@@ -4,6 +4,7 @@
     "evidence":  "",
     "owns":  [
                  "crates/pdfxi-testkit/**",
+                 "crates/pdfxi-core/examples/**",
                  "fixtures/**",
                  "orchestration/feature-updates/T-0030.toml"
              ],
