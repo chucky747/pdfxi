@@ -124,6 +124,23 @@ impl Rect {
         Self::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
     }
 
+    /// Creates a finite, normalized rectangle without the possibility of failure.
+    ///
+    /// Non-finite coordinates become zero and the corner order is normalized so
+    /// that the lower corner never exceeds the upper corner. This is useful for
+    /// display geometry derived from already-validated annotation dictionaries.
+    pub fn saturating(x0: f32, y0: f32, x1: f32, y1: f32) -> Self {
+        let clean = |value: f32| if value.is_finite() { value } else { 0.0 };
+        let (a, b) = (clean(x0), clean(x1));
+        let (c, d) = (clean(y0), clean(y1));
+        Self {
+            x0: a.min(b),
+            y0: c.min(d),
+            x1: a.max(b),
+            y1: c.max(d),
+        }
+    }
+
     /// Lower-left x coordinate.
     pub fn x0(&self) -> f32 {
         self.x0
@@ -142,6 +159,18 @@ impl Rect {
     /// Upper-right y coordinate.
     pub fn y1(&self) -> f32 {
         self.y1
+    }
+
+    /// Returns a rectangle inset by `dx` horizontally and `dy` vertically on
+    /// each side, or `None` when the inset would collapse the rectangle.
+    pub fn inset(&self, dx: f32, dy: f32) -> Option<Self> {
+        let (x0, x1) = (self.x0 + dx, self.x1 - dx);
+        let (y0, y1) = (self.y0 + dy, self.y1 - dy);
+        if x0 >= x1 || y0 >= y1 {
+            None
+        } else {
+            Some(Self { x0, y0, x1, y1 })
+        }
     }
 
     /// Width of the rectangle.
@@ -322,6 +351,17 @@ mod tests {
 
     fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
         Rect::new(x0, y0, x1, y1).expect("test rect must be valid")
+    }
+
+    #[test]
+    fn rect_saturating_normalizes_corners_and_non_finite_values() {
+        let r = Rect::saturating(f32::NAN, 5.0, f32::INFINITY, 2.0);
+        assert_eq!((r.x0(), r.y0(), r.x1(), r.y1()), (0.0, 2.0, 0.0, 5.0));
+        let ordered = Rect::saturating(10.0, 20.0, 0.0, 5.0);
+        assert_eq!(
+            (ordered.x0(), ordered.y0(), ordered.x1(), ordered.y1()),
+            (0.0, 5.0, 10.0, 20.0)
+        );
     }
 
     #[test]

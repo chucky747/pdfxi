@@ -2,8 +2,10 @@
 //!
 //! This crate owns the authoring-side document model. It is renderer-agnostic
 //! and depends only on the standard library: [`geometry`] defines validated
-//! page-space primitives and [`annotation`] defines the review and drawing
-//! annotation model with hit-testing, bounds, and clamping helpers.
+//! page-space primitives, [`annotation`] defines the review and drawing
+//! annotation model with hit-testing, bounds, and clamping helpers, and [`pdf`]
+//! maps annotations to and from a dependency-free PDF dictionary intermediate
+//! with validation and deterministic appearance geometry.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
 //! source document bytes in place.
@@ -13,6 +15,7 @@
 
 pub mod annotation;
 pub mod geometry;
+pub mod pdf;
 
 pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,

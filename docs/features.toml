@@ -984,27 +984,75 @@ tests = []
 title = "Policy-based protection replacement"
 
 [[feature]]
-docs = "crates/pdfxi-edit/src/lib.rs"
+docs = "crates/pdfxi-edit/src/pdf/mod.rs"
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): pdfxi-edit 13 passed, 0 failed; clippy -D warnings clean"
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): exit 0, 30 passed, 0 failed, 0 ignored; 0 doc tests. cargo fmt -p pdfxi-edit -- --check: exit 0. cargo clippy -p pdfxi-edit --all-targets --all-features -- -D warnings: exit 0, no warnings. Toolchain note: with rustc 1.100 merged doctests, any compiled doctest in this crate fails (even a trivial assert_eq); the module example is therefore a non-compiled text code fence, leaving `cargo test -p pdfxi-edit` green with 0 doctests. Reviewer sign-off and integrator snapshot remain external orchestration steps."
 id = "REVIEW-001"
-notes = "Added validated page geometry (Point, Rect, PageIndex, PageGeometry) with intersection, union, containment, crop-box clamping, and invalid-rect rejection, plus the full AnnotationKind toolset, Annotation metadata/flags, hit-testing, bounds_union, and page clamping. Standard-library only; errors implement Display/Error by hand to honor the no-dependency constraint. This is the model layer; rendering and persistence remain later tasks."
+notes = """
+Added a dependency-free `pdf` submodule to pdfxi-edit that maps the existing
+annotation model to and from a small intermediate dictionary (BTreeMap of
+string keys to scalar/array Value objects). It stays independent of the
+pdfxi-core object model, as required by the crate boundary.
+
+`serialize` covers the common entries /Subtype, /Rect, /Contents, /T, /NM, /M,
+/C, /F, /CA, and /AP normal/rollover/down reference names, plus per-type
+fields for Text, Highlight, Underline, StrikeOut, Squiggly, Square, Circle,
+Line, Ink, FreeText, and Link. Four documented extension keys (XI_Id, XI_Page,
+XI_Alpha, XI_FontSize) make Annotation -> Dict -> Annotation lossless for all
+sixteen existing AnnotationKinds. Unknown subtypes are preserved as
+PdfSubtype::Opaque together with every unmodelled dictionary entry; conversion
+back to the older Annotation model reports PdfError::UnknownSubtype rather than
+dropping data.
+
+Validation is structured via PdfError: rectangle normalization pairs corners
+in any order and rejects non-finite or degenerate extents, colour components
+must be finite and in 0.0..=1.0, Line requires two /L points and Ink requires
+at least one non-empty stroke.
+
+`appearance` derives deterministic border paths (solid and dashed with fixed
+clockwise traversal), centered text-note icon layout, and markup quads sorted
+into a stable reading order (descending y, then ascending x). Repeated calls
+and scrambled quad inputs produce identical geometry; source annotations are
+never mutated. Reading-order interaction is unchanged because this module
+does not depend on pdfxi-accessibility.
+
+Geometry gained infallible Rect::saturating and Rect::inset helpers so no
+non-test code needs unwrap/expect/panic. Public items carry rustdoc, the crate
+keeps #![forbid(unsafe_code)] and #![deny(missing_docs)].
+"""
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
-    "pdfxi-edit::geometry::tests::rect_intersection_returns_overlap_and_none_for_disjoint",
-    "pdfxi-edit::geometry::tests::edge_touching_rects_do_not_intersect",
-    "pdfxi-edit::geometry::tests::rect_union_covers_both_inputs",
-    "pdfxi-edit::geometry::tests::rect_contains_point_is_inclusive",
-    "pdfxi-edit::geometry::tests::invalid_rects_are_rejected",
-    "pdfxi-edit::geometry::tests::page_geometry_validates_crop_box_and_rotation",
-    "pdfxi-edit::geometry::tests::page_geometry_clamps_rect_to_visible_bounds",
-    "pdfxi-edit::geometry::tests::page_index_range_check",
-    "pdfxi-edit::annotation::tests::annotation_hit_test_within_and_outside_rect",
     "pdfxi-edit::annotation::tests::annotation_bounds_union_covers_all_rects",
     "pdfxi-edit::annotation::tests::annotation_clamps_to_page_and_rejects_wrong_page",
-    "pdfxi-edit::annotation::tests::annotation_rejects_invalid_opacity",
+    "pdfxi-edit::annotation::tests::annotation_hit_test_within_and_outside_rect",
     "pdfxi-edit::annotation::tests::annotation_kinds_cover_full_toolset",
+    "pdfxi-edit::annotation::tests::annotation_rejects_invalid_opacity",
+    "pdfxi-edit::geometry::tests::edge_touching_rects_do_not_intersect",
+    "pdfxi-edit::geometry::tests::invalid_rects_are_rejected",
+    "pdfxi-edit::geometry::tests::page_geometry_clamps_rect_to_visible_bounds",
+    "pdfxi-edit::geometry::tests::page_geometry_validates_crop_box_and_rotation",
+    "pdfxi-edit::geometry::tests::page_index_range_check",
+    "pdfxi-edit::geometry::tests::rect_contains_point_is_inclusive",
+    "pdfxi-edit::geometry::tests::rect_intersection_returns_overlap_and_none_for_disjoint",
+    "pdfxi-edit::geometry::tests::rect_saturating_normalizes_corners_and_non_finite_values",
+    "pdfxi-edit::geometry::tests::rect_union_covers_both_inputs",
+    "pdfxi-edit::pdf::appearance::tests::build_appearance_covers_icon_border_and_marks",
+    "pdfxi-edit::pdf::appearance::tests::dashed_border_path_is_deterministic_and_non_empty",
+    "pdfxi-edit::pdf::appearance::tests::markup_quad_ordering_is_deterministic_and_does_not_mutate_input",
+    "pdfxi-edit::pdf::appearance::tests::markup_strokes_are_deterministic",
+    "pdfxi-edit::pdf::appearance::tests::opacity_is_carried_into_appearance",
+    "pdfxi-edit::pdf::appearance::tests::solid_border_path_is_five_deterministic_commands",
+    "pdfxi-edit::pdf::error::tests::pdf_error_messages_are_descriptive",
+    "pdfxi-edit::pdf::serialize::tests::annotation_round_trip_all_kinds",
+    "pdfxi-edit::pdf::serialize::tests::invalid_color_components_are_rejected",
+    "pdfxi-edit::pdf::serialize::tests::missing_or_insufficient_points_are_rejected",
+    "pdfxi-edit::pdf::serialize::tests::opaque_unknown_subtype_is_preserved",
+    "pdfxi-edit::pdf::serialize::tests::per_type_dictionary_keys_cover_the_full_toolset",
+    "pdfxi-edit::pdf::serialize::tests::pdf_annotation_round_trip_preserves_per_type_fields",
+    "pdfxi-edit::pdf::serialize::tests::rectangle_is_normalized_and_degenerate_rects_rejected",
+    "pdfxi-edit::pdf::value::tests::dictionary_typed_access_reports_structured_errors",
+    "pdfxi-edit::pdf::value::tests::value_accessors_return_typed_views",
 ]
 title = "Sticky note highlight underline strikeout and squiggly"
 
