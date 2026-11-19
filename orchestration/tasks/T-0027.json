@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo test -p pdfxi-app",
+    "id":  "T-0027",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-app/**",
+                 "orchestration/feature-updates/T-0027.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0021",
+                       "T-0022",
+                       "T-0011"
+                   ],
+    "title":  "Implement canvas layout hit testing and selection",
+    "priority":  "P0",
+    "lane":  "app"
+}
