@@ -1,41 +1,51 @@
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-render/src/pdfium_backend.rs"
 domain = "View & Navigate"
-evidence = ""
+evidence = 'cargo test -p pdfxi-render --features pdfium (CARGO_TARGET_DIR=target/lanes/render, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 5 unit passed + 4 integration passed, 0 failed, EXIT=0. cargo test -p pdfxi-render (default): 5 unit passed, 0 failed, EXIT=0. cargo fmt -p pdfxi-render -- --check: EXIT=0. cargo clippy -p pdfxi-render --all-targets --features pdfium -- -D warnings: EXIT=0. Installed PDFium FileVersion=160.0.8165.0 (pdfium-render 0.9.5 default pdfium_8125 bindings).'
 id = "VIEW-001"
-notes = ""
+notes = '''
+Added an optional `pdfium` feature and optional pdfium-render 0.9.5 dependency;
+default builds stay dependency-light (`default = []`) and compile the backend
+out entirely. PdfiumRenderer binds the native library from PDFIUM_PATH, then
+%LOCALAPPDATA%\pdfxi\pdfium\bin\pdfium.dll, the current directory, and finally
+the system search path. It loads a document from bytes or a file, implements
+Renderer::render_page/page_count, and returns tightly packed RGBA at the
+requested scale (1.0 == 72 DPI) via PdfRenderConfig::scale_page_by_factor.
+PDFium is not thread-safe, so one process-wide Pdfium instance is held behind a
+Mutex and that lock is kept for the whole load/get-page/render/copy sequence;
+a documented bounded pool of one. Invalid scale, out-of-range page, cancelled
+tokens, missing files, and malformed documents all return structured
+RenderError variants without panicking. Progress is reported as work advances.
+This is the backend POC only: app tile/canvas wiring, printing, and golden SSIM
+comparison remain future tasks, hence in-progress.
+'''
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "tests/pdfium_backend.rs::renders_minimal_pdf_page_zero_at_scale_one",
+    "tests/pdfium_backend.rs::invalid_document_returns_structured_error",
+    "tests/pdfium_backend.rs::missing_file_returns_structured_error",
+    "tests/pdfium_backend.rs::invalid_inputs_are_rejected_without_panicking",
+]
 title = "Open and print PDF documents"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/ui.rs"
+docs = "crates/pdfxi-render/src/pdfium_backend.rs"
 domain = "View & Navigate"
-evidence = "cargo check -p pdfxi-app --features ui (CARGO_TARGET_DIR=target/lanes/app, installed rustc 1.100.0): Finished dev profile, EXITCODE=0. cargo test -p pdfxi-app --features ui: 26 passed, 0 failed. cargo test -p pdfxi-app (default): 17 passed, 0 failed. cargo fmt -p pdfxi-app -- --check: EXITCODE=0. cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: EXITCODE=0."
+evidence = "cargo test -p pdfxi-render --features pdfium (CARGO_TARGET_DIR=target/lanes/render): renders_minimal_pdf_page_zero_at_scale_one ok - non-zero dimensions, RGBA length == width*height*4, non-uniform raster, complete progress; 4/4 integration tests passed, EXIT=0."
 id = "VIEW-002"
 notes = """
-The optional `ui` feature now builds a native egui/eframe shell (eframe/egui
-0.33, MSRV 1.88 matching the workspace pin; default builds stay dependency-light
-with default = []). PdfxiApp implements eframe::App with a toolbar (open demo,
-close, zoom +/-, rotate CW/CCW), a tool selector, a view-mode selector, a tab
-strip, a status header, and a placeholder canvas area. The status header shows
-the active tab's title, zoom, rotation, and view mode via the pure helper
-active_tab_status(); canvas_placeholder() reports the active page and page count.
-Toolbar buttons and Ctrl+N/W/+/-/R keyboard chords all route through AppState
-methods (open/activate/close tab, zoom, rotate, view mode). The layout primitives
-in view.rs remain the data model; arranging rendered pages on the canvas is
-future work, hence in-progress.
+The new backend rasterizes a real page at an explicit scale and exposes the
+page count through the frozen Renderer contract, which is the native foundation
+for zoom/layout work. It does not yet implement fit/custom zoom modes, rotation,
+or continuous/two-page layout; those remain in pdfxi-app's data model and
+future canvas work, so VIEW-002 stays in-progress.
 """
 priority = "P0"
 status = "in-progress"
 tests = [
-    "ui::tests::active_tab_status_without_document_has_fixed_message",
-    "ui::tests::active_tab_status_includes_title_zoom_rotation_and_view",
-    "ui::tests::canvas_placeholder_reports_page_count_and_prompts_when_empty",
-    "ui::tests::zoom_in_and_out_change_active_tab_zoom",
-    "ui::tests::zoom_without_active_tab_reports_status_without_panicking",
-    "ui::tests::rotate_and_view_mode_commands_update_active_tab",
+    "tests/pdfium_backend.rs::renders_minimal_pdf_page_zero_at_scale_one",
+    "tests/pdfium_backend.rs::invalid_inputs_are_rejected_without_panicking",
 ]
 title = "Single page continuous and two-page layouts"
 

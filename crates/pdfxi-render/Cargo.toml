@@ -10,3 +10,12 @@ publish = false
 
 [dependencies]
 thiserror.workspace = true
+# Optional native backend. Default builds stay dependency-light; only the
+# `pdfium` feature pulls in the PDFium bindings.
+pdfium-render = { version = "0.9.5", optional = true }
+
+[features]
+default = []
+# Enable the PDFium-backed `PdfiumRenderer`. Requires a PDFium library at
+# runtime (see `PDFIUM_PATH` or the standard per-user install location).
+pdfium = ["dep:pdfium-render"]
