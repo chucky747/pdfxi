@@ -11,3 +11,6 @@ publish = false
 [dependencies]
 thiserror.workspace = true
 
+[dev-dependencies]
+pdfxi-testkit = { path = "../pdfxi-testkit" }
+

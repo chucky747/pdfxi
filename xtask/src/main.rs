@@ -101,6 +101,9 @@ enum FeatureCommand {
         /// Remove successfully applied fragments.
         #[arg(long)]
         clean: bool,
+        /// Apply only the fragment for this task ID.
+        #[arg(long)]
+        task: Option<String>,
     },
 }
 
@@ -168,7 +171,7 @@ fn main() -> Result<()> {
         } => goal_verify(milestone.as_deref(), all, allow_dirty),
         Command::Features { command } => match command {
             FeatureCommand::Verify => features_verify(),
-            FeatureCommand::Apply { clean } => features_apply(clean),
+            FeatureCommand::Apply { clean, task } => features_apply(clean, task.as_deref()),
         },
         Command::Claim { task, lane } => claim(&task, &lane),
         Command::Release { task } => release(&task),
@@ -376,7 +379,7 @@ fn features_verify() -> Result<()> {
     Ok(())
 }
 
-fn features_apply(clean: bool) -> Result<()> {
+fn features_apply(clean: bool, task: Option<&str>) -> Result<()> {
     let path = root().join("docs/features.toml");
     let mut main: toml::Value =
         toml::from_str(&fs::read_to_string(&path).context("read docs/features.toml")?)
@@ -399,6 +402,12 @@ fn features_apply(clean: bool) -> Result<()> {
         let fragment_path = entry.path();
         if fragment_path.extension().and_then(|value| value.to_str()) != Some("toml") {
             continue;
+        }
+        if let Some(task) = task {
+            let stem = fragment_path.file_stem().and_then(|value| value.to_str());
+            if stem != Some(task) {
+                continue;
+            }
         }
         let fragment: toml::Value = toml::from_str(&fs::read_to_string(&fragment_path)?)
             .with_context(|| format!("parse {}", fragment_path.display()))?;

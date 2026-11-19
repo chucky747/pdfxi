@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-core",
     "id":  "T-0008",
-    "evidence":  "",
+    "evidence":  "docs/features.toml (STD-001, STD-002 in-progress) + cargo test -p pdfxi-core",
     "owns":  [
                  "crates/pdfxi-core/**",
                  "orchestration/feature-updates/T-0008.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0006"
                    ],

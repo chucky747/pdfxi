@@ -185,6 +185,7 @@ version = "0.1.0"
 name = "pdfxi-core"
 version = "0.1.0"
 dependencies = [
+ "pdfxi-testkit",
  "thiserror",
 ]
 
@@ -199,6 +200,9 @@ version = "0.1.0"
 [[package]]
 name = "pdfxi-render"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "pdfxi-security"
@@ -215,6 +219,9 @@ version = "0.1.0"
 [[package]]
 name = "pdfxi-text"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "proc-macro2"

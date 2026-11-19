@@ -5,19 +5,96 @@
 //! filters, encryption hooks, and incremental save. Rendering lives in
 //! `pdfxi-render`; editing semantics live in `pdfxi-edit`.
 //!
-//! The initial implementation validates the file header and exposes a stable
-//! document handle. Later milestones add the full object graph, xref streams,
-//! filters, and incremental updates without changing the public entry points.
+//! [`Document::from_bytes`] validates the file header immediately and parses
+//! the structural layer (classic xref table, trailer, catalog and page tree)
+//! eagerly. Structural errors are retained on the handle and surfaced by the
+//! page accessors, so callers can still inspect the version of a file whose
+//! body is damaged.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod object;
+pub mod page;
+
+mod lexer;
+mod parser;
+
+pub use object::{Object, ObjectId};
+pub use page::{Page, Rectangle};
+
+use parser::Structure;
+
 /// Errors returned by the core crate.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
     /// The input does not start with a supported PDF header.
     #[error("invalid PDF header; expected %PDF-")]
     InvalidHeader,
+    /// No `startxref` marker was found in the file.
+    #[error("missing startxref marker")]
+    MissingStartXref,
+    /// The value following `startxref` was not a valid byte offset.
+    #[error("invalid startxref value: {0}")]
+    InvalidStartXref(String),
+    /// The `startxref` value lies outside the file.
+    #[error("startxref offset {offset} is outside the file ({len} bytes)")]
+    StartXrefOutOfBounds {
+        /// The offset read from `startxref`.
+        offset: usize,
+        /// The total length of the input.
+        len: usize,
+    },
+    /// No classic `xref` table exists at the given offset.
+    #[error("no classic xref table at byte offset {0}")]
+    MissingXref(usize),
+    /// The classic xref table was structurally malformed.
+    #[error("malformed xref table: {0}")]
+    MalformedXref(String),
+    /// The chain of `/Prev` xref sections contains a cycle.
+    #[error("xref /Prev cycle detected at byte offset {0}")]
+    XrefCycle(usize),
+    /// The xref table has no trailer dictionary.
+    #[error("missing trailer dictionary")]
+    MissingTrailer,
+    /// The trailer has no valid `/Root` indirect reference.
+    #[error("trailer /Root is missing or not an indirect reference")]
+    MissingRoot,
+    /// The catalog has no valid `/Pages` indirect reference.
+    #[error("catalog /Pages is missing or not an indirect reference")]
+    MissingPages,
+    /// An object number is absent from the xref table.
+    #[error("object {0} is not present in the xref table")]
+    ObjectNotFound(u32),
+    /// An object number is present but marked free.
+    #[error("object {0} is free in the xref table")]
+    FreeObject(u32),
+    /// An indirect object body did not match its xref entry.
+    #[error("malformed object {number}: {reason}")]
+    MalformedObject {
+        /// The object number from the xref table.
+        number: u32,
+        /// Why the object body was rejected.
+        reason: String,
+    },
+    /// The `/Pages` tree could not be resolved.
+    #[error("malformed page tree: {0}")]
+    MalformedPageTree(String),
+    /// A `/MediaBox` entry was present but invalid.
+    #[error("invalid /MediaBox on page object {0}")]
+    InvalidMediaBox(u32),
+    /// The requested page index does not exist.
+    #[error("page index {0} is out of range")]
+    PageNotFound(usize),
+    /// The input ended before a value was complete.
+    #[error("unexpected end of PDF data")]
+    UnexpectedEof,
+    /// A token was encountered where the grammar did not allow it.
+    #[error("unexpected token while parsing: {0}")]
+    UnexpectedToken(String),
+    /// A nesting or container-size limit was exceeded.
+    #[error("PDF nesting limit ({0}) exceeded")]
+    NestingTooDeep(usize),
     /// The requested feature is not implemented in this build.
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
@@ -28,20 +105,23 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// A loaded PDF document.
 ///
-/// A document owns the source bytes and, in later milestones, the parsed object
-/// graph. It is intentionally cheap to construct so callers can validate a file
-/// before committing to a full parse.
+/// A document owns the source bytes and the parsed structural layer. The
+/// header is the only part that can make [`Document::from_bytes`] fail
+/// directly; all other parse failures are reported by [`Document::page_count`],
+/// [`Document::page`] and the other accessors.
 #[derive(Debug, Clone)]
 pub struct Document {
     bytes: Vec<u8>,
     version: String,
+    structure: std::result::Result<Structure, Error>,
 }
 
 impl Document {
     /// Load a document from an in-memory byte buffer.
     ///
     /// The header must begin with `%PDF-`; the version is read from the header
-    /// line when present.
+    /// line when present. The structural layer is parsed immediately and any
+    /// error is stored for the accessors to report.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
         if !bytes.starts_with(b"%PDF-") {
             return Err(Error::InvalidHeader);
@@ -51,7 +131,12 @@ impl Document {
             .and_then(|slice| std::str::from_utf8(slice).ok())
             .unwrap_or("1.x")
             .to_owned();
-        Ok(Self { bytes, version })
+        let structure = parser::parse_document(&bytes);
+        Ok(Self {
+            bytes,
+            version,
+            structure,
+        })
     }
 
     /// Return the declared PDF version, for example `1.7`.
@@ -74,13 +159,49 @@ impl Document {
         &self.bytes
     }
 
-    /// Return the number of pages.
-    ///
-    /// The full page tree is implemented in milestone M1. Until then this
-    /// returns `Ok(0)` for a structurally valid document and keeps the API
-    /// stable for callers.
+    /// Return the number of leaf pages resolved from the page tree.
     pub fn page_count(&self) -> Result<usize> {
-        Ok(0)
+        self.structure
+            .as_ref()
+            .map(|structure| structure.pages.len())
+            .map_err(Clone::clone)
+    }
+
+    /// Return metadata for the page at `index` in document order.
+    pub fn page(&self, index: usize) -> Result<Page> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        structure
+            .pages
+            .get(index)
+            .cloned()
+            .ok_or(Error::PageNotFound(index))
+    }
+
+    /// Return metadata for every page in document order.
+    pub fn pages(&self) -> Result<Vec<Page>> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        Ok(structure.pages.clone())
+    }
+
+    /// Return the indirect identifier of the catalog referenced by `/Root`.
+    pub fn root(&self) -> Result<ObjectId> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        Ok(structure.root_id)
+    }
+
+    /// Return the trailer `/Size` value when present and non-negative.
+    pub fn trailer_size(&self) -> Result<Option<u32>> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        Ok(structure.trailer_size)
+    }
+
+    /// Return the `/Count` declared by the root `/Pages` node, when valid.
+    ///
+    /// [`Document::page_count`] reports the number of leaf pages actually
+    /// found, which is normally equal to this value.
+    pub fn declared_page_count(&self) -> Result<Option<u32>> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        Ok(structure.declared_page_count)
     }
 }
 
@@ -88,17 +209,218 @@ impl Document {
 mod tests {
     use super::*;
 
+    /// Replace the numeric value following `startxref` with `value`.
+    fn set_startxref(pdf: &[u8], value: &str) -> Vec<u8> {
+        let text = String::from_utf8(pdf.to_vec()).expect("fixture is ASCII");
+        let marker = "startxref\n";
+        let start = text.find(marker).expect("startxref marker") + marker.len();
+        let end = start + text[start..].find('\n').expect("line ending");
+        let mut result = String::with_capacity(text.len());
+        result.push_str(&text[..start]);
+        result.push_str(value);
+        result.push_str(&text[end..]);
+        result.into_bytes()
+    }
+
+    /// Turn the first in-use xref entry's `n` marker into an invalid type.
+    fn corrupt_xref_entry(pdf: &[u8]) -> Vec<u8> {
+        let mut bytes = pdf.to_vec();
+        let pattern = b" 00000 n ";
+        let position = bytes
+            .windows(pattern.len())
+            .position(|window| window == pattern)
+            .expect("in-use xref entry");
+        bytes[position + pattern.len() - 2] = b'x';
+        bytes
+    }
+
+    /// Replace the first occurrence of `from` with `to` in an ASCII fixture.
+    ///
+    /// The replacement is padded with white space so every byte offset in the
+    /// xref table stays valid; this keeps each test focused on one defect.
+    fn replace_once(pdf: &[u8], from: &str, to: &str) -> Vec<u8> {
+        assert!(
+            to.len() <= from.len(),
+            "replacement must not grow the fixture"
+        );
+        let text = String::from_utf8(pdf.to_vec()).expect("fixture is ASCII");
+        let position = text.find(from).expect("pattern must exist");
+        let mut result = String::with_capacity(text.len());
+        result.push_str(&text[..position]);
+        result.push_str(to);
+        for _ in 0..from.len().saturating_sub(to.len()) {
+            result.push(' ');
+        }
+        result.push_str(&text[position + from.len()..]);
+        result.into_bytes()
+    }
+
+    /// Build a deterministic PDF with `count` pages and distinct MediaBoxes.
+    fn multi_page_pdf(count: usize) -> Vec<u8> {
+        let mut objects: Vec<String> = Vec::new();
+        let page_ids: Vec<usize> = (3..3 + count).collect();
+        let kids = page_ids
+            .iter()
+            .map(|id| format!("{id} 0 R"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        objects.push("<< /Type /Catalog /Pages 2 0 R >>".to_owned());
+        objects.push(format!(
+            "<< /Type /Pages /Kids [ {kids} ] /Count {count} >>"
+        ));
+        for index in 0..count {
+            let width = 612 + 10 * index;
+            let height = 792 + 5 * index;
+            let content_id = 3 + count + index;
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+                 /Contents {content_id} 0 R >>"
+            ));
+        }
+        for index in 0..count {
+            let content = format!("BT (Page {}) Tj ET", index + 1);
+            objects.push(format!(
+                "<< /Length {} >>\nstream\n{}\nendstream",
+                content.len(),
+                content
+            ));
+        }
+
+        let mut out = String::from("%PDF-1.7\n%PDFXI\n");
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
+        }
+        let xref_offset = out.len();
+        out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+        out.push_str("0000000000 65535 f \n");
+        for offset in &offsets {
+            out.push_str(&format!("{:010} 00000 n \n", offset));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+            objects.len() + 1,
+            xref_offset
+        ));
+        out.into_bytes()
+    }
+
     #[test]
     fn accepts_pdf_header_and_reads_version() {
         let doc = Document::from_bytes(b"%PDF-1.7\n%%EOF\n".to_vec()).expect("valid header");
         assert_eq!(doc.version(), "1.7");
         assert!(!doc.is_empty());
-        assert_eq!(doc.page_count().expect("page count"), 0);
+        assert_eq!(doc.len(), 15);
+        // A header-only file has no cross-reference table; the placeholder
+        // page count from T-0006 is now an explicit structural error.
+        assert!(matches!(doc.page_count(), Err(Error::MissingStartXref)));
     }
 
     #[test]
     fn rejects_non_pdf_input() {
         let err = Document::from_bytes(b"hello".to_vec()).expect_err("must reject");
         assert!(matches!(err, Error::InvalidHeader));
+    }
+
+    #[test]
+    fn parses_one_page_pdf_from_testkit() {
+        let doc = Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("valid fixture");
+        assert_eq!(doc.page_count().expect("page count"), 1);
+        assert_eq!(doc.root().expect("root"), ObjectId::new(1, 0));
+        assert_eq!(doc.trailer_size().expect("size"), Some(6));
+        assert_eq!(doc.declared_page_count().expect("count"), Some(1));
+
+        let page = doc.page(0).expect("first page");
+        assert_eq!(page.index, 0);
+        assert_eq!(page.id, ObjectId::new(3, 0));
+        assert_eq!(page.media_box, Rectangle::new(0.0, 0.0, 612.0, 792.0));
+        assert_eq!(page.width(), 612.0);
+        assert_eq!(page.height(), 792.0);
+        assert_eq!(page.contents, vec![ObjectId::new(4, 0)]);
+        assert!(page.resources.is_none());
+    }
+
+    #[test]
+    fn parses_multi_page_pdf_and_preserves_order() {
+        let doc = Document::from_bytes(multi_page_pdf(3)).expect("valid fixture");
+        assert_eq!(doc.page_count().expect("page count"), 3);
+        assert_eq!(doc.declared_page_count().expect("count"), Some(3));
+        assert_eq!(doc.pages().expect("pages").len(), 3);
+
+        for index in 0..3 {
+            let page = doc.page(index).expect("page in range");
+            assert_eq!(page.index, index);
+            assert_eq!(page.id, ObjectId::new(3 + index as u32, 0));
+            assert_eq!(page.width(), 612.0 + 10.0 * index as f64);
+            assert_eq!(page.height(), 792.0 + 5.0 * index as f64);
+            assert_eq!(page.contents, vec![ObjectId::new((6 + index) as u32, 0)]);
+        }
+        let err = doc.page(3).expect_err("index out of range");
+        assert!(matches!(err, Error::PageNotFound(3)));
+    }
+
+    #[test]
+    fn rejects_missing_xref() {
+        let header_only = Document::from_bytes(b"%PDF-1.7\n%%EOF\n".to_vec()).expect("header");
+        assert!(matches!(
+            header_only.page_count(),
+            Err(Error::MissingStartXref)
+        ));
+
+        let no_table = set_startxref(&pdfxi_testkit::minimal_pdf(), "8");
+        let doc = Document::from_bytes(no_table).expect("header");
+        assert!(matches!(doc.page_count(), Err(Error::MissingXref(8))));
+    }
+
+    #[test]
+    fn rejects_bad_startxref() {
+        let out_of_bounds = set_startxref(&pdfxi_testkit::minimal_pdf(), "999999999");
+        let doc = Document::from_bytes(out_of_bounds).expect("header");
+        assert!(matches!(
+            doc.page_count(),
+            Err(Error::StartXrefOutOfBounds { .. })
+        ));
+
+        let not_a_number = set_startxref(&pdfxi_testkit::minimal_pdf(), "abc");
+        let doc = Document::from_bytes(not_a_number).expect("header");
+        assert!(matches!(doc.page_count(), Err(Error::InvalidStartXref(_))));
+    }
+
+    #[test]
+    fn rejects_malformed_xref_entry() {
+        let doc = Document::from_bytes(corrupt_xref_entry(&pdfxi_testkit::minimal_pdf()))
+            .expect("header");
+        assert!(matches!(doc.page_count(), Err(Error::MalformedXref(_))));
+    }
+
+    #[test]
+    fn rejects_missing_root_and_pages() {
+        let no_root = replace_once(&pdfxi_testkit::minimal_pdf(), "/Root 1 0 R", "/Foo 1 0 R");
+        let doc = Document::from_bytes(no_root).expect("header");
+        assert!(matches!(doc.page_count(), Err(Error::MissingRoot)));
+
+        let no_pages = replace_once(
+            &pdfxi_testkit::minimal_pdf(),
+            "/Catalog /Pages 2 0 R",
+            "/Catalog /Foo 2 0 R",
+        );
+        let doc = Document::from_bytes(no_pages).expect("header");
+        assert!(matches!(doc.page_count(), Err(Error::MissingPages)));
+    }
+
+    #[test]
+    fn rejects_invalid_media_box_and_page_tree_cycle() {
+        let bad_box = replace_once(
+            &pdfxi_testkit::minimal_pdf(),
+            "/MediaBox [0 0 612 792]",
+            "/MediaBox [0 0]",
+        );
+        let doc = Document::from_bytes(bad_box).expect("header");
+        assert!(matches!(doc.page_count(), Err(Error::InvalidMediaBox(3))));
+
+        let cycle = replace_once(&multi_page_pdf(1), "/Kids [ 3 0 R ]", "/Kids [ 2 0 R ]");
+        let doc = Document::from_bytes(cycle).expect("header");
+        assert!(matches!(doc.page_count(), Err(Error::MalformedPageTree(_))));
     }
 }
