@@ -4,6 +4,17 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
+## Detailed feature pages
+
+Narrative documentation for the M1 slice (all **in progress**, not verified):
+
+- [Viewer slice](features/view.md) — open, page display, zoom, rotate,
+  thumbnails, bookmarks, search, text selection.
+- [Command-line interface](features/cli.md) — intended `pdfxi info`, `text`,
+  and `render` commands with examples.
+
+An mdBook entry point is available in [docs/book/src/README.md](book/src/README.md).
+
 ## Status legend
 
 | Status | Meaning |

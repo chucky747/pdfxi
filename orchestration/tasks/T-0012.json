@@ -1,14 +1,14 @@
 {
     "acceptance":  "cargo xtask docs",
     "id":  "T-0012",
-    "evidence":  "",
+    "evidence":  "docs/evidence/docs/T-0012.md",
     "owns":  [
                  "docs/features/**",
                  "docs/book/**",
                  "docs/evidence/docs/**",
                  "orchestration/feature-updates/T-0012.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0003"
                    ],
