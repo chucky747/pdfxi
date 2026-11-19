@@ -255,6 +255,12 @@ pub enum JsError {
         /// Position of the `continue`.
         pos: Pos,
     },
+    /// An Acrobat built-in or `event` was used without an injected document
+    /// context.
+    NoAcrobatContext {
+        /// Position of the operation that required a context.
+        pos: Pos,
+    },
     /// An explicitly injected host object rejected a call.
     Host {
         /// Position of the call, or `0:0` for registry-level failures.
@@ -305,6 +311,7 @@ impl JsError {
             | Self::ReturnOutsideFunction { pos }
             | Self::BreakOutsideLoop { pos }
             | Self::ContinueOutsideLoop { pos }
+            | Self::NoAcrobatContext { pos }
             | Self::Host { pos, .. }
             | Self::Internal { pos, .. } => *pos,
         }
@@ -401,6 +408,9 @@ impl fmt::Display for JsError {
             Self::BreakOutsideLoop { .. } => write!(f, "'break' is only valid inside a loop"),
             Self::ContinueOutsideLoop { .. } => {
                 write!(f, "'continue' is only valid inside a loop")
+            }
+            Self::NoAcrobatContext { .. } => {
+                write!(f, "Acrobat document context is not available in this run")
             }
             Self::Host { message, .. } => write!(f, "host object error: {message}"),
             Self::Internal { message, .. } => write!(f, "sandbox invariant violated: {message}"),

@@ -1,6 +1,9 @@
 //! Meaningful behavior tests for the JavaScript sandbox subset.
 
-use super::{HostObject, HostRegistry, JsError, Limits, Pos, Script, Value, run_script};
+use super::{
+    AcrobatContext, HostObject, HostRegistry, JsError, Limits, Pos, Script, Value,
+    run_acrobat_script, run_script,
+};
 use crate::CancelToken;
 use std::rc::Rc;
 use std::time::Duration;
@@ -19,6 +22,16 @@ fn number(source: &str) -> f64 {
 fn error(source: &str) -> JsError {
     run_script(source, &Limits::default(), &CancelToken::new())
         .expect_err("expected the script to be rejected")
+}
+
+fn eval_acrobat(source: &str, context: &AcrobatContext) -> Value {
+    run_acrobat_script(source, &Limits::default(), &CancelToken::new(), context)
+        .unwrap_or_else(|failure| panic!("script `{source}` failed: {failure}"))
+}
+
+fn error_acrobat(source: &str, context: &AcrobatContext) -> JsError {
+    run_acrobat_script(source, &Limits::default(), &CancelToken::new(), context)
+        .expect_err("expected the Acrobat script to be rejected")
 }
 
 #[test]
@@ -513,4 +526,349 @@ fn compound_assignment_evaluates_index_and_object_expressions_once() {
 
     let source = "var o = {x: 1}; var calls = 0; function obj() { calls = calls + 1; return o; } obj().x += 2; o.x + calls * 100;";
     assert_eq!(number(source), 103.0);
+}
+
+// --- T-0094 Acrobat compatibility ------------------------------------------
+
+#[test]
+fn acrobat_arithmetic_and_calculate_script() {
+    let context = AcrobatContext::new()
+        .with_field("price", "12.5")
+        .with_field("qty", "4");
+    let source = "var p = Number(this.getField('price').value); var q = Number(this.getField('qty').value); this.getField('total').value = String(p * q); this.getField('total').value;";
+    assert_eq!(eval_acrobat(source, &context).as_str(), Some("50"));
+    assert_eq!(context.field_value("total"), "50");
+}
+
+#[test]
+fn acrobat_strings_and_printf_helpers() {
+    let context = AcrobatContext::new();
+    let source = "var name = 'Box'; var text = util.printf('%s has %d items', name, 3); text;";
+    assert_eq!(
+        eval_acrobat(source, &context).as_str(),
+        Some("Box has 3 items")
+    );
+    assert_eq!(
+        eval_acrobat("util.printf('[%5d][%-5s]', 42, 'ab');", &context).as_str(),
+        Some("[   42][ab   ]")
+    );
+    assert_eq!(
+        eval_acrobat("util.printf('%.2f', 1.256);", &context).as_str(),
+        Some("1.26")
+    );
+    assert_eq!(
+        eval_acrobat("util.printf('%d%%', 7);", &context).as_str(),
+        Some("7%")
+    );
+}
+
+#[test]
+fn acrobat_control_flow_accumulates_field_values() {
+    let context = AcrobatContext::new();
+    let source = "var s = 0; var i = 0; while (i < 4) { if (i == 2) { i = i + 1; continue; } s += i; i = i + 1; } s;";
+    assert_eq!(eval_acrobat(source, &context).as_number(), Some(4.0));
+    let source = "var a = [1, 2, 3]; var o = {t: 0}; for (var i = 0; i < a.length; i = i + 1) { o.t += a[i]; } o.t;";
+    assert_eq!(eval_acrobat(source, &context).as_number(), Some(6.0));
+}
+
+#[test]
+fn acrobat_functions_objects_arrays_and_recursion_cap() {
+    let context = AcrobatContext::new();
+    let source = "function fact(n) { if (n <= 1) { return 1; } return n * fact(n - 1); } fact(5);";
+    assert_eq!(eval_acrobat(source, &context).as_number(), Some(120.0));
+
+    let source = "function f(n) { return f(n + 1); } f(0);";
+    let limits = Limits::default().with_max_call_depth(8);
+    let failure = run_acrobat_script(source, &limits, &CancelToken::new(), &context)
+        .expect_err("unbounded recursion must be stopped");
+    assert!(matches!(
+        failure,
+        JsError::CallDepthExceeded { limit: 8, .. }
+    ));
+}
+
+#[test]
+fn this_getfield_read_write_persists_in_context() {
+    let context = AcrobatContext::new().with_field("x", "7");
+    assert_eq!(
+        eval_acrobat("this.getField('x').value;", &context).as_str(),
+        Some("7")
+    );
+    assert_eq!(
+        eval_acrobat("this.getField('x').name;", &context).as_str(),
+        Some("x")
+    );
+    assert_eq!(
+        eval_acrobat("this.getField('x').value = 9;", &context).as_number(),
+        Some(9.0)
+    );
+    assert_eq!(context.field_value("x"), "9");
+    assert!(context.has_field("x"));
+}
+
+#[test]
+fn acrobat_builtins_are_whitelisted() {
+    let context = AcrobatContext::new();
+    assert_eq!(
+        eval_acrobat("Math.max(1, 9, 3);", &context).as_number(),
+        Some(9.0)
+    );
+    assert_eq!(
+        eval_acrobat("parseInt('42px');", &context).as_number(),
+        Some(42.0)
+    );
+    assert_eq!(
+        error_acrobat("AFBogus(1);", &context),
+        JsError::AmbientAccess {
+            pos: Pos::new(1, 1, 0),
+            name: "AFBogus".to_owned(),
+        }
+    );
+    assert!(matches!(
+        error_acrobat("util.nope();", &context),
+        JsError::MethodNotFound { .. }
+    ));
+}
+
+#[test]
+fn forbidden_globals_are_rejected_even_with_a_context() {
+    let context = AcrobatContext::new();
+    for name in ["eval", "Function", "process", "globalThis", "window"] {
+        let source = format!("{name};");
+        let failure = error_acrobat(&source, &context);
+        assert!(
+            matches!(failure, JsError::DangerousGlobal { .. }),
+            "{source} produced {failure}"
+        );
+    }
+    // `this` is allowed only because a context was injected.
+    let value = eval_acrobat("this.getField('missing').value;", &context);
+    assert_eq!(value, Value::Str(String::new()));
+}
+
+#[test]
+fn step_limit_is_enforced_with_acrobat_builtins() {
+    let context = AcrobatContext::new().with_event_value("1234.5");
+    let limits = Limits::default().with_max_steps(2);
+    let failure = run_acrobat_script(
+        "AFNumber_Format(2, 0, 0, 0, '', false);",
+        &limits,
+        &CancelToken::new(),
+        &context,
+    )
+    .expect_err("step budget must be enforced");
+    assert!(matches!(failure, JsError::StepBudgetExceeded { .. }));
+}
+
+#[test]
+fn syntax_and_unsupported_features_are_rejected_with_a_context() {
+    let context = AcrobatContext::new();
+    assert!(matches!(
+        error_acrobat("var = ;", &context),
+        JsError::Parse { .. }
+    ));
+    for source in ["var x = new Object();", "class A {}", "1 === 1;"] {
+        assert!(
+            matches!(
+                error_acrobat(source, &context),
+                JsError::UnsupportedSyntax { .. }
+            ),
+            "{source} was not rejected as unsupported"
+        );
+    }
+}
+
+#[test]
+fn cancellation_is_honored_with_a_context() {
+    let context = AcrobatContext::new();
+    let token = CancelToken::new();
+    token.cancel();
+    let failure = run_acrobat_script("1 + 1;", &Limits::default(), &token, &context)
+        .expect_err("a pre-cancelled token must stop the script");
+    assert!(matches!(failure, JsError::Cancelled { .. }));
+}
+
+#[test]
+fn acrobat_runs_are_deterministic() {
+    let script = "var s = 0; for (var i = 0; i < 5; i = i + 1) { s += i; } String(s);";
+    let first = eval_acrobat(script, &AcrobatContext::new());
+    let second = eval_acrobat(script, &AcrobatContext::new());
+    assert_eq!(first, second);
+    assert_eq!(first.as_str(), Some("10"));
+}
+
+#[test]
+fn af_number_format_end_to_end() {
+    let context = AcrobatContext::new().with_event_value("1234.5");
+    eval_acrobat("AFNumber_Format(2, 0, 0, 0, '', false);", &context);
+    assert_eq!(context.event_value(), "1,234.50");
+    assert!(context.event_rc());
+}
+
+#[test]
+fn af_number_format_separator_negatives_and_currency() {
+    let context = AcrobatContext::new().with_event_value("1234.5");
+    eval_acrobat("AFNumber_Format(2, 1, 0, 0, '', false);", &context);
+    assert_eq!(context.event_value(), "1234.50");
+
+    eval_acrobat("AFNumber_Format(2, 2, 0, 0, '', false);", &context);
+    assert_eq!(context.event_value(), "1.234,50");
+
+    let context = AcrobatContext::new().with_event_value("-1234.5");
+    eval_acrobat("AFNumber_Format(2, 0, 1, 0, '$', true);", &context);
+    assert_eq!(context.event_value(), "$(1,234.50)");
+
+    let context = AcrobatContext::new().with_event_value("1234.5");
+    eval_acrobat("AFNumber_Format(2, 0, 0, 0, ' USD', false);", &context);
+    assert_eq!(context.event_value(), "1,234.50 USD");
+}
+
+#[test]
+fn af_number_keystroke_accepts_and_rejects_keys() {
+    let context = AcrobatContext::new().with_event_key("5");
+    assert_eq!(
+        eval_acrobat("AFNumber_Keystroke(2, 0, 0, 0, '', false);", &context).as_bool(),
+        Some(true)
+    );
+    assert!(context.event_rc());
+
+    let context = AcrobatContext::new().with_event_key("x");
+    assert_eq!(
+        eval_acrobat("AFNumber_Keystroke(2, 0, 0, 0, '', false);", &context).as_bool(),
+        Some(false)
+    );
+    assert!(!context.event_rc());
+
+    let context = AcrobatContext::new()
+        .with_event_key(".")
+        .with_event_value("1.2");
+    assert_eq!(
+        eval_acrobat("AFNumber_Keystroke(2, 0, 0, 0, '', false);", &context).as_bool(),
+        Some(false)
+    );
+
+    let context = AcrobatContext::new()
+        .with_event_key(".")
+        .with_event_value("1");
+    assert_eq!(
+        eval_acrobat("AFNumber_Keystroke(2, 0, 0, 0, '', false);", &context).as_bool(),
+        Some(true)
+    );
+}
+
+#[test]
+fn af_percent_format_and_keystroke_end_to_end() {
+    let context = AcrobatContext::new().with_event_value("0.125");
+    eval_acrobat("AFPercent_Format(1, 0, 0, 0);", &context);
+    assert_eq!(context.event_value(), "12.5%");
+
+    let context = AcrobatContext::new().with_event_key("y");
+    assert_eq!(
+        eval_acrobat("AFPercent_Keystroke(2, 0, 0, 0);", &context).as_bool(),
+        Some(false)
+    );
+}
+
+#[test]
+fn af_date_format_ex_and_keystroke_ex() {
+    let context = AcrobatContext::new().with_event_value("2024-03-07");
+    eval_acrobat("AFDate_FormatEx('mm/dd/yyyy');", &context);
+    assert_eq!(context.event_value(), "03/07/2024");
+
+    eval_acrobat("AFDate_FormatEx('dd-mm-yy');", &context);
+    assert_eq!(context.event_value(), "07-03-24");
+
+    let context = AcrobatContext::new().with_event_key("1");
+    assert_eq!(
+        eval_acrobat("AFDate_KeystrokeEx('mm/dd/yyyy');", &context).as_bool(),
+        Some(true)
+    );
+
+    let context = AcrobatContext::new().with_event_key("x");
+    assert_eq!(
+        eval_acrobat("AFDate_KeystrokeEx('mm/dd/yyyy');", &context).as_bool(),
+        Some(false)
+    );
+}
+
+#[test]
+fn af_date_legacy_format_codes() {
+    let context = AcrobatContext::new().with_event_value("2024-03-07");
+    eval_acrobat("AFDate_Format(0);", &context);
+    assert_eq!(context.event_value(), "03/07/2024");
+
+    eval_acrobat("AFDate_Format(4);", &context);
+    assert_eq!(context.event_value(), "2024/03/07");
+
+    let context = AcrobatContext::new().with_event_key("/");
+    assert_eq!(
+        eval_acrobat("AFDate_Keystroke(0);", &context).as_bool(),
+        Some(true)
+    );
+}
+
+#[test]
+fn format_and_validate_script_end_to_end() {
+    let context = AcrobatContext::new()
+        .with_field("amount", "")
+        .with_event_value("9876.5");
+    let source = "AFNumber_Format(2, 0, 0, 0, '$', true); this.getField('amount').value = event.value; var note = util.printf('Total: %s', event.value); this.getField('note').value = note; this.getField('amount').value;";
+    assert_eq!(eval_acrobat(source, &context).as_str(), Some("$9,876.50"));
+    assert_eq!(context.field_value("amount"), "$9,876.50");
+    assert_eq!(context.field_value("note"), "Total: $9,876.50");
+}
+
+#[test]
+fn event_properties_are_readable_and_writable() {
+    let context = AcrobatContext::new().with_event_key("a");
+    assert_eq!(eval_acrobat("event.key;", &context).as_str(), Some("a"));
+    eval_acrobat("event.value = 'abc';", &context);
+    assert_eq!(context.event_value(), "abc");
+    eval_acrobat("event.rc = false;", &context);
+    assert!(!context.event_rc());
+    assert_eq!(eval_acrobat("event.rc;", &context).as_bool(), Some(false));
+}
+
+#[test]
+fn acrobat_builtins_require_an_injected_context() {
+    let failure = run_script(
+        "AFNumber_Format(2, 0, 0, 0, '', false);",
+        &Limits::default(),
+        &CancelToken::new(),
+    )
+    .expect_err("format built-ins must require a context");
+    assert!(matches!(failure, JsError::NoAcrobatContext { .. }));
+
+    assert!(matches!(
+        error("this.getField('x');"),
+        JsError::DangerousGlobal { .. }
+    ));
+    assert!(matches!(
+        error("event.value;"),
+        JsError::AmbientAccess { .. }
+    ));
+}
+
+#[test]
+fn acrobat_size_limits_are_enforced() {
+    let context = AcrobatContext::new().with_event_value("1234.5");
+    let limits = Limits::default().with_max_string_len(3);
+    let failure = run_acrobat_script(
+        "AFNumber_Format(2, 0, 0, 0, 'VERYLONGCURRENCY', false);",
+        &limits,
+        &CancelToken::new(),
+        &context,
+    )
+    .expect_err("format output must respect the string-size budget");
+    assert!(matches!(failure, JsError::StringTooLarge { .. }));
+
+    let context = AcrobatContext::new();
+    let failure = run_acrobat_script(
+        "this.getField('x').value = 'abcdef';",
+        &limits,
+        &CancelToken::new(),
+        &context,
+    )
+    .expect_err("field writes must respect the string-size budget");
+    assert!(matches!(failure, JsError::StringTooLarge { .. }));
 }

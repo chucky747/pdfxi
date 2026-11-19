@@ -24,6 +24,12 @@
 //!   iteration, size, wall-clock, and cancellation budgets. The [`HostObject`]
 //!   trait is an audited boundary for exposing future document operations; no
 //!   real PDF mutation is wired up in this milestone.
+//! - [`AcrobatContext`] / [`FieldStore`] / [`EventData`] / [`run_acrobat_script`]
+//!   — an explicitly injected, in-memory Acrobat compatibility layer providing
+//!   `this.getField` read/write, `event`, the `AFNumber_*`, `AFPercent_*`, and
+//!   `AFDate_*` helpers, and a documented `util.printf` subset for field format,
+//!   validate, and calculate scripts. No I/O, clock, randomness, or ambient
+//!   globals; no real PDF mutation.
 //!
 //! All behavior is deterministic and allocates only as needed. The crate has no
 //! external dependencies, forbids `unsafe`, and keeps panics out of non-test
@@ -51,8 +57,8 @@ pub use document::{
 };
 pub use error::AutomationError;
 pub use js::{
-    BuiltinFn, HostObject, HostRegistry, JsError, JsFunction, Limits, NoHostObject, Pos, Script,
-    Value, run_script,
+    AcrobatContext, BuiltinFn, EventData, FieldStore, HostObject, HostRegistry, JsError,
+    JsFunction, Limits, NoHostObject, Pos, Script, Value, run_acrobat_script, run_script,
 };
 pub use library::ActionLibrary;
 

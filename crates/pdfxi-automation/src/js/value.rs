@@ -5,6 +5,7 @@
 //! assignment; every borrow in this module uses `try_borrow`/`try_borrow_mut`
 //! and converts a failed borrow into a typed error instead of panicking.
 
+use crate::js::acrobat::{EventData, FieldStore};
 use crate::js::ast::Stmt;
 use crate::js::error::{JsError, Pos};
 use crate::js::host::HostObject;
@@ -48,6 +49,24 @@ pub enum BuiltinFn {
     MathSqrt,
     /// `Math.pow`.
     MathPow,
+    /// Acrobat `AFNumber_Format`.
+    AfNumberFormat,
+    /// Acrobat `AFNumber_Keystroke`.
+    AfNumberKeystroke,
+    /// Acrobat `AFPercent_Format`.
+    AfPercentFormat,
+    /// Acrobat `AFPercent_Keystroke`.
+    AfPercentKeystroke,
+    /// Acrobat `AFDate_FormatEx`.
+    AfDateFormatEx,
+    /// Acrobat `AFDate_KeystrokeEx`.
+    AfDateKeystrokeEx,
+    /// Acrobat `AFDate_Format` (legacy numeric format codes).
+    AfDateFormat,
+    /// Acrobat `AFDate_Keystroke` (legacy numeric format codes).
+    AfDateKeystroke,
+    /// Acrobat `util.printf` (documented subset).
+    UtilPrintf,
 }
 
 /// A runtime value produced or consumed by the sandbox interpreter.
@@ -79,6 +98,14 @@ pub enum Value {
     BuiltinFn(BuiltinFn),
     /// The `Math` namespace object.
     MathNamespace,
+    /// The Acrobat `util` namespace object (`util.printf`).
+    UtilNamespace,
+    /// The injected Acrobat `event` object.
+    AcrobatEvent(Rc<RefCell<EventData>>),
+    /// The injected Acrobat document context exposed as `this`.
+    DocumentContext(Rc<RefCell<FieldStore>>),
+    /// A field reference produced by `this.getField(name)`.
+    Field(Rc<RefCell<FieldStore>>, String),
     /// An explicitly injected host object.
     Host(Rc<dyn HostObject>),
 }
@@ -102,6 +129,10 @@ impl fmt::Debug for Value {
             Self::Function(function) => write!(f, "Function({})", function.name),
             Self::BuiltinFn(function) => write!(f, "BuiltinFn({function:?})"),
             Self::MathNamespace => f.write_str("MathNamespace"),
+            Self::UtilNamespace => f.write_str("UtilNamespace"),
+            Self::AcrobatEvent(_) => f.write_str("AcrobatEvent(<shared>)"),
+            Self::DocumentContext(_) => f.write_str("DocumentContext(<shared>)"),
+            Self::Field(_, name) => write!(f, "Field({name})"),
             Self::Host(_) => f.write_str("Host(<opaque>)"),
         }
     }
@@ -124,7 +155,11 @@ impl PartialEq for Value {
             },
             (Self::Function(a), Self::Function(b)) => Rc::ptr_eq(a, b),
             (Self::BuiltinFn(a), Self::BuiltinFn(b)) => a == b,
-            (Self::MathNamespace, Self::MathNamespace) => true,
+            (Self::MathNamespace, Self::MathNamespace)
+            | (Self::UtilNamespace, Self::UtilNamespace) => true,
+            (Self::AcrobatEvent(a), Self::AcrobatEvent(b)) => Rc::ptr_eq(a, b),
+            (Self::DocumentContext(a), Self::DocumentContext(b)) => Rc::ptr_eq(a, b),
+            (Self::Field(a, an), Self::Field(b, bn)) => an == bn && Rc::ptr_eq(a, b),
             (Self::Host(a), Self::Host(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
@@ -143,8 +178,11 @@ impl Value {
             Self::Array(_) => "object",
             Self::Object(_) => "object",
             Self::Function(_) | Self::BuiltinFn(_) => "function",
-            Self::MathNamespace => "object",
-            Self::Host(_) => "object",
+            Self::MathNamespace | Self::UtilNamespace => "object",
+            Self::AcrobatEvent(_)
+            | Self::DocumentContext(_)
+            | Self::Field(_, _)
+            | Self::Host(_) => "object",
         }
     }
 
@@ -223,6 +261,10 @@ impl Value {
             },
             Self::Function(_) | Self::BuiltinFn(_) => "[function]".to_owned(),
             Self::MathNamespace => "[object Math]".to_owned(),
+            Self::UtilNamespace => "[object util]".to_owned(),
+            Self::AcrobatEvent(_) => "[object event]".to_owned(),
+            Self::DocumentContext(_) => "[object document]".to_owned(),
+            Self::Field(_, name) => format!("[field {name}]"),
             Self::Host(_) => "[host object]".to_owned(),
         }
     }

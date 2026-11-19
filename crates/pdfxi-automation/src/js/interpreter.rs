@@ -8,6 +8,7 @@
 
 use crate::CancelToken;
 use crate::js::Limits;
+use crate::js::acrobat::{AcrobatContext, EventData};
 use crate::js::ast::{
     AssignOp, BinaryOp, Expr, ExprKind, Program, Stmt, StmtKind, UnaryOp, VarKind,
 };
@@ -48,6 +49,7 @@ pub(crate) struct Interpreter<'a> {
     limits: &'a Limits,
     cancel: &'a CancelToken,
     host: &'a HostRegistry,
+    acrobat: Option<&'a AcrobatContext>,
     steps: u64,
     calls: u64,
     call_depth: usize,
@@ -57,12 +59,19 @@ pub(crate) struct Interpreter<'a> {
 }
 
 impl<'a> Interpreter<'a> {
-    /// Creates an interpreter with fresh counters.
-    pub(crate) fn new(limits: &'a Limits, cancel: &'a CancelToken, host: &'a HostRegistry) -> Self {
+    /// Creates an interpreter with fresh counters and an optional Acrobat
+    /// document context.
+    pub(crate) fn new_with_context(
+        limits: &'a Limits,
+        cancel: &'a CancelToken,
+        host: &'a HostRegistry,
+        acrobat: Option<&'a AcrobatContext>,
+    ) -> Self {
         Self {
             limits,
             cancel,
             host,
+            acrobat,
             steps: 0,
             calls: 0,
             call_depth: 0,
@@ -70,6 +79,13 @@ impl<'a> Interpreter<'a> {
             last_value: Value::Undefined,
             start: Instant::now(),
         }
+    }
+
+    /// Returns the injected event object, or a typed error when absent.
+    fn event_ref(&self, pos: Pos) -> Result<std::rc::Rc<std::cell::RefCell<EventData>>, JsError> {
+        self.acrobat
+            .map(AcrobatContext::event_ref)
+            .ok_or(JsError::NoAcrobatContext { pos })
     }
 
     /// Runs the program and returns the value of the last expression, or
@@ -97,6 +113,28 @@ impl<'a> Interpreter<'a> {
             let _ = env.declare(name, false, Value::BuiltinFn(function), Pos::default());
         }
         let _ = env.declare("Math", false, Value::MathNamespace, Pos::default());
+        let _ = env.declare("util", false, Value::UtilNamespace, Pos::default());
+        let acrobat_builtins = [
+            ("AFNumber_Format", BuiltinFn::AfNumberFormat),
+            ("AFNumber_Keystroke", BuiltinFn::AfNumberKeystroke),
+            ("AFPercent_Format", BuiltinFn::AfPercentFormat),
+            ("AFPercent_Keystroke", BuiltinFn::AfPercentKeystroke),
+            ("AFDate_FormatEx", BuiltinFn::AfDateFormatEx),
+            ("AFDate_KeystrokeEx", BuiltinFn::AfDateKeystrokeEx),
+            ("AFDate_Format", BuiltinFn::AfDateFormat),
+            ("AFDate_Keystroke", BuiltinFn::AfDateKeystroke),
+        ];
+        for (name, function) in acrobat_builtins {
+            let _ = env.declare(name, false, Value::BuiltinFn(function), Pos::default());
+        }
+        if let Some(context) = self.acrobat {
+            let _ = env.declare(
+                "event",
+                false,
+                Value::AcrobatEvent(context.event_ref()),
+                Pos::default(),
+            );
+        }
         for name in self.host.names() {
             if let Some(object) = self.host.get(name) {
                 let _ = env.declare(name, false, Value::Host(Rc::clone(object)), Pos::default());
@@ -297,6 +335,13 @@ impl<'a> Interpreter<'a> {
             }
             ExprKind::Bool(value) => Ok(Value::Bool(*value)),
             ExprKind::Null => Ok(Value::Null),
+            ExprKind::This => match self.acrobat {
+                Some(context) => Ok(Value::DocumentContext(context.fields_ref())),
+                None => Err(JsError::DangerousGlobal {
+                    pos,
+                    name: "this".to_owned(),
+                }),
+            },
             ExprKind::Ident(name) => {
                 if crate::js::is_dangerous_name(name) {
                     return Err(JsError::DangerousGlobal {
@@ -431,9 +476,7 @@ impl<'a> Interpreter<'a> {
     ) -> Result<(), JsError> {
         match place {
             Place::Var(name) => env.set(name, value, pos),
-            Place::Property { receiver, name } => {
-                set_property(receiver, name, value, self.limits, pos)
-            }
+            Place::Property { receiver, name } => self.set_property(receiver, name, value, pos),
             Place::Index { receiver, key } => set_index(self, receiver, key, value, pos),
         }
     }
@@ -570,6 +613,29 @@ impl<'a> Interpreter<'a> {
                         name: method.to_owned(),
                     })
                 }
+            }
+            Value::UtilNamespace => {
+                if method == "printf" {
+                    call_builtin(self, BuiltinFn::UtilPrintf, args, pos)
+                } else {
+                    Err(JsError::MethodNotFound {
+                        pos,
+                        name: method.to_owned(),
+                    })
+                }
+            }
+            Value::DocumentContext(fields) => {
+                if method != "getField" {
+                    return Err(JsError::MethodNotFound {
+                        pos,
+                        name: method.to_owned(),
+                    });
+                }
+                let name = match args.first() {
+                    Some(value) => self.stringify(value, pos)?,
+                    None => String::new(),
+                };
+                Ok(Value::Field(Rc::clone(fields), name))
             }
             Value::Object(entries) => {
                 let value = {
@@ -748,6 +814,10 @@ fn truthy(value: &Value) -> bool {
         | Value::Function(_)
         | Value::BuiltinFn(_)
         | Value::MathNamespace
+        | Value::UtilNamespace
+        | Value::AcrobatEvent(_)
+        | Value::DocumentContext(_)
+        | Value::Field(_, _)
         | Value::Host(_) => true,
     }
 }
@@ -859,6 +929,36 @@ fn get_property(receiver: &Value, name: &str, pos: Pos) -> Result<Value, JsError
                     name: name.to_owned(),
                 })
         }
+        Value::UtilNamespace if name == "printf" => Ok(Value::BuiltinFn(BuiltinFn::UtilPrintf)),
+        Value::AcrobatEvent(event) => {
+            let event = event.try_borrow().map_err(|_| JsError::Internal {
+                pos,
+                message: "event was already mutably borrowed".to_owned(),
+            })?;
+            match name {
+                "value" => Ok(Value::Str(event.value.clone())),
+                "key" => Ok(Value::Str(event.key.clone())),
+                "rc" => Ok(Value::Bool(event.rc)),
+                _ => Err(JsError::PropertyNotFound {
+                    pos,
+                    name: name.to_owned(),
+                }),
+            }
+        }
+        Value::Field(fields, field_name) => match name {
+            "value" => {
+                let fields = fields.try_borrow().map_err(|_| JsError::Internal {
+                    pos,
+                    message: "field store was already mutably borrowed".to_owned(),
+                })?;
+                Ok(Value::Str(fields.value(field_name)))
+            }
+            "name" => Ok(Value::Str(field_name.clone())),
+            _ => Err(JsError::PropertyNotFound {
+                pos,
+                name: name.to_owned(),
+            }),
+        },
         _ => Err(JsError::PropertyNotFound {
             pos,
             name: name.to_owned(),
@@ -866,36 +966,77 @@ fn get_property(receiver: &Value, name: &str, pos: Pos) -> Result<Value, JsError
     }
 }
 
-fn set_property(
-    receiver: &Value,
-    name: &str,
-    value: Value,
-    limits: &Limits,
-    pos: Pos,
-) -> Result<(), JsError> {
-    match receiver {
-        Value::Object(entries) => {
-            let mut entries = entries.try_borrow_mut().map_err(|_| JsError::Internal {
-                pos,
-                message: "object was already borrowed".to_owned(),
-            })?;
-            if !entries.contains_key(name) && entries.len() >= limits.max_object_entries {
-                return Err(JsError::ObjectTooLarge {
+impl<'a> Interpreter<'a> {
+    fn set_property(
+        &mut self,
+        receiver: &Value,
+        name: &str,
+        value: Value,
+        pos: Pos,
+    ) -> Result<(), JsError> {
+        match receiver {
+            Value::Object(entries) => {
+                let mut entries = entries.try_borrow_mut().map_err(|_| JsError::Internal {
                     pos,
-                    limit: limits.max_object_entries,
-                });
+                    message: "object was already borrowed".to_owned(),
+                })?;
+                if !entries.contains_key(name) && entries.len() >= self.limits.max_object_entries {
+                    return Err(JsError::ObjectTooLarge {
+                        pos,
+                        limit: self.limits.max_object_entries,
+                    });
+                }
+                entries.insert(name.to_owned(), value);
+                Ok(())
             }
-            entries.insert(name.to_owned(), value);
-            Ok(())
+            Value::AcrobatEvent(event) => {
+                let mut event = event.try_borrow_mut().map_err(|_| JsError::Internal {
+                    pos,
+                    message: "event was already borrowed".to_owned(),
+                })?;
+                match name {
+                    "value" | "key" => {
+                        let text = self.stringify(&value, pos)?;
+                        if name == "value" {
+                            event.value = text;
+                        } else {
+                            event.key = text;
+                        }
+                    }
+                    "rc" => event.rc = truthy(&value),
+                    _ => {
+                        return Err(JsError::PropertyNotFound {
+                            pos,
+                            name: name.to_owned(),
+                        });
+                    }
+                }
+                Ok(())
+            }
+            Value::Field(fields, field_name) => {
+                if name != "value" {
+                    return Err(JsError::PropertyNotFound {
+                        pos,
+                        name: name.to_owned(),
+                    });
+                }
+                let text = self.stringify(&value, pos)?;
+                let mut fields = fields.try_borrow_mut().map_err(|_| JsError::Internal {
+                    pos,
+                    message: "field store was already borrowed".to_owned(),
+                })?;
+                fields.set(field_name.clone(), text);
+                Ok(())
+            }
+            Value::Host(_) => Err(JsError::Host {
+                pos,
+                message: "host object properties are read-only; call a method instead".to_owned(),
+            }),
+            _ => Err(JsError::Type {
+                pos,
+                message: format!("cannot set property '{name}' on {}", receiver.type_name()),
+            }),
         }
-        Value::Host(_) => Err(JsError::Host {
-            pos,
-            message: "host object properties are read-only; call a method instead".to_owned(),
-        }),
-        _ => Err(JsError::Type {
-            pos,
-            message: format!("cannot set property '{name}' on {}", receiver.type_name()),
-        }),
     }
 }
 
@@ -1093,6 +1234,15 @@ fn call_builtin(
             let exponent = to_number(&args[1], interpreter.limits, pos)?;
             Ok(Value::Number(base.powf(exponent)))
         }
+        BuiltinFn::AfNumberFormat => mutate_event(interpreter, args, pos, af_number_format),
+        BuiltinFn::AfNumberKeystroke => mutate_event(interpreter, args, pos, af_number_keystroke),
+        BuiltinFn::AfPercentFormat => mutate_event(interpreter, args, pos, af_percent_format),
+        BuiltinFn::AfPercentKeystroke => mutate_event(interpreter, args, pos, af_percent_keystroke),
+        BuiltinFn::AfDateFormatEx => mutate_event(interpreter, args, pos, af_date_format_ex),
+        BuiltinFn::AfDateKeystrokeEx => mutate_event(interpreter, args, pos, af_date_keystroke_ex),
+        BuiltinFn::AfDateFormat => mutate_event(interpreter, args, pos, af_date_format),
+        BuiltinFn::AfDateKeystroke => mutate_event(interpreter, args, pos, af_date_keystroke),
+        BuiltinFn::UtilPrintf => util_printf(interpreter, args, pos),
     }
 }
 
@@ -1445,4 +1595,448 @@ fn call_array_method(
             name: method.to_owned(),
         }),
     }
+}
+
+// --- Acrobat compatibility helpers -----------------------------------------
+//
+// The functions below implement the documented deterministic subsets of the
+// Acrobat field format/validate API. They read and write only the injected
+// in-memory [`EventData`]; they never touch a document, a clock, or the host.
+
+fn mutate_event<F>(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    pos: Pos,
+    mutate: F,
+) -> Result<Value, JsError>
+where
+    F: FnOnce(&mut Interpreter<'_>, &[Value], &mut EventData, Pos) -> Result<Value, JsError>,
+{
+    interpreter.tick(pos)?;
+    let event = interpreter.event_ref(pos)?;
+    let mut data = event.try_borrow_mut().map_err(|_| JsError::Internal {
+        pos,
+        message: "event was already borrowed".to_owned(),
+    })?;
+    mutate(interpreter, args, &mut data, pos)
+}
+
+fn arg_int(args: &[Value], index: usize, default: i64) -> i64 {
+    match args.get(index) {
+        Some(Value::Number(number)) if number.is_finite() => *number as i64,
+        Some(Value::Bool(boolean)) => i64::from(*boolean),
+        Some(Value::Str(text)) => text.trim().parse::<i64>().unwrap_or(default),
+        _ => default,
+    }
+}
+
+fn arg_bool(args: &[Value], index: usize, default: bool) -> bool {
+    match args.get(index) {
+        Some(Value::Bool(boolean)) => *boolean,
+        Some(Value::Number(number)) => *number != 0.0,
+        Some(Value::Str(text)) => matches!(
+            text.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes"
+        ),
+        _ => default,
+    }
+}
+
+fn af_number_format(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    format_number_common(interpreter, args, event, pos, false)
+}
+
+fn af_percent_format(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    format_number_common(interpreter, args, event, pos, true)
+}
+
+fn format_number_common(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+    percent: bool,
+) -> Result<Value, JsError> {
+    let decimals = arg_int(args, 0, 2).clamp(0, 12) as u32;
+    let sep_style = arg_int(args, 1, 0);
+    let neg_style = arg_int(args, 2, 0);
+    let currency = if percent {
+        String::new()
+    } else {
+        arg_string(interpreter, args, 4, pos)?
+    };
+    let prepend = !percent && arg_bool(args, 5, true);
+
+    let mut number = event.value.trim().parse::<f64>().unwrap_or(f64::NAN);
+    if !number.is_finite() {
+        event.rc = true;
+        return Ok(Value::Undefined);
+    }
+    if percent {
+        number *= 100.0;
+    }
+
+    let scale = 10f64.powi(decimals as i32);
+    let scaled_float = (number.abs() * scale).round();
+    let scale_u = scale as u64;
+    let scaled = if scaled_float >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        scaled_float as u64
+    };
+    let integer = scaled / scale_u;
+    let fraction = scaled % scale_u;
+    let negative = number < 0.0;
+
+    let mut body = String::new();
+    write_grouped(integer, sep_style, &mut body);
+    if decimals > 0 {
+        body.push(if sep_style == 2 { ',' } else { '.' });
+        body.push_str(&format!("{fraction:0width$}", width = decimals as usize));
+    }
+
+    let parentheses = negative && matches!(neg_style, 1 | 3);
+    let lead = if negative {
+        if parentheses { "(" } else { "-" }
+    } else {
+        ""
+    };
+    let trail = if parentheses { ")" } else { "" };
+
+    let mut out = String::new();
+    let mut length = 0usize;
+    if prepend && !currency.is_empty() {
+        interpreter.push_string(&mut out, &mut length, &currency, pos)?;
+    }
+    interpreter.push_string(&mut out, &mut length, lead, pos)?;
+    interpreter.push_string(&mut out, &mut length, &body, pos)?;
+    interpreter.push_string(&mut out, &mut length, trail, pos)?;
+    if !prepend && !currency.is_empty() {
+        interpreter.push_string(&mut out, &mut length, &currency, pos)?;
+    }
+    if percent {
+        interpreter.push_string(&mut out, &mut length, "%", pos)?;
+    }
+    event.value = out;
+    event.rc = true;
+    Ok(Value::Undefined)
+}
+
+fn write_grouped(value: u64, sep_style: i64, out: &mut String) {
+    let digits = format!("{value}");
+    match sep_style {
+        0 | 2 => {
+            let separator = if sep_style == 0 { ',' } else { '.' };
+            let len = digits.len();
+            for (index, ch) in digits.chars().enumerate() {
+                if index > 0 && (len - index) % 3 == 0 {
+                    out.push(separator);
+                }
+                out.push(ch);
+            }
+        }
+        _ => out.push_str(&digits),
+    }
+}
+
+fn af_number_keystroke(
+    _interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    _pos: Pos,
+) -> Result<Value, JsError> {
+    let decimals = arg_int(args, 0, 2).clamp(0, 12);
+    let accepted = match event.key.chars().next() {
+        None => true,
+        Some(_ch) if event.key.chars().count() > 1 => event
+            .key
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | '+' | ' ')),
+        Some(ch) if ch.is_ascii_digit() => true,
+        Some('.') => decimals > 0 && !event.value.contains('.'),
+        Some(',' | '-' | '+' | ' ') => true,
+        Some(_) => false,
+    };
+    event.rc = accepted;
+    Ok(Value::Bool(accepted))
+}
+
+fn af_percent_keystroke(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    af_number_keystroke(interpreter, args, event, pos)
+}
+
+fn af_date_format_ex(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    let format = arg_string(interpreter, args, 0, pos)?;
+    format_date_with(interpreter, &format, event, pos)
+}
+
+fn af_date_format(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    let format = legacy_date_format(arg_int(args, 0, 0));
+    format_date_with(interpreter, format, event, pos)
+}
+
+fn af_date_keystroke_ex(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    let format = arg_string(interpreter, args, 0, pos)?;
+    keystroke_date_with(&format, event, pos)
+}
+
+fn af_date_keystroke(
+    _interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    let format = legacy_date_format(arg_int(args, 0, 0));
+    keystroke_date_with(format, event, pos)
+}
+
+fn legacy_date_format(code: i64) -> &'static str {
+    match code {
+        0 => "mm/dd/yyyy",
+        1 => "mm/dd/yy",
+        2 => "dd/mm/yyyy",
+        3 => "dd/mm/yy",
+        4 => "yyyy/mm/dd",
+        5 => "yy/mm/dd",
+        _ => "mm/dd/yyyy",
+    }
+}
+
+fn digit_runs(text: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            current.push(ch);
+        } else if !current.is_empty() {
+            runs.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        runs.push(current);
+    }
+    runs
+}
+
+fn format_date_with(
+    interpreter: &mut Interpreter<'_>,
+    format: &str,
+    event: &mut EventData,
+    pos: Pos,
+) -> Result<Value, JsError> {
+    let runs = digit_runs(&event.value);
+    if runs.len() < 3 {
+        event.rc = true;
+        return Ok(Value::Undefined);
+    }
+    let (year, month, day) = if runs[0].chars().count() == 4 {
+        (runs[0].as_str(), runs[1].as_str(), runs[2].as_str())
+    } else {
+        (runs[2].as_str(), runs[0].as_str(), runs[1].as_str())
+    };
+
+    let mut out = String::new();
+    let mut length = 0usize;
+    let mut index = 0usize;
+    while index < format.len() {
+        let rest = &format[index..];
+        let token = if rest.starts_with("yyyy") {
+            Some((4usize, year, 4usize))
+        } else if rest.starts_with("yy") {
+            Some((2, year, 2))
+        } else if rest.starts_with("mm") {
+            Some((2, month, 2))
+        } else if rest.starts_with("dd") {
+            Some((2, day, 2))
+        } else if rest.starts_with('m') {
+            Some((1, month, 1))
+        } else if rest.starts_with('d') {
+            Some((1, day, 1))
+        } else {
+            None
+        };
+        match token {
+            Some((advance, component, width)) => {
+                let piece = fit_component(component, width);
+                interpreter.push_string(&mut out, &mut length, &piece, pos)?;
+                index += advance;
+            }
+            None => {
+                let ch = rest.chars().next().unwrap_or('\0');
+                if ch != '\0' {
+                    interpreter.push_string(&mut out, &mut length, &ch.to_string(), pos)?;
+                    index += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    event.value = out;
+    event.rc = true;
+    Ok(Value::Undefined)
+}
+
+fn fit_component(value: &str, width: usize) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() >= width {
+        chars[chars.len() - width..].iter().collect()
+    } else {
+        let mut padded = "0".repeat(width - chars.len());
+        padded.push_str(value);
+        padded
+    }
+}
+
+fn keystroke_date_with(format: &str, event: &mut EventData, _pos: Pos) -> Result<Value, JsError> {
+    let accepted = event
+        .key
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || ch == ' ' || format.contains(ch));
+    event.rc = accepted;
+    Ok(Value::Bool(accepted))
+}
+
+fn util_printf(
+    interpreter: &mut Interpreter<'_>,
+    args: &[Value],
+    pos: Pos,
+) -> Result<Value, JsError> {
+    interpreter.tick(pos)?;
+    let format = arg_string(interpreter, args, 0, pos)?;
+    let chars: Vec<char> = format.chars().collect();
+    let mut out = String::new();
+    let mut length = 0usize;
+    let mut index = 0usize;
+    let mut next_arg = 1usize;
+
+    while index < chars.len() {
+        if chars[index] != '%' {
+            interpreter.push_string(&mut out, &mut length, &chars[index].to_string(), pos)?;
+            index += 1;
+            continue;
+        }
+        if index + 1 < chars.len() && chars[index + 1] == '%' {
+            interpreter.push_string(&mut out, &mut length, "%", pos)?;
+            index += 2;
+            continue;
+        }
+
+        let mut cursor = index + 1;
+        let mut left_align = false;
+        let mut zero_pad = false;
+        while cursor < chars.len() && matches!(chars[cursor], '-' | '0') {
+            if chars[cursor] == '-' {
+                left_align = true;
+            } else {
+                zero_pad = true;
+            }
+            cursor += 1;
+        }
+        let width_start = cursor;
+        while cursor < chars.len() && chars[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        let width = chars[width_start..cursor]
+            .iter()
+            .collect::<String>()
+            .parse::<usize>()
+            .unwrap_or(0);
+        let mut precision: Option<usize> = None;
+        if cursor < chars.len() && chars[cursor] == '.' {
+            cursor += 1;
+            let precision_start = cursor;
+            while cursor < chars.len() && chars[cursor].is_ascii_digit() {
+                cursor += 1;
+            }
+            precision = Some(
+                chars[precision_start..cursor]
+                    .iter()
+                    .collect::<String>()
+                    .parse::<usize>()
+                    .unwrap_or(0),
+            );
+        }
+        if cursor >= chars.len() {
+            interpreter.push_string(&mut out, &mut length, "%", pos)?;
+            index += 1;
+            continue;
+        }
+        let conversion = chars[cursor];
+        cursor += 1;
+
+        let value = args.get(next_arg).cloned().unwrap_or(Value::Undefined);
+        next_arg += 1;
+        let mut piece = match conversion {
+            's' => interpreter.stringify(&value, pos)?,
+            'd' | 'i' => {
+                let number = to_number(&value, interpreter.limits, pos)?;
+                if number.is_finite() {
+                    format!("{}", number as i64)
+                } else {
+                    "0".to_owned()
+                }
+            }
+            'f' | 'F' => {
+                let number = to_number(&value, interpreter.limits, pos)?;
+                let places = precision.unwrap_or(6);
+                if number.is_finite() {
+                    format!("{number:.places$}")
+                } else {
+                    "NaN".to_owned()
+                }
+            }
+            _ => {
+                let literal: String = chars[index..cursor].iter().collect();
+                interpreter.push_string(&mut out, &mut length, &literal, pos)?;
+                index = cursor;
+                continue;
+            }
+        };
+
+        let current = piece.chars().count();
+        if width > current {
+            let pad_count = width - current;
+            let pad = if zero_pad && !left_align { '0' } else { ' ' };
+            let padding: String = std::iter::repeat_n(pad, pad_count).collect();
+            if left_align {
+                piece.push_str(&padding);
+            } else {
+                piece = format!("{padding}{piece}");
+            }
+        }
+        interpreter.push_string(&mut out, &mut length, &piece, pos)?;
+        index = cursor;
+    }
+    Ok(Value::Str(out))
 }

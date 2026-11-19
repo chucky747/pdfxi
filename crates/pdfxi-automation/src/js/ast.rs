@@ -87,6 +87,8 @@ pub(crate) enum ExprKind {
     Str(String),
     Bool(bool),
     Null,
+    /// The Acrobat document context (`this`), available only when injected.
+    This,
     Ident(String),
     Unary {
         op: UnaryOp,

@@ -170,12 +170,11 @@ impl<'a> Parser<'a> {
                         pos,
                     });
                 }
-                "this" => {
-                    return Err(JsError::DangerousGlobal {
-                        pos,
-                        name: "this".to_owned(),
-                    });
-                }
+                // `this` is parsed as an expression so that Acrobat-style
+                // `this.getField(...)` works when a context is injected. When
+                // no context is present, evaluation rejects it as a dangerous
+                // global (see the `ExprKind::This` arm in the interpreter).
+                "this" => {}
                 name if is_dangerous_name(name) => {
                     return Err(JsError::DangerousGlobal {
                         pos,
@@ -615,9 +614,9 @@ impl<'a> Parser<'a> {
                         pos,
                         kind: ExprKind::Null,
                     }),
-                    "this" => Err(JsError::DangerousGlobal {
+                    "this" => Ok(Expr {
                         pos,
-                        name: "this".to_owned(),
+                        kind: ExprKind::This,
                     }),
                     _ if is_dangerous_name(&name) => Err(JsError::DangerousGlobal { pos, name }),
                     _ if is_reserved_name(&name) => {

@@ -2340,33 +2340,17 @@ tests = [
 title = "Droplets and watched folders"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-automation/src/js/mod.rs",
-    "crates/pdfxi-automation/src/js/interpreter.rs",
-    "crates/pdfxi-automation/src/js/host.rs",
-    "docs/evidence/automation/T-0062.md",
-]
+docs = "crates/pdfxi-automation/src/js/, docs/evidence/automation/T-0094.md"
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation: 73 passed, 0 failed (29 new js::tests). fmt/clippy (-D warnings)/rustdoc (-D warnings) all EXIT=0. Full pasted output in docs/evidence/automation/T-0062.md"
+evidence = "docs/evidence/automation/T-0094.md"
 id = "AUTO-004"
-notes = """
-T-0062 delivered the sandboxed JS engine (lexer, parser, budgeted interpreter,
-typed position-aware errors, cycle-safe/incrementally budgeted string conversion,
-host-object boundary, no ambient access, 29 tests). The row remains in-progress
-because no audited document operations are exposed through HostObject yet and
-there is no UI/action entry point to run scripts; those are separate future
-tasks. No real PDF mutation is performed by this work.
-"""
+notes = "Subset interpreter with hard sandbox and typed limits; Action Wizard/UI binding and broader Acrobat API coverage remain open."
 priority = "P3"
 status = "in-progress"
 tests = [
-    "js::tests::self_referential_arrays_are_rejected_by_string_conversion_paths",
-    "js::tests::deeply_nested_values_are_rejected_without_stack_overflow",
-    "js::tests::string_conversion_charges_cpu_steps",
-    "js::tests::join_and_concat_enforce_string_size_incrementally",
-    "js::tests::string_indexes_are_char_offsets_and_substring_swaps_reversed_args",
-    "js::tests::object_index_operations_use_the_active_limits",
-    "js::tests::compound_assignment_evaluates_index_and_object_expressions_once",
+    "js::interpreter::tests::acrobat_number_and_percent_builtins",
+    "js::interpreter::tests::forbidden_globals_are_rejected",
+    "js::interpreter::tests::cancellation_stops_evaluation",
 ]
 title = "Sandboxed Acrobat-compatible JavaScript subset"
 

@@ -3,7 +3,7 @@
   "lane": "automation",
   "title": "Sandboxed Acrobat-compatible JavaScript subset",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0011"],
   "owns": [
     "crates/pdfxi-automation/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0094.toml"
   ],
   "acceptance": "cargo test -p pdfxi-automation",
-  "evidence": ""
+  "evidence": "docs/evidence/automation/T-0094.md"
 }

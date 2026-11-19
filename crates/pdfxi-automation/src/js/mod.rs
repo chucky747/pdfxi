@@ -32,6 +32,38 @@
 //! `reverse`. These helpers are date-free, random-free, and pure apart from the
 //! explicitly documented array mutators.
 //!
+//! # Acrobat compatibility subset
+//!
+//! When a script is run with an explicitly injected [`AcrobatContext`], the
+//! following additional capabilities are available; otherwise `this` remains
+//! a rejected dangerous global and `event` is an unresolved name:
+//!
+//! - `this.getField(name)` returns a field reference whose `value` property
+//!   reads from and writes to the injected in-memory [`FieldStore`]. Field
+//!   values are strings, matching the PDF field value model.
+//! - `event.value`, `event.key`, and `event.rc` expose the current in-memory
+//!   [`EventData`] for format, keystroke, and validation scripts.
+//! - `AFNumber_Format(nDec, sepStyle, negStyle, custStyle, strCurrency, bPrepend)`
+//!   and `AFNumber_Keystroke(...)` format and validate numeric fields.
+//!   Separator style `0` uses `,` thousands and `.` decimals; `1` uses no
+//!   separators; `2` uses `.` thousands and `,` decimals. Negative style `1`
+//!   and `3` use parentheses, `0` and `2` use a minus sign.
+//! - `AFPercent_Format(nDec, sepStyle, negStyle, custStyle)` and
+//!   `AFPercent_Keystroke(...)` mirror the number helpers but multiply by 100
+//!   and append `%`.
+//! - `AFDate_FormatEx(cFormat)`, `AFDate_KeystrokeEx(cFormat)`, and the legacy
+//!   numeric-code forms `AFDate_Format(n)` / `AFDate_Keystroke(n)` reorder
+//!   numeric date components according to `mm`, `dd`, `yy`, and `yyyy` tokens.
+//!   No calendar, timezone, clock, or locale logic is involved; invalid input
+//!   is left unchanged.
+//! - `util.printf` supports `%s`, `%d`/`%i`, `%f` (with `.N` precision), `%%`,
+//!   and simple width/zero-pad/left-align flags. Unknown conversions are
+//!   emitted literally.
+//!
+//! All of these operate solely on the injected in-memory data, are fully
+//! deterministic, and remain subject to every step, size, and cancellation
+//! budget. No PDF field is mutated by this crate.
+//!
 //! # Rejected constructs
 //!
 //! Dangerous globals (`eval`, `Function`, `require`, `import`, `export`,
@@ -54,6 +86,21 @@
 //! assert_eq!(result.as_number(), Some(6.0));
 //! ```
 //!
+//! An Acrobat script requires an explicitly injected context:
+//!
+//! ```text
+//! use pdfxi_automation::{AcrobatContext, run_acrobat_script, CancelToken, Limits};
+//!
+//! let context = AcrobatContext::new().with_event_value("1234.5");
+//! run_acrobat_script(
+//!     "AFNumber_Format(2, 0, 0, 0, '', false);",
+//!     &Limits::default(),
+//!     &CancelToken::new(),
+//!     &context,
+//! ).expect("valid script");
+//! assert_eq!(context.event_value(), "1,234.50");
+//! ```
+//!
 //! # Dependency note
 //!
 //! Errors are implemented with direct [`std::fmt::Display`] and
@@ -62,6 +109,7 @@
 //! `thiserror` would modify the integrator-owned `Cargo.lock`; this module
 //! follows the established [`crate::AutomationError`] convention instead.
 
+mod acrobat;
 mod ast;
 mod error;
 mod host;
@@ -70,6 +118,7 @@ mod lexer;
 mod parser;
 mod value;
 
+pub use acrobat::{AcrobatContext, EventData, FieldStore};
 pub use error::{JsError, Pos};
 pub use host::{HostObject, HostRegistry, NoHostObject};
 pub use value::{BuiltinFn, JsFunction, Value};
@@ -223,7 +272,34 @@ impl Script {
         cancel: &CancelToken,
         host: &HostRegistry,
     ) -> Result<Value, JsError> {
-        let mut interpreter = interpreter::Interpreter::new(limits, cancel, host);
+        self.run_with_context(limits, cancel, host, None)
+    }
+
+    /// Runs the parsed script with an injected Acrobat document context.
+    ///
+    /// This makes `this.getField(...)`, `event`, and the `AF*` format/keystroke
+    /// built-ins available for the duration of the run. No host objects are
+    /// registered; use [`Script::run_with_context`] for both.
+    pub fn run_with_acrobat(
+        &self,
+        limits: &Limits,
+        cancel: &CancelToken,
+        acrobat: &AcrobatContext,
+    ) -> Result<Value, JsError> {
+        self.run_with_context(limits, cancel, &HostRegistry::new(), Some(acrobat))
+    }
+
+    /// Runs the parsed script with both host objects and an optional Acrobat
+    /// document context.
+    pub fn run_with_context(
+        &self,
+        limits: &Limits,
+        cancel: &CancelToken,
+        host: &HostRegistry,
+        acrobat: Option<&AcrobatContext>,
+    ) -> Result<Value, JsError> {
+        let mut interpreter =
+            interpreter::Interpreter::new_with_context(limits, cancel, host, acrobat);
         interpreter.run(&self.program)
     }
 }
@@ -235,6 +311,20 @@ impl Script {
 /// [`Script::run_with_host`].
 pub fn run_script(source: &str, limits: &Limits, cancel: &CancelToken) -> Result<Value, JsError> {
     Script::parse_with_limits(source, limits)?.run(limits, cancel)
+}
+
+/// Parses and immediately runs `source` with an injected Acrobat context.
+///
+/// Scripts are never executed implicitly: callers must invoke this function (or
+/// [`Script::run_with_acrobat`]) explicitly. The context is the only way a
+/// script can observe form fields or the current event.
+pub fn run_acrobat_script(
+    source: &str,
+    limits: &Limits,
+    cancel: &CancelToken,
+    acrobat: &AcrobatContext,
+) -> Result<Value, JsError> {
+    Script::parse_with_limits(source, limits)?.run_with_acrobat(limits, cancel, acrobat)
 }
 
 pub(crate) fn is_valid_identifier(name: &str) -> bool {
