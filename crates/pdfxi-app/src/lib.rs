@@ -13,6 +13,8 @@
 //! The [`thumbs`] module adds the window-free state and math for a page-thumbnail
 //! navigation pane: visible-row ranges, page/row mapping, active-page tracking,
 //! and a bounded prefetch request queue backed by `pdfxi-render`'s cache.
+//! The [`commands`] module defines typed view commands (rotation, fit modes,
+//! zoom) and a pure keyboard-shortcut map shared by the toolbar and key paths.
 //! [`AppState`] is the tabbed document workspace: it owns an insertion-ordered
 //! set of stable-id tabs, each with its own path, dirty flag, and per-tab view
 //! state (page, zoom, layout, rotation, and scroll offset). Open, close,
@@ -27,6 +29,7 @@
 #![forbid(unsafe_code)]
 
 pub mod canvas;
+pub mod commands;
 pub mod find;
 pub mod raster;
 pub mod selection;
@@ -42,6 +45,10 @@ pub mod ui;
 
 pub use canvas::{
     CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, PageGeometry, PageSize,
+    effective_page_size, rotate_point, uv_quad_for_rotation, unrotate_point,
+};
+pub use commands::{
+    ShortcutKey, ShortcutModifiers, ViewCommand, map_shortcut,
 };
 pub use find::{DEFAULT_MATCH_CAP, FindMatch, FindOptions, FindState};
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};

@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::canvas::CanvasPoint;
 use crate::tabs::{DocumentTab, TabId, normalize_path_key};
 use crate::toolset::Toolset;
-use crate::view::{Rotation, ViewMode, Zoom};
+use crate::view::{DEFAULT_ZOOM, Rotation, ViewMode, Zoom};
 
 /// Errors produced by tab-oriented operations on [`AppState`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,6 +418,31 @@ impl AppState {
         Ok(tab.rotation())
     }
 
+    /// Reset the active tab's view rotation to zero.
+    ///
+    /// Only the per-tab *view* rotation is changed; a page's intrinsic `/Rotate`
+    /// is never stored here and is never mutated. Returns the new rotation.
+    pub fn reset_rotation(&mut self) -> Result<Rotation, AppError> {
+        let tab = self.active_tab_mut().ok_or(AppError::NoActiveTab)?;
+        tab.set_rotation(Rotation::Deg0);
+        Ok(tab.rotation())
+    }
+
+    /// Set the active tab's zoom to "fit page".
+    pub fn fit_page(&mut self) -> Result<(), AppError> {
+        self.set_zoom(Zoom::FitPage)
+    }
+
+    /// Set the active tab's zoom to "fit width".
+    pub fn fit_width(&mut self) -> Result<(), AppError> {
+        self.set_zoom(Zoom::FitWidth)
+    }
+
+    /// Set the active tab's zoom to 100% actual size.
+    pub fn actual_size(&mut self) -> Result<(), AppError> {
+        self.set_zoom(Zoom::custom(DEFAULT_ZOOM))
+    }
+
     /// Compute the deterministic title of a tab, if it exists.
     pub fn tab_title(&self, id: TabId) -> Option<String> {
         self.tab(id).map(|tab| tab.title())
@@ -572,6 +597,57 @@ mod tests {
             Err(AppError::NoActiveTab)
         );
         assert_eq!(state.rotate_clockwise(), Err(AppError::NoActiveTab));
+    }
+
+    #[test]
+    fn reset_rotation_and_display_controls_update_only_the_active_tab() {
+        let mut state = AppState::new();
+        let a = state.open_tab("a.pdf");
+        let b = state.open_tab("b.pdf");
+        assert!(state.activate_tab(a).is_ok());
+
+        // Drive tab A through a full rotation cycle, then reset it.
+        for _ in 0..4 {
+            state.rotate_clockwise().expect("active tab");
+        }
+        assert_eq!(state.tab(a).map(|t| t.rotation()), Some(Rotation::Deg0));
+        state.rotate_clockwise().expect("active tab");
+        assert_eq!(state.tab(a).map(|t| t.rotation()), Some(Rotation::Deg90));
+        assert_eq!(state.reset_rotation(), Ok(Rotation::Deg0));
+        assert_eq!(state.tab(a).map(|t| t.rotation()), Some(Rotation::Deg0));
+
+        // Tab B never changed.
+        assert_eq!(state.tab(b).map(|t| t.rotation()), Some(Rotation::Deg0));
+
+        // Page display controls set the zoom policy on the active tab only.
+        state.fit_page().expect("active tab");
+        assert_eq!(state.tab(a).map(|t| t.zoom()), Some(Zoom::FitPage));
+        state.fit_width().expect("active tab");
+        assert_eq!(state.tab(a).map(|t| t.zoom()), Some(Zoom::FitWidth));
+        state.actual_size().expect("active tab");
+        assert_eq!(state.tab(a).map(|t| t.zoom()), Some(Zoom::custom(1.0)));
+        assert_eq!(state.tab(b).map(|t| t.zoom()), Some(Zoom::default()));
+
+        // No active tab produces a typed error rather than a panic.
+        state.close_tab(a).expect("tab a exists");
+        state.close_tab(b).expect("tab b exists");
+        assert_eq!(state.reset_rotation(), Err(AppError::NoActiveTab));
+    }
+
+    #[test]
+    fn rotation_state_is_isolated_and_restored_across_tab_switches() {
+        let mut state = AppState::new();
+        let a = state.open_tab("a");
+        state.set_rotation(Rotation::Deg270).expect("active tab");
+        let b = state.open_tab("b");
+        // The new tab starts at the default rotation, not tab A's rotation.
+        assert_eq!(state.tab(b).map(|t| t.rotation()), Some(Rotation::Deg0));
+        state.set_rotation(Rotation::Deg90).expect("active tab");
+
+        assert!(state.activate_tab(a).is_ok());
+        assert_eq!(state.tab(a).map(|t| t.rotation()), Some(Rotation::Deg270));
+        assert!(state.activate_tab(b).is_ok());
+        assert_eq!(state.tab(b).map(|t| t.rotation()), Some(Rotation::Deg90));
     }
 
     #[test]

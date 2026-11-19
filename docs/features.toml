@@ -122,14 +122,35 @@ tests = [
 title = "Zoom pan loupe and fit modes"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/commands.rs",
+    "crates/pdfxi-app/src/state.rs",
+    "crates/pdfxi-app/src/view.rs",
+    "crates/pdfxi-app/src/canvas.rs",
+    "crates/pdfxi-app/src/ui.rs",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-app: 94 passed; fmt/clippy/doc EXIT=0. See docs/evidence/app/T-0083.md."
 id = "VIEW-004"
-notes = ""
+notes = "Per-tab view rotation independent of page /Rotate, with rotation-aware hit testing, selection, fit, scroll clamping, texture mapping, shortcuts, and UI status."
 priority = "P0"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "view::tests::rotation_normalizes_and_turns",
+    "view::tests::rotation_cycles_through_four_quarter_turns",
+    "view::tests::rotation_compose_and_dimension_swap",
+    "state::tests::rotation_commands_update_active_tab_only",
+    "state::tests::rotation_state_is_isolated_and_restored_across_tab_switches",
+    "state::tests::reset_rotation_and_display_controls_update_only_the_active_tab",
+    "canvas::tests::hit_test_transform_is_correct_at_every_rotation",
+    "canvas::tests::selection_rect_maps_forward_under_rotation",
+    "canvas::tests::fit_width_uses_rotated_page_extent",
+    "canvas::tests::scroll_clamp_tracks_rotated_content_height",
+    "canvas::tests::page_rotate_is_independent_and_composes_with_view",
+    "canvas::tests::uv_quad_maps_texture_corners_for_each_rotation",
+    "commands::tests::rotation_shortcuts_map_with_shift_disambiguation",
+    "commands::tests::every_command_has_a_stable_shortcut_label",
+]
 title = "Rotate view and page display"
 
 [[feature]]

@@ -47,6 +47,17 @@
 //! shell saves on switch-away and restores on switch-back. A fixed placeholder
 //! is shown while no document is open. All of these paths are exposed as
 //! window-free [`PdfxiApp`] methods so they are unit tested without a GUI.
+//!
+//! # View rotation and page display
+//!
+//! The toolbar exposes clockwise/counterclockwise rotation, a rotation reset,
+//! and fit page / fit width / actual size controls, each with a keyboard path
+//! via [`crate::map_shortcut`]. The status line reports rotation and zoom
+//! together. Rotation is per-tab and independent of a PDF page's `/Rotate`; the
+//! layout composes them (rotation first, then zoom) so fit modes, hit testing,
+//! overlay placement, and scroll clamping all follow what is displayed. Every
+//! command goes through [`AppState`] and returns immediately — no UI action
+//! performs blocking I/O.
 
 use std::path::Path;
 
@@ -55,12 +66,14 @@ use egui::Key;
 use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
     DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, OpenOutcome, OwnedSpan,
-    OwnedTextPage, PageSize, SelectionModel, TabId, ThumbnailPaneState, Toolset, ViewMode, Zoom,
-    app_name,
+    OwnedTextPage, PageSize, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
+    ThumbnailPaneState, Toolset, ViewCommand, ViewMode, Zoom, app_name, map_shortcut,
 };
 
 #[cfg(feature = "pdfium")]
 use crate::Rotation;
+#[cfg(feature = "pdfium")]
+use crate::uv_quad_for_rotation;
 #[cfg(feature = "pdfium")]
 use crate::raster::{RasterCache, RasterKey, workspace_fixture_path};
 #[cfg(feature = "pdfium")]
@@ -197,11 +210,12 @@ pub fn demo_text_pages(count: usize) -> Vec<OwnedTextPage> {
 /// and window-free so the geometry can be asserted in unit tests.
 pub fn layout_for_state(state: &AppState, viewport: CanvasSize) -> Option<CanvasLayout> {
     let tab = state.active_tab()?;
-    Some(CanvasLayout::standard(
+    Some(CanvasLayout::standard_rotated(
         tab.view_mode(),
         tab.zoom(),
         viewport,
         &demo_page_sizes(tab.page_count()),
+        tab.rotation(),
     ))
 }
 
@@ -217,6 +231,22 @@ pub fn screen_to_canvas(
     scroll_y: f32,
 ) -> CanvasPoint {
     CanvasPoint::new(pos.x - origin.x + scroll_x, pos.y - origin.y + scroll_y)
+}
+
+/// Translate an `egui` key into the toolkit-independent [`ShortcutKey`].
+///
+/// Returning `None` for keys outside the view-command map lets other widgets
+/// (notably the find text field) keep their normal key handling.
+fn native_shortcut_key(key: Key) -> Option<ShortcutKey> {
+    match key {
+        Key::R => Some(ShortcutKey::R),
+        Key::Num0 => Some(ShortcutKey::Zero),
+        Key::Num1 => Some(ShortcutKey::One),
+        Key::Num2 => Some(ShortcutKey::Two),
+        Key::Equals => Some(ShortcutKey::Equals),
+        Key::Minus => Some(ShortcutKey::Minus),
+        _ => None,
+    }
 }
 
 /// Compose the one-line canvas info shown in the status area.
@@ -394,6 +424,40 @@ pub fn run() {
     ) {
         eprintln!("PDFXI viewer exited with an error: {error}");
     }
+}
+
+/// Paint a cached page texture into `rect`, rotating the texture UVs so the
+/// raster appears turned rather than stretched into a swapped page rectangle.
+///
+/// The four UV corners come from [`uv_quad_for_rotation`]; they are assigned to
+/// the displayed rectangle's corners in `(top-left, top-right, bottom-right,
+/// bottom-left)` order and drawn as two triangles. This is a pure GPU-side
+/// transform — no re-render or blocking I/O is involved.
+#[cfg(feature = "pdfium")]
+fn paint_rotated_image(
+    painter: &egui::Painter,
+    texture_id: egui::TextureId,
+    rect: egui::Rect,
+    rotation: Rotation,
+) {
+    let uv = uv_quad_for_rotation(rotation);
+    let corners = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+    ];
+    let mut mesh = egui::Mesh::with_texture(texture_id);
+    for (corner, (u, v)) in corners.iter().zip(uv.iter()) {
+        mesh.vertices.push(egui::Vertex {
+            pos: *corner,
+            uv: egui::pos2(*u, *v),
+            color: egui::Color32::WHITE,
+        });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(mesh);
 }
 
 /// The eframe application implementing the PDFXI viewer shell.
@@ -779,6 +843,58 @@ impl PdfxiApp {
         match self.state.rotate_counterclockwise() {
             Ok(rotation) => self.status = format!("Rotated to {} degrees", rotation.degrees()),
             Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Reset the active tab's view rotation to zero.
+    pub fn reset_rotation(&mut self) {
+        match self.state.reset_rotation() {
+            Ok(rotation) => {
+                self.status = format!("Rotation reset to {} degrees", rotation.degrees())
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Fit the whole (rotated) page in the viewport.
+    pub fn fit_page(&mut self) {
+        match self.state.fit_page() {
+            Ok(()) => self.status = format!("Page display: {}", Zoom::FitPage),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Fit the width of the (rotated) page to the viewport.
+    pub fn fit_width(&mut self) {
+        match self.state.fit_width() {
+            Ok(()) => self.status = format!("Page display: {}", Zoom::FitWidth),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Show the active page at 100% actual size.
+    pub fn actual_size(&mut self) {
+        match self.state.actual_size() {
+            Ok(()) => self.status = format!("Page display: {}", Zoom::custom(DEFAULT_ZOOM)),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Dispatch a typed [`ViewCommand`] to the matching action.
+    ///
+    /// Both the toolbar and keyboard paths funnel through this method, so every
+    /// command has one implementation and status message. Rotation and display
+    /// commands are window-free and never block on I/O.
+    pub fn apply_view_command(&mut self, command: ViewCommand) {
+        match command {
+            ViewCommand::RotateClockwise => self.rotate_clockwise(),
+            ViewCommand::RotateCounterclockwise => self.rotate_counterclockwise(),
+            ViewCommand::ResetRotation => self.reset_rotation(),
+            ViewCommand::FitPage => self.fit_page(),
+            ViewCommand::FitWidth => self.fit_width(),
+            ViewCommand::ActualSize => self.actual_size(),
+            ViewCommand::ZoomIn => self.zoom_in(),
+            ViewCommand::ZoomOut => self.zoom_out(),
         }
     }
 
@@ -1171,11 +1287,51 @@ impl PdfxiApp {
             if ui.button("Zoom +").clicked() {
                 self.zoom_in();
             }
-            if ui.button("Rotate CCW").clicked() {
+            if ui
+                .button("Rotate CCW")
+                .on_hover_text(ViewCommand::RotateCounterclockwise.shortcut_label())
+                .clicked()
+            {
                 self.rotate_counterclockwise();
             }
-            if ui.button("Rotate CW").clicked() {
+            if ui
+                .button("Rotate CW")
+                .on_hover_text(ViewCommand::RotateClockwise.shortcut_label())
+                .clicked()
+            {
                 self.rotate_clockwise();
+            }
+            if ui
+                .button("Reset rotation")
+                .on_hover_text(ViewCommand::ResetRotation.shortcut_label())
+                .clicked()
+            {
+                self.reset_rotation();
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Display:");
+            if ui
+                .button("Fit page")
+                .on_hover_text(ViewCommand::FitPage.shortcut_label())
+                .clicked()
+            {
+                self.fit_page();
+            }
+            if ui
+                .button("Fit width")
+                .on_hover_text(ViewCommand::FitWidth.shortcut_label())
+                .clicked()
+            {
+                self.fit_width();
+            }
+            if ui
+                .button("Actual size")
+                .on_hover_text(ViewCommand::ActualSize.shortcut_label())
+                .clicked()
+            {
+                self.actual_size();
             }
         });
 
@@ -1347,8 +1503,6 @@ impl PdfxiApp {
 
                 #[cfg(feature = "pdfium")]
                 let ctx = ui.ctx().clone();
-                #[cfg(feature = "pdfium")]
-                let full_uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                 let painter = ui.painter();
                 let stroke = ui.visuals().widgets.inactive.fg_stroke;
                 for page in layout.pages() {
@@ -1363,8 +1517,9 @@ impl PdfxiApp {
                     if let Some(texture) =
                         self.raster_texture(&ctx, page.page, page.scale, rotation)
                     {
-                        // Paint the real page raster inside the page rectangle.
-                        painter.image(texture.id(), rect, full_uv, egui::Color32::WHITE);
+                        // Paint the real page raster inside the rotated page
+                        // rectangle, rotating its UVs to match the view.
+                        paint_rotated_image(painter, texture.id(), rect, page.rotation);
                         continue;
                     }
                     // Without a cached raster (or without PDFium), draw the
@@ -1387,15 +1542,18 @@ impl PdfxiApp {
                     let Some(local) = match_rect(find_hit, &self.demo_text) else {
                         continue;
                     };
-                    let Some(geometry) = layout.page(find_hit.page()) else {
+                    // Map the page-local match rectangle forward through the
+                    // page's effective rotation so highlights follow the
+                    // rotated page instead of stretching with it.
+                    let Some(mapped) = layout.page_rect_to_canvas(find_hit.page(), local) else {
                         continue;
                     };
                     let rect = egui::Rect::from_min_size(
                         egui::pos2(
-                            origin.x + geometry.rect.x + local.x * geometry.scale - self.scroll_x,
-                            origin.y + geometry.rect.y + local.y * geometry.scale - self.scroll_y,
+                            origin.x + mapped.x - self.scroll_x,
+                            origin.y + mapped.y - self.scroll_y,
                         ),
-                        egui::vec2(local.width * geometry.scale, local.height * geometry.scale),
+                        egui::vec2(mapped.width, mapped.height),
                     );
                     highlights.push((rect, Some(index) == current_index));
                 }
@@ -1434,10 +1592,7 @@ impl PdfxiApp {
             next_tab,
             prev_tab,
             close,
-            zoom_in,
-            zoom_out,
-            rotate_cw,
-            rotate_ccw,
+            view_command,
             escape,
             open_find,
             next,
@@ -1446,15 +1601,35 @@ impl PdfxiApp {
         ) = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl;
             let shift = input.modifiers.shift;
+            // Rotation, fit modes, and zoom are resolved through the shared
+            // shortcut map, so the toolbar and keyboard paths cannot drift.
+            let view_command = [
+                Key::R,
+                Key::Num0,
+                Key::Num1,
+                Key::Num2,
+                Key::Equals,
+                Key::Minus,
+            ]
+            .into_iter()
+            .find(|key| input.key_pressed(*key))
+            .and_then(native_shortcut_key)
+            .and_then(|key| {
+                map_shortcut(
+                    key,
+                    ShortcutModifiers {
+                        ctrl,
+                        shift,
+                        alt: input.modifiers.alt,
+                    },
+                )
+            });
             (
                 ctrl && input.key_pressed(Key::N),
                 ctrl && !shift && input.key_pressed(Key::Tab),
                 ctrl && shift && input.key_pressed(Key::Tab),
                 ctrl && input.key_pressed(Key::W),
-                ctrl && input.key_pressed(Key::Equals),
-                ctrl && input.key_pressed(Key::Minus),
-                ctrl && !shift && input.key_pressed(Key::R),
-                ctrl && shift && input.key_pressed(Key::R),
+                view_command,
                 input.key_pressed(Key::Escape),
                 ctrl && input.key_pressed(Key::F),
                 !shift && input.key_pressed(Key::F3),
@@ -1475,17 +1650,8 @@ impl PdfxiApp {
         if close {
             self.close_active_tab();
         }
-        if zoom_in {
-            self.zoom_in();
-        }
-        if zoom_out {
-            self.zoom_out();
-        }
-        if rotate_cw {
-            self.rotate_clockwise();
-        }
-        if rotate_ccw {
-            self.rotate_counterclockwise();
+        if let Some(command) = view_command {
+            self.apply_view_command(command);
         }
         if open_find {
             self.open_find();
@@ -1641,6 +1807,109 @@ mod tests {
             app.state().tab(id).map(|tab| tab.view_mode()),
             Some(ViewMode::SinglePage)
         );
+    }
+
+    #[test]
+    fn reset_rotation_and_page_display_controls_update_active_tab() {
+        let mut app = PdfxiApp::new();
+        let id = app.open_demo_tab();
+        app.rotate_clockwise();
+        app.rotate_clockwise();
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.rotation()),
+            Some(Rotation::Deg180)
+        );
+        app.reset_rotation();
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.rotation()),
+            Some(Rotation::Deg0)
+        );
+        assert!(app.status().contains("reset"), "{}", app.status());
+
+        app.fit_page();
+        assert_eq!(app.state().tab(id).map(|tab| tab.zoom()), Some(Zoom::FitPage));
+        app.fit_width();
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.zoom()),
+            Some(Zoom::FitWidth)
+        );
+        app.actual_size();
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.zoom()),
+            Some(Zoom::custom(1.0))
+        );
+        assert!(app.status().contains("100%"), "{}", app.status());
+
+        // With no active tab the commands report through status, never panic.
+        app.close_active_tab();
+        app.reset_rotation();
+        app.fit_page();
+        assert_eq!(app.status(), "no tab is currently active");
+    }
+
+    #[test]
+    fn apply_view_command_dispatches_rotation_zoom_and_fit() {
+        let mut app = PdfxiApp::new();
+        let id = app.open_demo_tab();
+        app.apply_view_command(ViewCommand::RotateClockwise);
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.rotation()),
+            Some(Rotation::Deg90)
+        );
+        app.apply_view_command(ViewCommand::RotateCounterclockwise);
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.rotation()),
+            Some(Rotation::Deg0)
+        );
+        app.apply_view_command(ViewCommand::ResetRotation);
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.rotation()),
+            Some(Rotation::Deg0)
+        );
+        app.apply_view_command(ViewCommand::FitWidth);
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.zoom()),
+            Some(Zoom::FitWidth)
+        );
+        app.apply_view_command(ViewCommand::ZoomIn);
+        // A fit mode has no explicit scale; zoom-in resolves to 100% + step.
+        assert_eq!(
+            app.state().tab(id).and_then(|tab| tab.zoom().scale()),
+            Some(1.25)
+        );
+    }
+
+    #[test]
+    fn layout_for_state_applies_per_tab_view_rotation() {
+        let mut state = AppState::new();
+        let id = state.open_tab("rotated");
+        if let Some(tab) = state.tab_mut(id) {
+            tab.set_page_count(1);
+            tab.set_zoom(Zoom::custom(1.0));
+        }
+        let flat = layout_for_state(&state, CanvasSize::new(1000.0, 1000.0))
+            .expect("a layout is produced");
+        assert_eq!(flat.rotation(), Rotation::Deg0);
+        let flat_width = flat.page(0).map(|page| page.rect.width).unwrap_or(0.0);
+
+        state.set_rotation(Rotation::Deg90).expect("active tab");
+        let turned = layout_for_state(&state, CanvasSize::new(1000.0, 1000.0))
+            .expect("a layout is produced");
+        assert_eq!(turned.rotation(), Rotation::Deg90);
+        let turned_width = turned.page(0).map(|page| page.rect.width).unwrap_or(0.0);
+        // The demo page is portrait; a quarter turn makes it landscape.
+        assert!(turned_width > flat_width);
+    }
+
+    #[test]
+    fn status_indicator_reports_rotation_and_zoom_together() {
+        let mut state = AppState::new();
+        state.open_tab("report.pdf");
+        state.set_rotation(Rotation::Deg270).expect("active tab");
+        state.set_zoom(Zoom::FitWidth).expect("active tab");
+        let status = active_tab_status(&state);
+        assert!(status.contains("270 deg"), "{status}");
+        assert!(status.contains("Fit Width"), "{status}");
     }
 
     #[test]

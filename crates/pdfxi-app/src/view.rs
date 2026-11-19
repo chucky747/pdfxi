@@ -4,6 +4,27 @@
 //! dependency. They describe *policy* (how pages are arranged, how zoom is
 //! resolved, how pages are rotated) that the rendering/canvas layer will later
 //! consume.
+//!
+//! # Rotation and zoom composition order
+//!
+//! The viewer composes rotation and zoom in a fixed, documented order so fit
+//! modes and hit testing stay consistent (see [`crate::canvas::CanvasLayout`]):
+//!
+//! 1. **Rotation first.** A page's intrinsic `/Rotate` (from the PDF) is
+//!    combined with the per-tab *view* rotation via [`Rotation::combine`] to
+//!    obtain the effective rotation. Quarter turns (`90`/`270`) swap the
+//!    displayed width and height ([`Rotation::swaps_dimensions`]).
+//! 2. **Zoom second.** The fit modes resolve to a point-to-canvas scale against
+//!    the *rotated* (effective) page dimensions, so "fit width" fits the width
+//!    the user actually sees, whether the page is landscape or portrait.
+//! 3. **Layout and mapping last.** Pages are placed using that scale; pointer
+//!    hits are mapped back through the *inverse* rotation into page-local
+//!    coordinates, and page-local overlay rectangles are mapped forward into
+//!    canvas coordinates.
+//!
+//! The per-tab view rotation is deliberately separate from a page's own
+//! `/Rotate`: changing the view rotation never mutates the document, and the
+//! two compose additively.
 
 /// Minimum permitted custom zoom scale (10%).
 pub const MIN_ZOOM: f32 = 0.1;
@@ -118,6 +139,23 @@ impl Rotation {
             Self::Deg180 => Self::Deg90,
             Self::Deg270 => Self::Deg180,
         }
+    }
+
+    /// Compose this rotation with `other`, returning the combined quarter turn.
+    ///
+    /// Addition is modulo a full turn, so `Deg270.combine(Deg90) == Deg0`. This
+    /// is how a per-tab view rotation is combined with a page's intrinsic
+    /// `/Rotate` to obtain the effective rotation used by the canvas.
+    pub fn combine(self, other: Self) -> Self {
+        Self::from_degrees(i32::from(self.degrees()) + i32::from(other.degrees()))
+    }
+
+    /// Whether quarter turns of this rotation swap page width and height.
+    ///
+    /// `90` and `270` degrees display a page on its side, so the effective page
+    /// size used for layout and fit modes must exchange its two extents.
+    pub fn swaps_dimensions(self) -> bool {
+        matches!(self, Self::Deg90 | Self::Deg270)
     }
 }
 
@@ -253,6 +291,46 @@ mod tests {
         assert_eq!(Rotation::Deg0.counterclockwise(), Rotation::Deg270);
         assert_eq!(Rotation::Deg270.clockwise(), Rotation::Deg0);
         assert_eq!(Rotation::Deg90.clockwise().clockwise(), Rotation::Deg270);
+    }
+
+    #[test]
+    fn rotation_cycles_through_four_quarter_turns() {
+        // Clockwise cycling returns to the start after exactly four steps.
+        let mut r = Rotation::Deg0;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            r = r.clockwise();
+            seen.push(r);
+        }
+        assert_eq!(
+            seen,
+            vec![
+                Rotation::Deg90,
+                Rotation::Deg180,
+                Rotation::Deg270,
+                Rotation::Deg0,
+            ]
+        );
+        // Counterclockwise is the exact inverse of clockwise.
+        for start in [
+            Rotation::Deg0,
+            Rotation::Deg90,
+            Rotation::Deg180,
+            Rotation::Deg270,
+        ] {
+            assert_eq!(start.clockwise().counterclockwise(), start);
+        }
+    }
+
+    #[test]
+    fn rotation_compose_and_dimension_swap() {
+        assert_eq!(Rotation::Deg270.combine(Rotation::Deg90), Rotation::Deg0);
+        assert_eq!(Rotation::Deg90.combine(Rotation::Deg90), Rotation::Deg180);
+        assert_eq!(Rotation::Deg0.combine(Rotation::Deg270), Rotation::Deg270);
+        assert!(Rotation::Deg90.swaps_dimensions());
+        assert!(Rotation::Deg270.swaps_dimensions());
+        assert!(!Rotation::Deg0.swaps_dimensions());
+        assert!(!Rotation::Deg180.swaps_dimensions());
     }
 
     #[test]

@@ -4,7 +4,7 @@ Source: `docs/GOAL.md`. A criterion is checked only when the listed command
 output or file evidence is current at HEAD. This file is the integrator's
 single view of the end condition; task evidence lives in `docs/evidence/`.
 
-Last updated: 2026-11-19 (M1 verified; 25 verified feature rows of 140; 76 verified tasks).
+Last updated: 2026-11-19 (M1 verified; 25 verified feature rows of 140; 78 verified tasks).
 
 | ID | Criterion | Status | Evidence | Blocker |
 |---|---|---|---|---|
@@ -16,7 +16,7 @@ Last updated: 2026-11-19 (M1 verified; 25 verified feature rows of 140; 76 verif
 | AC-06 | Security | partial | AES/RC4 handlers incl. AES-256 R5/R6 (T-0036, T-0061), parameter validation (T-0018), redaction/sanitization plans (T-0052), content-stream redaction removal (T-0076), CMS SignedData build/verify (T-0048), X.509 chain and digital-ID store (T-0070) | PDF ByteRange signing, timestamps, revocation, key-store/UI pending |
 | AC-07 | Accessibility | partial | reading-order model (T-0013), validated accessibility tree + reading-order export (T-0055), tagged PDF structure writer/reader (T-0075) | PDF/UA checker, editor UI, accesskit pending |
 | AC-08 | Documentation | partial | rustdoc on all crates, mdBook skeleton, ADRs 0001â€“0006, `cargo xtask docs` green | CLI reference and full mdBook content pending |
-| AC-09 | Orchestration evidence | partial | board, claims, 76 verified tasks, per-task evidence files, memory inbox notes | Every verified row needs a completed task; audit at goal end |
+| AC-09 | Orchestration evidence | partial | board, claims, 78 verified tasks, per-task evidence files, memory inbox notes | Every verified row needs a completed task; audit at goal end |
 | AC-10 | Packaging and legal | partial | `docs/THIRD_PARTY.md`, `deny.toml`, PDFium license retained out-of-tree | Installer/portable archive not built |
 
 ## Rule
