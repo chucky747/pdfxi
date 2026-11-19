@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-core",
+    "id":  "T-0047",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-core/src/**",
+                 "orchestration/feature-updates/T-0047.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0008",
+                       "T-0029"
+                   ],
+    "title":  "Read and write document metadata and XMP",
+    "priority":  "P1",
+    "lane":  "core"
+}

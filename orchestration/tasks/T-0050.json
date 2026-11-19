@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo test -p pdfxi-automation -p pdfxi-cli",
+    "id":  "T-0050",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-automation/**",
+                 "crates/pdfxi-cli/**",
+                 "orchestration/feature-updates/T-0050.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0020",
+                       "T-0038"
+                   ],
+    "title":  "Run saved actions from the CLI and droplets",
+    "priority":  "P1",
+    "lane":  "automation"
+}

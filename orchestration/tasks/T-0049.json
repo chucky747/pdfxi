@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-render --features pdfium",
+    "id":  "T-0049",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-render/**",
+                 "orchestration/feature-updates/T-0049.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0021",
+                       "T-0032"
+                   ],
+    "title":  "Build print raster pipeline with page ranges",
+    "priority":  "P1",
+    "lane":  "render"
+}

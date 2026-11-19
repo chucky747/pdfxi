@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo xtask corpus smoke",
+    "id":  "T-0051",
+    "evidence":  "",
+    "owns":  [
+                 "corpus/**",
+                 "crates/pdfxi-testkit/**",
+                 "orchestration/feature-updates/T-0051.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0024"
+                   ],
+    "title":  "Fetch and smoke-test external corpora with checksums",
+    "priority":  "P2",
+    "lane":  "qa"
+}
