@@ -8,7 +8,7 @@
 /corpus/cache/
 /corpus/private/
 /fixtures/generated/
-/docs/book/
+/docs/book/book/
 /coverage/
 *.profraw
 *.pdb
