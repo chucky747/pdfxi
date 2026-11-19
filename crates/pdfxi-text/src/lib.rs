@@ -11,9 +11,16 @@
 //! Like rendering, extraction is cooperative: callers pass a
 //! [`CancellationToken`] and a progress callback so a closed document can stop
 //! work and the UI can show advancement.
+//!
+//! The [`ocr`] module freezes the OCR sidecar boundary without depending on a
+//! backend: [`ocr::OcrEngine`], [`ocr::LanguageRouter`], the
+//! [`ocr::SidecarRequest`]/[`ocr::SidecarResponse`] JSON contract, and the
+//! [`ocr::ConfidencePolicy`] suspect report.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+
+pub mod ocr;
 
 use std::collections::BTreeMap;
 use std::sync::{

@@ -432,14 +432,37 @@ tests = []
 title = "Scan to PDF with TWAIN and WIA"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-text/src/ocr.rs",
+    "crates/pdfxi-text/src/lib.rs",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 39 unit tests passed, 0 failed; TEST_EXIT=0; cargo fmt --check FMT_EXIT=0; cargo clippy --all-targets --all-features -- -D warnings CLIPPY_EXIT=0."
 id = "CREATE-008"
-notes = ""
+notes = """
+T-0057 delivers the pdfxi-text OCR contract: OcrEngine trait, OcrImage/OcrPage
+data model, LanguageRouter with script-based `auto` detection and documented
+fallback reasons, the SidecarRequest/SidecarResponse JSON wire format (no serde,
+no process spawning), and a ConfidencePolicy with suspect-character reporting.
+The row stays in-progress because the external Tesseract process bridge and
+end-to-end scanned-page-to-searchable-PDF flow are future work owned by later
+tasks; only the boundary contract and its policy are verified here.
+"""
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "ocr::tests::mock_engine_recognizes_image_and_reports_metadata",
+    "ocr::tests::router_routes_exact_fallback_and_auto",
+    "ocr::tests::strict_router_rejects_unsupported_language",
+    "ocr::tests::sidecar_request_json_round_trip",
+    "ocr::tests::sidecar_response_json_round_trip_and_conversion",
+    "ocr::tests::sidecar_json_rejects_malformed_inputs",
+    "ocr::tests::ocr_image_rejects_out_of_range_dpi",
+    "ocr::tests::confidence_policy_filters_low_confidence_spans",
+    "ocr::tests::suspect_report_flags_low_confidence_and_unusual_characters",
+    "ocr::tests::ocr_page_sorts_spans_deterministically",
+    "ocr::tests::ocr_operations_leave_cancellation_and_progress_untouched",
+]
 title = "OCR scanned pages to searchable PDF"
 
 [[feature]]
