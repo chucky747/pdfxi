@@ -1,0 +1,39 @@
+# Feature update fragment for T-0007 (qa lane).
+# Merged by the integrator into docs/features.toml. This task adds test
+# infrastructure only and claims no user-visible feature-matrix row.
+
+task = "T-0007"
+lane = "qa"
+status = "verified"
+evidence = "cargo test -p pdfxi-testkit (CARGO_TARGET_DIR=target/lanes/qa): 13 passed; 0 failed; 0 ignored; 0 measured"
+docs = [
+    "crates/pdfxi-testkit/src/lib.rs",
+    "fixtures/README.md",
+]
+
+notes = """
+Expanded the deterministic fixture builder. Kept minimal_pdf byte-for-byte and
+added text_pdf(text), multipage_pdf(pages: usize), and
+pdf_with_page_size(width, height). Every builder computes byte-accurate xref
+offsets and stream /Length values, emits a startxref that points at the xref
+table, and returns Vec<u8> without writing files. Added rustdoc and a
+fixtures/README.md describing committed vs generated fixtures. Tests assert the
+PDF header, object count, page count, per-page text presence, special-character
+escaping, media box, and startxref/xref/stream structural validity.
+"""
+
+tests = [
+    "tests::minimal_pdf_has_header_and_xref",
+    "tests::minimal_pdf_has_five_objects",
+    "tests::minimal_pdf_is_byte_stable",
+    "tests::minimal_pdf_startxref_points_at_xref",
+    "tests::all_builders_have_valid_xref_offsets_and_lengths",
+    "tests::text_pdf_contains_requested_text",
+    "tests::text_pdf_escapes_special_literal_characters",
+    "tests::multipage_pdf_reports_requested_page_count",
+    "tests::multipage_pdf_has_distinct_text_on_each_page",
+    "tests::multipage_pdf_zero_pages_is_valid",
+    "tests::pdf_with_page_size_embeds_requested_mediabox",
+    "tests::pdf_with_page_size_supports_fractional_dimensions",
+    "tests::pdf_with_page_size_rejects_invalid_dimensions",
+]
