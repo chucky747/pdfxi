@@ -28,3 +28,8 @@ cross-cutting.
 10. **Context cap.** DeepSeek V4.1 Flash is configured with a 588,000-token hard
     context and a 15% compaction buffer, yielding a ~499,800-token compaction
     ceiling.
+11. **Doctest execution is host-limited.** The current Windows host denies
+    execution of generated doctest binaries with `os error 5`. Rustdoc examples
+    remain in the documentation but use non-executed `text` blocks in crates
+    that would otherwise fail `cargo test`. Unit and integration tests carry the
+    behavioral coverage. Revisit when the host execution policy is understood.
