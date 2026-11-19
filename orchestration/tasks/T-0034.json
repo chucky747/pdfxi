@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-edit",
+    "id":  "T-0034",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-edit/**",
+                 "orchestration/feature-updates/T-0034.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0013"
+                   ],
+    "title":  "Serialize annotations to PDF dictionaries",
+    "priority":  "P1",
+    "lane":  "author"
+}
