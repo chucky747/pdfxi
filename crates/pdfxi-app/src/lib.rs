@@ -6,6 +6,8 @@
 //! machine can be tested deterministically. The [`canvas`] module arranges
 //! pages and answers hit-testing/coordinate questions, and [`selection`] maps
 //! drag points to ordered text ranges — both without any renderer dependency.
+//! The [`raster`] module adds a dependency-light, LRU-bounded cache that feeds
+//! [`pdfxi_render::Renderer`] rasters to the canvas; it has no `egui` types.
 //! An optional native viewer shell built on `egui`/`eframe` is available behind
 //! the `ui` feature.
 
@@ -13,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod canvas;
+pub mod raster;
 pub mod selection;
 mod state;
 mod tabs;
@@ -26,6 +29,7 @@ pub mod ui;
 pub use canvas::{
     CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, PageGeometry, PageSize,
 };
+pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
 };

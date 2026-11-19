@@ -2439,6 +2439,8 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "pdfxi-render",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2454,6 +2456,7 @@ dependencies = [
  "pdfxi-core",
  "pdfxi-render",
  "pdfxi-testkit",
+ "pdfxi-text",
  "serde",
  "serde_json",
 ]

@@ -8,10 +8,19 @@
 //!
 //! The canvas draws page rectangles laid out by [`crate::canvas::CanvasLayout`],
 //! reports the page under the cursor, and shows copied text from a
-//! [`crate::selection::SelectionModel`] in the status line. Real rasterization
-//! stays optional: without a renderer, the rectangles and selection overlay are
-//! the placeholder. All layout/selection logic lives in window-free modules so
-//! it can be tested without this GUI layer.
+//! [`crate::selection::SelectionModel`] in the status line.
+//!
+//! # Raster integration
+//!
+//! With the `pdfium` feature enabled, the demo viewer opens
+//! `fixtures/minimal.pdf` (resolved from the workspace root via
+//! [`crate::raster::workspace_fixture_path`]) through
+//! [`pdfxi_render::PdfiumRenderer`]. Visible pages are rasterized into [the
+//! bounded raster cache](crate::raster::RasterCache), and the active raster is
+//! uploaded into an `egui` texture that is painted inside the page rectangle.
+//! Without `pdfium`, no native library is loaded and the canvas keeps drawing
+//! the outlined placeholder pages. All layout, selection, and cache logic lives
+//! in window-free modules so it can be tested without this GUI layer.
 
 use egui::Key;
 
@@ -19,6 +28,24 @@ use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasSize, DEFAULT_ZOOM, OwnedSpan,
     OwnedTextPage, PageSize, SelectionModel, TabId, Toolset, ViewMode, Zoom, app_name,
 };
+
+#[cfg(feature = "pdfium")]
+use crate::Rotation;
+#[cfg(feature = "pdfium")]
+use crate::raster::{RasterCache, RasterKey, workspace_fixture_path};
+#[cfg(feature = "pdfium")]
+use pdfxi_render::{CancellationToken, PdfiumRenderer, Renderer};
+
+/// An `egui` texture plus the raster key it currently holds.
+///
+/// Reusing one texture handle and calling [`egui::TextureHandle::set`] on zoom
+/// or rotation avoids allocating a new GPU texture every frame.
+#[cfg(feature = "pdfium")]
+struct LiveTexture {
+    handle: egui::TextureHandle,
+    scale_bits: u32,
+    rotation: u16,
+}
 
 /// Amount by which each zoom-in / zoom-out step changes a custom zoom scale.
 const ZOOM_STEP: f32 = 0.25;
@@ -148,7 +175,7 @@ pub fn run() {
     if let Err(error) = eframe::run_native(
         app_name(),
         options,
-        Box::new(|_creation_context| Ok(Box::new(PdfxiApp::default()))),
+        Box::new(|_creation_context| Ok(Box::new(PdfxiApp::new()))),
     ) {
         eprintln!("PDFXI viewer exited with an error: {error}");
     }
@@ -168,12 +195,43 @@ pub struct PdfxiApp {
     scroll_y: f32,
     selection: SelectionModel,
     demo_text: Vec<OwnedTextPage>,
+    /// Bounded cache of real page rasters, filled from the demo fixture.
+    #[cfg(feature = "pdfium")]
+    raster_cache: RasterCache,
+    /// The native renderer; `None` when the fixture could not be opened.
+    #[cfg(feature = "pdfium")]
+    pdfium_renderer: Option<PdfiumRenderer>,
+    /// One GPU texture per laid-out page, refreshed on zoom/rotation changes.
+    #[cfg(feature = "pdfium")]
+    textures: std::collections::HashMap<usize, LiveTexture>,
 }
 
 impl PdfxiApp {
     /// Create a viewer with no open documents.
+    ///
+    /// With the `pdfium` feature this also opens the demo fixture from
+    /// `fixtures/minimal.pdf`. A load failure is reported through [`Self::status`]
+    /// and leaves the placeholder canvas in place rather than panicking.
     pub fn new() -> Self {
-        Self::default()
+        #[cfg(feature = "pdfium")]
+        {
+            let mut app = Self::default();
+            let path = workspace_fixture_path("minimal.pdf");
+            match PdfiumRenderer::from_file(&path) {
+                Ok(renderer) => {
+                    app.status = format!("Loaded demo fixture {}", path.display());
+                    app.pdfium_renderer = Some(renderer);
+                }
+                Err(error) => {
+                    app.status = format!("Could not open demo fixture: {error}");
+                }
+            }
+            app
+        }
+        #[cfg(not(feature = "pdfium"))]
+        {
+            Self::default()
+        }
     }
 
     /// Borrow the underlying UI-agnostic application state.
@@ -186,19 +244,39 @@ impl PdfxiApp {
         &self.status
     }
 
-    /// Open a new placeholder demo tab, make it active, and return its id.
+    /// Open a new demo tab, make it active, and return its id.
+    ///
+    /// With `pdfium`, the tab's page count comes from the real fixture so the
+    /// canvas never asks the renderer for a page the document does not have.
     pub fn open_demo_tab(&mut self) -> TabId {
         let name = format!("Demo Document {}", self.state.tab_count() + 1);
         let id = self.state.open_tab(name);
+        let page_count = self.demo_page_count();
         if let Some(tab) = self.state.tab_mut(id) {
-            tab.set_page_count(DEMO_PAGE_COUNT);
+            tab.set_page_count(page_count);
         }
-        self.demo_text = demo_text_pages(DEMO_PAGE_COUNT);
+        self.demo_text = demo_text_pages(page_count);
         self.selection.clear();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.status = format!("Opened demo tab {id}");
         id
+    }
+
+    /// The page count used for demo tabs.
+    #[cfg(feature = "pdfium")]
+    fn demo_page_count(&self) -> usize {
+        self.pdfium_renderer
+            .as_ref()
+            .map_or(DEMO_PAGE_COUNT, |renderer| {
+                renderer.page_count().unwrap_or(DEMO_PAGE_COUNT)
+            })
+    }
+
+    /// The page count used for demo tabs (fixed placeholder without PDFium).
+    #[cfg(not(feature = "pdfium"))]
+    fn demo_page_count(&self) -> usize {
+        DEMO_PAGE_COUNT
     }
 
     /// Close the active tab, if any.
@@ -220,12 +298,12 @@ impl PdfxiApp {
         }
     }
 
-    /// Increase the active tab's custom zoom by one [`ZOOM_STEP`].
+    /// Increase the active tab's custom zoom by one `ZOOM_STEP`.
     pub fn zoom_in(&mut self) {
         self.adjust_zoom(ZOOM_STEP, "Zoom in");
     }
 
-    /// Decrease the active tab's custom zoom by one [`ZOOM_STEP`].
+    /// Decrease the active tab's custom zoom by one `ZOOM_STEP`.
     pub fn zoom_out(&mut self) {
         self.adjust_zoom(-ZOOM_STEP, "Zoom out");
     }
@@ -287,6 +365,83 @@ impl PdfxiApp {
             Ok(()) => self.status = format!("{action}: {new_zoom}"),
             Err(error) => self.status = error.to_string(),
         }
+    }
+
+    /// Rasterize the pages visible in `layout` into the cache (PDFium build only).
+    ///
+    /// A fresh [`CancellationToken`] is scoped to this frame; the renderer
+    /// checks it between steps so a closed document can stop outstanding work.
+    #[cfg(feature = "pdfium")]
+    fn ensure_rasters(&mut self, layout: &CanvasLayout, rotation: Rotation) {
+        let Some(renderer) = self.pdfium_renderer.as_ref() else {
+            return;
+        };
+        let scroll = CanvasPoint::new(self.scroll_x, self.scroll_y);
+        let token = CancellationToken::new();
+        match self.raster_cache.ensure_visible(
+            renderer,
+            layout,
+            rotation,
+            scroll,
+            &token,
+            &mut |_| {},
+        ) {
+            Ok(_) => {}
+            Err(error) => self.status = format!("Render error: {error}"),
+        }
+    }
+
+    /// Upload the cached raster for `page` into a reusable `egui` texture.
+    ///
+    /// Returns `None` when the page is not cached or its pixel buffer is not a
+    /// valid tightly packed RGBA image. The handle is reused across frames and
+    /// only re-uploaded when the scale or rotation key changes.
+    #[cfg(feature = "pdfium")]
+    fn raster_texture(
+        &mut self,
+        ctx: &egui::Context,
+        page: usize,
+        scale: f32,
+        rotation: Rotation,
+    ) -> Option<egui::TextureHandle> {
+        let key = RasterKey::new(page, scale, rotation);
+        // Clone out of the cache so the pixel borrow does not overlap the
+        // mutable borrow of the texture map below.
+        let raster = self.raster_cache.get(key)?.clone();
+        let width = raster.width() as usize;
+        let height = raster.height() as usize;
+        let pixels = raster.pixels();
+        let expected = width.checked_mul(height)?.checked_mul(4)?;
+        if width == 0 || height == 0 || pixels.len() != expected {
+            return None;
+        }
+        let image = || egui::ColorImage::from_rgba_unmultiplied([width, height], pixels);
+        let scale_bits = key.scale_bits();
+        let rotation_degrees = key.rotation_degrees();
+        match self.textures.get_mut(&page) {
+            Some(live) if live.scale_bits == scale_bits && live.rotation == rotation_degrees => {}
+            Some(live) => {
+                live.handle.set(image(), egui::TextureOptions::LINEAR);
+                live.scale_bits = scale_bits;
+                live.rotation = rotation_degrees;
+            }
+            None => {
+                let handle = ctx.load_texture(
+                    format!("pdfxi-page-{page}"),
+                    image(),
+                    egui::TextureOptions::LINEAR,
+                );
+                self.textures.insert(
+                    page,
+                    LiveTexture {
+                        handle,
+                        scale_bits,
+                        rotation: rotation_degrees,
+                    },
+                );
+            }
+        }
+        self.textures.get(&page).map(|live| live.handle.clone())
     }
 
     /// Render the toolbar panel.
@@ -397,6 +552,16 @@ impl PdfxiApp {
                     return;
                 };
 
+                #[cfg(feature = "pdfium")]
+                let rotation = self
+                    .state
+                    .active_tab()
+                    .map_or(Rotation::Deg0, |tab| tab.rotation());
+                // Fill the LRU cache with real rasters before painting. This
+                // happens only with PDFium; otherwise the placeholder stands.
+                #[cfg(feature = "pdfium")]
+                self.ensure_rasters(&layout, rotation);
+
                 let origin = ui.min_rect().left_top();
                 let text_tool = self.state.active_tool() == Toolset::TextSelection;
                 let (scroll_delta, hover, pressed, dragging) = ui.input(|input| {
@@ -433,8 +598,10 @@ impl PdfxiApp {
                     layout.page_at(screen_to_canvas(pos, origin, self.scroll_x, self.scroll_y))
                 });
 
-                // Draw one outlined placeholder rectangle per laid-out page.
-                // Real rasterization is optional and intentionally absent here.
+                #[cfg(feature = "pdfium")]
+                let ctx = ui.ctx().clone();
+                #[cfg(feature = "pdfium")]
+                let full_uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                 let painter = ui.painter();
                 let stroke = ui.visuals().widgets.inactive.fg_stroke;
                 for page in layout.pages() {
@@ -445,6 +612,16 @@ impl PdfxiApp {
                         ),
                         egui::vec2(page.rect.width, page.rect.height),
                     );
+                    #[cfg(feature = "pdfium")]
+                    if let Some(texture) =
+                        self.raster_texture(&ctx, page.page, page.scale, rotation)
+                    {
+                        // Paint the real page raster inside the page rectangle.
+                        painter.image(texture.id(), rect, full_uv, egui::Color32::WHITE);
+                        continue;
+                    }
+                    // Without a cached raster (or without PDFium), draw the
+                    // outlined placeholder rectangle.
                     painter.rect(
                         rect,
                         0.0,
@@ -567,9 +744,12 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(app.state().tab_count(), 2);
         assert_eq!(app.state().active_tab_id(), Some(second));
+        // With PDFium the count comes from the real fixture (one page);
+        // without it the fixed placeholder count is used.
+        let expected = app.demo_page_count();
         assert_eq!(
             app.state().tab(second).map(|tab| tab.page_count()),
-            Some(DEMO_PAGE_COUNT)
+            Some(expected)
         );
         assert!(!app.status().is_empty());
     }
@@ -704,5 +884,24 @@ mod tests {
         app.clear_selection();
         assert_eq!(app.status(), "Selection cleared");
         assert_eq!(app.selected_text(), "");
+    }
+
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn demo_fixture_fills_the_cache_without_a_window() {
+        let mut app = PdfxiApp::new();
+        assert!(app.pdfium_renderer.is_some(), "{}", app.status());
+        let id = app.open_demo_tab();
+        // Minimal.pdf has exactly one page.
+        assert_eq!(app.state().tab(id).map(|tab| tab.page_count()), Some(1));
+
+        let layout = layout_for_state(app.state(), CanvasSize::new(800.0, 600.0))
+            .expect("the demo tab produces a layout");
+        app.ensure_rasters(&layout, Rotation::Deg0);
+        assert_eq!(app.raster_cache.len(), 1, "the visible page was rasterized");
+        assert!(
+            app.raster_cache
+                .contains(RasterKey::new(0, layout.scale(), Rotation::Deg0))
+        );
     }
 }

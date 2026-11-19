@@ -11,10 +11,19 @@ publish = false
 [features]
 default = []
 # The native egui/eframe viewer shell. Default builds stay dependency-light;
-# enabling `ui` pulls in the GUI stack (winit, the renderer, and egui).
+# enabling `ui` pulls in the GUI stack (winit, egui, and the raster upload path).
 ui = ["dep:eframe", "dep:egui"]
+# Enables the native PDFium backend inside `pdfxi-render`. This is independent
+# of `ui` so the raster cache can be exercised headlessly, and `ui` keeps working
+# without it by drawing the placeholder canvas.
+pdfium = ["pdfxi-render/pdfium"]
 
 [dependencies]
+# Rendering is a normal (non-optional) dependency: the dependency-light raster
+# cache uses only the backend-agnostic `pdfxi-render` contracts. Native PDFium
+# is pulled in only through the `pdfium` feature above.
+pdfxi-render = { path = "../pdfxi-render" }
+thiserror.workspace = true
 eframe = { version = "0.33", optional = true }
 egui = { version = "0.33", optional = true }
 

@@ -30,21 +30,23 @@ tests = [
 title = "Open and print PDF documents"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/canvas.rs"
+docs = [
+    "crates/pdfxi-app/src/canvas.rs",
+    "crates/pdfxi-app/src/raster.rs",
+    "crates/pdfxi-app/src/ui.rs",
+]
 domain = "View & Navigate"
-evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 34 passed, 0 failed. cargo test -p pdfxi-app --features ui: 48 passed, 0 failed. cargo check -p pdfxi-app --features ui: EXIT 0. cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: clean. cargo fmt -p pdfxi-app -- --check: clean. cargo doc -p pdfxi-app --no-deps: EXIT 0."
+evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passed, 0 failed. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed (raster::tests::empty_layout_renders_nothing and the canvas layout tests ok)."
 id = "VIEW-002"
 notes = """
-Added a dependency-free CanvasLayout that arranges pages deterministically for
-SinglePage, Continuous, TwoPage and TwoPageContinuous modes. Two-page modes pair
-pages (0,1), (2,3), ...; continuous modes use a small inter-row gap while paged
-modes insert a viewport-height break between screens. CanvasHit and page_at give
-deterministic half-open hit testing (Page/Gap/Outside); page_point maps a canvas
-point into page-local, top-left-origin, y-down PDF-point coordinates with
-clamping. Scroll offsets are clamped to content bounds. The egui placeholder
-canvas now draws one outlined rectangle per page and reports the page under the
-cursor. Rows stay in-progress because real raster integration and a thumbnail
-pane are not part of this task.
+The dependency-free CanvasLayout arrangements for SinglePage, Continuous,
+TwoPage and TwoPageContinuous, half-open hit testing, page_point mapping and
+scroll clamping are unchanged. T-0028 connects those rectangles to real page
+rasters: ensure_visible renders only pages whose rectangle intersects the
+viewport at the current scroll offset, so scroll/layout changes drive which
+rasters are produced; an empty layout renders nothing. Rasters are uploaded
+into the same page rectangles that the placeholder outlined. A thumbnail pane
+is still pending, so the row stays in-progress.
 """
 priority = "P0"
 status = "in-progress"
@@ -57,20 +59,27 @@ tests = [
     "canvas::tests::degenerate_inputs_do_not_panic_or_produce_nan",
     "ui::tests::layout_for_state_tracks_active_tab",
     "ui::tests::canvas_info_line_reports_page_and_selection",
+    "raster::tests::empty_layout_renders_nothing",
 ]
 title = "Single page continuous and two-page layouts"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/canvas.rs"
+docs = [
+    "crates/pdfxi-app/src/canvas.rs",
+    "crates/pdfxi-app/src/raster.rs",
+    "crates/pdfxi-app/src/ui.rs",
+]
 domain = "View & Navigate"
-evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 34 passed, 0 failed (zoom_scaling_multiplies_page_extent, fit_modes_resolve_against_the_widest_row, scroll_clamping_is_bounded_and_finite all ok). cargo check -p pdfxi-app --features ui: EXIT 0."
+evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passed, 0 failed. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed (raster::tests::zoom_and_rotation_changes_invalidate_the_previous_raster and raster::tests::caching_avoids_a_second_render ok)."
 id = "VIEW-003"
 notes = """
-CanvasLayout resolves Zoom::FitWidth/FitPage against the widest page row and
-clamps the resulting scale through the existing Zoom policy; Custom zoom scales
-page rectangles linearly (1.0 -> 612pt, 2.0 -> 1224pt). max_scroll/clamp_scroll
-provide bounded panning, including sanitizing non-finite offsets. Loupe and
- gesture panning are still future work, so the row remains in-progress.
+CanvasLayout still resolves Zoom::FitWidth/FitPage against the widest row and
+custom zoom scales page rectangles linearly; max_scroll/clamp_scroll bound
+panning and sanitize non-finite offsets. T-0028 adds real raster keys at the
+resolved canvas scale: each zoom level has a distinct scale_bits key, so zooming
+invalidates the previous raster and triggers a fresh render, while returning to
+a previous zoom reuses the cached raster. Loupe and gesture panning remain
+future work, so the row stays in-progress.
 """
 priority = "P0"
 status = "in-progress"
@@ -78,6 +87,10 @@ tests = [
     "canvas::tests::zoom_scaling_multiplies_page_extent",
     "canvas::tests::fit_modes_resolve_against_the_widest_row",
     "canvas::tests::scroll_clamping_is_bounded_and_finite",
+    "raster::tests::zoom_and_rotation_changes_invalidate_the_previous_raster",
+    "raster::tests::caching_avoids_a_second_render",
+    "raster::tests::lru_eviction_removes_the_least_recently_used_entry",
+    "raster::tests::zero_limit_disables_caching",
 ]
 title = "Zoom pan loupe and fit modes"
 
@@ -1883,14 +1896,35 @@ tests = [
 title = "CLI text extraction for uncompressed content streams"
 
 [[feature]]
-docs = "docs/evidence/M1.md"
+docs = [
+    "crates/pdfxi-app/src/raster.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/Cargo.toml",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = '''CARGO_TARGET_DIR=target/lanes/app; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed; raster::tests::pdfium_raster_fills_cache_with_non_uniform_pixels opened fixtures/minimal.pdf with PdfiumRenderer, rendered page 0 at scale 1.0 (non-zero width/height, pixels.len() == width*height*4), then filled the app RasterCache and asserted a non-uniform raster (the 'Hello, PDFXI!' text). ui::tests::demo_fixture_fills_the_cache_without_a_window verified the demo tab takes its one-page count from the fixture and that ensure_rasters fills the cache. Also cargo test -p pdfxi-app: 42 passed; --features ui: 56 passed; clippy/fmt/doc clean.'''
 id = "VIEW-016"
-notes = "M1 open/display slice, split from VIEW-001 so printing stays an M2 row. See docs/decisions/0006-m1-gate.md."
+notes = """
+End-to-end open/render slice. `pdfxi-app` now depends on `pdfxi-render` and its
+`pdfium` feature forwards to `pdfxi-render/pdfium`. `PdfxiApp::new()` opens
+fixtures/minimal.pdf through `PdfiumRenderer` when `pdfium` is enabled (failures
+are reported through status, never panics). `CanvasLayout` drives
+`RasterCache::ensure_visible`, which renders the visible pages at the resolved
+canvas scale into an LRU cache; `raster_texture` uploads the cached RGBA page
+into a reusable egui texture that `canvas_ui` paints inside the page rectangle.
+The cache and its tests are GUI-free and run under default features with a mock
+renderer. Fixture resolution is documented in `raster::workspace_fixture_path`:
+CARGO_MANIFEST_DIR for pdfxi-app is crates/pdfxi-app, so the workspace root is
+two levels up.
+"""
 priority = "P0"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "raster::tests::pdfium_raster_fills_cache_with_non_uniform_pixels",
+    "ui::tests::demo_fixture_fills_the_cache_without_a_window",
+    "raster::tests::caching_avoids_a_second_render",
+    "raster::tests::empty_layout_renders_nothing",
+]
 title = "Open PDF and render pages in the viewer"
 
 [[feature]]
