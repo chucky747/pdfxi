@@ -19,11 +19,16 @@
 //!   `action list`, `action show`, `action run`, and `droplet` commands.
 //! - [`AutomationError`] — actionable, self-describing errors for every
 //!   rejection path.
+//! - [`Script`] / [`Limits`] / [`run_script`] — a dependency-free, deterministic
+//!   JavaScript subset for document actions, with explicit CPU-step, call,
+//!   iteration, size, wall-clock, and cancellation budgets. The [`HostObject`]
+//!   trait is an audited boundary for exposing future document operations; no
+//!   real PDF mutation is wired up in this milestone.
 //!
 //! All behavior is deterministic and allocates only as needed. The crate has no
 //! external dependencies, forbids `unsafe`, and keeps panics out of non-test
-//! code. Future milestones will add watched folders, the JavaScript sandbox,
-//! and the plugin host on top of these contracts.
+//! code. Future milestones will add watched folders and the plugin host on top
+//! of these contracts.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -32,6 +37,7 @@ mod action;
 mod batch;
 mod document;
 mod error;
+mod js;
 mod library;
 
 pub use action::{Action, ActionStep, StepKind};
@@ -44,6 +50,10 @@ pub use document::{
     OperationError, OperationOutcome, RealExecutor, StepResult,
 };
 pub use error::AutomationError;
+pub use js::{
+    BuiltinFn, HostObject, HostRegistry, JsError, JsFunction, Limits, NoHostObject, Pos, Script,
+    Value, run_script,
+};
 pub use library::ActionLibrary;
 
 /// Return the implementation name for diagnostics.

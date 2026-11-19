@@ -232,7 +232,7 @@ impl ExportOptions {
     /// # Errors
     ///
     /// Returns the matching [`ExportError`] variant for the first invalid
-    /// field: DPI, JPEG quality, fit mode, or format/alpha compatibility.
+    /// field: DPI, JPEG quality, fit mode, or format/colour/alpha compatibility.
     pub fn validate(&self) -> Result<(), ExportError> {
         if self.dpi == 0 || self.dpi > MAX_EXPORT_DPI {
             return Err(ExportError::InvalidDpi(self.dpi));
@@ -258,6 +258,15 @@ impl ExportOptions {
                 && matches!(self.format, ImageFormat::Png | ImageFormat::Tiff))
         {
             return Err(ExportError::AlphaNotSupported(
+                self.format.label(),
+                self.color.label(),
+            ));
+        }
+        // Baseline JPEG stores at most three components, so an RGBA request
+        // cannot be satisfied even when alpha is flattened. Reject it here,
+        // before a renderer is invoked and pixels are rasterized.
+        if self.format == ImageFormat::Jpeg && self.color == ColorMode::Rgba {
+            return Err(ExportError::UnsupportedColor(
                 self.format.label(),
                 self.color.label(),
             ));
@@ -319,6 +328,9 @@ pub enum ExportError {
     /// A fit box had a zero dimension or could not be represented.
     #[error("fit dimensions must be positive and representable")]
     InvalidFit,
+    /// An image had a zero width or height.
+    #[error("image dimensions must be non-zero, got {0}x{1}")]
+    InvalidDimensions(u32, u32),
     /// The selection resolved to no pages.
     #[error("the export selection resolved to no pages")]
     EmptySelection,
@@ -328,6 +340,9 @@ pub enum ExportError {
     /// Alpha preservation was requested for an incompatible format/colour.
     #[error("alpha cannot be preserved with format '{0}' and colour '{1}'")]
     AlphaNotSupported(&'static str, &'static str),
+    /// The selected format cannot store the requested colour mode.
+    #[error("format '{0}' does not support colour mode '{1}'")]
+    UnsupportedColor(&'static str, &'static str),
     /// The operation was cancelled through its token.
     #[error("image export was cancelled")]
     Cancelled,
@@ -459,8 +474,9 @@ fn reduce_pixels(
 ///
 /// # Errors
 ///
-/// Returns [`ExportError::InvalidRaster`] for a mismatched buffer, and
-/// propagates validation and encoder errors from the selected format.
+/// Returns [`ExportError::InvalidDimensions`] for a zero width or height,
+/// [`ExportError::InvalidRaster`] for a mismatched buffer, and propagates
+/// validation and encoder errors from the selected format.
 pub fn encode_image(
     width: u32,
     height: u32,
@@ -468,6 +484,9 @@ pub fn encode_image(
     options: &ExportOptions,
 ) -> Result<Vec<u8>, ExportError> {
     options.validate()?;
+    if width == 0 || height == 0 {
+        return Err(ExportError::InvalidDimensions(width, height));
+    }
     let (data, channels) = reduce_pixels(width, height, rgba, options)?;
     match options.format {
         ImageFormat::Png => encode_png(width, height, &data, channels, options.dpi),
@@ -520,6 +539,11 @@ pub fn export_pages(
             rgba,
             ..
         } = page;
+        // A renderer may hand back an empty raster; reject it with a typed
+        // error before any encoder performs row chunking on a zero row length.
+        if width_px == 0 || height_px == 0 {
+            return Err(ExportError::InvalidDimensions(width_px, height_px));
+        }
         let (data, channels) = reduce_pixels(width_px, height_px, &rgba, options)?;
         rasters.push(ReducedRaster {
             page: index,
@@ -671,6 +695,11 @@ fn encode_png(
     channels: u8,
     dpi: u32,
 ) -> Result<Vec<u8>, ExportError> {
+    // `data.chunks(row_len)` below requires a non-zero row length. Reject zero
+    // dimensions before any chunking so public callers get a typed error.
+    if width == 0 || height == 0 {
+        return Err(ExportError::InvalidDimensions(width, height));
+    }
     let color_type = match channels {
         1 => 0u8,
         3 => 2u8,
@@ -695,12 +724,11 @@ fn encode_png(
     }
 
     let mut raw = Vec::with_capacity(height_usize.saturating_mul(row_len.saturating_add(1)));
+    // Width and height were proven non-zero above, so row_len > 0 and chunks
+    // yields exactly `height` rows.
     for row in data.chunks(row_len) {
         raw.push(0); // PNG filter type: None
         raw.extend_from_slice(row);
-    }
-    if width == 0 {
-        raw.resize(height_usize, 0);
     }
 
     let mut header = Vec::with_capacity(13);
@@ -749,9 +777,7 @@ fn encode_tiff(rasters: &[ReducedRaster], dpi: u32) -> Result<Vec<u8>, ExportErr
     let mut layouts = Vec::with_capacity(rasters.len());
     for raster in rasters {
         if raster.width == 0 || raster.height == 0 {
-            return Err(ExportError::Encode(
-                "TIFF page has zero dimensions".to_owned(),
-            ));
+            return Err(ExportError::InvalidDimensions(raster.width, raster.height));
         }
         let row_len =
             usize::from(raster.channels)
@@ -1186,9 +1212,7 @@ fn encode_jpeg(
     quality: u8,
 ) -> Result<Vec<u8>, ExportError> {
     if width == 0 || height == 0 {
-        return Err(ExportError::Encode(
-            "JPEG needs non-zero dimensions".to_owned(),
-        ));
+        return Err(ExportError::InvalidDimensions(width, height));
     }
     let components: usize = match channels {
         1 => 1,
@@ -1973,6 +1997,97 @@ mod tests {
         assert_eq!(
             encode_image(2, 2, &[0u8; 8], &options),
             Err(ExportError::InvalidRaster(2, 2))
+        );
+    }
+
+    #[test]
+    fn zero_dimensions_are_rejected_before_chunking() {
+        // Regression: PNG's `data.chunks(row_len)` panicked for width == 0
+        // because row_len was zero. Public callers must get a typed error.
+        let options = ExportOptions::default();
+        for (width, height) in [(0, 4), (4, 0), (0, 0)] {
+            assert_eq!(
+                encode_image(width, height, &[], &options),
+                Err(ExportError::InvalidDimensions(width, height)),
+                "zero dimension {width}x{height} must yield a typed error"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_data_with_nonzero_dimensions_is_rejected() {
+        let options = ExportOptions::default();
+        assert_eq!(
+            encode_image(1, 1, &[], &options),
+            Err(ExportError::InvalidRaster(1, 1))
+        );
+        assert_eq!(
+            encode_image(2, 2, &[], &options),
+            Err(ExportError::InvalidRaster(2, 2))
+        );
+    }
+
+    #[test]
+    fn zero_dimension_page_from_renderer_is_typed_error() {
+        // A hostile or broken renderer can return an empty raster; the export
+        // path must reject it before any encoder chunks on a zero row length.
+        struct ZeroRenderer;
+        impl Renderer for ZeroRenderer {
+            fn render_page(
+                &self,
+                page: PageIndex,
+                _scale: f32,
+                cancellation: &CancellationToken,
+                _progress: &mut dyn FnMut(Progress),
+            ) -> Result<crate::RenderedPage, RenderError> {
+                cancellation.check()?;
+                Ok(crate::RenderedPage::new(page, 0, 0, Vec::new()))
+            }
+
+            fn page_count(&self) -> Result<usize, RenderError> {
+                Ok(1)
+            }
+        }
+
+        let result = export_pages(
+            &ZeroRenderer,
+            &ExportOptions::default(),
+            &CancellationToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(result, Err(ExportError::InvalidDimensions(0, 0)));
+    }
+
+    #[test]
+    fn jpeg_rgba_with_flatten_is_rejected_in_validate() {
+        let options = ExportOptions {
+            format: ImageFormat::Jpeg,
+            color: ColorMode::Rgba,
+            alpha: AlphaPolicy::Flatten {
+                background: [255, 255, 255],
+            },
+            ..ExportOptions::default()
+        };
+        assert_eq!(
+            options.validate(),
+            Err(ExportError::UnsupportedColor("jpg", "rgba"))
+        );
+        assert_eq!(
+            encode_image(1, 1, &[1, 2, 3, 255], &options),
+            Err(ExportError::UnsupportedColor("jpg", "rgba"))
+        );
+    }
+
+    #[test]
+    fn jpeg_bit_writer_stuffs_0xff_bytes() {
+        let mut writer = BitWriter::new();
+        writer.write_bits(0xFF, 8);
+        writer.write_bits(0x00, 8);
+        let bytes = writer.finish();
+        assert_eq!(
+            &bytes[..3],
+            &[0xFF, 0x00, 0x00],
+            "a 0xFF entropy byte must be followed by a stuffed 0x00"
         );
     }
 

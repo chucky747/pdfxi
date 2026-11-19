@@ -8,7 +8,11 @@
 //! with validation and deterministic appearance geometry, and [`navigation`]
 //! models bookmarks, links, and attachments with the same dictionary
 //! round-trip approach. [`review`] models comment threads, workflow states, and
-//! a filterable review registry with a dictionary round-trip.
+//! a filterable review registry with a dictionary round-trip. [`header_footer`]
+//! models six-slot headers, footers, and page numbering and renders them as
+//! additive content-stream overlays. [`watermark`] models text, vector, and
+//! image watermarks and backgrounds with placement, rotation, opacity, page
+//! selection, and copy-on-write composition helpers.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
 //! source document bytes in place.
@@ -18,14 +22,22 @@
 
 pub mod annotation;
 pub mod geometry;
+pub mod header_footer;
 pub mod navigation;
 pub mod pdf;
 pub mod review;
+pub mod watermark;
 
 pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
 };
 pub use geometry::{GeometryError, PageGeometry, PageIndex, Point, Rect};
+pub use header_footer::{
+    ContentMatrix, HeaderFooterError, HeaderFooterLayout, Margins, NumberFormat, Overlay,
+    PageContext, PageFilter, PageNumbering, PageSelection, Slot, SlotContent, StandardFont,
+    TextColor, TextStyle, Token, compose_content, display_dimensions, escape_literal,
+    render_overlay, transform_for_page,
+};
 pub use navigation::{
     Attachment, Bookmark, Destination, FitType, Link, LinkBorder, LinkHighlight, LinkTarget,
     MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link, dict_to_name_tree,
@@ -34,6 +46,12 @@ pub use navigation::{
 pub use review::{
     CommentThread, HistoryEntry, Reply, ReplyId, ReviewError, ReviewFilter, ReviewRegistry,
     ReviewState, ReviewStatus, ReviewSummary, ThreadId, dict_to_registry, registry_to_dict,
+};
+pub use watermark::{
+    ImageMark, MarkContent, PageRange, Placement, ResourceExtGState, ResourceFont, ResourcePatch,
+    Suppression, VectorMark, Watermark, WatermarkError, WatermarkOverlay, WatermarkPosition,
+    WatermarkStyle, apply_resource_patch, compose_content as compose_watermark_content,
+    render_watermark,
 };
 
 /// Return the implementation name for diagnostics.
