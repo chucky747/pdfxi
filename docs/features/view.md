@@ -1,8 +1,10 @@
 # Viewer — M1 slice
 
-> **Status: in progress.** The M1 viewer slice is being implemented. The
-> behaviours on this page describe the intended M1 experience; several are not
-> available yet. See [Feature and milestone status](#feature-and-milestone-status)
+> **Status: M1 slice verified; later viewer rows in progress.** Open/display,
+> layouts, zoom/fit, thumbnails, bookmarks, attachments, links, and find/select
+> are verified in the matrix. Print, rotate, tabs, split view, layers, full
+> screen, reflow, portfolios, compare, and the loupe remain in progress or
+> planned. See [Feature and milestone status](#feature-and-milestone-status)
 > and the canonical [feature matrix](../FEATURES.md) before relying on any item.
 
 This page documents the viewing and navigation surface delivered by milestone
@@ -103,14 +105,14 @@ lane.
 
 | Capability | Matrix row | Priority | M1 status |
 |---|---|---|---|
-| Open / display pages | `VIEW-016` | P0 | in progress — PDFium backend and viewer shell landed |
-| Open / print | `VIEW-001` | P0 | in progress — print stays in M2 |
-| Page layouts | `VIEW-002` | P0 | in progress |
-| Zoom / pan / fit | `VIEW-003` | P0 | in progress |
-| Rotate view | `VIEW-004` | P0 | in progress |
-| Thumbnails / navigation pane | `VIEW-007` | P0 | in progress |
-| Bookmarks / destinations | `VIEW-008` | P1 | in progress |
-| In-document search | `EDIT-003` / `MANAGE-003` | P1 | in progress, closest rows |
+| Open / display pages | `VIEW-016` | P0 | verified - PDFium backend and viewer shell |
+| Open / print | `VIEW-001` | P0 | in progress - print stays in M2 |
+| Page layouts | `VIEW-002` | P0 | verified |
+| Zoom / pan / fit | `VIEW-003` | P0 | verified |
+| Rotate view | `VIEW-004` | P0 | planned |
+| Thumbnails / navigation pane | `VIEW-007` | P0 | verified |
+| Bookmarks / destinations | `VIEW-008` | P1 | verified |
+| In-document find / select / copy | `VIEW-017` | P1 | verified |
 
 `docs/decisions/0006-m1-gate.md` splits open/display (`VIEW-016`) from
 open/print (`VIEW-001`) so the M1 gate does not claim M2 print parity. A row
@@ -118,14 +120,14 @@ becomes `verified` only with a test identifier, a docs path, and an evidence
 path, recorded through a lane fragment in `orchestration/feature-updates/` and
 merged by the integrator.
 
-Implemented so far: a native PDFium backend (`PdfiumRenderer`, optional
-`pdfium` feature) rasterizes pages to RGBA with cancellation and structured
-errors, and a native egui/eframe shell (optional `ui` feature) provides the tab
-strip, toolbar, status header, and placeholder canvas.
+Implemented: a native PDFium backend (`PdfiumRenderer`, optional `pdfium`
+feature) rasterizes pages to RGBA with cancellation and structured errors; a
+native egui/eframe shell (optional `ui` feature) provides the tab strip,
+toolbar, status header, canvas, thumbnails, find bar, and selection copy.
 
 ## Verification
 
 The M1 exit gate is `cargo xtask goal-verify --milestone M1`, together with the
-open/first-page budgets listed in [TESTING.md](../TESTING.md). Until that gate
-is green, treat everything above as intended behaviour rather than shipped
-behaviour.
+open/first-page budgets listed in [TESTING.md](../TESTING.md). The gate is green
+(see [M1 evidence](../evidence/M1.md)); later viewer rows remain in progress or
+planned as shown above.

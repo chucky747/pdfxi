@@ -1719,6 +1719,10 @@ tests = [
     "pdfxi-accessibility::reading_order::tests::duplicate_ids_and_unknown_children_are_rejected",
     "pdfxi-accessibility::reading_order::tests::multiple_parents_are_rejected",
     "pdfxi-accessibility::reading_order::tests::empty_reading_order_is_valid",
+    "pdfxi-accessibility::tree::tests::disconnected_cycle_is_rejected",
+    "pdfxi-accessibility::tree::tests::deep_chain_traversal_uses_explicit_stack",
+    "pdfxi-accessibility::export::tests::deep_chain_export_uses_explicit_stack",
+    "pdfxi-accessibility::export::tests::page_label_saturates_for_max_page",
 ]
 title = "Tag tree and reading order editor"
 
@@ -1728,7 +1732,7 @@ docs = [
     "crates/pdfxi-accessibility/src/export.rs",
 ]
 domain = "Accessibility"
-evidence = "cargo test -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/app): 25 passed; 0 failed. cargo clippy -D warnings and cargo fmt --check clean."
+evidence = "cargo test -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/app): 29 passed; 0 failed. cargo clippy -D warnings and cargo fmt --check clean."
 id = "ACCESS-002"
 notes = "Alt-text coverage and role-count summary computed over figure/image nodes and all roles; structured rejection of empty and non-finite boxes. Table editor UI remains out of scope for this task."
 priority = "P2"
