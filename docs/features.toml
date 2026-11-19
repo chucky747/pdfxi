@@ -2163,14 +2163,36 @@ tests = [
 title = "Alt text and table editor"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-accessibility/src/checker.rs",
+    "crates/pdfxi-accessibility/src/lib.rs",
+    "docs/evidence/author/T-0088.md",
+]
 domain = "Accessibility"
-evidence = ""
+evidence = "cargo test -p pdfxi-accessibility: 61 passed, 0 failed (17 new checker tests); fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0088.md."
 id = "ACCESS-003"
-notes = ""
+notes = "Headless checker with 12 stable rules, severity findings, deterministic ordering, heuristic pass/fail summary, and read-only fixup suggestions is complete and tested. Stays in-progress: no CLI/UI surface and no independent veraPDF cross-validation yet."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "checker::tests::clean_document_passes",
+    "checker::tests::missing_language_is_an_error",
+    "checker::tests::missing_title_is_an_error",
+    "checker::tests::missing_alt_text_is_a_warning",
+    "checker::tests::heading_level_skip_is_flagged",
+    "checker::tests::empty_link_is_flagged",
+    "checker::tests::untagged_content_is_an_error",
+    "checker::tests::list_structure_issues_are_flagged",
+    "checker::tests::table_structure_issues_are_flagged",
+    "checker::tests::form_field_label_is_flagged",
+    "checker::tests::reading_order_regression_is_flagged",
+    "checker::tests::unknown_and_duplicate_roles_are_flagged",
+    "checker::tests::findings_are_deterministic_and_rule_ids_are_stable",
+    "checker::tests::fixup_suggestions_cover_the_actionable_rules",
+    "checker::tests::deep_tree_is_safe_and_iterative",
+    "checker::tests::typed_error_rejects_blank_metadata",
+    "checker::tests::severity_and_rule_names_are_stable",
+]
 title = "Accessibility and PDF/UA checker"
 
 [[feature]]
