@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-security",
     "id":  "T-0018",
-    "evidence":  "",
+    "evidence":  "docs/evidence/security/T-0018.md",
     "owns":  [
                  "crates/pdfxi-security/**",
                  "orchestration/feature-updates/T-0018.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0002"
                    ],

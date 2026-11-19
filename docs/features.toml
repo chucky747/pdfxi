@@ -724,25 +724,36 @@ tests = []
 title = "Electronic signature fields and workflows"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-security/src/permissions.rs"
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 16 passed; 0 failed."
 id = "SEC-001"
-notes = ""
+notes = "User/owner password roles modeled: Permissions::allows, MockProtector::unlock. Real PDF open-password decryption handler is pending a later milestone."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "tests::permissions_user_role_only_allows_granted_bits",
+    "tests::permissions_owner_role_bypasses_all_restrictions",
+    "tests::mock_unlock_user_password_grants_user_role",
+    "tests::mock_unlock_owner_password_grants_owner_role",
+    "tests::mock_unlock_rejects_wrong_and_empty_passwords",
+]
 title = "Open password and permissions password"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-security/src/encryption.rs"
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 16 passed; 0 failed."
 id = "SEC-002"
-notes = ""
+notes = "EncryptionMethod models none/RC4-40/RC4-128/AES-128/AES-256 with key-length validation and round-trippable IDs; Protector/MockProtector contracts defined. Concrete RC4/AES cipher handlers are pending a later milestone."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "tests::encryption_method_ids_round_trip_for_all_algorithms",
+    "tests::encryption_method_key_lengths_and_families",
+    "tests::mock_protector_encrypt_decrypt_round_trip_for_all_methods",
+    "tests::protector_trait_is_object_safe",
+]
 title = "RC4 and AES encryption handlers"
 
 [[feature]]
@@ -768,14 +779,19 @@ tests = []
 title = "Digital IDs and certificate management"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-security/src/signature.rs"
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 16 passed; 0 failed."
 id = "SEC-005"
-notes = ""
+notes = "SignatureInfo (signer/time/digest algorithm/coverage/validity), SignatureStatus, SignatureCoverage and DigestAlgorithm modeled with round-trippable IDs. Actual CMS/PKCS#7 signing and certification are pending a later milestone."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "tests::digest_algorithm_ids_round_trip",
+    "tests::signature_status_distinguishes_valid_from_failure_states",
+    "tests::signature_info_exposes_all_metadata",
+    "tests::signature_coverage_enforces_page_ranges",
+]
 title = "Sign and certify documents"
 
 [[feature]]
