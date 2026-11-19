@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium",
+    "id":  "T-0028",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-app/**",
+                 "orchestration/feature-updates/T-0028.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0027",
+                       "T-0021"
+                   ],
+    "title":  "Wire PDFium raster into the viewer canvas",
+    "priority":  "P0",
+    "lane":  "app"
+}

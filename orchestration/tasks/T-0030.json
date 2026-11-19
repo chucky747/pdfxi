@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo run -p pdfxi-testkit --example bench_open --release",
+    "id":  "T-0030",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-testkit/**",
+                 "fixtures/**",
+                 "orchestration/feature-updates/T-0030.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0024"
+                   ],
+    "title":  "Build 500-page performance fixture and open benchmark",
+    "priority":  "P0",
+    "lane":  "qa"
+}
