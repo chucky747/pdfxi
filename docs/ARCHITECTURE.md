@@ -36,11 +36,15 @@ pdfxi-render ────────────┤
 
 Dependency rules:
 
-- `pdfxi-core` depends only on `thiserror` and small utility crates.
-- `pdfxi-render` may depend on `pdfium-render`, `image`, `rayon`, and `pdfxi-core`.
-- `pdfxi-edit` may depend on `pdfxi-core` and `pdfxi-render` (for geometry only).
-- `pdfxi-app` may depend on every feature crate; feature crates never depend on
-  `pdfxi-app`.
+- `pdfxi-core` depends on `thiserror` plus small, audited utility crates (for
+  example `flate2` for FlateDecode); it never depends on renderer or UI types.
+- `pdfxi-render` may depend on `pdfium-render` (optional `pdfium` feature),
+  `image`, `rayon`, and `pdfxi-core`.
+- `pdfxi-text`, `pdfxi-edit`, `pdfxi-forms`, `pdfxi-security`, `pdfxi-convert`,
+  `pdfxi-standards`, and `pdfxi-automation` stay dependency-free beyond
+  `thiserror` until a documented need appears.
+- `pdfxi-app` may depend on every feature crate; `eframe`/`egui` are optional
+  behind the `ui` feature. Feature crates never depend on `pdfxi-app`.
 - `pdfxi-testkit` is test-only and may depend on all core crates.
 
 ## Core contracts
