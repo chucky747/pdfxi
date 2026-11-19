@@ -1,0 +1,15 @@
+{
+  "id": "T-0108",
+  "lane": "core",
+  "title": "Incremental updates and preservation metadata",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0092"],
+  "owns": [
+    "crates/pdfxi-core/**",
+    "docs/evidence/core/T-0108.md",
+    "orchestration/feature-updates/T-0108.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core",
+  "evidence": ""
+}

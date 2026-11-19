@@ -1,0 +1,15 @@
+{
+  "id": "T-0119",
+  "lane": "app",
+  "title": "Enforce radio-group exclusivity in layer construction",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0089"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0089.md",
+    "orchestration/feature-updates/T-0119.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}

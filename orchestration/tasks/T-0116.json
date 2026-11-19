@@ -1,0 +1,15 @@
+{
+  "id": "T-0116",
+  "lane": "security",
+  "title": "Trust revocation envelopes and policy protection",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0109"],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/security/T-0116.md",
+    "orchestration/feature-updates/T-0116.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security",
+  "evidence": ""
+}

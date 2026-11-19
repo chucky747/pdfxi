@@ -1166,38 +1166,16 @@ tests = [
 title = "Export accessible text and tagged content"
 
 [[feature]]
-docs = "crates/pdfxi-convert/src/lib.rs"
+docs = "crates/pdfxi-convert/src/conformance.rs, docs/evidence/convert/T-0093.md"
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 22 convert unit tests passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, because the host denies generated doctest binaries with os error 5). cargo fmt -p pdfxi-convert -p pdfxi-standards -- --check and cargo clippy -p pdfxi-convert -p pdfxi-standards --all-targets --all-features -- -D warnings both exit 0."
+evidence = "docs/evidence/convert/T-0093.md"
 id = "EXPORT-008"
-notes = """
-Froze the conversion contract in pdfxi-convert: SourceKind and ExportKind
-classify file names (case-insensitive, dot-optional, Unknown fallback);
-ConversionOptions carries page range, image/annotation, and OCR settings with
-validate(); ConversionError names unsupported source/export/pair and invalid
-input; Converter exposes options(), can_import(), import(), and export(); and
-MockConverter is a deterministic in-memory implementation. Terms are documented
-as raw PDF bytes at the trait boundary so the crate has no dependencies. Real
-PDF/A-X-E export adapters and the standards fixups are future work, hence
-in-progress.
-"""
+notes = "Subset normalization with honest enforced/reported-only report and no certification claim; ICC validity and backend rendering remain reported-only."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "converter::tests::mock_export_is_deterministic_and_respects_configured_targets",
-    "converter::tests::default_mock_supports_all_known_kinds",
-    "converter::tests::mock_validates_options_before_converting",
-    "converter::tests::mock_import_returns_registered_bytes",
-    "converter::tests::mock_import_rejects_unsupported_source",
-    "converter::tests::mock_import_without_registered_input_is_an_error",
-    "converter::tests::mock_can_import_respects_configured_sources",
-    "export::tests::export_kind_from_extension_is_case_insensitive_and_optional_dot",
-    "export::tests::export_kind_from_path_handles_missing_and_unknown_extensions",
-    "export::tests::export_kind_labels_and_flags_are_stable",
-    "source::tests::source_kind_from_extension_is_case_insensitive_and_optional_dot",
-    "source::tests::source_kind_from_path_handles_missing_and_unknown_extensions",
-    "error::tests::unsupported_variants_are_flagged_and_have_actionable_messages",
-    "options::tests::builders_store_every_option",
+    "conformance::tests::normalization_is_deterministic",
+    "conformance_export::pdfa_export_round_trips_through_core",
 ]
 title = "Export to PDF/A PDF/X and PDF/E"
 
@@ -2027,37 +2005,71 @@ tests = [
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
-docs = "crates/pdfxi-standards/src/document_profile.rs"
+docs = "crates/pdfxi-standards/src/profile_request.rs, docs/evidence/convert/T-0093.md"
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed. cargo clippy -p pdfxi-standards --all-targets -- -D warnings and cargo fmt -p pdfxi-standards -- --check both exit 0."
+evidence = "docs/evidence/convert/T-0093.md"
 id = "PRINT-002"
-notes = """
-T-0037 adds real, deterministic preflight checks for PDF/A-1b, PDF/A-2b,
-PDF/X-1a, PDF/X-4 and PDF/UA-1 over a dependency-free PreflightInput snapshot,
-with stable finding codes and severities. Fixups, ICC validation, PDF/E,
-PDF/VT, and a veraPDF corpus comparison remain future work, so the row stays
-in-progress rather than verified."""
+notes = "Deterministic rule IDs and ordering across PDF/A-1b, PDF/A-2b, PDF/X-4, and PDF/E-1; PDF/VT and independent veraPDF-style cross-validation remain open."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
-    "document_profile::tests::nonconforming_input_fails_every_profile",
-    "document_profile::tests::finding_codes_are_stable_per_profile",
-    "document_profile::tests::ordering_is_independent_of_input_collection_order",
-    "document_profile::tests::severity_filtering_keeps_only_requested_levels",
-    "document_profile::tests::report_summary_is_stable",
+    "document_profile::t0093_tests::pdfa1b_missing_xmp_fails",
+    "document_profile::t0093_tests::findings_have_stable_ids_and_order",
 ]
 title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/color.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/render/T-0095.md",
+]
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-render: EXIT=0 (78 unit tests, incl. 16 color::tests; all other targets 0 tests); cargo fmt -p pdfxi-render -- --check: EXIT=0; cargo clippy -p pdfxi-render --all-targets --all-features -- -D warnings: EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-render --no-deps --all-features: EXIT=0. Full output in docs/evidence/render/T-0095.md."
 id = "PRINT-003"
-notes = ""
+notes = """
+Added a dependency-free colour-management module in crates/pdfxi-render/src/color.rs.
+
+- Bounded IccProfile parser: 128-byte header (size, CMM, version, class, data
+  colour space, PCS, rendering intent, illuminant), 'acsp' signature check,
+  tag table with size/tag-count caps (16 MiB, 1024 tags), and bounds-checked
+  tag payloads. Typed ColorError for truncated/oversize/invalid-signature/
+  out-of-bounds/zero-length/hostile input; no panics.
+- desc/wtpt/rXYZ/gXYZ/bXYZ/rTRC/gTRC/bTRC/kTRC queries, including curv (identity,
+  gamma, sampled table) and simple parametric (Y=X^g) TRCs.
+- Output-intent model (RawOutputIntent -> OutputIntent -> OutputIntentSet) parsing
+  subtype, output condition identifier, info, registry name and /DestOutputProfile,
+  with issues() and validate() detecting missing, multiple and unsupported intents.
+- Rendering colour contract: DeviceColor pairs components with an explicit
+  DeviceColorSpace; ConversionPlan::from_profile derives deterministic RGB
+  matrix/TRC, gray-gamma, identity, or NeedsBackend plans. Full ICC/CMM rendering
+  (LUTs, complex parametric curves, chromatic adaptation) is explicitly delegated
+  to the renderer backend, so PRINT-003 remains in-progress.
+
+16 new tests cover all required cases plus description/whitepoint queries,
+needs-backend errors, and device-colour component validation. No image decoding,
+no unsafe, no new dependencies, no unwrap/expect/panic in non-test code.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "color::tests::header_fields_are_parsed",
+    "color::tests::tag_lookup_by_signature",
+    "color::tests::description_and_whitepoint_queries",
+    "color::tests::truncated_profile_is_rejected",
+    "color::tests::oversize_profile_is_rejected",
+    "color::tests::invalid_signature_is_rejected",
+    "color::tests::srgb_like_matrix_and_trc_are_decoded",
+    "color::tests::gray_trc_is_decoded",
+    "color::tests::output_intent_parse",
+    "color::tests::missing_output_intent_is_detected",
+    "color::tests::multiple_output_intents_are_detected",
+    "color::tests::unsupported_intent_subtype_is_detected",
+    "color::tests::conversion_plan_is_deterministic",
+    "color::tests::needs_backend_plan_returns_typed_error",
+    "color::tests::hostile_and_zero_length_tag_data_rejected",
+    "color::tests::device_color_component_validation",
+]
 title = "ICC color management and output intents"
 
 [[feature]]
@@ -2696,6 +2708,8 @@ tests = [
     "xref_tests::out_of_range_compressed_index_is_rejected",
     "xref_tests::xref_stream_writer_round_trip_is_readable",
     "xref_tests::public_inspect_xref_matches_document_report",
+    "xref_tests::absurd_object_stream_count_is_rejected",
+    "xref_tests::truncated_xref_stream_is_a_structured_error",
 ]
 title = "Cross-reference tables and streams"
 

@@ -48,6 +48,12 @@
 //!   streams without a decoder dependency. This is the only module that adds a
 //!   runtime dependency (`thiserror`, already in the workspace and lockfile);
 //!   `pdfxi-core` is used only as a dev-dependency for round-trip tests.
+//! - [`conformance`] normalizes raw PDF bytes for a declared subset of
+//!   PDF/A, PDF/X and PDF/E targets. It adds XMP and output-intent placeholders,
+//!   raises the header version to the target minimum, regenerates the xref,
+//!   rejects unsupported or contradictory requests with typed errors, and
+//!   returns a report of enforced versus reported-only constraints. It never
+//!   claims certification.
 //! - [`create_from_html`], [`create_from_html_with_options`], [`HtmlOptions`],
 //!   and [`create_pdf_from_html_file`] add a bounded, dependency-free HTML
 //!   importer: a documented element/CSS subset, typed rejection of active
@@ -83,6 +89,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod conformance;
 mod converter;
 pub mod create;
 mod error;
@@ -99,6 +106,11 @@ mod tagged_text;
 mod text;
 mod text_converter;
 
+pub use conformance::{
+    ConformanceExport, ConformanceExportError, ConformanceExportReport, ConformanceFinding,
+    ConformanceRequest, ConformanceTarget, ExportSeverity, NormalizationOptions,
+    REPORTED_ONLY_CONSTRAINTS, SCOPE_NOTE, export_conformance_pdf, looks_like_normalized_pdf,
+};
 pub use converter::{Converter, MockConverter};
 pub use create::{
     CreateError, CreateImageFormat, CreateOptions, DEFAULT_DPI, HTML_MAX_INPUT_BYTES, HtmlOptions,

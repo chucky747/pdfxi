@@ -1,0 +1,16 @@
+{
+  "id": "T-0111",
+  "lane": "app",
+  "title": "Manage home search and compare",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0101"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "crates/pdfxi-text/**",
+    "docs/evidence/app/T-0111.md",
+    "orchestration/feature-updates/T-0111.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui -p pdfxi-text",
+  "evidence": ""
+}

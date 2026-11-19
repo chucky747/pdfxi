@@ -1,0 +1,15 @@
+{
+  "id": "T-0110",
+  "lane": "convert",
+  "title": "Export HTML and PostScript",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0093"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "docs/evidence/convert/T-0110.md",
+    "orchestration/feature-updates/T-0110.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert",
+  "evidence": ""
+}

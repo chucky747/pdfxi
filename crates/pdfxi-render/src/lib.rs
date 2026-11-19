@@ -31,6 +31,12 @@
 //! cancellation, reports progress, and emits a stable [`SpoolSummary`]. It is
 //! pure Rust and produces rasters only; sending them to a platform printer is a
 //! later adapter.
+//!
+//! The [`mod@color`] module adds bounded ICC profile parsing, output-intent
+//! validation, and a deterministic colour-conversion contract. Device colours
+//! carry an explicit colour space, and analytic matrix/TRC and gray-gamma plans
+//! are derived from profiles; full ICC/CMM rendering is delegated to the native
+//! renderer backend.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -59,6 +65,18 @@ pub mod export;
 pub use export::{
     AlphaPolicy, ColorMode, DEFAULT_EXPORT_DPI, ExportError, ExportOptions, ExportedImage, FitMode,
     ImageFormat, MAX_EXPORT_DPI, encode_image, export_pages,
+};
+
+/// Dependency-light ICC profile parsing, output-intent validation, and a
+/// deterministic colour-conversion contract. Full ICC/CMM rendering is
+/// delegated to the renderer backend.
+pub mod color;
+
+pub use color::{
+    ColorError, ConversionPlan, DeviceClass, DeviceColor, DeviceColorSpace, ICC_HEADER_SIZE,
+    IccColorSpace, IccHeader, IccProfile, MAX_ICC_PROFILE_BYTES, MAX_ICC_TAG_COUNT,
+    MIN_ICC_PROFILE_BYTES, OutputIntent, OutputIntentIssue, OutputIntentSet, OutputIntentSubtype,
+    Pcs, RawOutputIntent, RenderingIntent, RgbMatrix, RgbMatrixTrc, TagEntry, Trc, Xyz,
 };
 
 pub use print::{

@@ -187,6 +187,24 @@ pub(crate) fn forbidden_catalog_entries_for(standard: Standard) -> &'static [&'s
     }
 }
 
+/// Returns whether the profile for `standard` forbids transparency.
+///
+/// This delegates to the same declarative rule constants the checks run, so a
+/// request dispatcher can reject a contradictory "allow transparency" request
+/// without duplicating the per-standard decision.
+#[must_use]
+pub(crate) fn forbids_transparency(standard: Standard) -> bool {
+    match standard {
+        Standard::PdfA1b => PDFA1B_RULES.forbid_transparency,
+        Standard::PdfA2b => PDFA2B_RULES.forbid_transparency,
+        Standard::PdfA3b => PDFA3B_RULES.forbid_transparency,
+        Standard::PdfX1a => PDFX1A_RULES.forbid_transparency,
+        Standard::PdfX4 => PDFX4_RULES.forbid_transparency,
+        Standard::PdfE1 => PDFE1_RULES.forbid_transparency,
+        Standard::PdfUa1 => PDFUA1_RULES.forbid_transparency,
+    }
+}
+
 /// Appends a finding with a stable `PREFIX.CHECK` code.
 fn push(
     out: &mut Vec<PreflightFinding>,
@@ -1336,5 +1354,281 @@ mod tests {
         assert_eq!(PdfE1Profile::new(), PdfE1Profile);
         assert_eq!(PdfA3bProfile::new().standard().label(), "PDF/A-3b");
         assert_eq!(PdfE1Profile::new().standard().label(), "PDF/E-1");
+    }
+}
+
+/// T-0093 focused conformance coverage: one conforming and one violating
+/// fixture per required profile family, plus rule order, context and fixups.
+#[cfg(test)]
+mod t0093_tests {
+    use super::*;
+    use crate::input::{
+        AnnotationInfo, CatalogInfo, FontInfo, FontType, ImageFilter, ImageInfo, OutputIntent,
+        PageBoxes, PageInfo, TransparencyUsage,
+    };
+    use crate::{
+        FixupPolicy, PdfA1bProfile, PdfA2bProfile, PdfX4Profile, PreflightProfile, apply_fixups,
+        suggested_fixups,
+    };
+
+    /// A minimal conforming snapshot for one of the four required profiles.
+    fn conforming(standard: Standard) -> PreflightInput {
+        let (version, subtype) = match standard {
+            Standard::PdfA1b => (PdfVersion::new(1, 4), "GTS_PDFA1"),
+            Standard::PdfA2b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
+            Standard::PdfX4 => (PdfVersion::new(1, 6), "GTS_PDFX"),
+            Standard::PdfE1 => (PdfVersion::new(1, 6), ""),
+            other => panic!("test: unexpected standard {other}"),
+        };
+        let mut catalog = CatalogInfo {
+            has_xmp_metadata: true,
+            ..Default::default()
+        };
+        if standard != Standard::PdfE1 {
+            catalog
+                .output_intents
+                .push(OutputIntent::new(subtype, true));
+        }
+        PreflightInput {
+            version,
+            catalog,
+            page_count: 1,
+            pages: vec![PageInfo {
+                number: 1,
+                boxes: PageBoxes::all_present(),
+            }],
+            fonts: vec![FontInfo {
+                name: "/F1".to_owned(),
+                font_type: FontType::TrueType,
+                embedded: true,
+            }],
+            images: vec![ImageInfo {
+                name: "/Im1".to_owned(),
+                filter: ImageFilter::FlateDecode,
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn profile(standard: Standard) -> crate::ConformanceProfile {
+        crate::ConformanceProfile::from_standard(standard)
+            .unwrap_or_else(|_| panic!("test: standard must resolve"))
+    }
+
+    #[test]
+    fn t0093_a1b_conforming_fixture_passes() {
+        let report = profile(Standard::PdfA1b).report(&conforming(Standard::PdfA1b));
+        assert!(report.is_conforming(), "{}", report.summary());
+        assert_eq!(report.error_count(), 0);
+        assert!(report.findings().is_empty());
+    }
+
+    #[test]
+    fn t0093_a2b_conforming_fixture_passes() {
+        let report = profile(Standard::PdfA2b).report(&conforming(Standard::PdfA2b));
+        assert!(report.is_conforming(), "{}", report.summary());
+        assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn t0093_x4_conforming_fixture_passes() {
+        let report = profile(Standard::PdfX4).report(&conforming(Standard::PdfX4));
+        assert!(report.is_conforming(), "{}", report.summary());
+        assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn t0093_e1_conforming_fixture_passes() {
+        let report = profile(Standard::PdfE1).report(&conforming(Standard::PdfE1));
+        assert!(report.is_conforming(), "{}", report.summary());
+        assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn t0093_missing_xmp_is_an_error_for_pdf_a_and_x4() {
+        for standard in [Standard::PdfA1b, Standard::PdfA2b, Standard::PdfX4] {
+            let mut input = conforming(standard);
+            input.catalog.has_xmp_metadata = false;
+            let report = profile(standard).report(&input);
+            assert!(
+                report.findings().iter().any(|finding| {
+                    finding.code().ends_with(".NO_XMP_METADATA")
+                        && finding.severity() == Severity::Error
+                }),
+                "{standard} must require XMP"
+            );
+            assert!(!report.is_conforming());
+        }
+    }
+
+    #[test]
+    fn t0093_low_version_is_an_error() {
+        let mut input = conforming(Standard::PdfA2b);
+        input.version = PdfVersion::new(1, 4);
+        let findings = PdfA2bProfile::new().check(&input);
+        let finding = findings
+            .iter()
+            .find(|item| item.code() == "PDFA2B.VERSION_TOO_LOW")
+            .unwrap_or_else(|| panic!("test: version finding missing"));
+        assert_eq!(finding.severity(), Severity::Error);
+        assert_eq!(finding.location(), Some("header"));
+        assert!(finding.message().contains("1.7"));
+    }
+
+    #[test]
+    fn t0093_missing_output_intent_is_an_error() {
+        for standard in [Standard::PdfA1b, Standard::PdfX4] {
+            let mut input = conforming(standard);
+            input.catalog.output_intents.clear();
+            let findings = profile(standard).check(&input);
+            assert!(
+                findings
+                    .iter()
+                    .any(|item| item.code().ends_with(".NO_OUTPUT_INTENT")),
+                "{standard} must require an output intent"
+            );
+        }
+    }
+
+    #[test]
+    fn t0093_encryption_is_an_error() {
+        for standard in [
+            Standard::PdfA1b,
+            Standard::PdfA2b,
+            Standard::PdfX4,
+            Standard::PdfE1,
+        ] {
+            let mut input = conforming(standard);
+            input.is_encrypted = true;
+            let findings = profile(standard).check(&input);
+            assert!(
+                findings
+                    .iter()
+                    .any(|item| item.code().ends_with(".ENCRYPTED")),
+                "{standard} must reject encryption"
+            );
+        }
+    }
+
+    #[test]
+    fn t0093_forbidden_javascript_is_an_error() {
+        let mut input = conforming(Standard::PdfA1b);
+        input.catalog.forbidden_entries = vec!["/JavaScript".to_owned()];
+        let findings = PdfA1bProfile::new().check(&input);
+        let finding = findings
+            .iter()
+            .find(|item| item.code() == "PDFA1B.FORBIDDEN_ENTRY")
+            .unwrap_or_else(|| panic!("test: forbidden-entry finding missing"));
+        assert_eq!(finding.location(), Some("Catalog /JavaScript"));
+        assert!(finding.message().contains("/JavaScript"));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|item| item.code() == "PDFA1B.FORBIDDEN_ENTRY")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn t0093_transparency_is_an_error_where_forbidden() {
+        let mut input = conforming(Standard::PdfA1b);
+        input.transparency = TransparencyUsage {
+            uses_transparency: true,
+            locations: vec!["page 2".to_owned(), "page 1".to_owned()],
+        };
+        let findings = PdfA1bProfile::new().check(&input);
+        let codes: Vec<&str> = findings
+            .iter()
+            .filter(|item| item.code() == "PDFA1B.TRANSPARENCY_FORBIDDEN")
+            .map(PreflightFinding::code)
+            .collect();
+        assert_eq!(codes.len(), 2);
+        assert!(
+            findings
+                .iter()
+                .all(|item| item.severity() == Severity::Error)
+        );
+
+        let mut allowed = conforming(Standard::PdfA2b);
+        allowed.transparency.uses_transparency = true;
+        assert!(PdfA2bProfile::new().check(&allowed).is_empty());
+    }
+
+    #[test]
+    fn t0093_rule_ids_are_deterministic_and_ordered() {
+        let mut input = conforming(Standard::PdfX4);
+        input.is_encrypted = true;
+        input.catalog.has_xmp_metadata = false;
+        input.version = PdfVersion::new(1, 3);
+        input.fonts[0].embedded = false;
+        let profile = PdfX4Profile::new();
+        let first = profile.report(&input);
+        let second = profile.report(&input);
+        assert_eq!(first, second);
+        for finding in first.findings() {
+            assert!(finding.code().starts_with("PDFX4."));
+            let suffix = finding.code().trim_start_matches("PDFX4.");
+            assert_eq!(suffix, suffix.to_uppercase());
+            assert!(!suffix.contains(' '));
+        }
+        let severities: Vec<Severity> = first
+            .findings()
+            .iter()
+            .map(PreflightFinding::severity)
+            .collect();
+        let last_error = severities.iter().rposition(|item| *item == Severity::Error);
+        assert!(last_error.is_some());
+        assert!(
+            severities[..=last_error.unwrap_or(0)]
+                .iter()
+                .all(|item| *item == Severity::Error)
+        );
+    }
+
+    #[test]
+    fn t0093_findings_carry_page_and_object_context() {
+        let mut input = conforming(Standard::PdfX4);
+        input.pages[0].boxes = PageBoxes::default();
+        input.annotations.push(AnnotationInfo::new("/Popup", true));
+        let findings = PdfX4Profile::new().check(&input);
+        assert!(findings.iter().any(
+            |item| item.code() == "PDFX4.PAGE_NO_MEDIABOX" && item.location() == Some("page 1")
+        ));
+        assert!(
+            findings
+                .iter()
+                .any(|item| item.code() == "PDFX4.ANNOTATION_FORBIDDEN"
+                    && item.location() == Some("annotation /Popup"))
+        );
+    }
+
+    #[test]
+    fn t0093_fixup_suggestions_do_not_mutate_the_source() {
+        let mut input = conforming(Standard::PdfA2b);
+        input.catalog.has_xmp_metadata = false;
+        input.catalog.output_intents.clear();
+        input.version = PdfVersion::new(1, 4);
+        input
+            .catalog
+            .forbidden_entries
+            .push("/JavaScript".to_owned());
+        let before = input.clone();
+        let report = PdfA2bProfile::new().report(&input);
+        let suggestions = suggested_fixups(Standard::PdfA2b, &report);
+        assert_eq!(suggestions, suggested_fixups(Standard::PdfA2b, &report));
+        let outcome = apply_fixups(Standard::PdfA2b, &input, &FixupPolicy::all(), &suggestions)
+            .unwrap_or_else(|error| panic!("test: suggestions must be applicable: {error}"));
+        assert_eq!(input, before);
+        assert!(outcome.input.catalog.has_xmp_metadata);
+        let after = PdfA2bProfile::new().report(&outcome.input);
+        assert!(after.error_count() < report.error_count());
+        assert!(
+            after
+                .findings()
+                .iter()
+                .any(|item| item.code() == "PDFA2B.OUTPUT_INTENT_NO_PROFILE"),
+            "a real ICC profile is still required"
+        );
     }
 }

@@ -235,6 +235,146 @@ fn verify(no_docs: bool) -> Result<()> {
     Ok(())
 }
 
+fn milestone_required_rows(milestone: &str) -> Option<&'static [&'static str]> {
+    // Milestone gates mirror docs/PLAN.md. They are a subset of the full
+    // matrix: `goal-verify --all` still requires every row.
+    match milestone {
+        "M0" => Some(&[]),
+        "M1" => Some(&[
+            "STD-011", "STD-012", "AUTO-009", "AUTO-010", "VIEW-002", "VIEW-003", "VIEW-016",
+        ]),
+        "M2" => Some(&[
+            "CREATE-003",
+            "CREATE-004",
+            "CREATE-005",
+            "CREATE-009",
+            "VIEW-004",
+            "VIEW-005",
+            "VIEW-006",
+            "VIEW-007",
+            "EDIT-008",
+            "EDIT-009",
+            "EDIT-011",
+            "EXPORT-006",
+            "EXPORT-007",
+            "PRINT-001",
+            "PRINT-007",
+        ]),
+        "M3" => Some(&[
+            "EDIT-001",
+            "EDIT-002",
+            "EDIT-003",
+            "EDIT-004",
+            "EDIT-012",
+            "EDIT-013",
+            "EDIT-015",
+            "FORMS-001",
+            "FORMS-002",
+            "FORMS-003",
+            "FORMS-004",
+            "FORMS-005",
+            "FORMS-008",
+            "FORMS-009",
+            "FORMS-010",
+            "SEC-001",
+            "SEC-002",
+            "SEC-004",
+            "SEC-005",
+            "SEC-006",
+            "SEC-008",
+            "SEC-009",
+            "AUTO-004",
+        ]),
+        "M4" => Some(&[
+            "SEC-003",
+            "SEC-007",
+            "STD-001",
+            "STD-002",
+            "STD-004",
+            "STD-005",
+            "STD-006",
+            "STD-007",
+            "STD-008",
+            "STD-009",
+            "STD-010",
+            "PRINT-002",
+            "PRINT-003",
+            "PRINT-004",
+            "PRINT-005",
+            "PRINT-006",
+            "PRINT-008",
+            "EXPORT-008",
+        ]),
+        "M5" => Some(&[
+            "CREATE-001",
+            "CREATE-002",
+            "CREATE-006",
+            "CREATE-007",
+            "CREATE-008",
+            "CREATE-010",
+            "CREATE-011",
+            "CREATE-012",
+            "CREATE-013",
+            "CREATE-014",
+            "EXPORT-001",
+            "EXPORT-002",
+            "EXPORT-003",
+            "EXPORT-004",
+            "EXPORT-005",
+            "EXPORT-009",
+            "PLAT-003",
+            "PLAT-004",
+        ]),
+        "M6" => Some(&[
+            "AUTO-001",
+            "AUTO-002",
+            "AUTO-003",
+            "AUTO-005",
+            "AUTO-006",
+            "AUTO-007",
+            "AUTO-008",
+            "REVIEW-001",
+            "REVIEW-002",
+            "REVIEW-003",
+            "REVIEW-004",
+            "REVIEW-005",
+            "REVIEW-006",
+            "REVIEW-007",
+            "REVIEW-008",
+            "REVIEW-009",
+            "ACCESS-001",
+            "ACCESS-002",
+            "ACCESS-003",
+            "ACCESS-004",
+            "ACCESS-005",
+            "ACCESS-006",
+            "VIEW-012",
+            "VIEW-013",
+            "VIEW-014",
+            "VIEW-015",
+        ]),
+        "M7" => Some(&[
+            "PLAT-001",
+            "PLAT-002",
+            "PLAT-005",
+            "PLAT-006",
+            "PLAT-007",
+            "MANAGE-002",
+            "MANAGE-003",
+            "MANAGE-004",
+            "MANAGE-005",
+            "MANAGE-006",
+            "MEDIA-001",
+            "MEDIA-002",
+            "MEDIA-003",
+            "MEDIA-004",
+            "MEDIA-005",
+            "VIEW-018",
+        ]),
+        _ => None,
+    }
+}
+
 fn goal_verify(milestone: Option<&str>, all: bool, allow_dirty: bool) -> Result<()> {
     if !all && milestone.is_none() {
         bail!("pass --milestone M0 or --all");
@@ -251,31 +391,25 @@ fn goal_verify(milestone: Option<&str>, all: bool, allow_dirty: bool) -> Result<
     features_verify()?;
 
     if let Some(milestone) = milestone {
-        if !matches!(milestone, "M0" | "M1") {
+        let required = milestone_required_rows(milestone).ok_or_else(|| {
+            anyhow::anyhow!("unknown milestone {milestone}; expected M0 through M7")
+        })?;
+        let rows = load_features()?;
+        let missing: Vec<&str> = required
+            .iter()
+            .copied()
+            .filter(|id| {
+                !rows
+                    .iter()
+                    .any(|row| row.id == *id && row.status == "verified")
+            })
+            .collect();
+        if !missing.is_empty() {
             bail!(
-                "milestone {milestone} is not implemented yet; only M0 and M1 are available in this build"
+                "{} requires these feature rows to be verified: {}",
+                milestone,
+                missing.join(", ")
             );
-        }
-        if milestone == "M1" {
-            let rows = load_features()?;
-            let required = [
-                "STD-011", "STD-012", "AUTO-009", "AUTO-010", "VIEW-002", "VIEW-003", "VIEW-016",
-            ];
-            let missing: Vec<&str> = required
-                .iter()
-                .copied()
-                .filter(|id| {
-                    !rows
-                        .iter()
-                        .any(|row| row.id == *id && row.status == "verified")
-                })
-                .collect();
-            if !missing.is_empty() {
-                bail!(
-                    "M1 requires these feature rows to be verified: {}",
-                    missing.join(", ")
-                );
-            }
         }
         run("cargo", &["fmt", "--all", "--check"])?;
         run("cargo", &["test", "--workspace"])?;

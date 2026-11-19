@@ -3,7 +3,7 @@
   "lane": "convert",
   "title": "Export and validate PDF/A, PDF/X, PDF/E",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0084"],
   "owns": [
     "crates/pdfxi-standards/**",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0093.toml"
   ],
   "acceptance": "cargo test -p pdfxi-standards -p pdfxi-convert",
-  "evidence": ""
+  "evidence": "docs/evidence/convert/T-0093.md"
 }

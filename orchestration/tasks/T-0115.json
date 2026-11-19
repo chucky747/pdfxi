@@ -1,0 +1,15 @@
+{
+  "id": "T-0115",
+  "lane": "forms",
+  "title": "Static form recognition and distribution",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0097"],
+  "owns": [
+    "crates/pdfxi-forms/**",
+    "docs/evidence/forms/T-0115.md",
+    "orchestration/feature-updates/T-0115.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-forms",
+  "evidence": ""
+}

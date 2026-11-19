@@ -1,0 +1,15 @@
+{
+  "id": "T-0114",
+  "lane": "author",
+  "title": "Stamp attachments compare and measurement review",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0104"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/author/T-0114.md",
+    "orchestration/feature-updates/T-0114.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "evidence": ""
+}

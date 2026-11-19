@@ -1,0 +1,15 @@
+{
+  "id": "T-0112",
+  "lane": "app",
+  "title": "Accessibility navigation high contrast and read aloud",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0096"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0112.md",
+    "orchestration/feature-updates/T-0112.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}

@@ -19,6 +19,9 @@
 //! - [`apply_fixups`], [`FixupPolicy`], and [`FixupReport`] apply only explicitly
 //!   enabled, safe mechanical fixes to a cloned snapshot and audit every change.
 //!   [`suggested_fixups`] derives a conservative fixup list from a report.
+//! - [`ProfileRequest`], [`ConformanceProfile`], and [`ProfileRequestError`]
+//!   resolve a caller-supplied label to a concrete profile and reject unknown
+//!   or contradictory requests with typed errors.
 //! - [`PreflightReport`], [`StaticProfile`], and [`HeaderProfile`] are the
 //!   report type, a test double, and a small real header check respectively.
 //!
@@ -52,6 +55,7 @@ mod finding;
 mod fixup;
 mod input;
 mod profile;
+mod profile_request;
 mod standard;
 
 pub use document_profile::{
@@ -68,6 +72,7 @@ pub use input::{
     OutputIntent, PageBoxes, PageInfo, PdfVersion, PreflightInput, TransparencyUsage,
 };
 pub use profile::{HeaderProfile, PreflightProfile, PreflightReport, StaticProfile};
+pub use profile_request::{ConformanceProfile, ProfileRequest, ProfileRequestError};
 pub use standard::{Standard, StandardFamily};
 
 /// Return the implementation name for diagnostics.
