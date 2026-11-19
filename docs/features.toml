@@ -10,17 +10,17 @@ tests = []
 title = "Open and print PDF documents"
 
 [[feature]]
-docs = "crates/pdfxi-render/src/lib.rs"
+docs = "crates/pdfxi-app/src/view.rs"
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-render -p pdfxi-text (T-0009)"
+evidence = "cargo test -p pdfxi-app (T-0011)"
 id = "VIEW-002"
-notes = "Renderer contract frozen: PageIndex, RenderedPage, RenderError, Renderer with cancellation and progress. Layout policy is owned by the app lane; this row tracks the rendering surface it consumes."
+notes = "ViewMode (single, continuous, two-page, two-page-continuous) and fit/custom Zoom with deterministic clamping are modeled. Layout is data-only; the canvas that arranges real pages is future app work."
 priority = "P0"
 status = "in-progress"
 tests = [
-    "pdfxi-render::tests::mock_renderer_produces_expected_raster_and_progress",
-    "pdfxi-render::tests::empty_document_and_out_of_range_pages_are_rejected",
-    "pdfxi-render::tests::cancellation_stops_render_before_pixels_are_built",
+    "view::tests::view_mode_classification_is_consistent",
+    "view::tests::zoom_fit_modes_resolve_to_provided_scales",
+    "state::tests::set_zoom_rotation_and_view_mode_on_active_tab",
 ]
 title = "Single page continuous and two-page layouts"
 
@@ -51,25 +51,35 @@ tests = []
 title = "Rotate view and page display"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/state.rs"
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-app (T-0011)"
 id = "VIEW-005"
-notes = ""
+notes = "AppState owns open DocumentTabs with allocation/activation/close semantics and per-tab view state; deterministic tab titles are derived from display name plus a dirty marker. Dock widgets are future work."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "state::tests::tab_open_close_and_activate_lifecycle",
+    "state::tests::closing_active_tab_prefers_the_following_neighbor",
+    "state::tests::unknown_tab_operations_return_errors",
+    "state::tests::active_tab_operations_fail_without_a_tab",
+    "tabs::tests::tab_title_is_deterministic",
+]
 title = "Tabbed multi-document interface"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/view.rs"
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-app (T-0011)"
 id = "VIEW-006"
-notes = ""
+notes = "Two-page and two-page-continuous layout modes plus independent per-tab view state provide the data model a split/tile window manager will consume. Actual split/tile window management is not implemented in this task."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "view::tests::view_mode_classification_is_consistent",
+    "state::tests::set_zoom_rotation_and_view_mode_on_active_tab",
+    "state::tests::rotation_commands_update_active_tab_only",
+]
 title = "Split and tile document windows"
 
 [[feature]]
@@ -821,25 +831,46 @@ tests = []
 title = "Policy-based protection replacement"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-edit/src/lib.rs"
 domain = "Review"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): pdfxi-edit 13 passed, 0 failed; clippy -D warnings clean"
 id = "REVIEW-001"
-notes = ""
+notes = "Added validated page geometry (Point, Rect, PageIndex, PageGeometry) with intersection, union, containment, crop-box clamping, and invalid-rect rejection, plus the full AnnotationKind toolset, Annotation metadata/flags, hit-testing, bounds_union, and page clamping. Standard-library only; errors implement Display/Error by hand to honor the no-dependency constraint. This is the model layer; rendering and persistence remain later tasks."
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-edit::geometry::tests::rect_intersection_returns_overlap_and_none_for_disjoint",
+    "pdfxi-edit::geometry::tests::edge_touching_rects_do_not_intersect",
+    "pdfxi-edit::geometry::tests::rect_union_covers_both_inputs",
+    "pdfxi-edit::geometry::tests::rect_contains_point_is_inclusive",
+    "pdfxi-edit::geometry::tests::invalid_rects_are_rejected",
+    "pdfxi-edit::geometry::tests::page_geometry_validates_crop_box_and_rotation",
+    "pdfxi-edit::geometry::tests::page_geometry_clamps_rect_to_visible_bounds",
+    "pdfxi-edit::geometry::tests::page_index_range_check",
+    "pdfxi-edit::annotation::tests::annotation_hit_test_within_and_outside_rect",
+    "pdfxi-edit::annotation::tests::annotation_bounds_union_covers_all_rects",
+    "pdfxi-edit::annotation::tests::annotation_clamps_to_page_and_rejects_wrong_page",
+    "pdfxi-edit::annotation::tests::annotation_rejects_invalid_opacity",
+    "pdfxi-edit::annotation::tests::annotation_kinds_cover_full_toolset",
+]
 title = "Sticky note highlight underline strikeout and squiggly"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-accessibility/src/lib.rs"
 domain = "Review"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): pdfxi-accessibility 6 passed, 0 failed; clippy -D warnings clean"
 id = "REVIEW-002"
-notes = ""
+notes = "Added a small accessibility model: TagRole semantic roles and a validated ReadingOrder tree with duplicate-id, unknown-child, multiple-parent, and cycle detection (Kahn) plus deterministic depth-first traversal. Standard-library only with hand-written error types. Wiring into tag-tree parsing and assistive output is deferred to the accessibility milestone."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-accessibility::reading_order::tests::valid_reading_order_traverses_in_presentation_order",
+    "pdfxi-accessibility::reading_order::tests::cyclic_reading_order_is_rejected",
+    "pdfxi-accessibility::reading_order::tests::duplicate_ids_and_unknown_children_are_rejected",
+    "pdfxi-accessibility::reading_order::tests::multiple_parents_are_rejected",
+    "pdfxi-accessibility::reading_order::tests::empty_reading_order_is_valid",
+    "pdfxi-accessibility::tests::tag_role_has_stable_names",
+]
 title = "Free text callout line arrow shape and cloud"
 
 [[feature]]

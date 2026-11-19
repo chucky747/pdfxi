@@ -1,12 +1,147 @@
 //! Tag trees, reading order, alt text, PDF/UA checks, reflow, and assistive output.
 //!
-//! This crate is scaffolded in milestone M0. The public surface is kept small
-//! while the contracts in `docs/ARCHITECTURE.md` are frozen.
+//! This crate owns the accessibility-side document model. It is
+//! renderer-agnostic and depends only on the standard library. The
+//! [`reading_order`] module provides a validated tree of tagged nodes and an
+//! acyclic depth-first presentation order suitable for assistive technology.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod reading_order;
+
+pub use reading_order::{ReadingOrder, ReadingOrderError, ReadingOrderNode};
+
+use core::fmt;
+
+/// Semantic role of a tagged content node.
+///
+/// The variants mirror the standard PDF structure-tag roles used to give
+/// assistive technology a meaningful outline of a document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TagRole {
+    /// Root of the tag tree.
+    Document,
+    /// A major division of the document.
+    Part,
+    /// A self-contained artistic composition.
+    Art,
+    /// A section of a document.
+    Sect,
+    /// A generic division.
+    Div,
+    /// A paragraph.
+    Paragraph,
+    /// A span of inline content.
+    Span,
+    /// First-level heading.
+    Heading1,
+    /// Second-level heading.
+    Heading2,
+    /// Third-level heading.
+    Heading3,
+    /// Fourth-level heading.
+    Heading4,
+    /// Fifth-level heading.
+    Heading5,
+    /// Sixth-level heading.
+    Heading6,
+    /// A list.
+    List,
+    /// An item in a list.
+    ListItem,
+    /// The body of a list item.
+    ListBody,
+    /// A table.
+    Table,
+    /// A row in a table.
+    TableRow,
+    /// A header cell in a table.
+    TableHeader,
+    /// A data cell in a table.
+    TableData,
+    /// A figure.
+    Figure,
+    /// An image or graphic.
+    Image,
+    /// A form.
+    Form,
+    /// A form field.
+    FormField,
+    /// A hyperlink.
+    Link,
+    /// Decorative or non-content artifact.
+    Artifact,
+    /// A quotation.
+    Quote,
+    /// A note or footnote.
+    Note,
+    /// A bibliographic entry.
+    BibEntry,
+    /// A block of code.
+    Code,
+    /// A caption for a figure or table.
+    Caption,
+}
+
+impl TagRole {
+    /// Returns a stable lowercase name for diagnostics and serialization.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Document => "document",
+            Self::Part => "part",
+            Self::Art => "art",
+            Self::Sect => "sect",
+            Self::Div => "div",
+            Self::Paragraph => "paragraph",
+            Self::Span => "span",
+            Self::Heading1 => "heading1",
+            Self::Heading2 => "heading2",
+            Self::Heading3 => "heading3",
+            Self::Heading4 => "heading4",
+            Self::Heading5 => "heading5",
+            Self::Heading6 => "heading6",
+            Self::List => "list",
+            Self::ListItem => "listitem",
+            Self::ListBody => "listbody",
+            Self::Table => "table",
+            Self::TableRow => "tablerow",
+            Self::TableHeader => "tableheader",
+            Self::TableData => "tabledata",
+            Self::Figure => "figure",
+            Self::Image => "image",
+            Self::Form => "form",
+            Self::FormField => "formfield",
+            Self::Link => "link",
+            Self::Artifact => "artifact",
+            Self::Quote => "quote",
+            Self::Note => "note",
+            Self::BibEntry => "bibentry",
+            Self::Code => "code",
+            Self::Caption => "caption",
+        }
+    }
+}
+
+impl fmt::Display for TagRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {
     "pdfxi-accessibility"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_role_has_stable_names() {
+        assert_eq!(TagRole::Document.as_str(), "document");
+        assert_eq!(TagRole::Heading1.to_string(), "heading1");
+        assert_eq!(TagRole::TableData.as_str(), "tabledata");
+    }
 }

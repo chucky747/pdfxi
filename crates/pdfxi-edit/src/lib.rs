@@ -1,10 +1,23 @@
 //! Page operations, content editing, annotations, watermarks, Bates numbering, and redaction.
 //!
-//! This crate is scaffolded in milestone M0. The public surface is kept small
-//! while the contracts in `docs/ARCHITECTURE.md` are frozen.
+//! This crate owns the authoring-side document model. It is renderer-agnostic
+//! and depends only on the standard library: [`geometry`] defines validated
+//! page-space primitives and [`annotation`] defines the review and drawing
+//! annotation model with hit-testing, bounds, and clamping helpers.
+//!
+//! Edits in this crate are copy-on-write by contract; no API here mutates
+//! source document bytes in place.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+
+pub mod annotation;
+pub mod geometry;
+
+pub use annotation::{
+    Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
+};
+pub use geometry::{GeometryError, PageGeometry, PageIndex, Point, Rect};
 
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {

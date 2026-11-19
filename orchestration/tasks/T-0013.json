@@ -1,13 +1,13 @@
 {
     "acceptance":  "cargo test -p pdfxi-edit -p pdfxi-accessibility",
     "id":  "T-0013",
-    "evidence":  "",
+    "evidence":  "docs/evidence/author/T-0013.md",
     "owns":  [
                  "crates/pdfxi-edit/**",
                  "crates/pdfxi-accessibility/**",
                  "orchestration/feature-updates/T-0013.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0002"
                    ],
