@@ -731,7 +731,7 @@ docs = [
 ]
 domain = "Forms"
 evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0. Doc tests require TEMP pointed at target/lanes/forms/doctest-tmp because this sandbox denies execution from the system temp dir.
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (the lib.rs doc example is rendered as a ```text block, not compiled or run, because the host denies generated doctest binaries with os error 5).
 cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
 """
 id = "FORMS-001"
@@ -759,7 +759,7 @@ docs = [
 ]
 domain = "Forms"
 evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0.
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
 cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
 """
 id = "FORMS-002"
@@ -783,7 +783,7 @@ docs = [
 ]
 domain = "Forms"
 evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0.
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
 cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
 """
 id = "FORMS-003"
@@ -833,13 +833,13 @@ docs = [
 ]
 domain = "Forms"
 evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0.
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
 cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
 """
 id = "FORMS-006"
-notes = '''
-Added FDF 1.7 export/import. export_fdf writes a canonical %FDF-1.7 object with /Fields sorted by name, skipping NO_EXPORT fields: literal strings escape ( ) \\ and newlines, control bytes use short escapes, and non-ASCII UTF-8 bytes use three-digit octal escapes for byte-exact round-trips. Booleans map to /On and /Off, multi-select choices to arrays of literal strings, numbers to bare PDF numbers, and non-finite numbers are rejected with FdfError::NonFiniteNumber. import_fdf is a bounds-checked byte parser (header/version, indirect objects, trailer, trailer references, nested arrays/dictionaries, literal strings with nesting and octal escapes) that returns structured FdfError variants with byte offsets for malformed input. FdfDocument fields feed directly into FormFill::fill_from_fdf. export_xfdf emits a small schema-compatible XML subset (escaped names/values, one <value> per choice) but XFDF import is deliberately out of scope for this task; the row therefore stays in-progress.
-'''
+notes = """
+Added FDF 1.7 export/import. export_fdf writes a canonical %FDF-1.7 object with /Fields sorted by name, skipping NO_EXPORT fields: literal strings escape ( ) and newlines, control bytes use short escapes, and non-ASCII UTF-8 bytes use three-digit octal escapes for byte-exact round-trips. Booleans map to /On and /Off, multi-select choices to arrays of literal strings, numbers to bare PDF numbers, and non-finite numbers are rejected with FdfError::NonFiniteNumber. import_fdf is a bounds-checked byte parser (header/version, indirect objects, trailer, trailer references, nested arrays/dictionaries, literal strings with nesting and octal escapes) that returns structured FdfError variants with byte offsets for malformed input. FdfDocument fields feed directly into FormFill::fill_from_fdf. export_xfdf emits a small schema-compatible XML subset (escaped names/values, one <value> per choice) but XFDF import is deliberately out of scope for this task; the row therefore stays in-progress.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
@@ -1225,38 +1225,25 @@ tests = []
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
-docs = "crates/pdfxi-standards/src/lib.rs"
+docs = "crates/pdfxi-standards/src/document_profile.rs"
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-convert -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 15 standards unit tests passed, 0 failed; 0 doctests executed (the lib.rs doc example is rendered as a ```text block, not compiled or run, due to the host's os error 5 on generated doctest binaries). cargo fmt -p pdfxi-convert -p pdfxi-standards -- --check and cargo clippy -p pdfxi-convert -p pdfxi-standards --all-targets --all-features -- -D warnings both exit 0."
+evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed. cargo clippy -p pdfxi-standards --all-targets -- -D warnings and cargo fmt -p pdfxi-standards -- --check both exit 0."
 id = "PRINT-002"
 notes = """
-Froze the standards/preflight contract in pdfxi-standards: Standard covers
-PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1, and PDF/UA-1 with canonical
-labels, families, and minimum PDF versions; Severity and PreflightFinding carry
-stable codes and actionable messages; PreflightFinding::Ord defines a canonical
-order (severity descending, then code/message/location) used by sort_findings,
-filter_by_severity, and the PreflightProfile provided methods; PreflightReport,
-StaticProfile, and HeaderProfile provide the report, a test double, and a
-shallow real header check. Full conformance rules and fixups are future work;
-veraPDF remains a CI oracle, never a runtime dependency. Hence in-progress.
-"""
+T-0037 adds real, deterministic preflight checks for PDF/A-1b, PDF/A-2b,
+PDF/X-1a, PDF/X-4 and PDF/UA-1 over a dependency-free PreflightInput snapshot,
+with stable finding codes and severities. Fixups, ICC profile validation,
+PDF/E, PDF/VT, and a veraPDF corpus comparison remain future work, so the row
+stays in-progress rather than verified."""
 priority = "P2"
 status = "in-progress"
 tests = [
-    "standard::tests::standard_labels_are_canonical",
-    "standard::tests::from_label_round_trips_and_ignores_ascii_case",
-    "standard::tests::families_and_minimum_versions_match_expectations",
-    "finding::tests::severity_ordering_and_labels_are_stable",
-    "finding::tests::findings_sort_by_severity_then_code_then_message_then_location",
-    "finding::tests::filtering_by_severity_keeps_warnings_and_errors_in_order",
-    "finding::tests::finding_display_includes_location_when_present",
-    "profile::tests::static_profile_check_sorted_is_canonical",
-    "profile::tests::static_profile_check_filtered_applies_severity_threshold",
-    "profile::tests::report_sorts_findings_and_decides_conformance",
-    "profile::tests::header_profile_reports_empty_input_and_bad_header",
-    "profile::tests::header_profile_warns_on_malformed_or_old_version",
-    "profile::tests::header_profile_accepts_conforming_header",
-    "profile::tests::preflight_report_find_order_is_independent_of_discovery_order",
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "document_profile::tests::nonconforming_input_fails_every_profile",
+    "document_profile::tests::finding_codes_are_stable_per_profile",
+    "document_profile::tests::ordering_is_independent_of_input_collection_order",
+    "document_profile::tests::severity_filtering_keeps_only_requested_levels",
+    "document_profile::tests::report_summary_is_stable",
 ]
 title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 
@@ -1901,36 +1888,60 @@ tests = []
 title = "Tagged PDF and structure tree"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-standards/src/document_profile.rs"
 domain = "Standards"
-evidence = ""
+evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed (PDF/A-1b and PDF/A-2b conforming/non-conforming profiles included)."
 id = "STD-007"
-notes = ""
+notes = """
+PdfA1bProfile and PdfA2bProfile check PDF version, encryption, GTS_PDFA1
+output intent with DestOutputProfile, XMP presence, embedded fonts, forbidden
+image compression (JPX for PDF/A-1b), and transparency (PDF/A-1b). Byte-level
+ICC validation and a veraPDF oracle run are still pending."""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "document_profile::tests::nonconforming_input_fails_every_profile",
+    "document_profile::tests::finding_codes_are_stable_per_profile",
+]
 title = "PDF/A conformance"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-standards/src/document_profile.rs"
 domain = "Standards"
-evidence = ""
+evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed (PDF/X-1a and PDF/X-4 conforming/non-conforming profiles included)."
 id = "STD-008"
-notes = ""
+notes = """
+PdfX1aProfile and PdfX4Profile check version, GTS_PDFX output intent,
+embedded fonts, TrimBox/BleedBox presence, forbidden colour spaces and
+JPX/JBIG2 compression for PDF/X-1a, and transparency rules. Full GTS_PDFX
+profile validation and a veraPDF oracle run remain future work."""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "document_profile::tests::nonconforming_input_fails_every_profile",
+    "document_profile::tests::finding_codes_are_stable_per_profile",
+]
 title = "PDF/X conformance"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-standards/src/document_profile.rs"
 domain = "Standards"
-evidence = ""
+evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed (PDF/UA-1 conforming/non-conforming profile included)."
 id = "STD-009"
-notes = ""
+notes = """
+PdfUa1Profile checks the cheap decidable facts: version, encryption,
+MarkInfo/Marked, StructTreeRoot, Lang, and an informational note for AcroForm
+fields that need manual accessible-name review. Full tagged-PDF structure and
+reading-order checks belong to the accessibility lane."""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "document_profile::tests::nonconforming_input_fails_every_profile",
+    "document_profile::tests::severity_filtering_keeps_only_requested_levels",
+]
 title = "PDF/UA conformance"
 
 [[feature]]

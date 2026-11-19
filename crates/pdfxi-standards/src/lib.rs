@@ -5,15 +5,21 @@
 //! - [`Standard`] identifies PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1,
 //!   and PDF/UA-1 with canonical labels and minimum PDF versions.
 //! - [`Severity`] and [`PreflightFinding`] describe actionable check results.
-//! - [`PreflightProfile`] defines a deterministic checker; its provided methods
-//!   sort findings into a canonical order and filter them by severity.
+//! - [`PreflightProfile`] defines a deterministic checker over an associated
+//!   input type; its provided methods sort findings into a canonical order and
+//!   filter them by severity.
+//! - [`PreflightInput`] is a dependency-free snapshot of the document facts the
+//!   real profiles need. A caller adapts `pdfxi-core` data into it.
+//! - [`PdfA1bProfile`], [`PdfA2bProfile`], [`PdfX1aProfile`], [`PdfX4Profile`],
+//!   and [`PdfUa1Profile`] run real, deterministic preflight checks over that
+//!   snapshot with stable codes such as `PDFA1B.NO_OUTPUT_INTENT`.
 //! - [`PreflightReport`], [`StaticProfile`], and [`HeaderProfile`] are the
 //!   report type, a test double, and a small real header check respectively.
 //!
-//! The crate is dependency-free and never executes external tools. Full
-//! conformance (including ICC colour, transparency, and tagging rules) belongs
-//! in future adapters; veraPDF is used as a CI oracle, not a runtime
-//! dependency.
+//! The crate is dependency-free and never executes external tools. Checks are
+//! limited to facts decidable from the snapshot; full byte-level conformance
+//! (including ICC profile validation) belongs in future adapters, with veraPDF
+//! used as a CI oracle rather than a runtime dependency.
 //!
 //! # Examples
 //!
@@ -33,11 +39,20 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod document_profile;
 mod finding;
+mod input;
 mod profile;
 mod standard;
 
+pub use document_profile::{
+    PdfA1bProfile, PdfA2bProfile, PdfUa1Profile, PdfX1aProfile, PdfX4Profile,
+};
 pub use finding::{PreflightFinding, Severity, filter_by_severity, sort_findings};
+pub use input::{
+    CatalogInfo, ColourSpace, FontInfo, FontType, ImageFilter, ImageInfo, OutputIntent, PageBoxes,
+    PageInfo, PdfVersion, PreflightInput, TransparencyUsage,
+};
 pub use profile::{HeaderProfile, PreflightProfile, PreflightReport, StaticProfile};
 pub use standard::{Standard, StandardFamily};
 

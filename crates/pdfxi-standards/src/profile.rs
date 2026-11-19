@@ -1,9 +1,13 @@
 //! Preflight profiles and deterministic reports.
 //!
-//! A [`PreflightProfile`] checks raw PDF bytes against one [`Standard`] and
-//! returns [`PreflightFinding`] values. The trait's provided methods guarantee
-//! that every caller sees findings in the same canonical order, whether it
-//! wants all findings, a filtered subset, or a [`PreflightReport`].
+//! A [`PreflightProfile`] checks one kind of input against one [`Standard`] and
+//! returns [`PreflightFinding`] values. The associated [`PreflightProfile::Input`]
+//! type lets the same trait serve both byte-oriented checks
+//! ([`HeaderProfile`] and [`StaticProfile`] use `[u8]`) and structured document
+//! checks (the profiles in [`crate::document_profile`] use
+//! [`crate::PreflightInput`]). The trait's provided methods guarantee that every
+//! caller sees findings in the same canonical order, whether it wants all
+//! findings, a filtered subset, or a [`PreflightReport`].
 //!
 //! [`StaticProfile`] is a configurable test double. [`HeaderProfile`] is a
 //! small real profile that validates the `%PDF-x.y` header; it is deliberately
@@ -14,12 +18,20 @@ use crate::Severity;
 use crate::Standard;
 use crate::finding::{PreflightFinding, filter_by_severity, sort_findings};
 
-/// A deterministic conformance checker for one PDF standard.
+/// A deterministic conformance checker for one PDF standard and input kind.
 ///
-/// Implementors only need [`PreflightProfile::standard`] and
-/// [`PreflightProfile::check`]. The provided methods add canonical ordering and
-/// severity filtering without allowing implementations to reorder results.
+/// Implementors provide [`PreflightProfile::Input`],
+/// [`PreflightProfile::standard`], and [`PreflightProfile::check`]. The provided
+/// methods add canonical ordering and severity filtering without allowing
+/// implementations to reorder results.
 pub trait PreflightProfile {
+    /// The kind of value this profile inspects.
+    ///
+    /// Byte-oriented profiles use `[u8]`; document profiles use
+    /// [`crate::PreflightInput`]. The input is always borrowed, so unsized
+    /// types such as `[u8]` are supported.
+    type Input: ?Sized;
+
     /// Returns the standard this profile checks against.
     fn standard(&self) -> Standard;
 
@@ -27,23 +39,23 @@ pub trait PreflightProfile {
     ///
     /// Implementations must be deterministic for a given input. Results may
     /// be unsorted; the provided methods sort them.
-    fn check(&self, pdf: &[u8]) -> Vec<PreflightFinding>;
+    fn check(&self, input: &Self::Input) -> Vec<PreflightFinding>;
 
     /// Runs the checks and returns findings in canonical order.
-    fn check_sorted(&self, pdf: &[u8]) -> Vec<PreflightFinding> {
-        let mut findings = self.check(pdf);
+    fn check_sorted(&self, input: &Self::Input) -> Vec<PreflightFinding> {
+        let mut findings = self.check(input);
         sort_findings(&mut findings);
         findings
     }
 
     /// Returns findings at or above `min_severity` in canonical order.
-    fn check_filtered(&self, pdf: &[u8], min_severity: Severity) -> Vec<PreflightFinding> {
-        filter_by_severity(&self.check(pdf), min_severity)
+    fn check_filtered(&self, input: &Self::Input, min_severity: Severity) -> Vec<PreflightFinding> {
+        filter_by_severity(&self.check(input), min_severity)
     }
 
     /// Runs the checks and builds a canonically ordered report.
-    fn report(&self, pdf: &[u8]) -> PreflightReport {
-        PreflightReport::new(self.standard(), self.check(pdf))
+    fn report(&self, input: &Self::Input) -> PreflightReport {
+        PreflightReport::new(self.standard(), self.check(input))
     }
 }
 
@@ -105,6 +117,38 @@ impl PreflightReport {
             .count()
     }
 
+    /// Returns the number of informational findings.
+    #[must_use]
+    pub fn info_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.severity() == Severity::Info)
+            .count()
+    }
+
+    /// Returns a stable, human-readable verdict and severity tally.
+    ///
+    /// The exact format is
+    /// `<standard>: conforming|non-conforming (<errors> errors, <warnings>
+    /// warnings, <info> info)`. It is suitable for logs and CLI output and does
+    /// not depend on finding discovery order.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let verdict = if self.is_conforming() {
+            "conforming"
+        } else {
+            "non-conforming"
+        };
+        format!(
+            "{}: {} ({} errors, {} warnings, {} info)",
+            self.standard,
+            verdict,
+            self.error_count(),
+            self.warning_count(),
+            self.info_count()
+        )
+    }
+
     /// Consumes the report and returns its canonically ordered findings.
     #[must_use]
     pub fn into_findings(self) -> Vec<PreflightFinding> {
@@ -131,6 +175,8 @@ impl StaticProfile {
 }
 
 impl PreflightProfile for StaticProfile {
+    type Input = [u8];
+
     fn standard(&self) -> Standard {
         self.standard
     }
@@ -160,6 +206,8 @@ impl HeaderProfile {
 }
 
 impl PreflightProfile for HeaderProfile {
+    type Input = [u8];
+
     fn standard(&self) -> Standard {
         self.standard
     }
