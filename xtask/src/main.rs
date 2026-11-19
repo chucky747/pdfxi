@@ -75,6 +75,8 @@ enum Command {
     },
     /// Release a task claim.
     Release { task: String },
+    /// List queued tasks whose dependencies are verified and paths are unclaimed.
+    Ready,
     /// Regenerate orchestration/BOARD.md from task files.
     Board,
     /// Check documentation links and required pages.
@@ -175,6 +177,7 @@ fn main() -> Result<()> {
         },
         Command::Claim { task, lane } => claim(&task, &lane),
         Command::Release { task } => release(&task),
+        Command::Ready => ready(),
         Command::Board => board(),
         Command::Docs => docs(),
         Command::Bench { check } => bench(check),
@@ -603,6 +606,58 @@ fn paths_overlap(left: &str, right: &str) -> bool {
         return true;
     }
     a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
+}
+
+fn ready() -> Result<()> {
+    let tasks = load_tasks()?;
+    let mut active: Vec<Claim> = Vec::new();
+    if claims_dir().exists() {
+        for entry in fs::read_dir(claims_dir())? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            active.push(serde_json::from_str(&fs::read_to_string(&path)?)?);
+        }
+    }
+    let verified: BTreeSet<&str> = tasks
+        .iter()
+        .filter(|task| task.status == "verified")
+        .map(|task| task.id.as_str())
+        .collect();
+    let mut printed = 0usize;
+    for task in &tasks {
+        if task.status != "queued" {
+            continue;
+        }
+        if active.iter().any(|claim| claim.task == task.id) {
+            continue;
+        }
+        if !task
+            .depends_on
+            .iter()
+            .all(|dependency| verified.contains(dependency.as_str()))
+        {
+            continue;
+        }
+        let conflict = active.iter().any(|claim| {
+            claim.task != task.id
+                && claim
+                    .owns
+                    .iter()
+                    .any(|owned| task.owns.iter().any(|wanted| paths_overlap(owned, wanted)))
+        });
+        if conflict {
+            continue;
+        }
+        println!("{} {} {} {}", task.id, task.lane, task.priority, task.title);
+        printed += 1;
+    }
+    if printed == 0 {
+        println!("no ready tasks");
+    }
+    Ok(())
 }
 
 fn board() -> Result<()> {
