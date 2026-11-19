@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 pub mod boxes;
+pub mod compatibility;
 pub mod content;
 pub mod filter;
 pub mod linearization;
@@ -26,6 +27,7 @@ pub mod optimizer;
 pub mod page;
 pub mod pages;
 pub mod printer_marks;
+pub mod repair;
 
 mod lexer;
 mod parser;
@@ -35,6 +37,10 @@ mod writer;
 mod xref_tests;
 
 pub use boxes::{BoxKind, PageBoxes};
+pub use compatibility::{
+    CompatibilityReport, CompatibilityWarning, HEADER_SCAN_LIMIT, PdfVersion, VersionSource,
+    analyze_compatibility,
+};
 pub use content::extract_text;
 pub use filter::{
     DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
@@ -56,6 +62,7 @@ pub use pages::{PageOperation, PagePlan, RotationTarget};
 pub use printer_marks::{
     MarkCircle, MarkGeometry, MarkSegment, PrinterMarkOptions, PrinterMarks, generate_printer_marks,
 };
+pub use repair::{RepairError, RepairReport, RepairWarning, RepairedDocument, repair_document};
 
 use std::collections::BTreeMap;
 
@@ -315,6 +322,24 @@ impl Document {
     /// Return the declared PDF version, for example `1.7`.
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    /// Return the effective PDF version, honoring a catalog `/Version` override.
+    ///
+    /// This is the version that actually governs the document: the catalog
+    /// value when present, otherwise the value from the header. When neither is
+    /// readable, [`PdfVersion::DEFAULT`] is returned.
+    pub fn effective_version(&self) -> PdfVersion {
+        self.compatibility_report().effective_version()
+    }
+
+    /// Return a typed compatibility report derived from the source bytes.
+    ///
+    /// The report is produced even for a document whose structural layer is
+    /// damaged, so callers can inspect the version and any header/catalog
+    /// irregularities before deciding whether to attempt a repair.
+    pub fn compatibility_report(&self) -> CompatibilityReport {
+        compatibility::analyze_compatibility(&self.bytes)
     }
 
     /// Return the number of bytes in the source file.

@@ -12,7 +12,10 @@
 //! models six-slot headers, footers, and page numbering and renders them as
 //! additive content-stream overlays. [`watermark`] models text, vector, and
 //! image watermarks and backgrounds with placement, rotation, opacity, page
-//! selection, and copy-on-write composition helpers.
+//! selection, and copy-on-write composition helpers. [`redaction`] applies a
+//! plan of rectangles and text patterns to content streams, removing the
+//! affected operators (not merely covering them), stripping annotations and
+//! metadata, and verifying removal with a typed report.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
 //! source document bytes in place.
@@ -25,6 +28,7 @@ pub mod geometry;
 pub mod header_footer;
 pub mod navigation;
 pub mod pdf;
+pub mod redaction;
 pub mod review;
 pub mod watermark;
 
@@ -42,6 +46,11 @@ pub use navigation::{
     Attachment, Bookmark, Destination, FitType, Link, LinkBorder, LinkHighlight, LinkTarget,
     MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link, dict_to_name_tree,
     dict_to_outline, link_to_dict, name_tree_to_dict, outline_to_dict,
+};
+pub use redaction::{
+    AppliedPage, AppliedRedaction, FormXObject, Matrix, PageNumber, RedactionError, RedactionInput,
+    RedactionOptions, RedactionPlan, RedactionRect, RedactionRegion, RedactionReport, Removal,
+    RemovalKind, Residual, ResidualSource, TextPattern, apply, redact, scan_text,
 };
 pub use review::{
     CommentThread, HistoryEntry, Reply, ReplyId, ReviewError, ReviewFilter, ReviewRegistry,

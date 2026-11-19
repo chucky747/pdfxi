@@ -985,6 +985,17 @@ pub(crate) fn startxref_offset(data: &[u8]) -> Result<usize> {
     find_startxref(data)
 }
 
+/// Best-effort read of the final xref table's in-use object offsets.
+///
+/// The repair scanner uses this to distinguish a merely misplaced `startxref`
+/// (whose table is still readable) from a genuinely broken xref section.
+/// `None` means the `startxref` marker or the xref section could not be parsed.
+pub(crate) fn xref_offsets(data: &[u8]) -> Option<Vec<(u32, usize)>> {
+    let start = find_startxref(data).ok()?;
+    let table = load_xref(data, start).ok()?;
+    Some(table.in_use_entries())
+}
+
 /// Return the byte range covering the whole indirect object at `offset`.
 ///
 /// The range starts at the xref offset and ends just after the `endobj`
