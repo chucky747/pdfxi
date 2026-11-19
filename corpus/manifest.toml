@@ -1,19 +1,44 @@
 # Corpus descriptors for checksum-verified, on-demand fetches.
 #
 # No corpus data is committed. Each [[corpus]] entry records where an archive
-# can be fetched and the SHA-256 digest/size it must match before use. The list
-# is intentionally empty for M1: no large corpus has been approved, so no tool
-# should initiate a download based on this file. See corpus/README.md.
+# could be fetched and the SHA-256 digest/size it must match before use. A fetch
+# tool must fail closed: an entry whose `sha256` is empty is documentation only
+# and must NOT be downloaded. For M1 every descriptor below is unapproved and
+# carries an empty digest, so no tool will initiate a download based on this
+# file. See corpus/README.md for the full policy.
 
 version = 1
 
-# Example descriptor shape (commented out; do not enable without an approved
-# license and a verified digest):
-#
-# [[corpus]]
-# id = "example-public-domain"
-# url = "https://example.invalid/corpus.tar.zst"
-# sha256 = "<64 lower-case hex digits>"
-# bytes = 0
-# license = "Public domain"
-# source = "Upstream project name and release"
+# Optional external corpora considered for later milestones (M4/M7). These are
+# descriptors only: no license has been cleared, no URL has been resolved, and
+# no digest has been verified, so they are deliberately unfetchable in M1.
+# Populating a real `sha256`, `bytes`, and reachable `url` is a separate,
+# reviewed change that must also relax the `corpus_manifest_triggers_no_downloads`
+# test in crates/pdfxi-testkit/tests/committed_fixtures.rs.
+
+[[corpus]]
+id = "verapdf-test-suite"
+url = "https://example.invalid/verapdf/corpus.tar.zst"
+sha256 = ""
+bytes = 0
+license = "Apache-2.0 (upstream project; verify before use)"
+source = "veraPDF test suite (candidate for PDF/A conformance testing)"
+status = "unapproved"
+
+[[corpus]]
+id = "public-domain-pdfs"
+url = "https://example.invalid/public-domain/sample-pdfs.tar.zst"
+sha256 = ""
+bytes = 0
+license = "Public domain (verify per document before use)"
+source = "Assorted public-domain documents (candidate for render smoke tests)"
+status = "unapproved"
+
+[[corpus]]
+id = "fuzz-seed-archive"
+url = "https://example.invalid/pdfxi/fuzz-seeds.tar.zst"
+sha256 = ""
+bytes = 0
+license = "MIT OR Apache-2.0 (locally generated seeds)"
+source = "PDFXI-generated malformed-PDF seeds (candidate for fuzz campaigns)"
+status = "unapproved"

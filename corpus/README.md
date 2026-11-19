@@ -36,5 +36,14 @@ corpus/
 3. Do not commit the downloaded archive or its extracted files.
 4. Reference the corpus by `id` from a gated corpus/fuzz harness.
 
-The current manifest is an empty skeleton: no corpus has been approved for
-fetching in M1, so nothing here triggers a download.
+## M1 status (T-0024)
+
+The manifest now records three **optional external corpora** as documentation:
+`verapdf-test-suite`, `public-domain-pdfs`, and `fuzz-seed-archive`. Each has
+`status = "unapproved"`, an `example.invalid` placeholder URL, and an **empty
+`sha256`**. An empty digest means "documentation only — do not fetch", so no
+tool initiates a download and no corpus data is committed. The integration test
+`corpus_manifest_triggers_no_downloads` enforces that no descriptor is
+fetch-ready, keeping `cargo test -p pdfxi-testkit` network-free and fail-closed.
+Populating a real digest, size, and URL is a separate reviewed change that must
+also relax that test.

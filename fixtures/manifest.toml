@@ -1,11 +1,11 @@
-# Committed PDF fixture manifest (T-0016).
+# Committed PDF fixture manifest (T-0016, expanded to 50 fixtures in T-0024).
 #
 # These are small, deterministic, synthetic PDFs generated from pdfxi-testkit
 # builders. Regenerate with:
 #   cargo run -p pdfxi-testkit --example generate_fixtures
-# Then refresh the SHA-256 values below with `Get-FileHash -Algorithm SHA256`
-# or the digest printed by the generator. The integration test
-# `tests/committed_fixtures.rs` verifies every hash, page count, and text marker.
+# The generator writes this file from the same descriptors, so hashes, page
+# counts, builders, and text markers always agree with the files on disk.
+# The integration test `tests/committed_fixtures.rs` verifies every value.
 
 version = 1
 
@@ -29,3 +29,333 @@ builder = "multipage_pdf(3)"
 sha256 = "7dcdcff913a0992201feed514d3f1e31e9ed8cd54b134ae7e09fa207f72f4f42"
 pages = 3
 text = "Page 1 of 3|Page 2 of 3|Page 3 of 3"
+
+[[fixture]]
+name = "text-hello.pdf"
+builder = "text_pdf(\"Hello from PDFXI\")"
+sha256 = "66ac010cefc9420188edc0e840e87b52c58aeef8278965027804bf6675c494d4"
+pages = 1
+text = "Hello from PDFXI"
+
+[[fixture]]
+name = "text-ascii-short.pdf"
+builder = "text_pdf(\"ABC 123\")"
+sha256 = "04c64cd0c5d18d91412d07157327b0767155bdefa63ba68b2741768bd5197bfc"
+pages = 1
+text = "ABC 123"
+
+[[fixture]]
+name = "text-words.pdf"
+builder = "text_pdf(\"The quick brown fox jumps over the lazy dog\")"
+sha256 = "f15c27aae895e829927415d757e328e8475c5dd7517d891dfba5a1a511a77a58"
+pages = 1
+text = "The quick brown fox jumps over the lazy dog"
+
+[[fixture]]
+name = "text-punctuation.pdf"
+builder = "text_pdf(\"Hello, world! Is this OK? Yes; 42% & more...\")"
+sha256 = "b00f28793d12312157768da7d256681dfa231fe62e1a083bf513cb8d8b1aaf92"
+pages = 1
+text = "Hello, world! Is this OK? Yes; 42% & more..."
+
+[[fixture]]
+name = "text-long.pdf"
+builder = "text_pdf(\"PDFXI long text fixture. The quick brown fox jumps over the lazy dog. 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz. This string is intentionally repeated to exercise longer uncompressed content streams while keeping the committed fixture well under the corpus size budget.\")"
+sha256 = "d294d357b22fc6d9e22758684860c9cd4948f77583a191be24bf98658952ae43"
+pages = 1
+text = "PDFXI long text fixture. The quick brown fox jumps over the lazy dog. 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz. This string is intentionally repeated to exercise longer uncompressed content streams while keeping the committed fixture well under the corpus size budget."
+
+[[fixture]]
+name = "text-digits.pdf"
+builder = "text_pdf(\"0123456789 9876543210 1234567890\")"
+sha256 = "815a92e32d4e66149cf17d08af2a3c92091e70dbea761c8467d5a9ada878f2ea"
+pages = 1
+text = "0123456789 9876543210 1234567890"
+
+[[fixture]]
+name = "text-mixed-case.pdf"
+builder = "text_pdf(\"The Quick Brown Fox Jumps Over The Lazy Dog\")"
+sha256 = "9491d37c0be5a3df89b22ea54ca014b5fd2d43b74ee1ff8cfceafd9f2064c254"
+pages = 1
+text = "The Quick Brown Fox Jumps Over The Lazy Dog"
+
+[[fixture]]
+name = "text-symbols.pdf"
+builder = "text_pdf(\"#42 @ home 100% $5 + more = fun\")"
+sha256 = "240d87e78a706777775d6eed932f4b1ad6279ae59af167de5cceee1402541190"
+pages = 1
+text = "#42 @ home 100% $5 + more = fun"
+
+[[fixture]]
+name = "text-pathlike.pdf"
+builder = "text_pdf(\"C:/PDFXI/fixtures/report.txt\")"
+sha256 = "3001a039513494898a80274c1a7073ad4cfb2a91c91ddd0c9ba23608fab26774"
+pages = 1
+text = "C:/PDFXI/fixtures/report.txt"
+
+[[fixture]]
+name = "text-numbers.pdf"
+builder = "text_pdf(\"3.14159 -42 +17 0.001 1e10\")"
+sha256 = "e839e4f10c4ecf9327854235e7b1972c557f87374e09eaa8dfd27439e22be8c8"
+pages = 1
+text = "3.14159 -42 +17 0.001 1e10"
+
+[[fixture]]
+name = "text-greeting.pdf"
+builder = "text_pdf(\"Welcome to PDFXI!\")"
+sha256 = "a76ae91d20c792d76fa59d73a82f43e81bbdc32e1f8c7ffa9ae65428975051d9"
+pages = 1
+text = "Welcome to PDFXI!"
+
+[[fixture]]
+name = "text-lorem.pdf"
+builder = "text_pdf(\"Lorem ipsum dolor sit amet, consectetur adipiscing elit.\")"
+sha256 = "85c151c23d1962ea86997722058a97fd9caccaf693c5eb3df2027d0ce94e1425"
+pages = 1
+text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+
+[[fixture]]
+name = "text-uppercase.pdf"
+builder = "text_pdf(\"PDFXI UPPERCASE TEXT FIXTURE\")"
+sha256 = "a84455e97ad5c1ef5a699a2e580e2487ac6b13c4d591f321334afe6a9c4a4c1b"
+pages = 1
+text = "PDFXI UPPERCASE TEXT FIXTURE"
+
+[[fixture]]
+name = "text-lowercase.pdf"
+builder = "text_pdf(\"pdfxi lowercase text fixture\")"
+sha256 = "94dbfde78eb0d82a789c28f71846a2646af44d0ec36b189d839c250c7009a8fe"
+pages = 1
+text = "pdfxi lowercase text fixture"
+
+[[fixture]]
+name = "text-escape-safe.pdf"
+builder = "text_pdf(\"Brackets [and] braces {and} are safe\")"
+sha256 = "8a8bf6aedd84df30b601712fa10f141b1af562a206aac5a334941e951beb880f"
+pages = 1
+text = "Brackets [and] braces {and} are safe"
+
+[[fixture]]
+name = "text-hyphen.pdf"
+builder = "text_pdf(\"well-known state-of-the-art PDFXI fixture\")"
+sha256 = "ae9e2267775104c9215dd27712943ab41de80e2dddbd00f65dfd7b9484b215cf"
+pages = 1
+text = "well-known state-of-the-art PDFXI fixture"
+
+[[fixture]]
+name = "text-underscore.pdf"
+builder = "text_pdf(\"snake_case_text_with_underscores_42\")"
+sha256 = "e2bc15c8b11632a0f008b94451d1d32b0b28f98e217a40fc7ad5fe498c5914d2"
+pages = 1
+text = "snake_case_text_with_underscores_42"
+
+[[fixture]]
+name = "text-equals.pdf"
+builder = "text_pdf(\"key=value; a+b=c; 1<2 && 3>2\")"
+sha256 = "0897dc91951c9bb5a79416c1403567013c7bedea351bbf3b4142fbd700cb4bc6"
+pages = 1
+text = "key=value; a+b=c; 1<2 && 3>2"
+
+[[fixture]]
+name = "text-periods.pdf"
+builder = "text_pdf(\"First. Second. Third. Fourth. Fifth.\")"
+sha256 = "6c82578fbb2b10683db6f760bce44c848b79083fc7a29f4a9d4ba0ec515bd254"
+pages = 1
+text = "First. Second. Third. Fourth. Fifth."
+
+[[fixture]]
+name = "size-letter.pdf"
+builder = "pdf_with_page_size(612, 792)"
+sha256 = "5ff2d28030127f2586049af2c68fc73baa0b33d65d1dc54c21c6200e8c546914"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-letter-landscape.pdf"
+builder = "pdf_with_page_size(792, 612)"
+sha256 = "c13ff9dd2fab3bff482b572d43b69a74e640c5c23d7d87d662830734721a66e5"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-a4.pdf"
+builder = "pdf_with_page_size(595.28, 841.89)"
+sha256 = "2d308643affef915a641f3b1cca3872b25ac6508c7a04783d438ef6071bbab3c"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-a4-integer.pdf"
+builder = "pdf_with_page_size(595, 842)"
+sha256 = "6ec03abf8b88dc5b520277da4bfef8a4e854b51c419355c8e8cbc1f0cd6942d8"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-a4-landscape.pdf"
+builder = "pdf_with_page_size(841.89, 595.28)"
+sha256 = "0f6794907f93546612557693e23a5017e962a9d7369edb51a8a099ebe25d2ea0"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-a5.pdf"
+builder = "pdf_with_page_size(420, 595)"
+sha256 = "3758bacc0746b88688265ac21a61af2cc5edcf821e3964d20d883763edb52393"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-a3.pdf"
+builder = "pdf_with_page_size(842, 1191)"
+sha256 = "806cc2008c464bda37cdc612cbe9acef72552fcdd39382b3c48c754ec823e615"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-legal.pdf"
+builder = "pdf_with_page_size(612, 1008)"
+sha256 = "7c1ffb3ac028f3a3621ecec921bc2dd8122ff952b6dbae66c529424024a087f2"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-tabloid.pdf"
+builder = "pdf_with_page_size(792, 1224)"
+sha256 = "f40fbdb1389959aca29acd97c847d005622ab25a83573a2f8a07d6d0ea82cb44"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-tiny.pdf"
+builder = "pdf_with_page_size(72, 72)"
+sha256 = "8827db32328e44be34321b03073f831597addada0993d2b22e266c1690f07f3a"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-square.pdf"
+builder = "pdf_with_page_size(500, 500)"
+sha256 = "152f1df8e04184149eb3ea22255493fd245d04b83aab3d40401bbda76850a33c"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-large.pdf"
+builder = "pdf_with_page_size(2000, 3000)"
+sha256 = "177d7e988593bd1ee1e6bac1790ade3227aaf11728e00811b2e34d1bd6e2004c"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-b5.pdf"
+builder = "pdf_with_page_size(499, 709)"
+sha256 = "ede5c81cc6c488eb7595710f6a837e7f75f69018b2d35cafc412e8367c725c21"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-executive.pdf"
+builder = "pdf_with_page_size(522, 756)"
+sha256 = "bbbc6c74dc8d8187f0a9f7f55c65f88dfea44720159229d9913db5a36327d21d"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-ledger.pdf"
+builder = "pdf_with_page_size(1224, 792)"
+sha256 = "6430aba3fd2748c5196496dfa0e197901643f4695dfa1fd5562da02c2d71ccb3"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-poster.pdf"
+builder = "pdf_with_page_size(3000, 4000)"
+sha256 = "472b5e9e1ca3ba3d3e204caa87eee3eaa4762a6047f7f35fe9ba420ed712039e"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "size-micro.pdf"
+builder = "pdf_with_page_size(10, 10)"
+sha256 = "10927335d235619f72984a32f778636596f0ad2273ed3d8fb288eab5ed99ce4a"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "multipage-0.pdf"
+builder = "multipage_pdf(0)"
+sha256 = "3333c681c1bd1147c76582f7cb1e403736305fe4a6ad35885b4b7e079cfa763f"
+pages = 0
+text = ""
+
+[[fixture]]
+name = "multipage-1.pdf"
+builder = "multipage_pdf(1)"
+sha256 = "d95303491b58786b21d25c622909f0c4caec1463d0f2baf104917ba1ad601d95"
+pages = 1
+text = "Page 1 of 1"
+
+[[fixture]]
+name = "multipage-2.pdf"
+builder = "multipage_pdf(2)"
+sha256 = "935c48ee6223c57f6f8ef43c1acb2945a1df7643315a8c994ea1f2a2b07910e9"
+pages = 2
+text = "Page 1 of 2|Page 2 of 2"
+
+[[fixture]]
+name = "multipage-4.pdf"
+builder = "multipage_pdf(4)"
+sha256 = "aa0a11df174ffcaa7a33f5ba8865b482c2178e579f36e70c498a6b9d26a911f6"
+pages = 4
+text = "Page 1 of 4|Page 2 of 4|Page 3 of 4|Page 4 of 4"
+
+[[fixture]]
+name = "multipage-5.pdf"
+builder = "multipage_pdf(5)"
+sha256 = "ee335c6e362647ac7a43643fb8a1dd3516762c2aab57877c22a451af4ac1d544"
+pages = 5
+text = "Page 1 of 5|Page 2 of 5|Page 3 of 5|Page 4 of 5|Page 5 of 5"
+
+[[fixture]]
+name = "multipage-6.pdf"
+builder = "multipage_pdf(6)"
+sha256 = "06960bff100da383f0e8accb5d19f0eca278433109107aac9c0cbbdbc096edf0"
+pages = 6
+text = "Page 1 of 6|Page 2 of 6|Page 3 of 6|Page 4 of 6|Page 5 of 6|Page 6 of 6"
+
+[[fixture]]
+name = "multipage-7.pdf"
+builder = "multipage_pdf(7)"
+sha256 = "5901c670f9be9c666ff7cdd3be7d56a3599ed330fdc77b27ca9ef70850a3f8cc"
+pages = 7
+text = "Page 1 of 7|Page 2 of 7|Page 3 of 7|Page 4 of 7|Page 5 of 7|Page 6 of 7|Page 7 of 7"
+
+[[fixture]]
+name = "multipage-8.pdf"
+builder = "multipage_pdf(8)"
+sha256 = "4ac22a074097bf195b9aaf51176631d0778317494b28b1036ed737e8ed85fd64"
+pages = 8
+text = "Page 1 of 8|Page 2 of 8|Page 3 of 8|Page 4 of 8|Page 5 of 8|Page 6 of 8|Page 7 of 8|Page 8 of 8"
+
+[[fixture]]
+name = "multipage-9.pdf"
+builder = "multipage_pdf(9)"
+sha256 = "53a34fc298829e5f5eb8493675abcc9c933d557ada8bf43a95d8e740d9a1a6fe"
+pages = 9
+text = "Page 1 of 9|Page 2 of 9|Page 3 of 9|Page 4 of 9|Page 5 of 9|Page 6 of 9|Page 7 of 9|Page 8 of 9|Page 9 of 9"
+
+[[fixture]]
+name = "multipage-10.pdf"
+builder = "multipage_pdf(10)"
+sha256 = "3afd01984c5e058fa7adfe862d59f17403c811a943d2b91f627b32017c86e491"
+pages = 10
+text = "Page 1 of 10|Page 2 of 10|Page 3 of 10|Page 4 of 10|Page 5 of 10|Page 6 of 10|Page 7 of 10|Page 8 of 10|Page 9 of 10|Page 10 of 10"
+
+[[fixture]]
+name = "multipage-100.pdf"
+builder = "multipage_pdf(100)"
+sha256 = "5c6b2ce0925722e6c1467d07a00bafd31774c782faf1b68e550d20c27158fd2d"
+pages = 100
+text = "Page 1 of 100|Page 100 of 100"
+

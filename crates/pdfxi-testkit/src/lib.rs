@@ -29,6 +29,7 @@
 pub mod fixtures;
 pub mod golden;
 pub mod hash;
+pub mod perf;
 
 /// Default page width in PDF points (US Letter portrait).
 const DEFAULT_WIDTH: f64 = 612.0;

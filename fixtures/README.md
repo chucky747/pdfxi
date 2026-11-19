@@ -15,9 +15,37 @@ no real user data, credentials, or copyrighted material. A committed fixture mus
 
 Examples include the single-page `minimal.pdf` used by the CLI smoke test.
 
+## M1 committed corpus (50 fixtures)
+
+`fixtures/manifest.toml` lists exactly **50** committed fixtures (T-0024),
+totalling ~68 KiB — well under the 200 KiB corpus budget. The set covers:
+
+- **Page counts** 1 / 2 / 3 / 10 / 100, plus the structural edge cases 0 and
+  4–9 (`multipage-*.pdf`).
+- **Page sizes** Letter, A4 (integer and fractional), landscape, A3/A5/B5,
+  legal/tabloid/ledger/executive, tiny (`72x72`), micro (`10x10`), square, and
+  large/poster (`size-*.pdf`).
+- **Text variants** plain ASCII, punctuation, long strings, digits, symbols,
+  mixed case, and the distinct per-page text of multipage documents
+  (`text-*.pdf`).
+- **Structural baselines** `minimal.pdf`, `text.pdf`, and `multipage-3.pdf`
+  whose names and bytes have been stable since T-0016.
+
+The manifest and all PDF bytes are regenerated together from one description:
+
+```text
+cargo run -p pdfxi-testkit --example generate_fixtures
+```
+
+The generator writes every file and recomputes each SHA-256 from the bytes it
+wrote, so hashes, builders, page counts, and text markers cannot drift from the
+files. The integration test `crates/pdfxi-testkit/tests/committed_fixtures.rs`
+verifies every hash, page count, text marker, the corpus size budget, and that
+regeneration is byte-identical.
+
 ## Generated fixtures
 
-Most fixtures are **generated in memory at test time** by `pdfxi-testkit`:
+All fixtures are **generated in memory at test time** by `pdfxi-testkit`:
 
 - `minimal_pdf()` — a single page showing `Hello, PDFXI!` (612 x 792 pt).
 - `text_pdf(text)` — a single page showing the supplied text.
@@ -28,6 +56,16 @@ Most fixtures are **generated in memory at test time** by `pdfxi-testkit`:
 Every builder returns a `Vec<u8>` and writes nothing to disk, so tests never
 dirty the repository. Cross-reference offsets and stream `/Length` values are
 computed from the real byte lengths, making the bytes structurally valid PDFs.
+
+## Performance harness
+
+`cargo run -p pdfxi-testkit --example bench_open --release` opens every
+committed fixture 20 times (1000 opens total), reporting min/median/max wall
+time in a stable format. It has no sleeps or third-party benchmark dependency
+and fails only if a generous 2-second total budget is exceeded. The harness
+defines "open" at the testkit level (read bytes + header/trailer/`startxref`
+structure check) to avoid a `pdfxi-testkit` → `pdfxi-core` dependency cycle;
+see the example source for details.
 
 ## Real-world corpora
 

@@ -2,18 +2,27 @@
 //!
 //! These read the PDF files under `fixtures/`, verify their SHA-256 digests
 //! against `fixtures/manifest.toml`, and assert page and text structure. They
-//! also confirm the generator builders still reproduce the committed bytes.
+//! also confirm the generator builders still reproduce the committed bytes and
+//! that regeneration is byte-identical.
+//!
+//! # Why no `pdfxi-core` dependency
+//!
+//! `pdfxi-core` already depends on `pdfxi-testkit` as a dev-dependency. Adding
+//! the reverse edge here would create a dependency cycle, so these tests assert
+//! structure at the PDF byte level (header, trailer, `startxref`, xref target,
+//! object counts, and text markers) instead of calling a core parser. The
+//! parser's own tests in `pdfxi-core` cover these same fixtures from the other
+//! direction. This keeps `cargo test -p pdfxi-testkit` cycle-free and fast.
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use pdfxi_testkit::fixtures::{self, CommittedFixture};
+use pdfxi_testkit::fixtures::{self, CORPUS_SIZE_BUDGET, CommittedFixture, FIXTURE_COUNT};
 use pdfxi_testkit::hash::sha256_hex;
 
 fn workspace_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|crates| crates.parent())
         .expect("workspace root")
@@ -29,11 +38,36 @@ struct ManifestFixture {
     text: String,
 }
 
-/// Strip surrounding double quotes and unescape `\"` from a TOML scalar.
+/// Reverse the escaping performed by `fixtures::toml_quote`.
+fn unescape(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Strip surrounding double quotes from a TOML basic-string scalar.
 fn unquote(value: &str) -> String {
     let value = value.trim();
     if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
-        value[1..value.len() - 1].replace("\\\"", "\"")
+        unescape(&value[1..value.len() - 1])
     } else {
         value.to_string()
     }
@@ -142,7 +176,7 @@ fn assert_structure(bytes: &[u8], fixture: &CommittedFixture) {
         "{} object count",
         fixture.file_name
     );
-    for marker in fixture.text_markers {
+    for marker in &fixture.text_markers {
         assert!(
             text.contains(&format!("({marker}) Tj")),
             "{} missing text marker {marker:?}",
@@ -151,22 +185,29 @@ fn assert_structure(bytes: &[u8], fixture: &CommittedFixture) {
     }
 }
 
-fn committed_fixture_for(name: &str) -> &'static CommittedFixture {
-    fixtures::COMMITTED_FIXTURES
-        .iter()
-        .find(|f| f.file_name == name)
-        .unwrap_or_else(|| panic!("manifest references unknown fixture {name}"))
+fn committed_fixture_for(name: &str) -> CommittedFixture {
+    fixtures::by_name(name).unwrap_or_else(|| panic!("manifest references unknown fixture {name}"))
+}
+
+fn manifest_source() -> String {
+    fs::read_to_string(workspace_root().join("fixtures/manifest.toml"))
+        .expect("fixtures/manifest.toml exists")
+}
+
+#[test]
+fn corpus_contains_fifty_fixtures() {
+    let all = fixtures::all();
+    assert_eq!(all.len(), FIXTURE_COUNT);
+    assert_eq!(parse_manifest(&manifest_source()).len(), FIXTURE_COUNT);
 }
 
 #[test]
 fn manifest_covers_every_committed_fixture() {
-    let root = workspace_root();
-    let source = fs::read_to_string(root.join("fixtures/manifest.toml"))
-        .expect("fixtures/manifest.toml exists");
-    let entries = parse_manifest(&source);
-    assert_eq!(entries.len(), fixtures::COMMITTED_FIXTURES.len());
+    let all = fixtures::all();
+    let entries = parse_manifest(&manifest_source());
+    assert_eq!(entries.len(), all.len());
 
-    for fixture in fixtures::COMMITTED_FIXTURES {
+    for fixture in &all {
         let entry = entries
             .iter()
             .find(|e| e.name == fixture.file_name)
@@ -186,14 +227,10 @@ fn manifest_covers_every_committed_fixture() {
 
 #[test]
 fn committed_fixtures_match_manifest_hashes_and_structure() {
-    let root = workspace_root();
-    let source = fs::read_to_string(root.join("fixtures/manifest.toml"))
-        .expect("fixtures/manifest.toml exists");
-    let entries = parse_manifest(&source);
-
+    let entries = parse_manifest(&manifest_source());
     for entry in &entries {
         let fixture = committed_fixture_for(&entry.name);
-        let path = root.join("fixtures").join(&entry.name);
+        let path = workspace_root().join("fixtures").join(&entry.name);
         let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
         assert_eq!(
@@ -202,11 +239,25 @@ fn committed_fixtures_match_manifest_hashes_and_structure() {
             "SHA-256 mismatch for {}",
             entry.name
         );
-        assert_structure(&bytes, fixture);
-
-        let markers: Vec<&str> = entry.text.split('|').collect();
         assert_eq!(
-            markers, fixture.text_markers,
+            entry.pages, fixture.pages,
+            "manifest page count for {}",
+            entry.name
+        );
+        assert_structure(&bytes, &fixture);
+
+        let markers: Vec<&str> = if entry.text.is_empty() {
+            Vec::new()
+        } else {
+            entry.text.split('|').collect()
+        };
+        assert_eq!(
+            markers,
+            fixture
+                .text_markers
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             "text markers for {}",
             entry.name
         );
@@ -216,14 +267,19 @@ fn committed_fixtures_match_manifest_hashes_and_structure() {
 #[test]
 fn generators_reproduce_committed_bytes() {
     let root = workspace_root();
-    for fixture in fixtures::COMMITTED_FIXTURES {
-        let path = root.join("fixtures").join(fixture.file_name);
+    for fixture in fixtures::all() {
+        let path = root.join("fixtures").join(&fixture.file_name);
         let on_disk = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let built = fixtures::build(fixture.file_name)
-            .unwrap_or_else(|| panic!("no builder for {}", fixture.file_name));
+        let built = fixture.build();
         assert_eq!(
             on_disk, built,
             "{} is stale; regenerate fixtures",
+            fixture.file_name
+        );
+        assert_eq!(
+            built,
+            fixture.build(),
+            "{} regeneration is not byte-identical",
             fixture.file_name
         );
     }
@@ -231,10 +287,7 @@ fn generators_reproduce_committed_bytes() {
 
 #[test]
 fn manifest_hash_is_lowercase_hex_of_expected_length() {
-    let root = workspace_root();
-    let source = fs::read_to_string(root.join("fixtures/manifest.toml"))
-        .expect("fixtures/manifest.toml exists");
-    for entry in parse_manifest(&source) {
+    for entry in parse_manifest(&manifest_source()) {
         assert_eq!(entry.sha256.len(), 64, "hash length for {}", entry.name);
         assert!(
             entry
@@ -245,4 +298,76 @@ fn manifest_hash_is_lowercase_hex_of_expected_length() {
             entry.name
         );
     }
+}
+
+#[test]
+fn required_page_counts_are_covered() {
+    let pages: Vec<usize> = parse_manifest(&manifest_source())
+        .into_iter()
+        .map(|entry| entry.pages)
+        .collect();
+    for required in [1, 2, 3, 10, 100] {
+        assert!(
+            pages.contains(&required),
+            "no fixture with {required} pages"
+        );
+    }
+}
+
+#[test]
+fn total_corpus_size_is_within_budget() {
+    let root = workspace_root();
+    let total: u64 = fixtures::all()
+        .iter()
+        .map(|fixture| {
+            fs::metadata(root.join("fixtures").join(&fixture.file_name))
+                .unwrap_or_else(|e| panic!("stat {}: {e}", fixture.file_name))
+                .len()
+        })
+        .sum();
+    assert!(
+        total < CORPUS_SIZE_BUDGET as u64,
+        "committed corpus is {total} bytes, budget is {}",
+        CORPUS_SIZE_BUDGET
+    );
+}
+
+#[test]
+fn corpus_manifest_triggers_no_downloads() {
+    // The external-corpus descriptors are documentation only for M1. A fetch
+    // tool must refuse them because none carries a verified digest. This keeps
+    // `cargo test -p pdfxi-testkit` network-free and fail-closed.
+    let source = fs::read_to_string(workspace_root().join("corpus/manifest.toml"))
+        .expect("corpus/manifest.toml exists");
+    let mut in_corpus = false;
+    let mut descriptors = 0usize;
+    for raw in source.lines() {
+        let line = raw.trim();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        if line == "[[corpus]]" {
+            in_corpus = true;
+            descriptors += 1;
+            continue;
+        }
+        if line.starts_with('[') {
+            in_corpus = false;
+            continue;
+        }
+        if in_corpus && line.starts_with("sha256") {
+            let value = line
+                .split_once('=')
+                .map(|(_, v)| unquote(v))
+                .unwrap_or_default();
+            assert!(
+                value.is_empty(),
+                "corpus descriptor has a fetch-ready digest; downloads are disabled for M1"
+            );
+        }
+    }
+    assert!(
+        descriptors > 0,
+        "expected at least one documented corpus descriptor"
+    );
 }
