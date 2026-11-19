@@ -40,6 +40,12 @@ struct Rules {
     require_print_boxes: bool,
     /// Whether accessibility (tagging) metadata is checked.
     check_accessibility: bool,
+    /// Whether every annotation must carry an `/AP` appearance stream.
+    require_annotation_appearance: bool,
+    /// Annotation subtypes that the standard forbids.
+    forbidden_annotation_subtypes: &'static [&'static str],
+    /// Catalog or document entries that the standard forbids.
+    forbidden_catalog_entries: &'static [&'static str],
 }
 
 const PDFA1B_RULES: Rules = Rules {
@@ -53,6 +59,9 @@ const PDFA1B_RULES: Rules = Rules {
     forbidden_colour_spaces: &[],
     require_print_boxes: false,
     check_accessibility: false,
+    require_annotation_appearance: true,
+    forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D"],
+    forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
 };
 
 const PDFA2B_RULES: Rules = Rules {
@@ -66,6 +75,26 @@ const PDFA2B_RULES: Rules = Rules {
     forbidden_colour_spaces: &[],
     require_print_boxes: false,
     check_accessibility: false,
+    require_annotation_appearance: true,
+    forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D"],
+    forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
+};
+
+const PDFA3B_RULES: Rules = Rules {
+    standard: Standard::PdfA3b,
+    prefix: "PDFA3B",
+    min_version: PdfVersion::new(1, 7),
+    required_output_subtype: Some("GTS_PDFA1"),
+    xmp_required: true,
+    forbid_transparency: false,
+    forbidden_image_filters: &[],
+    forbidden_colour_spaces: &[],
+    require_print_boxes: false,
+    check_accessibility: false,
+    require_annotation_appearance: true,
+    forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D"],
+    // PDF/A-3, unlike PDF/A-1 and PDF/A-2, permits embedded files.
+    forbidden_catalog_entries: &["/JavaScript", "/AA"],
 };
 
 const PDFX1A_RULES: Rules = Rules {
@@ -84,6 +113,9 @@ const PDFX1A_RULES: Rules = Rules {
     ],
     require_print_boxes: true,
     check_accessibility: false,
+    require_annotation_appearance: true,
+    forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D", "/FileAttachment"],
+    forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
 };
 
 const PDFX4_RULES: Rules = Rules {
@@ -97,6 +129,27 @@ const PDFX4_RULES: Rules = Rules {
     forbidden_colour_spaces: &[],
     require_print_boxes: true,
     check_accessibility: false,
+    require_annotation_appearance: true,
+    forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D", "/FileAttachment"],
+    forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
+};
+
+const PDFE1_RULES: Rules = Rules {
+    standard: Standard::PdfE1,
+    prefix: "PDFE1",
+    min_version: PdfVersion::new(1, 6),
+    required_output_subtype: None,
+    xmp_required: false,
+    forbid_transparency: false,
+    forbidden_image_filters: &[],
+    forbidden_colour_spaces: &[],
+    require_print_boxes: false,
+    check_accessibility: false,
+    require_annotation_appearance: false,
+    forbidden_annotation_subtypes: &[],
+    // PDF/E is an engineering exchange format; embedded files and scripting
+    // are not prohibited by this subset of checks.
+    forbidden_catalog_entries: &[],
 };
 
 const PDFUA1_RULES: Rules = Rules {
@@ -110,6 +163,9 @@ const PDFUA1_RULES: Rules = Rules {
     forbidden_colour_spaces: &[],
     require_print_boxes: false,
     check_accessibility: true,
+    require_annotation_appearance: false,
+    forbidden_annotation_subtypes: &[],
+    forbidden_catalog_entries: &[],
 };
 
 /// Appends a finding with a stable `PREFIX.CHECK` code.
@@ -156,6 +212,59 @@ fn run_checks(input: &PreflightInput, rules: &Rules) -> Vec<PreflightFinding> {
             format!("{} does not permit encryption", rules.standard),
             Some("Encrypt dictionary".to_owned()),
         );
+    }
+
+    for entry in &input.catalog.forbidden_entries {
+        if rules
+            .forbidden_catalog_entries
+            .iter()
+            .any(|forbidden| forbidden.eq_ignore_ascii_case(entry.as_str()))
+        {
+            push(
+                &mut out,
+                rules,
+                "FORBIDDEN_ENTRY",
+                Severity::Error,
+                format!(
+                    "entry {entry} is not permitted by {}; remove it before delivery",
+                    rules.standard
+                ),
+                Some(format!("Catalog {entry}")),
+            );
+        }
+    }
+
+    for annotation in &input.annotations {
+        if rules
+            .forbidden_annotation_subtypes
+            .iter()
+            .any(|forbidden| annotation.is_subtype(forbidden))
+        {
+            push(
+                &mut out,
+                rules,
+                "ANNOTATION_FORBIDDEN",
+                Severity::Error,
+                format!(
+                    "annotation subtype {} is not permitted by {}",
+                    annotation.subtype, rules.standard
+                ),
+                Some(format!("annotation {}", annotation.subtype)),
+            );
+        }
+        if rules.require_annotation_appearance && !annotation.has_appearance_stream {
+            push(
+                &mut out,
+                rules,
+                "ANNOTATION_NO_APPEARANCE",
+                Severity::Error,
+                format!(
+                    "annotation {} has no /AP appearance stream, required by {}",
+                    annotation.subtype, rules.standard
+                ),
+                Some(format!("annotation {}", annotation.subtype)),
+            );
+        }
     }
 
     if let Some(subtype) = rules.required_output_subtype {
@@ -456,6 +565,74 @@ impl PreflightProfile for PdfA2bProfile {
     }
 }
 
+/// Preflight profile for ISO 19005-3 Level B (PDF/A-3b).
+///
+/// Requires PDF 1.7+, a `GTS_PDFA1` output intent with an ICC profile, XMP, and
+/// embedded fonts. Transparency and embedded files are permitted; appearance
+/// streams are required on annotations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PdfA3bProfile;
+
+impl PdfA3bProfile {
+    /// Creates a PDF/A-3b profile.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for PdfA3bProfile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PreflightProfile for PdfA3bProfile {
+    type Input = PreflightInput;
+
+    fn standard(&self) -> Standard {
+        Standard::PdfA3b
+    }
+
+    fn check(&self, input: &PreflightInput) -> Vec<PreflightFinding> {
+        run_checks(input, &PDFA3B_RULES)
+    }
+}
+
+/// Preflight profile for ISO 14739-1 (PDF/E-1).
+///
+/// Checks the decidable engineering-exchange facts: PDF 1.6+, no encryption,
+/// embedded fonts, and the absence of forbidden entries. Output intents, XMP,
+/// transparency, and page-box requirements are not part of this subset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PdfE1Profile;
+
+impl PdfE1Profile {
+    /// Creates a PDF/E-1 profile.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for PdfE1Profile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PreflightProfile for PdfE1Profile {
+    type Input = PreflightInput;
+
+    fn standard(&self) -> Standard {
+        Standard::PdfE1
+    }
+
+    fn check(&self, input: &PreflightInput) -> Vec<PreflightFinding> {
+        run_checks(input, &PDFE1_RULES)
+    }
+}
+
 /// Preflight profile for ISO 15930-1 (PDF/X-1a).
 ///
 /// Requires PDF 1.3+, a `GTS_PDFX` output intent, embedded fonts, printable
@@ -561,8 +738,8 @@ impl PreflightProfile for PdfUa1Profile {
 mod tests {
     use super::*;
     use crate::input::{
-        CatalogInfo, FontInfo, FontType, ImageInfo, OutputIntent, PageBoxes, PageInfo,
-        TransparencyUsage,
+        AnnotationInfo, CatalogInfo, FontInfo, FontType, ImageInfo, OutputIntent, PageBoxes,
+        PageInfo, TransparencyUsage,
     };
 
     fn profiles() -> [(&'static str, Standard); 5] {
@@ -601,6 +778,7 @@ mod tests {
         let (version, subtype) = match standard {
             Standard::PdfA1b => (PdfVersion::new(1, 4), "GTS_PDFA1"),
             Standard::PdfA2b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
+            Standard::PdfA3b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
             Standard::PdfX1a => (PdfVersion::new(1, 3), "GTS_PDFX"),
             Standard::PdfX4 => (PdfVersion::new(1, 6), "GTS_PDFX"),
             Standard::PdfE1 | Standard::PdfUa1 => (PdfVersion::new(1, 7), "GTS_PDFA1"),
@@ -642,6 +820,7 @@ mod tests {
                 filter: ImageFilter::FlateDecode,
             }],
             transparency: TransparencyUsage::default(),
+            annotations: Vec::new(),
         }
     }
 
@@ -908,5 +1087,235 @@ mod tests {
         assert_eq!(PdfX1aProfile::new().standard(), Standard::PdfX1a);
         assert_eq!(PdfX4Profile::new().standard(), Standard::PdfX4);
         assert_eq!(PdfUa1Profile::new().standard(), Standard::PdfUa1);
+    }
+
+    // ---- T-0079 named coverage: ordered rules over the plain-data snapshot ----
+
+    #[test]
+    fn pdf_a_reports_unembedded_font() {
+        let mut input = conforming_input(Standard::PdfA1b);
+        input.fonts.push(FontInfo {
+            name: "/F2".to_owned(),
+            font_type: FontType::Type1,
+            embedded: false,
+        });
+        let findings = PdfA1bProfile::new().check(&input);
+        let font = findings
+            .iter()
+            .find(|finding| finding.code() == "PDFA1B.FONT_NOT_EMBEDDED")
+            .expect("test: unembedded font must be reported");
+        assert_eq!(font.severity(), Severity::Error);
+        assert_eq!(font.location(), Some("font /F2"));
+        assert!(font.message().contains("/F2"));
+        assert!(!PdfA1bProfile::new().report(&input).is_conforming());
+    }
+
+    #[test]
+    fn pdf_x_reports_missing_output_intent() {
+        let mut input = conforming_input(Standard::PdfX1a);
+        input.catalog.output_intents.clear();
+        let report = PdfX1aProfile::new().report(&input);
+        assert!(
+            report
+                .findings()
+                .iter()
+                .any(|finding| finding.code() == "PDFX1A.NO_OUTPUT_INTENT")
+        );
+        assert_eq!(report.error_count(), 1);
+        assert!(!report.is_conforming());
+    }
+
+    #[test]
+    fn version_mismatch_is_reported() {
+        let mut input = conforming_input(Standard::PdfA2b);
+        input.version = PdfVersion::new(1, 4);
+        let findings = PdfA2bProfile::new().check(&input);
+        let version = findings
+            .iter()
+            .find(|finding| finding.code() == "PDFA2B.VERSION_TOO_LOW")
+            .expect("test: version below the minimum must be reported");
+        assert_eq!(version.severity(), Severity::Error);
+        assert_eq!(version.location(), Some("header"));
+        assert!(version.message().contains("1.7"));
+    }
+
+    #[test]
+    fn transparency_is_reported() {
+        let mut input = conforming_input(Standard::PdfA1b);
+        input.transparency = TransparencyUsage {
+            uses_transparency: true,
+            locations: vec!["page 2".to_owned(), "page 1".to_owned()],
+        };
+        let findings = PdfA1bProfile::new().check(&input);
+        let locations: Vec<&str> = findings
+            .iter()
+            .filter(|finding| finding.code() == "PDFA1B.TRANSPARENCY_FORBIDDEN")
+            .filter_map(PreflightFinding::location)
+            .collect();
+        // Locations are normalised (sorted, deduplicated) by the check itself.
+        assert_eq!(locations, vec!["page 1", "page 2"]);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.severity() == Severity::Error)
+        );
+    }
+
+    #[test]
+    fn encryption_is_prohibited() {
+        for standard in [
+            Standard::PdfA1b,
+            Standard::PdfA3b,
+            Standard::PdfX4,
+            Standard::PdfE1,
+        ] {
+            let mut input = conforming_input(standard);
+            input.is_encrypted = true;
+            let findings = match standard {
+                Standard::PdfA1b => PdfA1bProfile::new().check(&input),
+                Standard::PdfA3b => PdfA3bProfile::new().check(&input),
+                Standard::PdfX4 => PdfX4Profile::new().check(&input),
+                Standard::PdfE1 => PdfE1Profile::new().check(&input),
+                _ => Vec::new(),
+            };
+            assert!(
+                findings
+                    .iter()
+                    .any(|finding| finding.code().ends_with(".ENCRYPTED")),
+                "{standard} must prohibit encryption"
+            );
+        }
+    }
+
+    #[test]
+    fn clean_input_passes_all_named_profiles() {
+        let cases = [
+            (
+                Standard::PdfA1b,
+                PdfA1bProfile::new().report(&conforming_input(Standard::PdfA1b)),
+            ),
+            (
+                Standard::PdfA2b,
+                PdfA2bProfile::new().report(&conforming_input(Standard::PdfA2b)),
+            ),
+            (
+                Standard::PdfA3b,
+                PdfA3bProfile::new().report(&conforming_input(Standard::PdfA3b)),
+            ),
+            (
+                Standard::PdfX1a,
+                PdfX1aProfile::new().report(&conforming_input(Standard::PdfX1a)),
+            ),
+            (
+                Standard::PdfX4,
+                PdfX4Profile::new().report(&conforming_input(Standard::PdfX4)),
+            ),
+            (
+                Standard::PdfE1,
+                PdfE1Profile::new().report(&conforming_input(Standard::PdfE1)),
+            ),
+        ];
+        for (standard, report) in cases {
+            assert_eq!(report.standard(), standard);
+            assert!(
+                report.findings().is_empty(),
+                "{standard} rejected a clean input: {}",
+                report.summary()
+            );
+            assert!(report.is_conforming(), "{standard}");
+        }
+    }
+
+    #[test]
+    fn severity_and_order_are_deterministic() {
+        let input = nonconforming_input(Standard::PdfX1a);
+        let profile = PdfX1aProfile::new();
+        let a = profile.report(&input);
+        let b = profile.report(&input);
+        assert_eq!(a, b, "the same input must yield the same report");
+
+        // Canonical order is severity (error first), then code, message, location.
+        let ordered = profile.check_sorted(&input);
+        let severities: Vec<Severity> = ordered.iter().map(PreflightFinding::severity).collect();
+        let first_warning = severities
+            .iter()
+            .position(|severity| *severity != Severity::Error)
+            .unwrap_or(severities.len());
+        assert!(
+            severities[..first_warning]
+                .iter()
+                .all(|severity| *severity == Severity::Error)
+        );
+        assert!(
+            severities[first_warning..]
+                .iter()
+                .all(|severity| *severity != Severity::Error)
+        );
+        assert_eq!(a.findings(), ordered.as_slice());
+    }
+
+    #[test]
+    fn annotations_and_forbidden_entries_are_reported() {
+        let mut input = conforming_input(Standard::PdfA1b);
+        input.catalog.forbidden_entries = vec!["/JavaScript".to_owned(), "/MediaBox".to_owned()];
+        input.annotations = vec![
+            AnnotationInfo::new("/Popup", true),
+            AnnotationInfo::new("/Text", false),
+        ];
+        let findings = PdfA1bProfile::new().check(&input);
+        let codes: Vec<&str> = findings.iter().map(PreflightFinding::code).collect();
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "PDFA1B.FORBIDDEN_ENTRY")
+                .count(),
+            1,
+            "only entries the profile forbids are reported"
+        );
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "PDFA1B.ANNOTATION_FORBIDDEN")
+                .count(),
+            1,
+            "only annotation subtypes the profile forbids are reported"
+        );
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "PDFA1B.ANNOTATION_NO_APPEARANCE")
+                .count(),
+            1,
+            "annotations without /AP are reported for PDF/A-1b"
+        );
+    }
+
+    #[test]
+    fn pdf_a3b_allows_embedded_files_but_pdf_a2b_does_not() {
+        let mut input = conforming_input(Standard::PdfA3b);
+        input.catalog.forbidden_entries = vec!["/EmbeddedFiles".to_owned()];
+        assert!(
+            PdfA3bProfile::new().check(&input).is_empty(),
+            "PDF/A-3 permits embedded files"
+        );
+
+        let mut older = conforming_input(Standard::PdfA2b);
+        older.catalog.forbidden_entries = vec!["/EmbeddedFiles".to_owned()];
+        assert!(
+            PdfA2bProfile::new()
+                .check(&older)
+                .iter()
+                .any(|finding| finding.code() == "PDFA2B.FORBIDDEN_ENTRY")
+        );
+    }
+
+    #[test]
+    fn new_profiles_are_wired_to_their_standards() {
+        assert_eq!(PdfA3bProfile::new().standard(), Standard::PdfA3b);
+        assert_eq!(PdfE1Profile::new().standard(), Standard::PdfE1);
+        assert_eq!(PdfA3bProfile::new(), PdfA3bProfile);
+        assert_eq!(PdfE1Profile::new(), PdfE1Profile);
+        assert_eq!(PdfA3bProfile::new().standard().label(), "PDF/A-3b");
+        assert_eq!(PdfE1Profile::new().standard().label(), "PDF/E-1");
     }
 }

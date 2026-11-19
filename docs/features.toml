@@ -1738,14 +1738,31 @@ tests = []
 title = "Measurement distance area and perimeter"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "crates/pdfxi-standards/src/fixup.rs",
+    "crates/pdfxi-standards/src/lib.rs",
+    "docs/evidence/convert/T-0079.md",
+]
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-standards: 49 passed; 0 failed (22 new for T-0079). fmt/clippy/doc EXIT=0. See docs/evidence/convert/T-0079.md."
 id = "PRINT-001"
-notes = ""
+notes = "Opt-in, reported fixups plus PDF/A-3b and PDF/E-1 profiles and ordered annotation/forbidden-entry rules. Row stays in-progress: ICC validation, byte-level fixup adapter, veraPDF CI oracle, and UI/CLI exposure remain."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "document_profile::tests::pdf_a_reports_unembedded_font",
+    "document_profile::tests::pdf_x_reports_missing_output_intent",
+    "document_profile::tests::version_mismatch_is_reported",
+    "document_profile::tests::transparency_is_reported",
+    "document_profile::tests::encryption_is_prohibited",
+    "document_profile::tests::clean_input_passes_all_named_profiles",
+    "document_profile::tests::severity_and_order_are_deterministic",
+    "fixup::tests::add_xmp_metadata_fixup_is_opt_in_and_reported",
+    "fixup::tests::remove_prohibited_entry_fixup_is_opt_in",
+    "fixup::tests::fixup_report_is_accurate",
+    "fixup::tests::suggested_fixups_resolve_only_mechanical_findings",
+]
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
@@ -2539,9 +2556,10 @@ points at the original startxref, so reparse resolves the newest entries first.
 Limitations: classic-table PDFs only. Encrypted documents (trailer /Encrypt)
 and cross-reference-stream documents return Error::UnsupportedState rather than
 panicking; malformed trailers surface the existing structured parse errors.
-Non-zero object generations and non-finite reals are rejected. No object-stream
-or linearization support (STD-003). Row stays in-progress because digital
-preservation also covers validation, signing and long-term packaging.
+Non-zero object generations and non-finite reals are rejected. Object-stream
+and linearization-hint support is provided separately by STD-003. Row stays
+in-progress because digital preservation also covers validation, signing and
+long-term packaging.
 """
 priority = "P1"
 status = "in-progress"

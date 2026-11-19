@@ -10,16 +10,24 @@
 //!   filter them by severity.
 //! - [`PreflightInput`] is a dependency-free snapshot of the document facts the
 //!   real profiles need. A caller adapts `pdfxi-core` data into it.
-//! - [`PdfA1bProfile`], [`PdfA2bProfile`], [`PdfX1aProfile`], [`PdfX4Profile`],
-//!   and [`PdfUa1Profile`] run real, deterministic preflight checks over that
-//!   snapshot with stable codes such as `PDFA1B.NO_OUTPUT_INTENT`.
+//! - [`PdfA1bProfile`], [`PdfA2bProfile`], [`PdfA3bProfile`], [`PdfX1aProfile`],
+//!   [`PdfX4Profile`], [`PdfE1Profile`], and [`PdfUa1Profile`] run real,
+//!   deterministic preflight checks over that snapshot with stable codes such
+//!   as `PDFA1B.NO_OUTPUT_INTENT`. Rules cover version and catalog facts, font
+//!   embedding, colour spaces, image filters, transparency, XMP, output
+//!   intents, annotations, encryption, and forbidden entries.
+//! - [`apply_fixups`], [`FixupPolicy`], and [`FixupReport`] apply only explicitly
+//!   enabled, safe mechanical fixes to a cloned snapshot and audit every change.
+//!   [`suggested_fixups`] derives a conservative fixup list from a report.
 //! - [`PreflightReport`], [`StaticProfile`], and [`HeaderProfile`] are the
 //!   report type, a test double, and a small real header check respectively.
 //!
 //! The crate is dependency-free and never executes external tools. Checks are
 //! limited to facts decidable from the snapshot; full byte-level conformance
 //! (including ICC profile validation) belongs in future adapters, with veraPDF
-//! used as a CI oracle rather than a runtime dependency.
+//! used as a CI oracle rather than a runtime dependency. Fixups edit a cloned
+//! snapshot only: a producer applies the result to PDF bytes and must still
+//! supply real fonts, ICC profiles, and metadata where a placeholder is used.
 //!
 //! # Examples
 //!
@@ -41,17 +49,23 @@
 
 mod document_profile;
 mod finding;
+mod fixup;
 mod input;
 mod profile;
 mod standard;
 
 pub use document_profile::{
-    PdfA1bProfile, PdfA2bProfile, PdfUa1Profile, PdfX1aProfile, PdfX4Profile,
+    PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfX1aProfile,
+    PdfX4Profile,
 };
 pub use finding::{PreflightFinding, Severity, filter_by_severity, sort_findings};
+pub use fixup::{
+    Fixup, FixupError, FixupOutcome, FixupPolicy, FixupRecord, FixupReport, apply_fixups,
+    profile_uses_output_intents, prohibited_entries, required_output_subtype, suggested_fixups,
+};
 pub use input::{
-    CatalogInfo, ColourSpace, FontInfo, FontType, ImageFilter, ImageInfo, OutputIntent, PageBoxes,
-    PageInfo, PdfVersion, PreflightInput, TransparencyUsage,
+    AnnotationInfo, CatalogInfo, ColourSpace, FontInfo, FontType, ImageFilter, ImageInfo,
+    OutputIntent, PageBoxes, PageInfo, PdfVersion, PreflightInput, TransparencyUsage,
 };
 pub use profile::{HeaderProfile, PreflightProfile, PreflightReport, StaticProfile};
 pub use standard::{Standard, StandardFamily};

@@ -107,6 +107,12 @@ pub struct CatalogInfo {
     pub has_struct_tree_root: bool,
     /// Whether the catalog has an `/AcroForm` dictionary.
     pub has_acro_form: bool,
+    /// Catalog or document-level entries that are present and that a target
+    /// profile may prohibit, for example `/EmbeddedFiles` or `/JavaScript`.
+    ///
+    /// This list is opt-in from the caller; profiles only flag entries they
+    /// explicitly forbid, and fixups only remove entries the profile forbids.
+    pub forbidden_entries: Vec<String>,
 }
 
 /// The five standard page boxes, reduced to presence flags.
@@ -304,6 +310,38 @@ pub struct TransparencyUsage {
     pub locations: Vec<String>,
 }
 
+/// One annotation and the presence of its appearance stream.
+///
+/// Preflight profiles use the `/Subtype` name to detect annotation types a
+/// target standard forbids and the `/AP` flag to require appearance streams.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationInfo {
+    /// The annotation `/Subtype` name, for example `/Text`.
+    pub subtype: String,
+    /// Whether the annotation dictionary carries an `/AP` appearance stream.
+    pub has_appearance_stream: bool,
+}
+
+impl AnnotationInfo {
+    /// Creates an annotation record from a subtype and appearance-stream flag.
+    #[must_use]
+    pub fn new(subtype: impl Into<String>, has_appearance_stream: bool) -> Self {
+        Self {
+            subtype: subtype.into(),
+            has_appearance_stream,
+        }
+    }
+
+    /// Compares this annotation's subtype to `name`, ignoring ASCII case and an
+    /// optional leading slash.
+    #[must_use]
+    pub fn is_subtype(&self, name: &str) -> bool {
+        let stored = self.subtype.strip_prefix('/').unwrap_or(&self.subtype);
+        let query = name.strip_prefix('/').unwrap_or(name);
+        stored.eq_ignore_ascii_case(query)
+    }
+}
+
 /// A dependency-free snapshot of the facts preflight profiles need.
 ///
 /// A caller adapts `pdfxi-core` (or any other PDF model) into this struct by
@@ -331,6 +369,8 @@ pub struct PreflightInput {
     pub images: Vec<ImageInfo>,
     /// Transparency usage.
     pub transparency: TransparencyUsage,
+    /// Annotations found in the document, in any order.
+    pub annotations: Vec<AnnotationInfo>,
 }
 
 impl PreflightInput {
@@ -396,6 +436,15 @@ mod tests {
             .push(OutputIntent::new("GTS_PDFA1", true));
         assert!(input.output_intent_of("GTS_PDFA1").is_some());
         assert!(input.output_intent_of("GTS_PDFX").is_none());
+    }
+
+    #[test]
+    fn annotation_subtype_ignores_case_and_slash() {
+        let annotation = AnnotationInfo::new("/popup", false);
+        assert!(annotation.is_subtype("Popup"));
+        assert!(annotation.is_subtype("/POPUP"));
+        assert!(!annotation.is_subtype("Text"));
+        assert!(!annotation.has_appearance_stream);
     }
 
     #[test]
