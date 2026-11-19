@@ -1,18 +1,18 @@
 # FEATURES
 
-`docs/features.toml` is the canonical parity matrix. It contains 139 feature
+`docs/features.toml` is the canonical parity matrix. It contains 140 feature
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 4 verified, 22 in-progress, 113 planned.
+Current status: 13 verified, 25 in-progress, 102 planned.
 
 ## Detailed feature pages
 
 Narrative documentation for the M1 slice (all **in progress**, not verified):
 
-- [Viewer slice](features/view.md) — open, page display, zoom, rotate,
+- [Viewer slice](features/view.md) â€” open, page display, zoom, rotate,
   thumbnails, bookmarks, search, text selection.
-- [Command-line interface](features/cli.md) — intended `pdfxi info`, `text`,
+- [Command-line interface](features/cli.md) â€” intended `pdfxi info`, `text`,
   and `render` commands with examples.
 
 An mdBook entry point is available in [docs/book/src/README.md](book/src/README.md).
@@ -56,10 +56,10 @@ An mdBook entry point is available in [docs/book/src/README.md](book/src/README.
 2. P0, P1, and P2 rows cannot be `deferred`. If a dependency is unavailable,
    implement a local equivalent and mark it `replaced`.
 3. Retired Adobe services map to local equivalents:
-   - FormsCentral → local form distribution and response store.
-   - EchoSign → local PKI signature workflow with audit trail.
-   - Acrobat.com / SendNow → local share links and LAN transfer.
-   - LiveCycle Rights Management → local policy service.
+   - FormsCentral â†’ local form distribution and response store.
+   - EchoSign â†’ local PKI signature workflow with audit trail.
+   - Acrobat.com / SendNow â†’ local share links and LAN transfer.
+   - LiveCycle Rights Management â†’ local policy service.
 4. Adobe binary plug-ins are not supported. PDFXI exposes a WASM/JSON plugin API.
 5. Every feature row links to an automated test and a documentation page before
    the final gate.
