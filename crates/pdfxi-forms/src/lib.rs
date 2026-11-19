@@ -18,13 +18,15 @@
 //!   a small [`export_xfdf`] XML subset.
 //! - [`load_acroform`] — loads a real PDF catalog `/AcroForm` dictionary into a
 //!   [`Form`] through the dependency-free [`FormSource`] adapter trait.
+//! - [`build_appearance`] — deterministically generates a widget's appearance
+//!   content stream and `/AP` dictionary model from a [`Field`], a
+//!   [`WidgetAppearance`] and the current [`FieldValue`].
 //!
 //! Field names are fully qualified (for example `order.address.city`). Callers
 //! that build fields directly supply the dotted path; [`load_acroform`] builds
 //! it from the inherited `/T` partial names of a real field tree using `.` as
 //! the separator. All operations are deterministic and allocate only as needed.
-//! Writing widget annotations, generating appearances, and flattening remain
-//! future work.
+//! Writing widget annotations and flattening remain future work.
 //!
 //! # Example
 //!
@@ -49,6 +51,7 @@
 #![forbid(unsafe_code)]
 
 mod acroform;
+mod appearance;
 mod calculation;
 mod fdf;
 mod field;
@@ -59,6 +62,13 @@ mod validation;
 pub use acroform::{
     AcroFormLoad, FormSource, LoadError, LoadedFieldInfo, LoadedForm, ObjectRef, PdfValue,
     load_acroform,
+};
+pub use appearance::{
+    AVERAGE_WIDTH, Alignment, AppearanceDictionary, AppearanceError, AppearanceStream, BorderStyle,
+    DEFAULT_FONT_RESOURCE, FontSpec, HORIZONTAL_PADDING, LINE_HEIGHT_FACTOR, NARROW_WIDTH,
+    NormalAppearance, RgbColor, STATE_OFF, STATE_ON, TextLayout, TextLine, VERTICAL_PADDING,
+    WIDE_WIDTH, WidgetAppearance, WidgetRect, build_appearance, button_state_names,
+    check_mark_content, escape_literal_string, layout_text,
 };
 pub use calculation::{
     Calculation, CalculationError, CalculationOp, CalculationReport, CalculationResult,

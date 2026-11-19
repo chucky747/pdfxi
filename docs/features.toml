@@ -934,68 +934,41 @@ title = "Export to PostScript"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/acroform.rs",
-    "crates/pdfxi-forms/src/acroform/tests.rs",
+    "crates/pdfxi-forms/src/appearance.rs",
     "crates/pdfxi-forms/src/lib.rs",
 ]
 domain = "Forms"
-evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 66 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
-cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps: EXIT=0.
-"""
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 85 passed / 0 failed. build_appearance takes the current FieldValue explicitly, so a filled form can regenerate its appearance for a prospective value."
 id = "FORMS-001"
-notes = """
-T-0043 adds a real /AcroForm loader that populates the existing Form model from
-a catalog dictionary through the dependency-free FormSource adapter trait.
-It walks /Fields and /Kids, resolves inherited /FT, /Ff, /V, /DV, /T, /TU,
-/Opt, /MaxLen, /Q and /DA, builds dotted fully qualified names, maps /V and /DV
-into FieldValue, and feeds directly into FormFill. A missing /AcroForm returns
-AcroFormLoad::NoForm; /Kids cycles and duplicate qualified names are structured
-LoadError variants; malformed values fall back to FieldValue::Empty. Loading a
-form is now covered, but writing widget annotations, generating appearances and
-flattening are still deferred, so the row remains in-progress.
-"""
+notes = "A filled field's current value can now be rendered into an appearance stream through build_appearance(field, widget, value). Dirty-appearance tracking and writing the new /AP back into a concrete /AcroForm remain with the document-writer integration."
 priority = "P1"
 status = "in-progress"
 tests = [
-    "acroform::tests::loads_text_checkbox_and_choice_fields",
-    "acroform::tests::loaded_values_flow_into_fill_session",
-    "acroform::tests::missing_acroform_returns_no_form",
-    "acroform::tests::cyclic_kids_is_an_error",
-    "acroform::tests::duplicate_fully_qualified_names_is_an_error",
+    "appearance::tests::text_fits_without_clipping",
+    "appearance::tests::text_overflow_clips_with_ellipsis",
+    "appearance::tests::alignment_left_center_right_offsets",
+    "appearance::tests::build_appearance_is_deterministic",
 ]
 title = "Fill existing AcroForm fields"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/acroform.rs",
-    "crates/pdfxi-forms/src/acroform/tests.rs",
+    "crates/pdfxi-forms/src/appearance.rs",
+    "crates/pdfxi-forms/src/appearance/tests.rs",
 ]
 domain = "Forms"
-evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 66 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
-cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps: EXIT=0.
-"""
+evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 appearance tests passed as part of 85/85 total. cargo fmt/clippy/doc clean."
 id = "FORMS-002"
-notes = """
-The loader classifies /Tx as Text, /Ch as Choice, /Btn as CheckBox/Radio/
-Pushbutton using the /Ff radio (bit 16) and pushbutton (bit 17) flags, and /Sig
-as Signature. Unknown or missing /FT is preserved as FieldType::Unknown with
-its value kept, so no field is dropped. Radio options come from /Opt or, when
-that is absent, /AP /N normal-state names. /MaxLen becomes a TextConstraint,
-choice /Opt becomes the option list, and checkbox /V states (On/Yes/True or
-Off/No/False) map to booleans. Creating widget annotations and appearances is
-still deferred, so the row remains in-progress.
-"""
+notes = "Appearance generation for text, checkbox, radio, choice and pushbutton widgets is now delivered via build_appearance with deterministic /AP state dictionaries and widget-local content streams. Widget annotation serialization into a real PDF dictionary is still deferred, so the row stays in-progress."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "acroform::tests::loads_text_checkbox_and_choice_fields",
-    "acroform::tests::handles_signature_and_pushbutton_fields",
-    "acroform::tests::widget_kids_collapse_into_one_terminal_field",
-    "acroform::tests::preserves_unknown_field_type_as_opaque",
-    "acroform::tests::malformed_values_fall_back_to_empty",
-    "acroform::tests::hex_escapes_in_names_decode",
+    "appearance::tests::text_operators_are_well_formed",
+    "appearance::tests::checkbox_on_off_state_names",
+    "appearance::tests::radio_group_states",
+    "appearance::tests::choice_combo_renders_single_line",
+    "appearance::tests::choice_list_renders_highlight_and_rows",
+    "appearance::tests::empty_value_produces_valid_appearance",
 ]
 title = "Create text checkbox radio choice and button fields"
 
@@ -1089,14 +1062,19 @@ tests = [
 title = "Import and export FDF and XFDF"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = ["crates/pdfxi-forms/src/appearance.rs"]
 domain = "Forms"
-evidence = ""
+evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 appearance tests passed as part of 85/85 total; clippy/doc clean."
 id = "FORMS-007"
-notes = ""
+notes = "Generating a self-contained appearance stream with a widget-local BBox and named on/off states is the prerequisite for preserving appearance during flattening. The flatten operation itself (merging the stream into page content and removing the widget) is not implemented here."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "appearance::tests::checkbox_on_off_state_names",
+    "appearance::tests::radio_group_states",
+    "appearance::tests::bbox_uses_widget_local_coordinates",
+    "appearance::tests::build_appearance_is_deterministic",
+]
 title = "Flatten forms and preserve appearance"
 
 [[feature]]
