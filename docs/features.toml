@@ -1119,25 +1119,74 @@ tests = []
 title = "Screen reader and accesskit integration"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-automation/src/lib.rs",
+    "crates/pdfxi-automation/src/action.rs",
+]
 domain = "Automation"
-evidence = ""
+evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 24 passed; 0 failed; 0 ignored. cargo clippy -p pdfxi-automation --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-automation -- --check: clean."
 id = "AUTO-001"
-notes = ""
+notes = """
+Added Action, ActionStep, and StepKind. StepKind has six stable string ids
+(import, convert, watermark, security, export, custom-command) with FromStr /
+Display so actions are importable/exportable. Action::validate rejects empty
+actions, empty names, empty step ids, duplicate step ids, and empty parameter
+keys; from_steps and add_step enforce the same invariants at construction time.
+A tab-delimited, escaped text format provides lossless, deterministic export and
+import (Action::to_text / from_text). Remains in-progress: the Action Wizard UI
+is not implemented by this model-only task.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "action::tests::empty_action_is_rejected",
+    "action::tests::duplicate_step_ids_are_rejected",
+    "action::tests::empty_name_and_step_id_are_rejected",
+    "action::tests::empty_parameter_key_is_rejected",
+    "action::tests::add_step_rejects_duplicates_without_mutating",
+    "action::tests::step_kind_strings_are_stable_and_round_trip",
+    "action::tests::text_export_import_is_lossless",
+    "action::tests::text_export_preserves_special_characters",
+    "action::tests::text_import_rejects_unknown_kind_and_bad_records",
+    "action::tests::parameters_are_enumerated_in_insertion_order",
+    "error::tests::unknown_kind_lists_accepted_kinds",
+]
 title = "Action Wizard create edit import export"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-automation/src/lib.rs",
+    "crates/pdfxi-automation/src/batch.rs",
+]
 domain = "Automation"
-evidence = ""
+evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 24 passed; 0 failed; 0 ignored. cargo clippy -p pdfxi-automation --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-automation -- --check: clean."
 id = "AUTO-002"
-notes = ""
+notes = """
+Added BatchJob, JobState (queued/running/succeeded/failed/cancelled), JobOutcome,
+CancelToken, the StepExecutor trait, MockExecutor, and BatchQueue. The queue is
+deterministic and single-threaded: jobs run in insertion order, steps run in
+action order, a failed or cancelled job never stops its siblings, and a stable
+per-file outcome summary is recorded for each job. Cancellation works before a
+run (cancel_job / cancel_all) and cooperatively from inside a step via a shared
+CancelToken (MockExecutor::cancel_at_step). Remains in-progress: watched folders
+and droplets are future milestones.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "batch::tests::jobs_run_in_insertion_order_with_per_file_outcomes",
+    "batch::tests::failure_is_isolated_to_one_job",
+    "batch::tests::failing_step_records_steps_completed_before_it",
+    "batch::tests::cancelling_before_run_skips_the_job",
+    "batch::tests::cancelling_mid_run_records_completed_steps",
+    "batch::tests::cancel_all_marks_every_pending_job_cancelled",
+    "batch::tests::cancel_unknown_job_reports_job_not_found",
+    "batch::tests::duplicate_job_ids_are_rejected",
+    "batch::tests::invalid_action_fails_only_its_job",
+    "batch::tests::outcomes_are_stable_across_repeated_runs",
+    "batch::tests::finished_jobs_are_not_rerun",
+    "batch::tests::job_state_strings_are_stable",
+]
 title = "Batch processing and command sequences"
 
 [[feature]]
