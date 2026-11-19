@@ -29,14 +29,30 @@ use crate::error::{Result, SecurityError};
 pub struct Tag(u8);
 
 impl Tag {
+    /// `BOOLEAN` (universal, primitive, tag 1).
+    pub const BOOLEAN: Self = Self(0x01);
     /// `INTEGER` (universal, primitive, tag 2).
     pub const INTEGER: Self = Self(0x02);
+    /// `BIT STRING` (universal, primitive, tag 3).
+    pub const BIT_STRING: Self = Self(0x03);
     /// `OCTET STRING` (universal, primitive, tag 4).
     pub const OCTET_STRING: Self = Self(0x04);
     /// `NULL` (universal, primitive, tag 5).
     pub const NULL: Self = Self(0x05);
     /// `OBJECT IDENTIFIER` (universal, primitive, tag 6).
     pub const OBJECT_IDENTIFIER: Self = Self(0x06);
+    /// `UTF8String` (universal, primitive, tag 12).
+    pub const UTF8_STRING: Self = Self(0x0c);
+    /// `NumericString` (universal, primitive, tag 18).
+    pub const NUMERIC_STRING: Self = Self(0x12);
+    /// `PrintableString` (universal, primitive, tag 19).
+    pub const PRINTABLE_STRING: Self = Self(0x13);
+    /// `TeletexString`/`T61String` (universal, primitive, tag 20).
+    pub const T61_STRING: Self = Self(0x14);
+    /// `IA5String` (universal, primitive, tag 22).
+    pub const IA5_STRING: Self = Self(0x16);
+    /// `BMPString` (universal, primitive, tag 30).
+    pub const BMP_STRING: Self = Self(0x1e);
     /// `UTCTime` (universal, primitive, tag 23).
     pub const UTC_TIME: Self = Self(0x17);
     /// `GeneralizedTime` (universal, primitive, tag 24).
@@ -428,6 +444,35 @@ impl<'a> Tlv<'a> {
         }
     }
 
+    /// Validate that this value is a `BOOLEAN` and return its logical value.
+    ///
+    /// DER permits only `0x00` for false and `0xff` for true; other encodings
+    /// (notably BER's `0x01`) are rejected.
+    pub fn as_bool(&self) -> Result<bool> {
+        expect_tag(Tag::BOOLEAN, self.tag)?;
+        match self.content {
+            [0x00] => Ok(false),
+            [0xff] => Ok(true),
+            _ => Err(SecurityError::DerInvalid),
+        }
+    }
+
+    /// Validate a `BIT STRING` and return `(unused_bits, payload)`.
+    ///
+    /// The first content octet counts the unused bits in the final octet. DER
+    /// requires it to be `0..=7` and to be zero when the payload is empty.
+    pub fn as_bit_string(&self) -> Result<(u8, &'a [u8])> {
+        expect_tag(Tag::BIT_STRING, self.tag)?;
+        let (unused, payload) = self
+            .content
+            .split_first()
+            .ok_or(SecurityError::DerTruncated)?;
+        if *unused > 7 || (payload.is_empty() && *unused != 0) {
+            return Err(SecurityError::DerInvalid);
+        }
+        Ok((*unused, payload))
+    }
+
     /// Decode a non-negative `INTEGER` into a `u64`.
     pub fn as_integer_u64(&self) -> Result<u64> {
         expect_tag(Tag::INTEGER, self.tag)?;
@@ -480,6 +525,14 @@ fn expect_tag(expected: Tag, found: Tag) -> Result<()> {
             found: found.byte(),
         })
     }
+}
+
+/// Decode the content octets of an `OBJECT IDENTIFIER` into integer arcs.
+///
+/// Useful when an OID appears behind an implicit context tag (for example a
+/// SAN `registeredID`), where the identifier octet is not `0x06`.
+pub fn decode_oid_content(content: &[u8]) -> Result<Vec<u32>> {
+    decode_oid_arcs(content)
 }
 
 fn decode_oid_arcs(content: &[u8]) -> Result<Vec<u32>> {

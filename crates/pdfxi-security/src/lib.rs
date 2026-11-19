@@ -28,6 +28,9 @@
 //! - [`der`] — a strict, dependency-free ASN.1 DER encoder/decoder subset.
 //! - [`cms`] — CMS/PKCS#7 `SignedData` creation and validation behind the
 //!   [`SignatureProvider`] trait, with a deterministic in-memory test provider.
+//! - [`x509`] — X.509 certificate parsing, deterministic name display,
+//!   extensions, caller-clocked chain validation, and digital IDs whose private
+//!   keys stay behind an opaque [`KeyHandle`] trait.
 //!
 //! All operations are deterministic and allocate only as needed. RFC 3161
 //! timestamps and trust/revocation management are layered on in later milestones
@@ -48,6 +51,7 @@ mod redaction;
 mod sanitization;
 mod signature;
 pub mod standard_handler;
+pub mod x509;
 
 pub use cms::{
     InMemorySignatureProvider, SignatureProvider, SignedDataParams, SignerIdentifier,
@@ -70,6 +74,13 @@ pub use standard_handler::{
     Decryptor, PASSWORD_PADDING, SecurityParameters, StandardSecurityHandler, compute_file_key,
     compute_o_and_oe, compute_o_value, compute_perms, compute_u_and_ue, compute_u_value,
     pad_password,
+};
+pub use x509::{
+    BasicConstraints, Certificate, CertificateVerifier, ChainReport, Clock, DigitalId,
+    DigitalIdMetadata, DigitalIdStore, EkuPurpose, ExtendedKeyUsage, Extension, ExtensionValue,
+    FixedClock, KeyHandle, KeyUsage, KeyUsageBit, Name, OpaqueKeyHandle, PublicKeyInfo,
+    RejectingVerifier, RelativeDistinguishedName, SignatureAlgorithm, SubjectAltName, TrustStore,
+    ValidationPolicy, Validity, ValidityStatus, verify_chain,
 };
 
 #[cfg(test)]

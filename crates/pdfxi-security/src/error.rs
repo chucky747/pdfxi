@@ -65,6 +65,40 @@ pub enum SecurityError {
     CertificateMismatch,
     /// A `SignedData` did not contain the expected signer certificate.
     CertificateMissing,
+    /// An X.509 certificate used a version other than v1 or v3.
+    CertificateVersionUnsupported(u64),
+    /// The certificate's `notBefore` was later than the validation time.
+    CertificateNotYetValid,
+    /// The certificate's `notAfter` was earlier than the validation time.
+    CertificateExpired,
+    /// No issuer certificate could be found for a certificate in the chain.
+    CertificateIssuerUnknown,
+    /// The chain did not terminate at a caller-supplied trust anchor.
+    CertificateUntrusted,
+    /// The certificate chain exceeded the caller's maximum depth.
+    CertificateChainTooLong,
+    /// A certificate signature check was rejected by the caller's verifier.
+    CertificateSignatureInvalid,
+    /// A certificate's key usage did not permit the requested operation.
+    CertificateKeyUsageViolation(&'static str),
+    /// An issuing certificate was not marked as a CA in basic constraints.
+    CertificateNotCa,
+    /// A required extended key usage purpose was absent from the certificate.
+    CertificateEkuMissing,
+    /// A critical X.509 extension that this subset does not understand was present.
+    CertificateUnknownCriticalExtension,
+    /// A known extension carried a malformed payload.
+    CertificateExtensionInvalid(&'static str),
+    /// An optional `TBSCertificate` field appeared more than once.
+    CertificateDuplicateField(&'static str),
+    /// Two extensions in a certificate declared the same OID.
+    CertificateDuplicateExtension,
+    /// A digital ID with the same certificate or key handle already exists.
+    DigitalIdDuplicate,
+    /// No digital ID matched the requested lookup.
+    DigitalIdNotFound,
+    /// Exported metadata did not match the supplied certificate material.
+    DigitalIdMetadataMismatch,
     /// A protector or test double was misconfigured.
     Configuration(String),
     /// A page number was zero; PDF page numbers are 1-based.
@@ -145,6 +179,41 @@ impl fmt::Display for SecurityError {
                 write!(f, "embedded certificate did not match the provider")
             }
             Self::CertificateMissing => write!(f, "signed data contained no signer certificate"),
+            Self::CertificateVersionUnsupported(version) => {
+                write!(f, "unsupported X.509 certificate version: {version}")
+            }
+            Self::CertificateNotYetValid => write!(f, "certificate is not yet valid"),
+            Self::CertificateExpired => write!(f, "certificate has expired"),
+            Self::CertificateIssuerUnknown => write!(f, "certificate issuer is unknown"),
+            Self::CertificateUntrusted => write!(f, "certificate chain has no trusted anchor"),
+            Self::CertificateChainTooLong => write!(f, "certificate chain is too long"),
+            Self::CertificateSignatureInvalid => write!(f, "certificate signature is invalid"),
+            Self::CertificateKeyUsageViolation(usage) => {
+                write!(f, "certificate key usage forbids {usage}")
+            }
+            Self::CertificateNotCa => {
+                write!(f, "issuing certificate is not marked as a CA")
+            }
+            Self::CertificateEkuMissing => {
+                write!(f, "certificate lacks the required extended key usage")
+            }
+            Self::CertificateUnknownCriticalExtension => {
+                write!(f, "certificate contains an unknown critical extension")
+            }
+            Self::CertificateExtensionInvalid(name) => {
+                write!(f, "malformed X.509 extension: {name}")
+            }
+            Self::CertificateDuplicateField(name) => {
+                write!(f, "duplicate X.509 TBS field: {name}")
+            }
+            Self::CertificateDuplicateExtension => {
+                write!(f, "certificate contains duplicate extension OIDs")
+            }
+            Self::DigitalIdDuplicate => write!(f, "a digital ID with this identity already exists"),
+            Self::DigitalIdNotFound => write!(f, "no matching digital ID was found"),
+            Self::DigitalIdMetadataMismatch => {
+                write!(f, "digital ID metadata does not match the certificate")
+            }
             Self::Configuration(message) => write!(f, "security configuration error: {message}"),
             Self::InvalidPageNumber => write!(f, "page number must be at least 1"),
             Self::EmptyRedactionRegion => {
