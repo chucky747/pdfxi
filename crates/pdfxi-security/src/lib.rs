@@ -14,27 +14,38 @@
 //!   report, including signer, time, digest algorithm, coverage, and validity.
 //! - [`Protector`] — a trait for encrypt/decrypt/permissions with a
 //!   [`MockProtector`] test double.
+//! - [`crypto`] — dependency-free MD5, SHA-2, RC4, and AES primitives with
+//!   published known-answer tests.
+//! - [`standard_handler`] — real password authentication and per-object
+//!   decryption for PDF encryption revisions 2–6
+//!   ([`StandardSecurityHandler`], [`Decryptor`], [`SecurityParameters`]).
 //!
-//! All operations are deterministic and allocate only as needed. Concrete
-//! cipher handlers, CMS/PKCS#7 verification, timestamps, redaction, and
-//! sanitization will be layered onto these contracts in later milestones
-//! without changing the public surface. No operation logs secrets or document
-//! contents.
+//! All operations are deterministic and allocate only as needed. CMS/PKCS#7
+//! verification, timestamps, redaction, and sanitization will be layered onto
+//! these contracts in later milestones without changing the public surface.
+//! No operation logs secrets or document contents.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod crypto;
 mod encryption;
 mod error;
 mod permissions;
 mod protector;
 mod signature;
+pub mod standard_handler;
 
 pub use encryption::EncryptionMethod;
 pub use error::{Result, SecurityError};
 pub use permissions::{PasswordRole, Permission, Permissions};
 pub use protector::{MockProtector, Protector};
 pub use signature::{DigestAlgorithm, SignatureCoverage, SignatureInfo, SignatureStatus};
+pub use standard_handler::{
+    Decryptor, PASSWORD_PADDING, SecurityParameters, StandardSecurityHandler, compute_file_key,
+    compute_o_and_oe, compute_o_value, compute_perms, compute_u_and_ue, compute_u_value,
+    pad_password,
+};
 
 #[cfg(test)]
 mod tests;
