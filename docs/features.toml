@@ -1232,9 +1232,9 @@ id = "PRINT-002"
 notes = """
 T-0037 adds real, deterministic preflight checks for PDF/A-1b, PDF/A-2b,
 PDF/X-1a, PDF/X-4 and PDF/UA-1 over a dependency-free PreflightInput snapshot,
-with stable finding codes and severities. Fixups, ICC profile validation,
-PDF/E, PDF/VT, and a veraPDF corpus comparison remain future work, so the row
-stays in-progress rather than verified."""
+with stable finding codes and severities. Fixups, ICC validation, PDF/E,
+PDF/VT, and a veraPDF corpus comparison remain future work, so the row stays
+in-progress rather than verified."""
 priority = "P2"
 status = "in-progress"
 tests = [
