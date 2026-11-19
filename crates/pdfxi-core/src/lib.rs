@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod content;
+pub mod filter;
 pub mod object;
 pub mod page;
 
@@ -22,6 +23,9 @@ mod lexer;
 mod parser;
 
 pub use content::extract_text;
+pub use filter::{
+    DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
+};
 pub use object::{Object, ObjectId};
 pub use page::{Page, Rectangle};
 
@@ -97,9 +101,34 @@ pub enum Error {
     /// A nesting or container-size limit was exceeded.
     #[error("PDF nesting limit ({0}) exceeded")]
     NestingTooDeep(usize),
-    /// A page content stream uses a filter that text extraction does not support.
-    #[error("content stream {0} is filtered; text extraction supports uncompressed streams only")]
-    FilteredContent(ObjectId),
+    /// A page content stream uses a filter that this build cannot decode.
+    #[error(
+        "content stream {id} uses unsupported filter {filter}; text extraction cannot decode it"
+    )]
+    FilteredContent {
+        /// The content stream object that could not be decoded.
+        id: ObjectId,
+        /// The PDF name of the unsupported filter.
+        filter: String,
+    },
+    /// A stream filter is recognized but not implemented in this build.
+    #[error("unsupported stream filter: {0}")]
+    UnsupportedFilter(String),
+    /// The zlib wrapper of a Flate stream is invalid.
+    #[error("invalid zlib header in Flate stream: {0}")]
+    InvalidZlibHeader(String),
+    /// A DEFLATE payload is truncated or violates RFC 1951.
+    #[error("malformed DEFLATE stream: {0}")]
+    MalformedDeflate(String),
+    /// A decoded stream would exceed the configured output cap.
+    #[error("decoded stream exceeds the {limit} byte output cap")]
+    DecodeLimitExceeded {
+        /// The output cap that would be exceeded.
+        limit: usize,
+    },
+    /// Decode parameters such as `/Predictor` are invalid or unsupported.
+    #[error("invalid stream decode parameters: {0}")]
+    InvalidDecodeParameters(String),
     /// A `/Contents` entry did not resolve to a stream object.
     #[error("content object {0} is not a stream")]
     ContentNotStream(ObjectId),
@@ -191,20 +220,21 @@ impl Document {
         Ok(structure.pages.clone())
     }
 
-    /// Return the unfiltered content bytes of the page at `index`.
+    /// Return the decoded content bytes of the page at `index`.
     ///
     /// The byte streams referenced by the page's `/Contents` entry are resolved
-    /// through the cross-reference table and concatenated in draw order. A
-    /// stream that declares a `/Filter` is rejected with
-    /// [`Error::FilteredContent`] because this build does not decode stream
-    /// filters; callers receive a clear error rather than undecoded bytes.
+    /// through the cross-reference table, decoded with [`decode_stream`], and
+    /// concatenated in draw order. `FlateDecode` streams (including PNG
+    /// predictors) are decoded transparently. A stream using any other filter
+    /// is rejected with [`Error::FilteredContent`], which names the filter.
     ///
     /// # Errors
     ///
     /// Returns a structural error when the document body is damaged,
     /// [`Error::PageNotFound`] when `index` is out of range,
-    /// [`Error::FilteredContent`] when a stream is compressed, and
-    /// [`Error::ContentNotStream`] when a `/Contents` entry is not a stream.
+    /// [`Error::FilteredContent`] when a stream uses an unsupported filter,
+    /// [`Error::ContentNotStream`] when a `/Contents` entry is not a stream,
+    /// and any filter error from [`decode_stream`] for corrupt compressed data.
     pub fn page_content(&self, index: usize) -> Result<Vec<u8>> {
         let structure = self.structure.as_ref().map_err(Clone::clone)?;
         let page = structure
@@ -525,19 +555,82 @@ mod tests {
     }
 
     #[test]
-    fn page_content_rejects_filtered_stream() {
-        let content = "BT (Hi) Tj ET";
-        let body = format!(
-            "<< /Length {} /Filter /FlateDecode >>\nstream\n{}\nendstream",
-            content.len(),
-            content
+    fn page_content_rejects_unsupported_filter_and_names_it() {
+        let content = b"BT (Hi) Tj ET";
+        let dict = b"<< /Length 13 /Filter /LZWDecode >>";
+        let pdf = one_page_pdf_with_binary_stream(dict, content);
+        let doc = Document::from_bytes(pdf).expect("valid fixture");
+        let err = doc.page_content(0).expect_err("LZW is unsupported");
+        assert!(
+            matches!(&err, Error::FilteredContent { id, filter }
+                if *id == ObjectId::new(4, 0) && filter == "LZWDecode"),
+            "unexpected error: {err}"
         );
-        let doc = Document::from_bytes(one_page_pdf_with_content(&body)).expect("valid fixture");
-        assert!(matches!(
-            doc.page_content(0),
-            Err(Error::FilteredContent(id)) if id == ObjectId::new(4, 0)
-        ));
-        assert!(matches!(doc.page_text(0), Err(Error::FilteredContent(_))));
+        assert!(err.to_string().contains("LZWDecode"));
+    }
+
+    /// Build a one-page PDF whose object 4 is a binary content stream.
+    ///
+    /// The dictionary and payload are byte slices so compressed streams with
+    /// arbitrary bytes and an exact `/Length` can be embedded without breaking
+    /// the cross-reference offsets.
+    fn one_page_pdf_with_binary_stream(dict: &[u8], stream: &[u8]) -> Vec<u8> {
+        let mut objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        ];
+        let mut fourth = dict.to_vec();
+        fourth.extend_from_slice(b"\nstream\n");
+        fourth.extend_from_slice(stream);
+        fourth.extend_from_slice(b"\nendstream");
+        objects.push(fourth);
+
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            out.extend_from_slice(object);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+        out.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in &offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn flate_compressed_page_content_is_decoded_transparently() {
+        // A genuine zlib stream produced by .NET DeflateStream for the content
+        // "BT /F1 24 Tf 72 720 Td (Hello, Flate PDFXI!) Tj ET".
+        const COMPRESSED: &[u8] = &[
+            0x78, 0x9C, 0x73, 0x0A, 0x51, 0xD0, 0x77, 0x33, 0x54, 0x30, 0x32, 0x51, 0x08, 0x49,
+            0x53, 0x30, 0x37, 0x02, 0x22, 0x03, 0x85, 0x90, 0x14, 0x05, 0x0D, 0x8F, 0xD4, 0x9C,
+            0x9C, 0x7C, 0x1D, 0x05, 0xB7, 0x9C, 0xC4, 0x92, 0x54, 0x85, 0x00, 0x17, 0xB7, 0x08,
+            0x4F, 0x45, 0x4D, 0x85, 0x90, 0x2C, 0x05, 0xD7, 0x10, 0x00, 0x34, 0x63, 0x0C, 0xC7,
+        ];
+        let dict = format!(
+            "<< /Length {} /Filter /FlateDecode /DecodeParms << /Predictor 1 /Colors 1 /BitsPerComponent 8 /Columns 1 >> >>",
+            COMPRESSED.len()
+        )
+        .into_bytes();
+        let pdf = one_page_pdf_with_binary_stream(&dict, COMPRESSED);
+        let doc = Document::from_bytes(pdf).expect("valid compressed fixture");
+        assert_eq!(
+            doc.page_text(0).expect("decoded page text"),
+            "Hello, Flate PDFXI!"
+        );
     }
 
     #[test]

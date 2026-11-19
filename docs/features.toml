@@ -1581,12 +1581,19 @@ title = "PDF 1.0 through 2.0 compatibility"
 [[feature]]
 docs = "crates/pdfxi-core/src/parser.rs"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out. cargo clippy -p pdfxi-core --all-targets -- -D warnings: clean. cargo doc -p pdfxi-core --no-deps: success."
+evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 48 passed; 0 failed. cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings: clean. cargo fmt -p pdfxi-core -- --check: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps: clean. docs/evidence/core/T-0023.md"
 id = "STD-002"
-notes = "Classic xref tables are fully parsed: final startxref lookup, subsection headers, n/f entries, trailer dictionary, /Root, and /Prev chains with newest-wins merging and cycle detection. The /Pages tree is walked recursively with cycle guards and inherited MediaBox/Resources; /Count, leaf page MediaBox and /Contents references are exposed via Document::page_count, page, pages, root, trailer_size and declared_page_count. All parsing is bounds-checked with thiserror variants and no non-test panics. Xref streams are explicitly out of scope for this task and keep the row in-progress."
+notes = "Classic xref tables are fully parsed: final startxref lookup, subsection headers, n/f entries, trailer dictionary, /Root, and /Prev chains with newest-wins merging and cycle detection. The /Pages tree is walked recursively with cycle guards and inherited MediaBox/Resources; /Count, leaf page MediaBox and /Contents references are exposed via Document::page_count, page, pages, root, trailer_size and declared_page_count. FlateDecode is decoded by a dependency-free, cap-bounded inflater with PNG predictor support, and page_content/page_text decode compressed streams transparently. Unsupported filters return a named FilteredContent error. Xref streams remain out of scope and keep the row in-progress."
 priority = "P0"
 status = "in-progress"
 tests = [
+    "pdfxi_core::filter::tests::decodes_known_zlib_vector",
+    "pdfxi_core::filter::tests::decodes_dynamic_huffman_vector",
+    "pdfxi_core::filter::tests::png_paeth_predictor_reconstructs_rows",
+    "pdfxi_core::filter::tests::unsupported_filter_error_names_the_filter",
+    "pdfxi_core::filter::tests::decode_cap_is_enforced",
+    "pdfxi_core::tests::flate_compressed_page_content_is_decoded_transparently",
+    "pdfxi_core::tests::page_content_rejects_unsupported_filter_and_names_it",
     "pdfxi_core::tests::parses_one_page_pdf_from_testkit",
     "pdfxi_core::tests::parses_multi_page_pdf_and_preserves_order",
     "pdfxi_core::tests::rejects_missing_xref",

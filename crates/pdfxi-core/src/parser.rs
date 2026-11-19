@@ -93,39 +93,37 @@ pub(crate) fn parse_document(data: &[u8]) -> Result<Structure> {
     })
 }
 
-/// Return the concatenated, unfiltered content bytes for `page`.
+/// Return the concatenated, decoded content bytes for `page`.
 ///
 /// Each `/Contents` reference is loaded through the cross-reference table and
-/// must resolve to a stream object. Streams carrying a `/Filter` are rejected
-/// with [`Error::FilteredContent`] so callers never receive encoded bytes by
-/// mistake.
+/// must resolve to a stream object. The stream dictionary is converted into a
+/// filter chain by [`crate::filter::filters_from_dictionary`] and decoded with
+/// [`crate::filter::decode_stream`]. `FlateDecode` is handled transparently;
+/// an unsupported filter is reported as [`Error::FilteredContent`] with the
+/// filter's name so callers never receive encoded bytes by mistake.
 pub(crate) fn page_content(data: &[u8], structure: &Structure, page: &Page) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     for id in &page.contents {
         let object = load_object(data, &structure.xref, *id)?;
         match object {
             Object::Stream { dictionary, data } => {
-                if has_filter(&dictionary) {
-                    return Err(Error::FilteredContent(*id));
-                }
+                let filters = crate::filter::filters_from_dictionary(&dictionary)?;
+                let decoded =
+                    crate::filter::decode_stream(&data, &filters).map_err(|error| match error {
+                        Error::UnsupportedFilter(filter) => {
+                            Error::FilteredContent { id: *id, filter }
+                        }
+                        other => other,
+                    })?;
                 if !out.is_empty() {
                     out.push(b'\n');
                 }
-                out.extend_from_slice(&data);
+                out.extend_from_slice(&decoded);
             }
             _ => return Err(Error::ContentNotStream(*id)),
         }
     }
     Ok(out)
-}
-
-/// Return `true` when a stream dictionary declares at least one real filter.
-fn has_filter(dictionary: &Dictionary) -> bool {
-    match dictionary.get("Filter") {
-        None | Some(Object::Null) => false,
-        Some(Object::Array(items)) => items.iter().any(|item| !matches!(item, Object::Null)),
-        Some(_) => true,
-    }
 }
 
 /// Locate the final `startxref` marker and read its byte offset.

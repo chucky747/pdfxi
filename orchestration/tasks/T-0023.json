@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-core",
     "id":  "T-0023",
-    "evidence":  "",
+    "evidence":  "docs/evidence/core/T-0023.md",
     "owns":  [
                  "crates/pdfxi-core/**",
                  "orchestration/feature-updates/T-0023.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0008",
                        "T-0010"
