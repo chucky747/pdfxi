@@ -35,6 +35,11 @@
 //!   [`WidgetAppearance`] and the current [`FieldValue`].
 //! - [`flatten_page`] / [`flatten_document`] — bake widget appearances into
 //!   page content, remove widget annotations, and preserve everything else.
+//! - [`SignatureField`] / [`SignatureWorkflow`] / [`SignatureSlot`] — signature
+//!   field creation with `/V` placeholders, locks and certification; a
+//!   deterministic local signing state machine with stable status reports; and
+//!   a byte-range planning boundary for a future security-layer signer. No
+//!   cryptography is implemented here.
 //!
 //! Field names are fully qualified (for example `order.address.city`). Callers
 //! that build fields directly supply the dotted path; [`load_acroform`] builds
@@ -73,6 +78,7 @@ mod fill;
 mod flatten;
 mod form;
 mod rules;
+mod signature;
 mod validation;
 mod xfdf;
 
@@ -104,6 +110,13 @@ pub use form::{Form, FormError};
 pub use rules::{
     CurrencyFormat, DateLayout, Format, MAX_PATTERN_LEN, MAX_PATTERN_TEXT_LEN, Pattern,
     PatternError, Rule, ValidationHook, Validator,
+};
+pub use signature::{
+    ByteRangePlan, CertPermission, Certification, DEFAULT_FILTER, DEFAULT_PLACEHOLDER_SIZE,
+    DEFAULT_SUBFILTER, LockAction, MAX_PLACEHOLDER_SIZE, Participant, ParticipantRole, SigFilter,
+    SignatureDictionary, SignatureError, SignatureField, SignatureLock, SignatureSlot,
+    SignatureStatus, SignatureWorkflow, SubFilter, Transition, TransitionKind, WorkflowError,
+    WorkflowReport,
 };
 pub use validation::{Validation, ValidationError, ValidationSummary};
 pub use xfdf::{XFDF_NAMESPACE, XfdfDocument, XfdfError, XfdfField, import_xfdf, parse_xfdf};

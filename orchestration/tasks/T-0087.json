@@ -1,0 +1,14 @@
+{
+  "id": "T-0087",
+  "lane": "forms",
+  "title": "Add electronic signature fields and local workflows",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0048", "T-0070", "T-0080"],
+  "owns": [
+    "crates/pdfxi-forms/**",
+    "orchestration/feature-updates/T-0087.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-forms",
+  "evidence": "docs/evidence/forms/T-0087.md"
+}
