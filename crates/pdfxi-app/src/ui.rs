@@ -17,8 +17,8 @@
 //!
 //! With the `pdfium` feature enabled, the demo viewer opens
 //! `fixtures/minimal.pdf` (resolved from the workspace root via
-//! [`crate::raster::workspace_fixture_path`]) through
-//! [`pdfxi_render::PdfiumRenderer`]. Visible pages are rasterized into [the
+//! `workspace_fixture_path`) through `PdfiumRenderer`. Visible pages are
+//! rasterized into [the
 //! bounded raster cache](crate::raster::RasterCache), and the active raster is
 //! uploaded into an `egui` texture that is painted inside the page rectangle.
 //! Without `pdfium`, no native library is loaded and the canvas keeps drawing
@@ -42,11 +42,11 @@
 //! close button. `Ctrl+Tab` / `Ctrl+Shift+Tab` walk the strip with wraparound and
 //! `Ctrl+W` closes the active tab. Opening the same path twice focuses the
 //! existing tab. Closing a dirty document is routed through a
-//! [`UiClosePolicy`] hook so unsaved work is not silently discarded. Each tab
+//! `UiClosePolicy` hook so unsaved work is not silently discarded. Each tab
 //! keeps its own page, zoom, layout, rotation, and scroll offset, which the
 //! shell saves on switch-away and restores on switch-back. A fixed placeholder
 //! is shown while no document is open. All of these paths are exposed as
-//! window-free [`PdfxiApp`] methods so they are unit tested without a GUI.
+//! window-free `PdfxiApp` methods so they are unit tested without a GUI.
 //!
 //! # View rotation and page display
 //!
@@ -73,9 +73,9 @@ use crate::{
 #[cfg(feature = "pdfium")]
 use crate::Rotation;
 #[cfg(feature = "pdfium")]
-use crate::uv_quad_for_rotation;
-#[cfg(feature = "pdfium")]
 use crate::raster::{RasterCache, RasterKey, workspace_fixture_path};
+#[cfg(feature = "pdfium")]
+use crate::uv_quad_for_rotation;
 #[cfg(feature = "pdfium")]
 use pdfxi_render::{CancellationToken, PdfiumRenderer, Renderer, thumbnail::ThumbnailSpec};
 
@@ -449,7 +449,7 @@ fn paint_rotated_image(
     ];
     let mut mesh = egui::Mesh::with_texture(texture_id);
     for (corner, (u, v)) in corners.iter().zip(uv.iter()) {
-        mesh.vertices.push(egui::Vertex {
+        mesh.vertices.push(egui::epaint::Vertex {
             pos: *corner,
             uv: egui::pos2(*u, *v),
             color: egui::Color32::WHITE,
@@ -1165,21 +1165,19 @@ impl PdfxiApp {
     ///
     /// A fresh [`CancellationToken`] is scoped to this frame; the renderer
     /// checks it between steps so a closed document can stop outstanding work.
+    /// Each raster is keyed by that page's effective rotation, matching the
+    /// rotation used when painting the cached texture below.
     #[cfg(feature = "pdfium")]
-    fn ensure_rasters(&mut self, layout: &CanvasLayout, rotation: Rotation) {
+    fn ensure_rasters(&mut self, layout: &CanvasLayout) {
         let Some(renderer) = self.pdfium_renderer.as_ref() else {
             return;
         };
         let scroll = CanvasPoint::new(self.scroll_x, self.scroll_y);
         let token = CancellationToken::new();
-        match self.raster_cache.ensure_visible(
-            renderer,
-            layout,
-            rotation,
-            scroll,
-            &token,
-            &mut |_| {},
-        ) {
+        match self
+            .raster_cache
+            .ensure_visible(renderer, layout, scroll, &token, &mut |_| {})
+        {
             Ok(_) => {}
             Err(error) => self.status = format!("Render error: {error}"),
         }
@@ -1434,15 +1432,10 @@ impl PdfxiApp {
                     return;
                 };
 
-                #[cfg(feature = "pdfium")]
-                let rotation = self
-                    .state
-                    .active_tab()
-                    .map_or(Rotation::Deg0, |tab| tab.rotation());
                 // Fill the LRU cache with real rasters before painting. This
                 // happens only with PDFium; otherwise the placeholder stands.
                 #[cfg(feature = "pdfium")]
-                self.ensure_rasters(&layout, rotation);
+                self.ensure_rasters(&layout);
 
                 let origin = ui.min_rect().left_top();
                 let text_tool = self.state.active_tool() == Toolset::TextSelection;
@@ -1515,7 +1508,7 @@ impl PdfxiApp {
                     );
                     #[cfg(feature = "pdfium")]
                     if let Some(texture) =
-                        self.raster_texture(&ctx, page.page, page.scale, rotation)
+                        self.raster_texture(&ctx, page.page, page.scale, page.rotation)
                     {
                         // Paint the real page raster inside the rotated page
                         // rectangle, rotating its UVs to match the view.
@@ -1587,56 +1580,46 @@ impl PdfxiApp {
 
     /// Apply keyboard shortcuts for the main find, copy, and view commands.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let (
-            open,
-            next_tab,
-            prev_tab,
-            close,
-            view_command,
-            escape,
-            open_find,
-            next,
-            prev,
-            copy,
-        ) = ctx.input(|input| {
-            let ctrl = input.modifiers.ctrl;
-            let shift = input.modifiers.shift;
-            // Rotation, fit modes, and zoom are resolved through the shared
-            // shortcut map, so the toolbar and keyboard paths cannot drift.
-            let view_command = [
-                Key::R,
-                Key::Num0,
-                Key::Num1,
-                Key::Num2,
-                Key::Equals,
-                Key::Minus,
-            ]
-            .into_iter()
-            .find(|key| input.key_pressed(*key))
-            .and_then(native_shortcut_key)
-            .and_then(|key| {
-                map_shortcut(
-                    key,
-                    ShortcutModifiers {
-                        ctrl,
-                        shift,
-                        alt: input.modifiers.alt,
-                    },
+        let (open, next_tab, prev_tab, close, view_command, escape, open_find, next, prev, copy) =
+            ctx.input(|input| {
+                let ctrl = input.modifiers.ctrl;
+                let shift = input.modifiers.shift;
+                // Rotation, fit modes, and zoom are resolved through the shared
+                // shortcut map, so the toolbar and keyboard paths cannot drift.
+                let view_command = [
+                    Key::R,
+                    Key::Num0,
+                    Key::Num1,
+                    Key::Num2,
+                    Key::Equals,
+                    Key::Minus,
+                ]
+                .into_iter()
+                .find(|key| input.key_pressed(*key))
+                .and_then(native_shortcut_key)
+                .and_then(|key| {
+                    map_shortcut(
+                        key,
+                        ShortcutModifiers {
+                            ctrl,
+                            shift,
+                            alt: input.modifiers.alt,
+                        },
+                    )
+                });
+                (
+                    ctrl && input.key_pressed(Key::N),
+                    ctrl && !shift && input.key_pressed(Key::Tab),
+                    ctrl && shift && input.key_pressed(Key::Tab),
+                    ctrl && input.key_pressed(Key::W),
+                    view_command,
+                    input.key_pressed(Key::Escape),
+                    ctrl && input.key_pressed(Key::F),
+                    !shift && input.key_pressed(Key::F3),
+                    shift && input.key_pressed(Key::F3),
+                    ctrl && input.key_pressed(Key::C),
                 )
             });
-            (
-                ctrl && input.key_pressed(Key::N),
-                ctrl && !shift && input.key_pressed(Key::Tab),
-                ctrl && shift && input.key_pressed(Key::Tab),
-                ctrl && input.key_pressed(Key::W),
-                view_command,
-                input.key_pressed(Key::Escape),
-                ctrl && input.key_pressed(Key::F),
-                !shift && input.key_pressed(Key::F3),
-                shift && input.key_pressed(Key::F3),
-                ctrl && input.key_pressed(Key::C),
-            )
-        });
 
         if open {
             self.open_demo_tab();
@@ -1827,7 +1810,10 @@ mod tests {
         assert!(app.status().contains("reset"), "{}", app.status());
 
         app.fit_page();
-        assert_eq!(app.state().tab(id).map(|tab| tab.zoom()), Some(Zoom::FitPage));
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.zoom()),
+            Some(Zoom::FitPage)
+        );
         app.fit_width();
         assert_eq!(
             app.state().tab(id).map(|tab| tab.zoom()),
@@ -1899,6 +1885,33 @@ mod tests {
         let turned_width = turned.page(0).map(|page| page.rect.width).unwrap_or(0.0);
         // The demo page is portrait; a quarter turn makes it landscape.
         assert!(turned_width > flat_width);
+    }
+
+    #[test]
+    fn demo_page_effective_rotation_matches_view_rotation() {
+        // The demo shell has no intrinsic page /Rotate, so a page's effective
+        // rotation equals the per-tab view rotation used for the raster key.
+        // This documents why producer and consumer keys stay in sync.
+        let mut state = AppState::new();
+        let id = state.open_tab("demo");
+        if let Some(tab) = state.tab_mut(id) {
+            tab.set_page_count(1);
+        }
+        for view in [
+            Rotation::Deg0,
+            Rotation::Deg90,
+            Rotation::Deg180,
+            Rotation::Deg270,
+        ] {
+            state.set_rotation(view).expect("active tab");
+            let layout = layout_for_state(&state, CanvasSize::new(800.0, 600.0))
+                .expect("a layout is produced");
+            assert_eq!(layout.rotation(), view);
+            for page in layout.pages() {
+                assert_eq!(page.page_rotation, Rotation::Deg0);
+                assert_eq!(page.rotation, view);
+            }
+        }
     }
 
     #[test]
@@ -2249,11 +2262,16 @@ mod tests {
 
         let layout = layout_for_state(app.state(), CanvasSize::new(800.0, 600.0))
             .expect("the demo tab produces a layout");
-        app.ensure_rasters(&layout, Rotation::Deg0);
+        let effective = layout
+            .page(0)
+            .map(|page| page.rotation)
+            .expect("the page has geometry");
+        app.ensure_rasters(&layout);
         assert_eq!(app.raster_cache.len(), 1, "the visible page was rasterized");
         assert!(
             app.raster_cache
-                .contains(RasterKey::new(0, layout.scale(), Rotation::Deg0))
+                .contains(RasterKey::new(0, layout.scale(), effective)),
+            "the producer keys by the same effective rotation used for painting"
         );
     }
 

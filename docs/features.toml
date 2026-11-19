@@ -123,25 +123,29 @@ title = "Zoom pan loupe and fit modes"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-app/src/commands.rs",
-    "crates/pdfxi-app/src/state.rs",
     "crates/pdfxi-app/src/view.rs",
+    "crates/pdfxi-app/src/tabs.rs",
+    "crates/pdfxi-app/src/state.rs",
     "crates/pdfxi-app/src/canvas.rs",
+    "crates/pdfxi-app/src/commands.rs",
+    "crates/pdfxi-app/src/raster.rs",
     "crates/pdfxi-app/src/ui.rs",
+    "docs/features/view.md",
+    "docs/evidence/app/T-0083.md",
 ]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-app: 94 passed; fmt/clippy/doc EXIT=0. See docs/evidence/app/T-0083.md."
+evidence = "cargo test -p pdfxi-app: 95 passed; cargo test -p pdfxi-app --features ui: 134 passed. fmt/clippy(--all-features)/doc all EXIT=0. See docs/evidence/app/T-0083.md."
 id = "VIEW-004"
-notes = "Per-tab view rotation independent of page /Rotate, with rotation-aware hit testing, selection, fit, scroll clamping, texture mapping, shortcuts, and UI status."
+notes = "Full per-tab rotation, rotation+zoom composition, coordinate transforms, fit/scroll behavior, and UI keyboard/toolbar paths shipped and verified."
 priority = "P0"
 status = "verified"
 tests = [
-    "view::tests::rotation_normalizes_and_turns",
     "view::tests::rotation_cycles_through_four_quarter_turns",
     "view::tests::rotation_compose_and_dimension_swap",
-    "state::tests::rotation_commands_update_active_tab_only",
-    "state::tests::rotation_state_is_isolated_and_restored_across_tab_switches",
+    "tabs::tests::rotation_state_is_owned_by_the_tab",
     "state::tests::reset_rotation_and_display_controls_update_only_the_active_tab",
+    "state::tests::rotation_state_is_isolated_and_restored_across_tab_switches",
+    "canvas::tests::quarter_turns_swap_layout_extents",
     "canvas::tests::hit_test_transform_is_correct_at_every_rotation",
     "canvas::tests::selection_rect_maps_forward_under_rotation",
     "canvas::tests::fit_width_uses_rotated_page_extent",
@@ -149,7 +153,15 @@ tests = [
     "canvas::tests::page_rotate_is_independent_and_composes_with_view",
     "canvas::tests::uv_quad_maps_texture_corners_for_each_rotation",
     "commands::tests::rotation_shortcuts_map_with_shift_disambiguation",
+    "commands::tests::display_control_shortcuts_map_to_zoom_commands",
+    "commands::tests::shortcuts_require_ctrl_and_reject_alt",
     "commands::tests::every_command_has_a_stable_shortcut_label",
+    "raster::tests::zoom_and_rotation_changes_invalidate_the_previous_raster",
+    "ui::tests::reset_rotation_and_page_display_controls_update_active_tab",
+    "ui::tests::apply_view_command_dispatches_rotation_zoom_and_fit",
+    "ui::tests::layout_for_state_applies_per_tab_view_rotation",
+    "ui::tests::demo_page_effective_rotation_matches_view_rotation",
+    "ui::tests::status_indicator_reports_rotation_and_zoom_together",
 ]
 title = "Rotate view and page display"
 
@@ -1688,19 +1700,35 @@ tests = [
 title = "Sanitize document and remove hidden information"
 
 [[feature]]
-docs = ["crates/pdfxi-security/src/sanitization.rs"]
+docs = [
+    "crates/pdfxi-security/src/scrub.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "docs/evidence/security/T-0078.md",
+]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security sanitization::tests::metadata_actions_remove_info_and_xmp (CARGO_TARGET_DIR=target/lanes/security): passed; full suite 72 passed / 0 failed."
+evidence = "cargo test -p pdfxi-security: 170 passed / 0 failed (17 new scrub tests); crate fmt, clippy -D warnings, rustdoc -D warnings EXIT=0. See docs/evidence/security/T-0078.md."
 id = "SEC-009"
-notes = "Info dictionary and XMP metadata scrubbing are modelled as two deterministic Remove actions under the Metadata category and verified via the post-sanitization inventory. Real Info/XMP stream deletion is owned by the core document writer and is not yet wired."
+notes = "Copy-on-write security-layer scrubber complete with profiles (all/keep_producer/custom), deterministic XMP replacement and selective namespace-aware filtering, before/after inventory and residual verification. Real PDF object deletion/byte output remains owned by the core writer; row stays in-progress."
 priority = "P1"
 status = "in-progress"
 tests = [
-    "sanitization::tests::metadata_actions_remove_info_and_xmp",
-    "sanitization::tests::category_identifiers_round_trip",
-    "sanitization::tests::verification_confirms_categories_are_removed",
-    "sanitization::tests::strict_mode_fails_when_a_category_remains",
-    "sanitization::tests::permissive_mode_reports_without_failing",
+    "scrub::tests::info_removal_drops_entries_and_reports_before_after",
+    "scrub::tests::xmp_packet_can_be_removed_or_replaced",
+    "scrub::tests::allowlist_preserves_selected_entries",
+    "scrub::tests::custom_allowlist_preserves_named_info_key_and_xmp_property",
+    "scrub::tests::piece_info_and_thumbnails_are_removed",
+    "scrub::tests::embedded_files_are_removed",
+    "scrub::tests::annotation_contents_author_and_time_are_cleared",
+    "scrub::tests::form_values_and_layer_names_are_cleared",
+    "scrub::tests::residual_verification_detects_and_accepts",
+    "scrub::tests::report_is_deterministic_for_equivalent_configs",
+    "scrub::tests::no_op_when_nothing_is_selected",
+    "scrub::tests::source_is_unchanged_after_copy_on_write_scrub",
+    "scrub::tests::selective_xmp_parse_filter_and_reserialize_round_trips",
+    "scrub::tests::xmp_values_are_xml_escaped_and_parser_unescapes_them",
+    "scrub::tests::malformed_xmp_and_empty_identifiers_are_typed_errors",
+    "scrub::tests::debug_output_never_contains_document_values",
+    "scrub::tests::category_and_operation_identifiers_round_trip",
 ]
 title = "Metadata and XMP scrubbing"
 
@@ -2582,33 +2610,43 @@ title = "Cross-reference tables and streams"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-core/src/objstm.rs",
+    "crates/pdfxi-core/src/linearize.rs",
     "crates/pdfxi-core/src/linearization.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0086.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core: 178 unit + 6 integration passed; 17 new tests including the 65,535-member index bound. fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0072.md."
+evidence = "cargo test -p pdfxi-core -p pdfxi-cli EXIT=0 (192 core unit + 6 integration, 3+31 cli); 14 new linearize tests cover the full linearized layout. cargo fmt --all --check EXIT=0; cargo clippy -p pdfxi-core --lib -- -D warnings EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps EXIT=0. Full output in docs/evidence/core/T-0086.md."
 id = "STD-003"
-notes = "Object-stream/xref-stream writing and linearization hint parsing are implemented; full linearized file writing remains, so in-progress."
+notes = """
+STD-003 is now fully verified: object-stream/xref-stream writing, linearization
+hint parsing, and complete linearized file writing are all implemented in
+pdfxi-core. The writer emits the first-page section ahead of the rest with a
+/Linearized dictionary, page-offset and shared-object hint tables, a first-page
+classic xref, a main xref with /Prev back to it, and a correct final
+startxref/%%EOF. Read-back via parse_linearization/parse_hint_stream confirms
+hints agree with real offsets, and reparse/re-save/repair are exercised. Every
+document with at least one page is linearized (no small-document fallback).
+Full-workspace clippy/doc remain blocked by in-progress edits in other lanes
+(pdfxi-security, pdfxi-convert, pdfxi-edit); see docs/evidence/core/T-0086.md.
+"""
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "objstm::tests::packing_excludes_streams_catalog_and_page_tree",
-    "objstm::tests::object_stream_header_first_and_offsets_are_correct",
-    "objstm::tests::xref_stream_has_w_index_size_and_type_two_entries",
-    "objstm::tests::compressed_xref_stream_decodes_and_reparses",
-    "objstm::tests::round_trip_through_existing_parser_resolves_compressed_objects",
-    "objstm::tests::multiple_object_streams_are_chained_with_extends",
-    "objstm::tests::incremental_save_has_prev_and_only_new_entries",
-    "objstm::tests::nonzero_generation_is_preserved_in_type_one_entry",
-    "objstm::tests::invalid_options_and_duplicate_ids_are_rejected",
-    "objstm::tests::document_save_with_object_streams_round_trips",
-    "objstm::tests::stored_zlib_payload_round_trips_through_inflater",
-    "linearization::tests::parses_valid_linearization_hint",
-    "linearization::tests::parses_shared_hint_stream_range",
-    "linearization::tests::rejects_malformed_linearization_hint",
-    "linearization::tests::non_linearized_document_returns_none",
-    "objstm::tests::object_stream_member_limit_rejects_65536_before_xref_index_wraps",
-    "objstm::tests::object_stream_at_the_member_limit_keeps_indices_in_range",
+    "linearize::tests::first_page_objects_are_placed_before_the_rest",
+    "linearize::tests::declared_length_matches_actual_file_size",
+    "linearize::tests::hint_ranges_match_the_emitted_layout",
+    "linearize::tests::page_offset_hints_agree_with_actual_offsets",
+    "linearize::tests::shared_object_hints_agree_with_actual_offsets",
+    "linearize::tests::end_offset_marks_the_first_xref_table",
+    "linearize::tests::page_count_first_page_and_version_are_correct",
+    "linearize::tests::first_page_xref_and_main_xref_link_are_valid",
+    "linearize::tests::full_reparse_and_resave_preserve_every_page",
+    "linearize::tests::malformed_inputs_are_rejected",
+    "linearize::tests::output_is_deterministic",
+    "linearize::tests::large_document_is_fully_linearized",
+    "linearize::tests::hint_stream_round_trips_through_the_parser",
+    "linearize::tests::repair_path_accepts_a_linearized_document",
 ]
 title = "Object streams and linearization"
 

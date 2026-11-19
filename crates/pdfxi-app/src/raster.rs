@@ -209,10 +209,13 @@ impl RasterCache {
 
     /// Render every page visible in `layout` that is not already cached.
     ///
-    /// `scroll` is the current viewport origin in unscrolled canvas units and
-    /// `rotation` is applied to the cache key. Progress reports from the
-    /// renderer are forwarded unchanged to `progress`. Cached pages are
-    /// promoted but not re-rendered.
+    /// `scroll` is the current viewport origin in unscrolled canvas units.
+    /// Each raster is keyed by the page's **effective rotation**
+    /// (`/Rotate` combined with the view rotation, as stored on
+    /// [`PageGeometry::rotation`](crate::PageGeometry::rotation)), the same
+    /// value the UI uses when painting the cached raster. Progress reports
+    /// from the renderer are forwarded unchanged to `progress`. Cached pages
+    /// are promoted but not re-rendered.
     ///
     /// Returns the number of rasters newly rendered (zero when everything
     /// visible was already cached, or when the layout is empty).
@@ -227,7 +230,6 @@ impl RasterCache {
         &mut self,
         renderer: &dyn Renderer,
         layout: &CanvasLayout,
-        rotation: Rotation,
         scroll: CanvasPoint,
         cancellation: &CancellationToken,
         progress: &mut dyn FnMut(Progress),
@@ -242,7 +244,7 @@ impl RasterCache {
             if cancellation.is_cancelled() {
                 return Err(RasterError::Cancelled);
             }
-            let key = RasterKey::new(geometry.page, geometry.scale, rotation);
+            let key = RasterKey::new(geometry.page, geometry.scale, geometry.rotation);
             if self.entries.contains_key(&key) {
                 self.touch(key);
                 continue;
@@ -392,24 +394,10 @@ mod tests {
         let token = CancellationToken::new();
 
         let first = cache
-            .ensure_visible(
-                &renderer,
-                &layout,
-                Rotation::Deg0,
-                zero_scroll(),
-                &token,
-                &mut |_| {},
-            )
+            .ensure_visible(&renderer, &layout, zero_scroll(), &token, &mut |_| {})
             .expect("first ensure succeeds");
         let second = cache
-            .ensure_visible(
-                &renderer,
-                &layout,
-                Rotation::Deg0,
-                zero_scroll(),
-                &token,
-                &mut |_| {},
-            )
+            .ensure_visible(&renderer, &layout, zero_scroll(), &token, &mut |_| {})
             .expect("second ensure succeeds");
 
         assert_eq!(first, 1);
@@ -428,7 +416,6 @@ mod tests {
             .ensure_visible(
                 &renderer,
                 &layout(&letter(1), 1.0),
-                Rotation::Deg0,
                 zero_scroll(),
                 &token,
                 &mut |_| {},
@@ -438,17 +425,23 @@ mod tests {
             .ensure_visible(
                 &renderer,
                 &layout(&letter(1), 2.0),
-                Rotation::Deg0,
                 zero_scroll(),
                 &token,
                 &mut |_| {},
             )
             .expect("scale 2.0");
+        // A rotated layout changes each page's effective rotation and therefore
+        // its cache key; no separate rotation argument is needed.
         cache
             .ensure_visible(
                 &renderer,
-                &layout(&letter(1), 1.0),
-                Rotation::Deg90,
+                &CanvasLayout::standard_rotated(
+                    ViewMode::Continuous,
+                    Zoom::custom(1.0),
+                    CanvasSize::new(800.0, 600.0),
+                    &letter(1),
+                    Rotation::Deg90,
+                ),
                 zero_scroll(),
                 &token,
                 &mut |_| {},
@@ -489,7 +482,6 @@ mod tests {
         let result = cache.ensure_visible(
             &renderer,
             &layout,
-            Rotation::Deg0,
             zero_scroll(),
             &CancellationToken::new(),
             &mut |_| {},
@@ -509,28 +501,17 @@ mod tests {
 
         let cancelled = CancellationToken::new();
         cancelled.cancel();
-        let before = cache.ensure_visible(
-            &renderer,
-            &layout,
-            Rotation::Deg0,
-            zero_scroll(),
-            &cancelled,
-            &mut |_| {},
-        );
+        let before =
+            cache.ensure_visible(&renderer, &layout, zero_scroll(), &cancelled, &mut |_| {});
         assert_eq!(before, Err(RasterError::Cancelled));
         assert_eq!(renderer.renders(), 0, "nothing rendered after cancellation");
 
         // A token cancelled from inside the progress callback stops the loop.
         let live = CancellationToken::new();
         let token_for_callback = live.clone();
-        let during = cache.ensure_visible(
-            &renderer,
-            &layout,
-            Rotation::Deg0,
-            zero_scroll(),
-            &live,
-            &mut |_| token_for_callback.cancel(),
-        );
+        let during = cache.ensure_visible(&renderer, &layout, zero_scroll(), &live, &mut |_| {
+            token_for_callback.cancel()
+        });
         assert_eq!(during, Err(RasterError::Cancelled));
     }
 
@@ -544,7 +525,6 @@ mod tests {
             .ensure_visible(
                 &renderer,
                 &layout,
-                Rotation::Deg0,
                 zero_scroll(),
                 &CancellationToken::new(),
                 &mut |_| {},
@@ -581,14 +561,7 @@ mod tests {
         let token = CancellationToken::new();
         for _ in 0..2 {
             assert_eq!(
-                cache.ensure_visible(
-                    &renderer,
-                    &layout,
-                    Rotation::Deg0,
-                    zero_scroll(),
-                    &token,
-                    &mut |_| {},
-                ),
+                cache.ensure_visible(&renderer, &layout, zero_scroll(), &token, &mut |_| {},),
                 Ok(1)
             );
         }
@@ -623,14 +596,7 @@ mod tests {
         let layout = layout(&letter(1), 1.0);
         let mut cache = RasterCache::default();
         let rendered = cache
-            .ensure_visible(
-                &renderer,
-                &layout,
-                Rotation::Deg0,
-                zero_scroll(),
-                &token,
-                &mut |_| {},
-            )
+            .ensure_visible(&renderer, &layout, zero_scroll(), &token, &mut |_| {})
             .expect("fill the cache from the fixture");
         assert_eq!(rendered, 1, "page 0 rendered through the cache");
 

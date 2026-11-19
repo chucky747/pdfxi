@@ -328,6 +328,24 @@ mod tests {
     }
 
     #[test]
+    fn rotation_state_is_owned_by_the_tab() {
+        // `DocumentTab` owns the per-tab rotation field and mutators;
+        // `AppState` only delegates to these methods for the active tab.
+        let mut tab = DocumentTab::new(TabId::from_u64(1), "doc");
+        assert_eq!(tab.rotation(), Rotation::Deg0);
+        tab.rotate_clockwise();
+        assert_eq!(tab.rotation(), Rotation::Deg90);
+        tab.rotate_counterclockwise();
+        assert_eq!(tab.rotation(), Rotation::Deg0);
+        tab.set_rotation(Rotation::Deg270);
+        assert_eq!(tab.rotation(), Rotation::Deg270);
+        // Rotation is independent of the tab's other view settings.
+        tab.set_zoom(Zoom::custom(1.5));
+        tab.set_view_mode(ViewMode::TwoPage);
+        assert_eq!(tab.rotation(), Rotation::Deg270);
+    }
+
+    #[test]
     fn scroll_offset_is_sanitized_and_restorable() {
         let mut tab = DocumentTab::new(TabId::from_u64(1), "doc");
         assert_eq!(tab.scroll_offset(), CanvasPoint::new(0.0, 0.0));

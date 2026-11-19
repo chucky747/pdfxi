@@ -45,11 +45,9 @@ pub mod ui;
 
 pub use canvas::{
     CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, PageGeometry, PageSize,
-    effective_page_size, rotate_point, uv_quad_for_rotation, unrotate_point,
+    effective_page_size, rotate_point, unrotate_point, uv_quad_for_rotation,
 };
-pub use commands::{
-    ShortcutKey, ShortcutModifiers, ViewCommand, map_shortcut,
-};
+pub use commands::{ShortcutKey, ShortcutModifiers, ViewCommand, map_shortcut};
 pub use find::{DEFAULT_MATCH_CAP, FindMatch, FindOptions, FindState};
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use selection::{

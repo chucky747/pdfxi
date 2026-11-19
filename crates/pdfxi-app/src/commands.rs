@@ -152,7 +152,10 @@ mod tests {
 
     #[test]
     fn shortcuts_require_ctrl_and_reject_alt() {
-        assert_eq!(map_shortcut(ShortcutKey::R, mods(false, false, false)), None);
+        assert_eq!(
+            map_shortcut(ShortcutKey::R, mods(false, false, false)),
+            None
+        );
         assert_eq!(map_shortcut(ShortcutKey::R, mods(true, false, true)), None);
         assert_eq!(
             map_shortcut(ShortcutKey::One, mods(true, true, false)),

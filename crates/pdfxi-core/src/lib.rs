@@ -20,6 +20,7 @@ pub mod compatibility;
 pub mod content;
 pub mod filter;
 pub mod linearization;
+pub mod linearize;
 pub mod metadata;
 pub mod object;
 pub mod objstm;
@@ -46,6 +47,10 @@ pub use filter::{
     DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
 };
 pub use linearization::{HintStreamRange, Linearization, parse_linearization};
+pub use linearize::{
+    HintStream, LinearizationOptions, LinearizedLayout, PageHint, SharedObjectHint,
+    parse_hint_stream, write_linearized_document, write_linearized_document_with_layout,
+};
 pub use metadata::{
     DocumentInfo, PdfDate, XmpMetadata, decode_text_string, encode_text_string, parse_pdf_date,
     parse_xmp,
@@ -103,6 +108,12 @@ pub enum Error {
     /// The linearization hint dictionary was present but invalid.
     #[error("malformed linearization hint: {0}")]
     MalformedLinearization(String),
+    /// A linearization hint stream was malformed.
+    #[error("malformed linearization hint stream: {0}")]
+    MalformedHintStream(String),
+    /// A fully linearized document could not be produced.
+    #[error("linearization failed: {0}")]
+    LinearizationFailed(String),
     /// The chain of `/Prev` xref sections contains a cycle.
     #[error("xref /Prev cycle detected at byte offset {0}")]
     XrefCycle(usize),
@@ -494,6 +505,62 @@ impl Document {
         }
         objects.sort_by_key(|(id, _)| id.number);
         objstm::write_object_stream_document(&objects, structure.root_id, options)
+    }
+
+    /// Save this document as a fully linearized, classic-xref PDF.
+    ///
+    /// The first page (the first leaf of the page tree) and every object it
+    /// needs are written ahead of the rest of the file, followed by a first-page
+    /// `xref` table, the remaining objects, and a main `xref` table whose
+    /// `/Prev` entry points back at the first-page section. A `/Linearized`
+    /// parameter dictionary and a hint stream with page-offset and shared-
+    /// object tables are emitted at the front. Staged changes from
+    /// [`Document::set_object`] are applied just like in
+    /// [`Document::save_with_object_streams`], and the result can be read back
+    /// with [`Document::from_bytes`] and inspected with
+    /// [`Document::linearization`].
+    ///
+    /// Unlike [`Document::save`], this path can read a source that already uses
+    /// xref streams because compressed objects are resolved through the parser.
+    /// Encrypted documents are declined.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stored structural error, [`Error::UnsupportedState`] for
+    /// encrypted input, [`Error::LinearizationFailed`] for an empty document,
+    /// and any serialization error from [`linearize::write_linearized_document`].
+    pub fn save_linearized(&self, options: &LinearizationOptions) -> Result<Vec<u8>> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        if structure.xref.trailer().contains_key("Encrypt") {
+            return Err(Error::UnsupportedState(
+                "encrypted documents cannot be saved",
+            ));
+        }
+        let mut objects = Vec::new();
+        for number in structure.xref.all_object_numbers() {
+            if number == 0 {
+                continue;
+            }
+            let generation = parser::object_generation(&self.bytes, &structure.xref, number)?;
+            let id = ObjectId::new(number, generation);
+            let object = match self.changes.get(&id) {
+                Some(changed) => changed.clone(),
+                None => parser::load_object(&self.bytes, &structure.xref, id)?,
+            };
+            objects.push((id, object));
+        }
+        for (id, object) in &self.changes {
+            if !objects.iter().any(|(existing, _)| existing == id) {
+                objects.push((*id, object.clone()));
+            }
+        }
+        objects.sort_by_key(|(id, _)| id.number);
+        let first_page = structure
+            .pages
+            .first()
+            .ok_or_else(|| Error::LinearizationFailed("document has no pages".to_owned()))?
+            .id;
+        linearize::write_linearized_document(&objects, structure.root_id, first_page, options)
     }
 
     /// Return the trailer `/Size` value when present and non-negative.

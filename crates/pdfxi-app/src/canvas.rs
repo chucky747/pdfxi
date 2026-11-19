@@ -323,10 +323,7 @@ impl CanvasLayout {
             .collect();
         let effective: Vec<Rotation> = (0..sizes.len())
             .map(|index| {
-                let intrinsic = page_rotations
-                    .get(index)
-                    .copied()
-                    .unwrap_or(Rotation::Deg0);
+                let intrinsic = page_rotations.get(index).copied().unwrap_or(Rotation::Deg0);
                 intrinsic.combine(view_rotation)
             })
             .collect();
@@ -554,7 +551,13 @@ impl CanvasLayout {
         let mut max_x = f32::NEG_INFINITY;
         let mut max_y = f32::NEG_INFINITY;
         for (x, y) in corners {
-            let (dx, dy) = rotate_point(x, y, geometry.width_pt, geometry.height_pt, geometry.rotation);
+            let (dx, dy) = rotate_point(
+                x,
+                y,
+                geometry.width_pt,
+                geometry.height_pt,
+                geometry.rotation,
+            );
             let cx = geometry.rect.x + dx * geometry.scale;
             let cy = geometry.rect.y + dy * geometry.scale;
             min_x = min_x.min(cx);
@@ -648,13 +651,7 @@ pub fn rotate_point(x: f32, y: f32, width: f32, height: f32, rotation: Rotation)
 
 /// Inverse of [`rotate_point`]: map a displayed point back to intrinsic page
 /// coordinates. Used by hit testing in [`CanvasLayout::page_point`].
-pub fn unrotate_point(
-    dx: f32,
-    dy: f32,
-    width: f32,
-    height: f32,
-    rotation: Rotation,
-) -> (f32, f32) {
+pub fn unrotate_point(dx: f32, dy: f32, width: f32, height: f32, rotation: Rotation) -> (f32, f32) {
     match rotation {
         Rotation::Deg0 => (dx, dy),
         Rotation::Deg90 => (dy, height - dx),
@@ -1000,15 +997,33 @@ mod tests {
                 expected[index * 2] = rect.x + dx * layout.scale();
                 expected[index * 2 + 1] = rect.y + dy * layout.scale();
             }
-            let min_x = expected[0].min(expected[2]).min(expected[4]).min(expected[6]);
-            let max_x = expected[0].max(expected[2]).max(expected[4]).max(expected[6]);
-            let min_y = expected[1].min(expected[3]).min(expected[5]).min(expected[7]);
-            let max_y = expected[1].max(expected[3]).max(expected[5]).max(expected[7]);
+            let min_x = expected[0]
+                .min(expected[2])
+                .min(expected[4])
+                .min(expected[6]);
+            let max_x = expected[0]
+                .max(expected[2])
+                .max(expected[4])
+                .max(expected[6]);
+            let min_y = expected[1]
+                .min(expected[3])
+                .min(expected[5])
+                .min(expected[7]);
+            let max_y = expected[1]
+                .max(expected[3])
+                .max(expected[5])
+                .max(expected[7]);
             let mapped = layout.page_rect_to_canvas(0, local).expect("page 0");
             assert!((mapped.x - min_x).abs() < 0.001, "{rotation:?}");
             assert!((mapped.y - min_y).abs() < 0.001, "{rotation:?}");
-            assert!((mapped.width - (max_x - min_x)).abs() < 0.001, "{rotation:?}");
-            assert!((mapped.height - (max_y - min_y)).abs() < 0.001, "{rotation:?}");
+            assert!(
+                (mapped.width - (max_x - min_x)).abs() < 0.001,
+                "{rotation:?}"
+            );
+            assert!(
+                (mapped.height - (max_y - min_y)).abs() < 0.001,
+                "{rotation:?}"
+            );
             // Quarter turns exchange the overlay's width and height.
             if rotation.swaps_dimensions() {
                 assert!((mapped.width - 30.0).abs() < 0.001, "{rotation:?}");
@@ -1018,9 +1033,11 @@ mod tests {
                 assert!((mapped.height - 30.0).abs() < 0.001, "{rotation:?}");
             }
         }
-        assert!(rotated_layout(Rotation::Deg0)
-            .page_rect_to_canvas(9, local)
-            .is_none());
+        assert!(
+            rotated_layout(Rotation::Deg0)
+                .page_rect_to_canvas(9, local)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1134,6 +1151,9 @@ mod tests {
         for _ in 0..4 {
             r = r.clockwise();
         }
-        assert_eq!(uv_quad_for_rotation(r), uv_quad_for_rotation(Rotation::Deg0));
+        assert_eq!(
+            uv_quad_for_rotation(r),
+            uv_quad_for_rotation(Rotation::Deg0)
+        );
     }
 }

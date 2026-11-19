@@ -2,9 +2,9 @@
 
 > **Status: M1 slice verified; later viewer rows in progress.** Open/display,
 > layouts, zoom/fit, thumbnails, bookmarks, attachments, links, and find/select
-> are verified in the matrix, as is the tabbed interface (`VIEW-005`). Print,
-> rotate, split view, layers, full screen, reflow, portfolios, compare, and the
-> loupe remain in progress or planned. See
+> are verified in the matrix, as is the tabbed interface (`VIEW-005`) and view
+> rotation (`VIEW-004`). Print, split view, layers, full screen, reflow,
+> portfolios, compare, and the loupe remain in progress or planned. See
 > [Feature and milestone status](#feature-and-milestone-status)
 > and the canonical [feature matrix](../FEATURES.md) before relying on any item.
 
@@ -66,7 +66,11 @@ lane.
   key so rotated and unrotated tiles do not thrash. Tracked by `VIEW-004`
   ("Rotate view and page display").
 - This is a *view* rotation for M1. Persisted page rotation is an editing
-  feature (`EDIT-006`) in a later milestone.
+  feature (`EDIT-006`) in a later milestone. `VIEW-004` is verified by
+  `T-0083`: rotation is per-tab and composes with a page's `/Rotate`
+  (rotation first, then zoom), with hit testing, selection/overlay mapping, fit
+  modes, scroll clamping, and keyboard paths covered by tests. See
+  [evidence](../evidence/app/T-0083.md).
 
 ### Thumbnails
 
@@ -109,7 +113,7 @@ lane.
 | Open / print | `VIEW-001` | P0 | in progress - print stays in M2 |
 | Page layouts | `VIEW-002` | P0 | verified |
 | Zoom / pan / fit | `VIEW-003` | P0 | verified |
-| Rotate view | `VIEW-004` | P0 | planned |
+| Rotate view | `VIEW-004` | P0 | verified |
 | Thumbnails / navigation pane | `VIEW-007` | P0 | verified |
 | Bookmarks / destinations | `VIEW-008` | P1 | verified |
 | In-document find / select / copy | `VIEW-017` | P1 | verified |
