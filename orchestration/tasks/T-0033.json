@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-cli",
+    "id":  "T-0033",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-cli/**",
+                 "orchestration/feature-updates/T-0033.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0010",
+                       "T-0026"
+                   ],
+    "title":  "Add CLI search command over the text index",
+    "priority":  "P1",
+    "lane":  "core"
+}
