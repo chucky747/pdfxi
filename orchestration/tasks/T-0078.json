@@ -3,12 +3,12 @@
   "lane": "security",
   "title": "Scrub metadata and XMP from documents",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0052", "T-0047"],
   "owns": [
     "crates/pdfxi-security/**",
     "orchestration/feature-updates/T-0078.toml"
   ],
   "acceptance": "cargo test -p pdfxi-security",
-  "evidence": ""
+  "evidence": "docs/evidence/security/T-0078.md"
 }

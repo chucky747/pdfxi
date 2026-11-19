@@ -25,6 +25,9 @@
 //! - [`Sanitizer`] / [`SanitizationReport`] — category-based sanitization plans
 //!   with deterministic actions and removal verification against a supplied
 //!   inventory.
+//! - [`ScrubDocument`] / [`ScrubReport`] — copy-on-write metadata and XMP
+//!   scrubbing with scrub profiles, deterministic XMP replacement, and residual
+//!   verification.
 //! - [`der`] — a strict, dependency-free ASN.1 DER encoder/decoder subset.
 //! - [`cms`] — CMS/PKCS#7 `SignedData` creation and validation behind the
 //!   [`SignatureProvider`] trait, with a deterministic in-memory test provider.
@@ -51,6 +54,7 @@ mod permissions;
 mod protector;
 mod redaction;
 mod sanitization;
+mod scrub;
 mod signature;
 pub mod standard_handler;
 pub mod timestamp;
@@ -71,6 +75,11 @@ pub use redaction::{
 pub use sanitization::{
     SanitizationAction, SanitizationCategory, SanitizationInventory, SanitizationOperation,
     SanitizationReport, Sanitizer,
+};
+pub use scrub::{
+    Allowlist, AnnotationRecord, Residual, ScrubAction, ScrubCategory, ScrubConfig, ScrubDocument,
+    ScrubInventory, ScrubOperation, ScrubOutcome, ScrubProfile, ScrubReport, XmpPacket,
+    XmpProperty, XmpPropertyKey, XmpStrategy,
 };
 pub use signature::{DigestAlgorithm, SignatureCoverage, SignatureInfo, SignatureStatus};
 pub use standard_handler::{

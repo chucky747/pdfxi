@@ -133,6 +133,17 @@ pub enum SecurityError {
         /// Category that was still present after sanitization.
         category: SanitizationCategory,
     },
+    /// A metadata field identifier (key, name, prefix, or local name) was empty.
+    ScrubInvalidFieldIdentifier,
+    /// An XMP packet could not be parsed into the canonical structured subset.
+    ScrubXmpMalformed,
+    /// Strict scrub verification found a removed string still present.
+    ScrubVerificationFailed {
+        /// Category whose removed value was still present.
+        category: crate::scrub::ScrubCategory,
+        /// Identifier of the field whose removed value was found.
+        target: String,
+    },
     /// A CMS token did not carry the RFC 3161 `id-ct-TSTInfo` content type.
     TimestampTokenTypeInvalid,
     /// A `TSTInfo` used a version other than v1.
@@ -240,6 +251,13 @@ impl fmt::Display for SecurityError {
             ),
             Self::SanitizationVerificationFailed { category } => {
                 write!(f, "sanitization category still present: {category}")
+            }
+            Self::ScrubInvalidFieldIdentifier => {
+                write!(f, "metadata field identifier must not be empty")
+            }
+            Self::ScrubXmpMalformed => write!(f, "XMP packet was not well-formed"),
+            Self::ScrubVerificationFailed { category, target } => {
+                write!(f, "scrub residual in {category} at {target}")
             }
             Self::TimestampTokenTypeInvalid => {
                 write!(f, "CMS token is not an RFC 3161 timestamp token")
