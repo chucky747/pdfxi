@@ -20,6 +20,9 @@ permissions:
     resource: "benches/**"
     effect: allow
   - action: edit
+    resource: "crates/pdfxi-core/examples/**"
+    effect: allow
+  - action: edit
     resource: "docs/evidence/qa/**"
     effect: allow
   - action: edit
