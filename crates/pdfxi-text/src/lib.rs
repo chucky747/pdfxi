@@ -36,6 +36,11 @@ pub struct TextSpan {
     pub height: f32,
     /// Font size of the run in page coordinates.
     pub font_size: f32,
+    /// Rotation of this run's baseline in degrees, as reported by the text
+    /// backend. Ordinary horizontal text is `0.0`. The sign convention is
+    /// backend-defined; consumers should treat the value as descriptive
+    /// metadata and not rely on it for hit testing.
+    pub direction_degrees: f32,
 }
 
 impl TextSpan {
@@ -48,6 +53,7 @@ impl TextSpan {
             width: 0.0,
             height: 0.0,
             font_size: 0.0,
+            direction_degrees: 0.0,
         }
     }
 
@@ -56,6 +62,12 @@ impl TextSpan {
         self.width = width;
         self.height = height;
         self.font_size = font_size;
+        self
+    }
+
+    /// Attach the backend-reported baseline rotation, in degrees.
+    pub fn with_direction(mut self, direction_degrees: f32) -> Self {
+        self.direction_degrees = direction_degrees;
         self
     }
 
@@ -1437,5 +1449,21 @@ mod tests {
             ],
             "progress reporting is unaffected by indexing"
         );
+    }
+
+    #[test]
+    fn span_direction_defaults_to_zero_and_can_be_attached() {
+        let plain = TextSpan::new("horizontal", 1.0, 2.0);
+        assert_eq!(plain.direction_degrees, 0.0);
+
+        let rotated = TextSpan::new("vertical", 3.0, 4.0)
+            .with_metrics(5.0, 6.0, 12.0)
+            .with_direction(90.0);
+        assert_eq!(rotated.direction_degrees, 90.0);
+        assert_eq!(
+            (rotated.width, rotated.height, rotated.font_size),
+            (5.0, 6.0, 12.0)
+        );
+        assert_ne!(rotated, plain.with_direction(90.0));
     }
 }

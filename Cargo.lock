@@ -2464,6 +2464,9 @@ dependencies = [
 [[package]]
 name = "pdfxi-convert"
 version = "0.1.0"
+dependencies = [
+ "pdfxi-render",
+]
 
 [[package]]
 name = "pdfxi-core"
@@ -2486,6 +2489,7 @@ name = "pdfxi-render"
 version = "0.1.0"
 dependencies = [
  "pdfium-render",
+ "pdfxi-text",
  "thiserror 2.0.21",
 ]
 

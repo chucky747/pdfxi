@@ -11,6 +11,16 @@
 //!   actionable messages.
 //! - [`Converter`] is the trait implemented by optional external adapters;
 //!   [`MockConverter`] is a deterministic in-memory implementation for tests.
+//! - [`encode_png`], [`encode_ppm`], and [`encode`] are pure-Rust image encoders
+//!   that need no image crate. They are always available, even with
+//!   `--no-default-features`.
+//! - [`export_pages`], [`ImageExportPlan`], [`PageSelection`], and
+//!   [`ExportedImage`] export selected pages through any renderer. They are
+//!   gated behind the default `renderer` feature so the crate can be used
+//!   dependency-free by callers that only need classification or encoding.
+//!   The `pdfium` feature adds [`export_pdf_bytes`] and [`export_pdf_file`],
+//!   which construct a `PdfiumRenderer` for convenience; the core API stays
+//!   renderer-agnostic.
 //!
 //! PDF documents cross the trait boundary as raw bytes. A caller holding a
 //! `pdfxi_core::Document` can pass its serialized bytes, which keeps this crate
@@ -41,13 +51,23 @@
 mod converter;
 mod error;
 mod export;
+pub mod image;
 mod options;
+#[cfg(feature = "renderer")]
+mod page_export;
 mod source;
 
 pub use converter::{Converter, MockConverter};
 pub use error::ConversionError;
 pub use export::ExportKind;
+pub use image::{ImageFormat, encode, encode_png, encode_ppm};
 pub use options::ConversionOptions;
+#[cfg(feature = "renderer")]
+pub use page_export::{
+    ExportedImage, ImageExportPlan, PageSelection, RenderResolution, export_pages,
+};
+#[cfg(feature = "pdfium")]
+pub use page_export::{export_pdf_bytes, export_pdf_file};
 pub use source::SourceKind;
 
 /// Return the implementation name for diagnostics.

@@ -18,6 +18,12 @@
 //! any [`Renderer`], with a pure-Rust nearest-neighbor resizer and an optional
 //! least-recently-used cache. It adds no dependencies and is available in every
 //! build.
+//!
+//! With the `pdfium` feature, `PdfiumRenderer` also implements
+//! `pdfxi_text::TextExtractor`, recovering real text from the same PDFium
+//! instance with the same process-wide mutex discipline as rasterization. The
+//! conversion helpers live in a private, native-free module so they can be
+//! exercised with synthetic characters in default builds.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -32,6 +38,14 @@ pub use pdfium_backend::PdfiumRenderer;
 /// Dependency-free page-thumbnail generation and LRU caching on top of the
 /// [`Renderer`] contract.
 pub mod thumbnail;
+
+/// Backend-agnostic conversion of per-character text runs into `pdfxi_text`
+/// pages. Private to this crate: the PDFium backend consumes it, and its mock
+/// character tests run in default builds without any native dependency.
+// In default builds nothing calls these helpers outside their own tests, so
+// silence dead_code there; with `pdfium` the native backend uses every item.
+#[cfg_attr(not(feature = "pdfium"), allow(dead_code))]
+mod text_extract;
 
 use std::sync::{
     Arc,

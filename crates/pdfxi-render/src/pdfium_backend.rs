@@ -15,6 +15,16 @@
 //! design is a deliberately bounded "pool" of one worker; it can be widened to
 //! a real per-worker pool later without changing the [`Renderer`] contract.
 //!
+//! # Text extraction
+//!
+//! With this feature enabled, [`PdfiumRenderer`] also implements
+//! `pdfxi_text::TextExtractor`. It takes the same lock for the whole load →
+//! page → text → character-copy sequence, visits characters in the order
+//! PDFium returns them, and merges them into text spans with the native-free
+//! helpers in the private `text_extract` module. Malformed glyph metrics are
+//! normalized rather than panicking, and every failure is a structured
+//! [`pdfxi_text::TextError`].
+//!
 //! # Library discovery
 //!
 //! The native library is located once, on first use, from the following sources
@@ -38,6 +48,12 @@ use std::{
 
 use pdfium_render::prelude::{PdfRenderConfig, Pdfium, PdfiumError};
 
+use pdfxi_text::{
+    CancellationToken as TextCancellationToken, Progress as TextProgress, TextError, TextExtractor,
+    TextPage,
+};
+
+use crate::text_extract::{RawChar, chars_to_text_page};
 use crate::{CancellationToken, PageIndex, Progress, RenderError, RenderedPage, Renderer};
 
 /// The one PDFium instance shared by every renderer in this process.
@@ -288,5 +304,97 @@ impl Renderer for PdfiumRenderer {
             .load_pdf_from_byte_slice(&self.bytes, None)
             .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
         Ok(document.pages().len() as usize)
+    }
+}
+
+impl TextExtractor for PdfiumRenderer {
+    /// Recover the text of `page` through PDFium.
+    ///
+    /// Characters are returned in PDFium's own text-page order (the order its
+    /// text operators produce for ordinary PDFs); this implementation does not
+    /// sort or regroup them geometrically. Consecutive characters that share a
+    /// baseline, font size, and direction become one [`pdfxi_text::TextSpan`].
+    /// Cancellation is checked before any native work and between characters.
+    fn extract_page(
+        &self,
+        page: usize,
+        cancellation: &TextCancellationToken,
+        progress: &mut dyn FnMut(TextProgress),
+    ) -> Result<TextPage, TextError> {
+        // Check before touching PDFium so a cancelled job does no native work.
+        cancellation.check()?;
+        progress(TextProgress::new(0, 3));
+        cancellation.check()?;
+
+        // The same single, process-wide lock as `render_page` covers the whole
+        // operation; no other caller can interleave with this character walk.
+        let pdfium = lock_pdfium().map_err(|error| TextError::Backend(error.to_string()))?;
+        let document = pdfium
+            .load_pdf_from_byte_slice(&self.bytes, None)
+            .map_err(|error| TextError::Backend(format!("cannot open document: {error}")))?;
+
+        progress(TextProgress::new(1, 3));
+        cancellation.check()?;
+
+        let pages = document.pages();
+        if page >= pages.len() as usize {
+            return Err(TextError::PageOutOfRange(page));
+        }
+        let pdf_page = pages.get(page as i32).map_err(|error| {
+            TextError::Backend(format!("cannot load page {page} for text: {error}"))
+        })?;
+        let text = pdf_page.text().map_err(|error| {
+            TextError::Backend(format!("cannot read text on page {page}: {error}"))
+        })?;
+
+        progress(TextProgress::new(2, 3));
+        cancellation.check()?;
+
+        let mut chars = Vec::with_capacity(text.len().max(0) as usize);
+        for character in text.chars().iter() {
+            // A cancelled extraction stops promptly even mid-page.
+            cancellation.check()?;
+
+            // Characters without a Unicode mapping (for example some generated
+            // spacing marks) carry no searchable text and are skipped.
+            let Some(unicode) = character.unicode_string() else {
+                continue;
+            };
+
+            // Glyph metrics can fail independently on malformed pages. Falling
+            // back to zero lets the normalizer produce a finite, usable span
+            // instead of panicking or aborting the whole page.
+            let (left, right, bottom, top) = match character.tight_bounds() {
+                Ok(bounds) => (
+                    bounds.left().value,
+                    bounds.right().value,
+                    bounds.bottom().value,
+                    bounds.top().value,
+                ),
+                Err(_) => (0.0, 0.0, 0.0, 0.0),
+            };
+            let baseline_y = character.origin_y().map(|y| y.value).unwrap_or(bottom);
+            let font_size = character.scaled_font_size().value;
+            let direction_degrees = character.angle_degrees().unwrap_or(0.0);
+
+            chars.push(RawChar::new(
+                unicode,
+                left,
+                right,
+                bottom,
+                top,
+                baseline_y,
+                font_size,
+                direction_degrees,
+            ));
+        }
+
+        progress(TextProgress::new(3, 3));
+        Ok(chars_to_text_page(page, &chars))
+    }
+
+    fn page_count(&self) -> Result<usize, TextError> {
+        // Reuse the renderer's validated path so both traits agree on the count.
+        Renderer::page_count(self).map_err(|error| TextError::Backend(error.to_string()))
     }
 }

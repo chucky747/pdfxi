@@ -10,6 +10,12 @@ publish = false
 
 [dependencies]
 thiserror.workspace = true
+# Dependency-light sibling crate that owns the text model. `pdfxi-text` only
+# depends on `thiserror` and never on `pdfxi-render`, so this edge cannot form a
+# dependency cycle. It is a normal (non-optional) dependency because the
+# backend-agnostic conversion helpers in `text_extract` are useful and tested
+# in default builds; the native PDFium bindings remain optional below.
+pdfxi-text = { path = "../pdfxi-text" }
 # Optional native backend. Default builds stay dependency-light; only the
 # `pdfium` feature pulls in the PDFium bindings.
 pdfium-render = { version = "0.9.5", optional = true }

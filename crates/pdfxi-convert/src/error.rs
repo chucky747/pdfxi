@@ -41,6 +41,21 @@ pub enum ConversionError {
     },
     /// An underlying I/O operation failed.
     Io(io::Error),
+    /// A long-running conversion was cancelled through its token.
+    ///
+    /// Page-image export maps a renderer's cancellation signal to this variant
+    /// so callers can distinguish a user-requested stop from a malformed input.
+    Cancelled,
+    /// A renderer backend failed while opening a document or rasterizing a page.
+    ///
+    /// `page` is `Some` when a specific page failed and `None` for a failure
+    /// that happens before a page is known, such as opening a document.
+    Render {
+        /// Zero-based page index, when the failure is tied to one page.
+        page: Option<usize>,
+        /// Human-readable message supplied by the renderer backend.
+        message: String,
+    },
 }
 
 impl ConversionError {
@@ -72,6 +87,19 @@ impl fmt::Display for ConversionError {
                 write!(f, "invalid conversion input: {message}")
             }
             Self::Io(error) => write!(f, "conversion I/O error: {error}"),
+            Self::Cancelled => write!(f, "conversion was cancelled"),
+            Self::Render {
+                page: Some(page),
+                message,
+            } => {
+                write!(f, "failed to render page {page}: {message}")
+            }
+            Self::Render {
+                page: None,
+                message,
+            } => {
+                write!(f, "render backend error: {message}")
+            }
         }
     }
 }
@@ -116,6 +144,32 @@ mod tests {
         assert!(pair.is_unsupported());
         assert!(pair.to_string().contains("rtf"));
         assert!(pair.to_string().contains("image"));
+    }
+
+    #[test]
+    fn cancelled_error_is_actionable_and_not_unsupported() {
+        let cancelled = ConversionError::Cancelled;
+        assert!(!cancelled.is_unsupported());
+        assert!(cancelled.to_string().contains("cancelled"));
+        assert!(std::error::Error::source(&cancelled).is_none());
+    }
+
+    #[test]
+    fn render_error_carries_the_page_and_is_actionable() {
+        let render = ConversionError::Render {
+            page: Some(3),
+            message: "native failure".to_owned(),
+        };
+        assert!(!render.is_unsupported());
+        assert!(render.to_string().contains("page 3"));
+        assert!(render.to_string().contains("native failure"));
+        assert!(std::error::Error::source(&render).is_none());
+
+        let open = ConversionError::Render {
+            page: None,
+            message: "cannot open".to_owned(),
+        };
+        assert!(open.to_string().contains("render backend error"));
     }
 
     #[test]

@@ -710,14 +710,77 @@ tests = []
 title = "Export PDF to RTF and plain text"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/page_export.rs",
+    "crates/pdfxi-convert/src/image.rs",
+    "crates/pdfxi-convert/src/error.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "crates/pdfxi-convert/Cargo.toml",
+]
 domain = "Export"
-evidence = ""
+evidence = '''
+CARGO_TARGET_DIR=D:\Documents\opencode-work\target\lanes\convert;
+cargo test -p pdfxi-convert: 50 unit tests passed, 0 failed; 0 doctests run; EXIT=0.
+cargo test -p pdfxi-convert --features pdfium (PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 50 unit tests passed, 0 failed; 0 doctests run; EXIT=0.
+cargo fmt -p pdfxi-convert -- --check: EXIT=0.
+cargo clippy -p pdfxi-convert --all-targets --all-features -- -D warnings: EXIT=0.
+'''
 id = "EXPORT-006"
-notes = ""
+notes = """
+Added renderer-driven page-image export to pdfxi-convert. The core API stays
+renderer-agnostic: export_pages(&dyn Renderer, &ImageExportPlan,
+&CancellationToken) resolves a PageSelection (All, one-based Range, or an
+ordered one-based Pages list), validates the plan, and returns an ordered
+Vec<ExportedImage> carrying page, width, height, encoded bytes, and format.
+ImageExportPlan documents page selection, resolution (direct scale or DPI
+converted with scale = dpi / 72.0), PNG/PPM format, and output naming with a
+page-{page}/index pattern. Encoding uses the dependency-free pure-Rust encoders
+in crates/pdfxi-convert/src/image.rs: 8-bit RGBA PNG with signature, IHDR, one
+stored-deflate zlib IDAT (CRC-32 per chunk, Adler-32 trailer, 65,535-byte
+multi-block splitting) and binary P6 PPM; both reject mismatched buffers and
+overflowing dimensions. ConversionError gained Cancelled and Render variants so
+cooperative cancellation and backend failures are actionable. A default-off
+dependency-light build remains available with --no-default-features; the
+optional pdfium feature adds export_pdf_bytes/export_pdf_file convenience
+constructors without changing the core trait-based API. The CLI has an
+equivalent image encoder in crates/pdfxi-cli/src/image.rs; deduplicating them
+into a shared low-level crate is a documented follow-up and was out of scope.
+
+Status stays in-progress because EXPORT-006 also names JPEG and TIFF, which are
+not implemented; PNG and PPM are delivered and verified.
+"""
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "image::tests::crc32_matches_standard_vector",
+    "image::tests::adler32_matches_standard_vector",
+    "image::tests::png_has_signature_and_ordered_chunks",
+    "image::tests::ihdr_declares_8bit_rgba_without_interlace",
+    "image::tests::idat_is_a_valid_stored_zlib_stream",
+    "image::tests::idat_ends_with_empty_iend_and_length_is_consistent",
+    "image::tests::large_raster_is_split_across_multiple_stored_blocks",
+    "image::tests::png_rejects_mismatched_pixel_buffer",
+    "image::tests::png_rejects_overflowing_dimensions",
+    "image::tests::ppm_has_p6_header_and_dropped_alpha",
+    "image::tests::ppm_rejects_mismatched_pixel_buffer",
+    "image::tests::empty_rasters_still_encode_valid_files",
+    "image::tests::image_format_classifies_extensions_and_labels_stably",
+    "image::tests::encode_dispatch_matches_each_format",
+    "page_export::tests::plan_builder_getters_round_trip",
+    "page_export::tests::output_name_substitutes_page_and_index_placeholders",
+    "page_export::tests::multi_page_export_preserves_selection_order",
+    "page_export::tests::one_based_range_and_format_selection_are_honoured",
+    "page_export::tests::empty_page_selection_is_rejected",
+    "page_export::tests::out_of_range_and_empty_pattern_are_rejected",
+    "page_export::tests::invalid_scale_and_dpi_are_rejected_before_work",
+    "page_export::tests::dpi_is_converted_to_a_renderer_scale",
+    "page_export::tests::cancellation_before_work_prevents_all_renders",
+    "page_export::tests::cancellation_between_pages_stops_after_the_first_page",
+    "page_export::tests::mismatched_renderer_buffer_is_rejected",
+    "page_export::tests::render_error_maps_cancellation_and_backend_failures",
+    "error::tests::cancelled_error_is_actionable_and_not_unsupported",
+    "error::tests::render_error_carries_the_page_and_is_actionable",
+]
 title = "Export pages to JPEG PNG and TIFF"
 
 [[feature]]
@@ -2203,45 +2266,55 @@ title = "Open PDF and render pages in the viewer"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-app/src/find.rs",
-    "crates/pdfxi-app/src/ui.rs",
-    "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "crates/pdfxi-render/src/pdfium_backend.rs",
+    "crates/pdfxi-render/src/text_extract.rs",
+    "crates/pdfxi-render/tests/pdfium_text.rs",
+    "crates/pdfxi-text/src/lib.rs",
 ]
 domain = "View & Navigate"
-evidence = """
-CARGO_TARGET_DIR=target/lanes/app (via scripts/env.ps1 -Lane app).
-cargo test -p pdfxi-app: 52 passed; 0 failed; 0 ignored; doc-tests 0 failed.
-cargo test -p pdfxi-app --features ui: 71 passed; 0 failed; doc-tests 0 failed.
-cargo test -p pdfxi-app --features ui,pdfium: 73 passed; 0 failed; doc-tests 0 failed.
-cargo fmt -p pdfxi-app -- --check: EXIT=0.
-cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: EXIT=0 (clean).
-"""
+evidence = '''
+CARGO_TARGET_DIR=target/lanes/render; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll (via scripts/env.ps1 -Lane render).
+
+cargo test -p pdfxi-render --features pdfium: EXIT=0.
+  25 lib unit tests passed; 0 failed.
+  tests/pdfium_backend.rs: 4 passed; 0 failed.
+  tests/pdfium_text.rs: 6 passed; 0 failed (golden marker from fixtures/text.pdf with non-zero finite spans; fixtures/minimal.pdf text; blank page empty; out-of-range error; cancellation before work; malformed document error).
+  tests/thumbnail_pdfium.rs: 2 passed; 0 failed.
+  Doc-tests: 0 executed.
+
+cargo test -p pdfxi-render (default): EXIT=0. 25 lib unit tests passed (includes 6 new native-free text_extract helper tests); 0 failed; PDFium integration tests compiled out.
+cargo test -p pdfxi-text: EXIT=0. 22 unit tests passed; 0 failed (includes new span_direction_defaults_to_zero_and_can_be_attached).
+cargo clippy -p pdfxi-render -p pdfxi-text --all-targets --all-features -- -D warnings: EXIT=0 (clean).
+cargo fmt -p pdfxi-render -p pdfxi-text -- --check: EXIT=0.
+RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-render -p pdfxi-text --no-deps (default and with --features pdfxi-render/pdfium): EXIT=0.
+cargo check -p pdfxi-cli: EXIT=0 (downstream TextSpan constructor unchanged).
+'''
 id = "VIEW-017"
 notes = """
-T-0040 completes the UI half of VIEW-017. A new dependency-light `find` module
-(no egui types, no pdfxi-text dependency, default = [] unchanged) exposes
-FindState with query/options/results/current-index, set_query, set_options,
-next_match/previous_match with deterministic wrap-around, current(), and
-match_summary() ("n of m", with a trailing + when the documented 10,000-match
-cap truncates). Matching uses Unicode-scalar character offsets, ASCII-only case
-folding, whole-word boundaries, leftmost-first non-overlapping results, and
-page-index sorting for supply-order independence.
+T-0042 completes the text half of VIEW-017. With the `pdfium` feature,
+`PdfiumRenderer` now implements `pdfxi_text::TextExtractor`. It takes the same
+process-wide PDFium mutex as `render_page` for the whole load -> page -> text ->
+character-copy sequence, visits characters in the order PDFium returns them,
+and preserves that order verbatim (documented as PDFium's text-page order,
+which follows the document's text operators for ordinary PDFs). Consecutive
+characters sharing a baseline, font size, direction, and near-adjacent boxes
+are merged into `TextSpan`s whose text, box (x/y/width/height in PDF page
+points), baseline, font size, and direction are populated.
 
-ui.rs (behind `ui`) adds a find bar (query field, Match case / Whole word
-toggles, Previous / Next, "n of m" summary, Close/Escape) opened with Ctrl+F;
-F3 / Shift+F3 navigate. Matches are highlighted on the canvas page rectangles
-(the current match gets a stronger fill and outline), and the view scrolls to
-the current match via a pure, clamped scroll helper when a layout is available.
-A text selection is shown in the status line and copied through egui's
-Context::copy_text on Ctrl+C. Highlight geometry, find-page construction, and
-scroll targeting are pure, window-free helpers with unit tests.
+`TextSpan` gained a documented `direction_degrees` field and `with_direction`
+builder; ordinary horizontal text is 0.0. No dependency cycle is introduced:
+`pdfxi-text` depends only on `thiserror` and never on `pdfxi-render`, so
+`pdfxi-render` now has a one-way path dependency on it.
 
-Demo page text: pdfxi-render exposes only rasters (no text_page method), and a
-direct pdfxi-core/pdfxi-text dependency would break the dependency-light default
-build and touch the shared Cargo.lock. The demo viewer therefore feeds the same
-synthetic OwnedTextPage text it displays into both find and selection copy, so a
-highlighted match is exactly the text a user can select and copy. A production
-loader can supply real extracted text through FindState::set_pages.
+A new private, native-free `text_extract` module owns span merging and box
+normalization. Reversed and non-finite coordinates are normalized to finite,
+non-negative metrics, so malformed glyph geometry cannot panic or leak NaN
+into search/selection. The PDFium backend checks cancellation before any
+native work and between characters, reports four progress stages, and returns
+structured `TextError` variants for out-of-range pages and backend failures;
+characters without a Unicode mapping or with failing metrics are skipped
+rather than aborting the page.
 """
 priority = "P1"
 status = "verified"
@@ -2272,6 +2345,19 @@ tests = [
     "tests::copy_range_uses_newline_and_space_rules",
     "tests::selection_normalizes_in_both_directions",
     "tests::selection_copies_text_across_pages",
+    "tests::span_direction_defaults_to_zero_and_can_be_attached",
+    "text_extract::tests::adjacent_characters_with_shared_metrics_merge_into_one_span",
+    "text_extract::tests::changes_in_baseline_size_or_direction_start_a_new_span",
+    "text_extract::tests::reversed_and_non_finite_boxes_are_normalized",
+    "text_extract::tests::empty_characters_are_skipped_without_splitting_a_run",
+    "text_extract::tests::distant_columns_on_one_baseline_are_not_merged",
+    "text_extract::tests::text_page_preserves_the_supplied_character_order",
+    "tests/pdfium_text.rs::extracts_golden_marker_from_text_fixture",
+    "tests/pdfium_text.rs::extracts_text_from_minimal_fixture",
+    "tests/pdfium_text.rs::page_without_text_returns_an_empty_page",
+    "tests/pdfium_text.rs::out_of_range_page_returns_structured_error",
+    "tests/pdfium_text.rs::cancellation_before_work_stops_extraction",
+    "tests/pdfium_text.rs::malformed_document_returns_structured_error",
     "search_finds_single_match_in_single_page",
     "search_orders_results_by_page_then_offset",
     "search_is_case_insensitive_by_default_and_can_be_exact",

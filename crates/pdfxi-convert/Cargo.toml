@@ -9,4 +9,17 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+# Renderer-facing page-image export is gated behind the `renderer` feature so
+# consumers that only need format classification or the pure image encoders can
+# stay dependency-free with `--no-default-features`. `pdfxi-render` itself keeps
+# default builds free of native PDFium; the `pdfium` feature opts into the
+# convenience path that constructs a `PdfiumRenderer`.
+pdfxi-render = { path = "../pdfxi-render", optional = true }
+
+[features]
+default = ["renderer"]
+# Expose `export_pages`, `ImageExportPlan`, `PageSelection`, and `ExportedImage`.
+renderer = ["dep:pdfxi-render"]
+# Add `export_pdf_bytes` / `export_pdf_file`, which construct a `PdfiumRenderer`.
+pdfium = ["renderer", "pdfxi-render/pdfium"]
 
