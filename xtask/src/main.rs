@@ -634,13 +634,32 @@ fn docs() -> Result<()> {
     Ok(())
 }
 
-fn bench(_check: bool) -> Result<()> {
-    println!("BENCH OK (no benchmarks are registered in M0)");
+fn bench(check: bool) -> Result<()> {
+    let mut args = vec!["run", "-p", "pdfxi-testkit", "--example", "bench_open"];
+    if check {
+        args.push("--release");
+    }
+    run("cargo", &args)?;
+    if check {
+        println!("BENCH OK (budget enforced)");
+    } else {
+        println!("BENCH OK");
+    }
     Ok(())
 }
 
 fn corpus_smoke() -> Result<()> {
-    println!("CORPUS SMOKE OK (no corpus registered in M0)");
+    run(
+        "cargo",
+        &[
+            "test",
+            "-p",
+            "pdfxi-testkit",
+            "--test",
+            "committed_fixtures",
+        ],
+    )?;
+    println!("CORPUS SMOKE OK");
     Ok(())
 }
 
