@@ -9,13 +9,15 @@
 //! summary; [`structure`] writes a validated tree into tagged-PDF structure
 //! objects and reads it back for verification; and [`checker`] audits a tree
 //! plus document metadata with a deterministic, non-certifying PDF/UA-oriented
-//! rule set.
+//! rule set; [`editor`] adds copy-on-write tag-tree edits, reading-order edits,
+//! alt-text/table models, and a bounded undo/redo journal.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod builder;
 pub mod checker;
+pub mod editor;
 pub mod export;
 pub mod reading_order;
 pub mod structure;
@@ -28,6 +30,11 @@ pub use builder::{
 pub use checker::{
     CheckError, CheckOptions, Finding, FixupSuggestion, Report, Rule, Severity, Summary, check,
     suggest_fixups,
+};
+pub use editor::{
+    AltRequirement, AltState, CellKind, CoverageReport, DEFAULT_JOURNAL_LIMIT, EditError,
+    HeaderScope, TableCell, TableError, TableModel, TableValidation, TagEditor, coverage_report,
+    requires_alt_text,
 };
 pub use export::{AltTextCoverage, RoleCount, TreeSummary, summarize, to_plain_text};
 pub use reading_order::{ReadingOrder, ReadingOrderError, ReadingOrderNode};

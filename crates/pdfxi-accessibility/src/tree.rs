@@ -251,6 +251,17 @@ pub struct A11yNode {
     pub text: String,
     /// Alternative text for visual content, when available.
     pub alt_text: Option<String>,
+    /// Replacement text (`/ActualText`) used when the node's glyphs do not
+    /// map to Unicode, when available.
+    pub actual_text: Option<String>,
+    /// Abbreviation expansion (`/E`) for the node's text, when available.
+    pub expansion: Option<String>,
+    /// Whether this node is a decorative artifact (not real content).
+    ///
+    /// Artifacts are excluded from assistive presentation by consumers but are
+    /// kept in the tree so an editor can toggle the flag without losing the
+    /// node's other data.
+    pub artifact: bool,
     /// Identifiers of the node's children, in presentation order.
     pub children: Vec<NodeId>,
 }
@@ -272,6 +283,9 @@ impl A11yNode {
             bbox,
             text: text.into(),
             alt_text: None,
+            actual_text: None,
+            expansion: None,
+            artifact: false,
             children,
         }
     }
@@ -279,6 +293,24 @@ impl A11yNode {
     /// Attaches alternative text to this node.
     pub fn with_alt_text(mut self, alt: impl Into<String>) -> Self {
         self.alt_text = Some(alt.into());
+        self
+    }
+
+    /// Attaches replacement (`/ActualText`) text to this node.
+    pub fn with_actual_text(mut self, text: impl Into<String>) -> Self {
+        self.actual_text = Some(text.into());
+        self
+    }
+
+    /// Attaches an abbreviation expansion (`/E`) to this node.
+    pub fn with_expansion(mut self, text: impl Into<String>) -> Self {
+        self.expansion = Some(text.into());
+        self
+    }
+
+    /// Marks this node as a decorative artifact.
+    pub fn with_artifact(mut self, artifact: bool) -> Self {
+        self.artifact = artifact;
         self
     }
 }

@@ -1241,7 +1241,7 @@ mod tests {
             editor
                 .tree()
                 .node(NodeId::new(4))
-                .is_none_or(|n| n.artifact)
+                .is_none_or(|n| !n.artifact)
         );
     }
 

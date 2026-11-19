@@ -2161,61 +2161,77 @@ title = "Droplets hot folders and batch preflight"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-accessibility/src/editor.rs",
     "crates/pdfxi-accessibility/src/tree.rs",
-    "crates/pdfxi-accessibility/src/builder.rs",
-    "crates/pdfxi-accessibility/src/export.rs",
+    "crates/pdfxi-accessibility/src/lib.rs",
+    "docs/evidence/author/T-0096.md",
 ]
 domain = "Accessibility"
-evidence = "cargo test -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/app): 25 passed; 0 failed. cargo clippy -D warnings and cargo fmt --check clean. RUSTDOCFLAGS='-D warnings' cargo doc --no-deps clean."
+evidence = "cargo test -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): 84 passed, 0 failed (22 new editor::tests covering structural and reading-order edits, undo/redo, determinism, typed errors). fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0096.md."
 id = "ACCESS-001"
-notes = "Tag tree and reading order model: validated A11yTree with stable NodeIds, ordered children, and deterministic builder/export. Editor UI remains out of scope for this task."
+notes = """
+TagEditor now supports ordered insert/remove/move, reparent with cycle rejection,
+role changes, alt/actual-text/expansion editing, artifact marking, and stable
+NodeId allocation. Reading-order editing adds move-before/move-after,
+promote/demote, and a stable page-order normalization, all returning typed
+errors on invalid moves. A bounded, deterministic undo/redo journal is exposed
+to hosts. Status stays in-progress: there is no editor UI/CLI surface and the
+tagged-PDF structure writer does not yet serialize actual-text/expansion/artifact.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
-    "pdfxi-accessibility::tests::tag_role_has_stable_names",
-    "pdfxi-accessibility::tree::tests::valid_tree_traversal_and_accessors",
-    "pdfxi-accessibility::tree::tests::duplicate_ids_are_rejected",
-    "pdfxi-accessibility::tree::tests::cycles_are_rejected",
-    "pdfxi-accessibility::tree::tests::orphan_nodes_are_rejected",
-    "pdfxi-accessibility::tree::tests::unknown_children_parents_and_roots_are_rejected",
-    "pdfxi-accessibility::tree::tests::empty_tree_is_valid",
-    "pdfxi-accessibility::builder::tests::builder_produces_ordered_document_page_paragraph_tree",
-    "pdfxi-accessibility::builder::tests::same_line_blocks_merge_into_one_node",
-    "pdfxi-accessibility::builder::tests::vertical_gap_splits_paragraphs_but_small_gap_merges",
-    "pdfxi-accessibility::builder::tests::font_size_assigns_heading_roles",
-    "pdfxi-accessibility::builder::tests::builder_is_deterministic_for_scrambled_input",
-    "pdfxi-accessibility::builder::tests::invalid_font_size_is_rejected",
-    "pdfxi-accessibility::export::tests::plain_text_export_is_stable_and_indented",
-    "pdfxi-accessibility::reading_order::tests::valid_reading_order_traverses_in_presentation_order",
-    "pdfxi-accessibility::reading_order::tests::cyclic_reading_order_is_rejected",
-    "pdfxi-accessibility::reading_order::tests::duplicate_ids_and_unknown_children_are_rejected",
-    "pdfxi-accessibility::reading_order::tests::multiple_parents_are_rejected",
-    "pdfxi-accessibility::reading_order::tests::empty_reading_order_is_valid",
-    "pdfxi-accessibility::tree::tests::disconnected_cycle_is_rejected",
-    "pdfxi-accessibility::tree::tests::deep_chain_traversal_uses_explicit_stack",
-    "pdfxi-accessibility::export::tests::deep_chain_export_uses_explicit_stack",
-    "pdfxi-accessibility::export::tests::page_label_saturates_for_max_page",
+    "editor::tests::insert_node_appends_and_allocates_stable_ids",
+    "editor::tests::insert_node_rejects_bad_inputs_without_mutation",
+    "editor::tests::duplicate_id_rejection",
+    "editor::tests::remove_node_promotes_children_and_preserves_order",
+    "editor::tests::move_node_reorders_siblings_preserving_order",
+    "editor::tests::reparent_cycle_rejected",
+    "editor::tests::change_role_updates_node",
+    "editor::tests::reading_order_move_before_and_move_after",
+    "editor::tests::invalid_move_is_typed",
+    "editor::tests::promote_and_demote_change_levels",
+    "editor::tests::page_order_normalization_is_stable",
+    "editor::tests::undo_redo_round_trip",
+    "editor::tests::journal_is_bounded_and_deterministic",
+    "editor::tests::journal_disabled_with_zero_limit",
+    "editor::tests::determinism_same_operations_same_tree",
+    "tree::tests::valid_tree_traversal_and_accessors",
+    "reading_order::tests::valid_reading_order_traverses_in_presentation_order",
 ]
 title = "Tag tree and reading order editor"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-accessibility/src/editor.rs",
     "crates/pdfxi-accessibility/src/tree.rs",
-    "crates/pdfxi-accessibility/src/export.rs",
+    "crates/pdfxi-accessibility/src/lib.rs",
+    "docs/evidence/author/T-0096.md",
 ]
 domain = "Accessibility"
-evidence = "cargo test -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/app): 29 passed; 0 failed. cargo clippy -D warnings and cargo fmt --check clean."
+evidence = "cargo test -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): 84 passed, 0 failed; new coverage_report/table_model/alt_text/artifact tests pass. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0096.md."
 id = "ACCESS-002"
-notes = "Alt-text coverage and role-count summary computed over figure/image nodes and all roles; structured rejection of empty and non-finite boxes. Table editor UI remains out of scope for this task."
+notes = """
+Adds per-figure/alt-text editing with required/empty detection and a deterministic
+CoverageReport (requirements sorted by NodeId; satisfiable fraction 1.0 when no
+node requires alt text). TableModel builds a row-major TH/TD cell model from an
+A11yTree, supports HeaderScope (row/column/rowgroup/columngroup) assignment and
+header association, and validates scopes/associations with typed TableError and
+a deterministic TableValidation summary plus header-coverage ratio. Stays
+in-progress: no table/alt editor UI and no PDF /Scope serialization yet.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
-    "pdfxi-accessibility::tree::tests::bbox_rejects_nonfinite_and_empty_boxes",
-    "pdfxi-accessibility::tree::tests::bbox_union_and_accessors_are_consistent",
-    "pdfxi-accessibility::export::tests::summary_counts_roles_and_alt_text_coverage",
-    "pdfxi-accessibility::export::tests::alt_text_coverage_handles_missing_and_empty_alt",
-    "pdfxi-accessibility::export::tests::summary_and_export_of_empty_tree_are_stable",
-    "pdfxi-accessibility::builder::tests::empty_input_produces_empty_tree",
+    "editor::tests::alt_text_set_and_clear",
+    "editor::tests::actual_text_and_expansion_round_trip",
+    "editor::tests::artifact_marking_toggles_flag",
+    "editor::tests::coverage_report_detects_required_empty_and_missing",
+    "editor::tests::coverage_report_of_empty_tree_is_full",
+    "editor::tests::table_model_from_tree_and_validation",
+    "editor::tests::table_header_scope_and_association_validation",
+    "export::tests::alt_text_coverage_handles_missing_and_empty_alt",
+    "export::tests::summary_counts_roles_and_alt_text_coverage",
 ]
 title = "Alt text and table editor"
 
