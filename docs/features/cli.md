@@ -1,9 +1,9 @@
 # Command-line interface — M1
 
-> **Status: in progress.** The CLI commands on this page are the intended M1
-> surface. `info` is wired in the core; `text` currently validates the input and
-> reports that extraction is pending; `render` is planned. Examples show the
-> intended interface and may not all succeed yet.
+> **Status: in progress.** `info`, `text`, and `render` are implemented and
+> covered by integration tests. `render` requires a build with the `pdfium`
+> feature and a discoverable PDFium library. `search` and the remaining commands
+> are still planned. See the canonical [feature matrix](../FEATURES.md).
 
 The CLI is the headless surface for automation and CI. It shares `pdfxi-core`
 and the feature crates with the desktop application, so every operation that
@@ -45,48 +45,45 @@ error from `pdfxi-core`, surfaced as a non-zero exit with an actionable message.
 
 ## `pdfxi text`
 
-Extract plain text from a PDF. Text extraction is implemented in the
-`pdfxi-text` lane during M1.
+Extract plain text from a PDF.
 
 ```powershell
 pdfxi text .\fixtures\minimal.pdf
 ```
 
-Intended behaviour:
+Behaviour:
 
-- Write extracted plain text to standard output, page by page.
-- Preserve reading order where the PDF's text structure permits.
-- Honour the same cancellation and progress conventions as the UI.
-
-Current behaviour: the command parses the document and then reports that text
-extraction lands in M1. Do not depend on its output until the `pdfxi-text`
-lane marks the feature verified.
+- Writes extracted text to standard output, page by page.
+- Decodes Flate-compressed content streams; unsupported filters return an error
+  that names the filter.
+- Supported text operators: `Tj`, `TJ`, `'`, and `"`. Extraction is
+  bounds-checked and never panics on malformed content.
 
 ## `pdfxi render`
 
-Render one or more pages to image files (intended; not yet implemented).
+Render one page to an image (PNG or PPM).
 
 ```powershell
-# Render page 1 at 144 DPI to a PNG.
-pdfxi render .\fixtures\minimal.pdf --page 1 --dpi 144 --format png --out .\out\page-1.png
+# Render page 1 (zero-based page 0) at 72 DPI to PNG.
+pdfxi render .\fixtures\minimal.pdf --page 0 --scale 1.0 --out .\out\page-0.png
 
-# Render a page range at a fixed scale.
-pdfxi render .\report.pdf --pages 1-3 --scale 2.0 --format png --out .\out\
+# Render at 144 DPI as binary PPM.
+pdfxi render .\fixtures\minimal.pdf --page 0 --scale 2.0 --format ppm --out .\out\page-0.ppm
 ```
 
-Intended options:
+Options:
 
 | Option | Meaning | Default |
 |---|---|---|
-| `--page N` | Render a single 1-based page | first page |
-| `--pages A-B` | Render an inclusive page range | all pages |
-| `--dpi N` | Target resolution | 72 |
-| `--scale F` | Scale factor (alternative to `--dpi`) | 1.0 |
-| `--format png\|jpeg` | Output image format | `png` |
-| `--out PATH` | Output file or directory | required |
+| `--page N` | Zero-based page index, matching the `Renderer` contract | required |
+| `--scale F` | Multiplier over 72 DPI (`2.0` = 144 DPI) | `1.0` |
+| `--format png\|ppm` | Output format | `png` |
+| `--out PATH` | Output file | required |
 
-Rendering uses the same PDFium-backed `Renderer` as the viewer, so CLI and UI
-output are expected to match. `--dpi` and `--scale` are mutually exclusive.
+Rendering uses the same PDFium-backed `Renderer` as the viewer. Without the
+`pdfium` feature the command exits non-zero with a clear "built without pdfium
+support" message instead of failing at compile time. PNG output is valid but
+uncompressed (stored deflate blocks).
 
 ## Cross-cutting conventions
 
