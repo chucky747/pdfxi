@@ -21,6 +21,7 @@ pub mod page;
 
 mod lexer;
 mod parser;
+mod writer;
 
 pub use content::extract_text;
 pub use filter::{
@@ -29,6 +30,9 @@ pub use filter::{
 pub use object::{Object, ObjectId};
 pub use page::{Page, Rectangle};
 
+use std::collections::BTreeMap;
+
+use object::Dictionary;
 use parser::Structure;
 
 /// Errors returned by the core crate.
@@ -135,6 +139,15 @@ pub enum Error {
     /// The requested feature is not implemented in this build.
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
+    /// The document uses a feature this build cannot save.
+    #[error("unsupported document state: {0}")]
+    UnsupportedState(&'static str),
+    /// An object identifier cannot be used for an in-use object.
+    #[error("invalid object id: {0}")]
+    InvalidObjectId(String),
+    /// An object value could not be serialized to PDF syntax.
+    #[error("cannot serialize object: {0}")]
+    CannotSerialize(String),
 }
 
 /// Result type used by the core crate.
@@ -151,6 +164,7 @@ pub struct Document {
     bytes: Vec<u8>,
     version: String,
     structure: std::result::Result<Structure, Error>,
+    changes: BTreeMap<ObjectId, Object>,
 }
 
 impl Document {
@@ -173,6 +187,7 @@ impl Document {
             bytes,
             version,
             structure,
+            changes: BTreeMap::new(),
         })
     }
 
@@ -278,6 +293,172 @@ impl Document {
         let structure = self.structure.as_ref().map_err(Clone::clone)?;
         Ok(structure.declared_page_count)
     }
+
+    /// Stage an indirect object to be replaced or added on the next save.
+    ///
+    /// The object is held as a copy-on-write change: the original bytes are
+    /// never modified in place, and both [`Document::save`] and
+    /// [`Document::save_incremental`] write the staged value. Replacing an
+    /// existing object number causes its new xref entry to supersede the old
+    /// one. Adding a number larger than the original `/Size` grows the table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidObjectId`] when `id.number` is zero (reserved
+    /// for the free-object list head) or when `id.generation` is non-zero
+    /// (non-zero generations are not supported by this writer).
+    pub fn set_object(&mut self, id: ObjectId, object: Object) -> Result<()> {
+        if id.number == 0 {
+            return Err(Error::InvalidObjectId(
+                "object number 0 is reserved for the free list".to_owned(),
+            ));
+        }
+        if id.generation != 0 {
+            return Err(Error::InvalidObjectId(
+                "non-zero generation numbers are not supported".to_owned(),
+            ));
+        }
+        self.changes.insert(id, object);
+        Ok(())
+    }
+
+    /// Serialize the whole document as a standalone PDF byte stream.
+    ///
+    /// Object numbers are preserved and unchanged objects are copied from the
+    /// source verbatim, so stream bytes are not re-compressed or rewritten.
+    /// Staged changes from [`Document::set_object`] replace or extend the
+    /// object set. A single classic xref table, trailer, `startxref` and
+    /// `%%EOF` are regenerated with byte-accurate offsets.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stored structural error when the source is malformed,
+    /// [`Error::UnsupportedState`] for encrypted documents or cross-reference
+    /// streams, and serialization errors when a staged object cannot be
+    /// encoded (see [`Error::CannotSerialize`]).
+    pub fn save(&self) -> Result<Vec<u8>> {
+        let structure = self.supported_structure()?;
+        let mut out = Vec::with_capacity(self.bytes.len() + 64);
+        out.extend_from_slice(format!("%PDF-{}\n%PDFXI\n", self.version).as_bytes());
+
+        let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
+        for (number, offset) in structure.xref.in_use_entries() {
+            if self.changes.keys().any(|id| id.number == number) {
+                continue;
+            }
+            let range = parser::object_range(&self.bytes, offset)?;
+            let raw = self
+                .bytes
+                .get(range)
+                .ok_or_else(|| Error::MalformedObject {
+                    number,
+                    reason: "object range lies outside the source".to_owned(),
+                })?;
+            objects.push((number, raw.to_vec()));
+        }
+        for (id, object) in &self.changes {
+            let mut body = Vec::new();
+            writer::serialize_indirect(*id, object, &mut body)?;
+            objects.push((id.number, body));
+        }
+        objects.sort_by_key(|(number, _)| *number);
+
+        let mut offsets = BTreeMap::new();
+        for (number, body) in &objects {
+            offsets.insert(*number, out.len());
+            out.extend_from_slice(body);
+            out.push(b'\n');
+        }
+
+        let xref_offset = out.len();
+        writer::write_xref_section(&mut out, &offsets, true);
+
+        let highest = objects.last().map_or(0, |(number, _)| *number);
+        let mut trailer = structure.xref.trailer();
+        let size = trailer_size(&trailer, highest);
+        trailer.insert("Size".to_owned(), Object::Integer(i64::from(size)));
+        trailer.insert("Root".to_owned(), Object::Reference(structure.root_id));
+        writer::write_trailer(&mut out, &trailer, xref_offset)?;
+        Ok(out)
+    }
+
+    /// Append a revision to the original bytes without rewriting them.
+    ///
+    /// Staged changes from [`Document::set_object`] are written as new indirect
+    /// objects, followed by a new xref section whose trailer carries a `/Prev`
+    /// entry pointing at the original `startxref`. The returned bytes start
+    /// with the complete, byte-for-byte source document.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stored structural error when the source is malformed,
+    /// [`Error::UnsupportedState`] for encrypted documents or cross-reference
+    /// streams, and serialization errors when a staged object cannot be
+    /// encoded (see [`Error::CannotSerialize`]).
+    pub fn save_incremental(&self) -> Result<Vec<u8>> {
+        let structure = self.supported_structure()?;
+        let previous = parser::startxref_offset(&self.bytes)?;
+        let mut out = self.bytes.clone();
+        out.push(b'\n');
+
+        let mut offsets = BTreeMap::new();
+        let mut highest = 0u32;
+        for (id, object) in &self.changes {
+            offsets.insert(id.number, out.len());
+            writer::serialize_indirect(*id, object, &mut out)?;
+            out.push(b'\n');
+            highest = highest.max(id.number);
+        }
+
+        let xref_offset = out.len();
+        writer::write_xref_section(&mut out, &offsets, false);
+
+        let mut trailer = structure.xref.trailer();
+        let size = trailer_size(&trailer, highest);
+        trailer.insert("Size".to_owned(), Object::Integer(i64::from(size)));
+        trailer.insert("Root".to_owned(), Object::Reference(structure.root_id));
+        let previous = i64::try_from(previous)
+            .map_err(|_| Error::CannotSerialize("previous startxref exceeds i64".to_owned()))?;
+        trailer.insert("Prev".to_owned(), Object::Integer(previous));
+        writer::write_trailer(&mut out, &trailer, xref_offset)?;
+        Ok(out)
+    }
+
+    /// Return the parsed structure only when the document can be saved.
+    fn supported_structure(&self) -> Result<&Structure> {
+        match &self.structure {
+            Ok(structure) => {
+                if structure.xref.trailer().contains_key("Encrypt") {
+                    return Err(Error::UnsupportedState(
+                        "encrypted documents cannot be saved",
+                    ));
+                }
+                Ok(structure)
+            }
+            Err(error) => {
+                if let Ok(offset) = parser::startxref_offset(&self.bytes)
+                    && parser::looks_like_xref_stream(&self.bytes, offset)
+                {
+                    return Err(Error::UnsupportedState(
+                        "cross-reference streams are not supported",
+                    ));
+                }
+                Err(error.clone())
+            }
+        }
+    }
+}
+
+/// Compute a `/Size` value that covers both the declared size and the highest
+/// object number written by a save.
+fn trailer_size(trailer: &Dictionary, highest_object: u32) -> u32 {
+    let declared = trailer
+        .get("Size")
+        .and_then(Object::as_i64)
+        .filter(|value| *value >= 0)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0);
+    declared.max(highest_object.saturating_add(1)).max(1)
 }
 
 #[cfg(test)]
@@ -648,5 +829,281 @@ mod tests {
         let doc = Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("valid fixture");
         assert!(matches!(doc.page_content(9), Err(Error::PageNotFound(9))));
         assert!(matches!(doc.page_text(9), Err(Error::PageNotFound(9))));
+    }
+
+    /// Return `true` when `needle` occurs anywhere in `haystack`.
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// Return the byte position of `needle`, or zero when absent.
+    fn find_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .unwrap_or(0)
+    }
+
+    /// Insert an extra entry into the trailer dictionary of an ASCII fixture.
+    ///
+    /// The trailer follows the xref table, so growing it does not invalidate
+    /// any object offsets or the `startxref` value.
+    fn with_trailer_entry(pdf: &[u8], entry: &str) -> Vec<u8> {
+        let text = String::from_utf8(pdf.to_vec()).expect("fixture is ASCII");
+        let marker = "trailer\n<<";
+        let position = text.find(marker).expect("trailer dictionary") + marker.len();
+        let mut result = String::with_capacity(text.len() + entry.len() + 1);
+        result.push_str(&text[..position]);
+        result.push(' ');
+        result.push_str(entry);
+        result.push_str(&text[position..]);
+        result.into_bytes()
+    }
+
+    /// Assert that `saved` reparses to the same structural facts as `source`.
+    fn assert_round_trip(source: &[u8], saved: &[u8]) {
+        let before = Document::from_bytes(source.to_vec()).expect("source parses");
+        let after = Document::from_bytes(saved.to_vec()).expect("saved PDF parses");
+        assert_eq!(after.version(), before.version());
+        assert_eq!(
+            after.page_count().expect("saved page count"),
+            before.page_count().expect("source page count")
+        );
+        assert_eq!(
+            after.root().expect("saved root"),
+            before.root().expect("source root")
+        );
+        assert_eq!(
+            after
+                .pages()
+                .expect("saved pages")
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>(),
+            before
+                .pages()
+                .expect("source pages")
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>(),
+            "page order and object ids must be preserved"
+        );
+        let count = before.page_count().expect("page count");
+        for index in 0..count {
+            assert_eq!(
+                after.page_text(index).expect("saved page text"),
+                before.page_text(index).expect("source page text"),
+                "page {index} text changed across save"
+            );
+        }
+    }
+
+    #[test]
+    fn save_round_trips_minimal_fixture() {
+        let source = pdfxi_testkit::minimal_pdf();
+        let saved = Document::from_bytes(source.clone())
+            .expect("valid fixture")
+            .save()
+            .expect("full save");
+        assert!(saved.starts_with(b"%PDF-1.7\n"));
+        assert!(saved.ends_with(b"%%EOF\n"));
+        assert!(contains_bytes(&saved, b"startxref\n"));
+        assert_round_trip(&source, &saved);
+    }
+
+    #[test]
+    fn save_round_trips_text_fixture() {
+        let source = pdfxi_testkit::text_pdf("Round-trip payload 42");
+        let saved = Document::from_bytes(source.clone())
+            .expect("valid fixture")
+            .save()
+            .expect("full save");
+        assert_round_trip(&source, &saved);
+        let reparsed = Document::from_bytes(saved).expect("saved PDF parses");
+        assert_eq!(
+            reparsed.page_text(0).expect("page text"),
+            "Round-trip payload 42"
+        );
+    }
+
+    #[test]
+    fn save_round_trips_multipage_fixture_in_order() {
+        let source = pdfxi_testkit::multipage_pdf(4);
+        let saved = Document::from_bytes(source.clone())
+            .expect("valid fixture")
+            .save()
+            .expect("full save");
+        assert_round_trip(&source, &saved);
+    }
+
+    #[test]
+    fn save_preserves_object_numbers_and_compressed_stream_bytes() {
+        const COMPRESSED: &[u8] = &[
+            0x78, 0x9C, 0x73, 0x0A, 0x51, 0xD0, 0x77, 0x33, 0x54, 0x30, 0x32, 0x51, 0x08, 0x49,
+            0x53, 0x30, 0x37, 0x02, 0x22, 0x03, 0x85, 0x90, 0x14, 0x05, 0x0D, 0x8F, 0xD4, 0x9C,
+            0x9C, 0x7C, 0x1D, 0x05, 0xB7, 0x9C, 0xC4, 0x92, 0x54, 0x85, 0x00, 0x17, 0xB7, 0x08,
+            0x4F, 0x45, 0x4D, 0x85, 0x90, 0x2C, 0x05, 0xD7, 0x10, 0x00, 0x34, 0x63, 0x0C, 0xC7,
+        ];
+        let dict = format!(
+            "<< /Length {} /Filter /FlateDecode /DecodeParms << /Predictor 1 /Colors 1 /BitsPerComponent 8 /Columns 1 >> >>",
+            COMPRESSED.len()
+        );
+        let source = one_page_pdf_with_binary_stream(dict.as_bytes(), COMPRESSED);
+        let saved = Document::from_bytes(source.clone())
+            .expect("valid compressed fixture")
+            .save()
+            .expect("full save");
+
+        assert!(contains_bytes(&saved, COMPRESSED), "stream bytes changed");
+        for number in 1..=4u32 {
+            assert!(
+                contains_bytes(&saved, format!("{number} 0 obj").as_bytes()),
+                "object {number} missing"
+            );
+        }
+        assert_round_trip(&source, &saved);
+    }
+
+    #[test]
+    fn save_writes_staged_change_with_preserved_object_numbers() {
+        let source = pdfxi_testkit::minimal_pdf();
+        let mut doc = Document::from_bytes(source.clone()).expect("valid fixture");
+        let mut dict = Dictionary::new();
+        dict.insert("Type".to_owned(), Object::Name("Custom".to_owned()));
+        doc.set_object(ObjectId::new(9, 0), Object::Dictionary(dict))
+            .expect("valid object id");
+
+        let saved = doc.save().expect("full save with new object");
+        assert!(contains_bytes(&saved, b"9 0 obj"));
+        assert!(contains_bytes(&saved, b"/Size 10"));
+        assert_round_trip(&source, &saved);
+    }
+
+    #[test]
+    fn incremental_save_preserves_original_bytes_as_prefix() {
+        let source = pdfxi_testkit::minimal_pdf();
+        let mut doc = Document::from_bytes(source.clone()).expect("valid fixture");
+        let mut dict = Dictionary::new();
+        dict.insert("Type".to_owned(), Object::Name("Marker".to_owned()));
+        doc.set_object(ObjectId::new(7, 0), Object::Dictionary(dict))
+            .expect("valid object id");
+
+        let saved = doc.save_incremental().expect("incremental save");
+        assert!(
+            saved.starts_with(&source),
+            "the original bytes must be an exact prefix"
+        );
+        assert!(saved.len() > source.len());
+        assert!(contains_bytes(&saved, b"7 0 obj"));
+    }
+
+    #[test]
+    fn incremental_save_links_new_xref_to_previous_with_prev() {
+        let source = pdfxi_testkit::minimal_pdf();
+        let previous_startxref = parser::startxref_offset(&source).expect("original startxref");
+        let mut doc = Document::from_bytes(source.clone()).expect("valid fixture");
+        doc.set_object(ObjectId::new(8, 0), Object::Integer(99))
+            .expect("valid object id");
+
+        let saved = doc.save_incremental().expect("incremental save");
+        let prev_entry = format!("/Prev {previous_startxref}");
+        assert!(
+            contains_bytes(&saved, prev_entry.as_bytes()),
+            "new trailer must point /Prev at the original startxref"
+        );
+        let marker = b"startxref";
+        let markers = saved.windows(marker.len()).filter(|w| *w == marker).count();
+        assert_eq!(markers, 2, "two xref sections should be present");
+
+        let new_startxref = parser::startxref_offset(&saved).expect("new startxref");
+        assert_ne!(new_startxref, previous_startxref);
+        assert!(saved[new_startxref..].starts_with(b"xref"));
+        assert_round_trip(&source, &saved);
+    }
+
+    #[test]
+    fn incremental_save_changed_stream_is_visible_after_reparse() {
+        let source = pdfxi_testkit::minimal_pdf();
+        let mut doc = Document::from_bytes(source.clone()).expect("valid fixture");
+        let replacement = b"BT (Replaced content) Tj ET";
+        let mut dictionary = Dictionary::new();
+        dictionary.insert(
+            "Length".to_owned(),
+            Object::Integer(i64::try_from(replacement.len()).expect("small length")),
+        );
+        doc.set_object(
+            ObjectId::new(4, 0),
+            Object::Stream {
+                dictionary,
+                data: replacement.to_vec(),
+            },
+        )
+        .expect("valid object id");
+
+        let saved = doc.save_incremental().expect("incremental save");
+        assert!(saved.starts_with(&source));
+        let reparsed = Document::from_bytes(saved).expect("incremental PDF parses");
+        assert_eq!(reparsed.page_count().expect("page count"), 1);
+        assert_eq!(
+            reparsed.page_text(0).expect("replaced page text"),
+            "Replaced content"
+        );
+    }
+
+    #[test]
+    fn set_object_rejects_invalid_object_ids() {
+        let mut doc = Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("valid fixture");
+        assert!(matches!(
+            doc.set_object(ObjectId::new(0, 0), Object::Null),
+            Err(Error::InvalidObjectId(_))
+        ));
+        assert!(matches!(
+            doc.set_object(ObjectId::new(3, 1), Object::Null),
+            Err(Error::InvalidObjectId(_))
+        ));
+    }
+
+    #[test]
+    fn save_rejects_encrypted_document_with_structured_error() {
+        let source = with_trailer_entry(&pdfxi_testkit::minimal_pdf(), "/Encrypt 9 0 R");
+        let doc = Document::from_bytes(source).expect("encrypted trailer still parses");
+        assert_eq!(doc.page_count().expect("page count"), 1);
+        assert!(matches!(
+            doc.save(),
+            Err(Error::UnsupportedState(
+                "encrypted documents cannot be saved"
+            ))
+        ));
+        assert!(matches!(
+            doc.save_incremental(),
+            Err(Error::UnsupportedState(
+                "encrypted documents cannot be saved"
+            ))
+        ));
+    }
+
+    #[test]
+    fn save_rejects_xref_stream_with_structured_error() {
+        let source = pdfxi_testkit::minimal_pdf();
+        let first_object = find_bytes(&source, b"1 0 obj");
+        assert_ne!(first_object, 0, "fixture must contain object 1");
+        let stream_like = set_startxref(&source, &first_object.to_string());
+        let doc = Document::from_bytes(stream_like).expect("header is still valid");
+        assert!(matches!(
+            doc.save(),
+            Err(Error::UnsupportedState(
+                "cross-reference streams are not supported"
+            ))
+        ));
+    }
+
+    #[test]
+    fn save_rejects_malformed_document_with_structured_error() {
+        let doc = Document::from_bytes(b"%PDF-1.7\n%%EOF\n".to_vec()).expect("valid header");
+        assert!(matches!(doc.save(), Err(Error::MissingStartXref)));
+        assert!(matches!(
+            doc.save_incremental(),
+            Err(Error::MissingStartXref)
+        ));
     }
 }

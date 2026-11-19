@@ -6,6 +6,7 @@
 //! of scope for this stage and remain handled by a later task.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use crate::lexer::Lexer;
 use crate::object::{Dictionary, Object, ObjectId};
@@ -46,6 +47,28 @@ struct XrefSection {
 pub(crate) struct XrefTable {
     entries: HashMap<u32, XrefEntry>,
     trailer: Dictionary,
+}
+
+impl XrefTable {
+    /// Return `(object number, byte offset)` for every in-use object, sorted by
+    /// object number. Free entries are omitted.
+    pub(crate) fn in_use_entries(&self) -> Vec<(u32, usize)> {
+        let mut entries: Vec<(u32, usize)> = self
+            .entries
+            .iter()
+            .filter_map(|(number, entry)| match entry {
+                XrefEntry::InUse { offset } => Some((*number, *offset)),
+                XrefEntry::Free => None,
+            })
+            .collect();
+        entries.sort_unstable_by_key(|(number, _)| *number);
+        entries
+    }
+
+    /// Return a clone of the merged trailer dictionary (newest keys win).
+    pub(crate) fn trailer(&self) -> Dictionary {
+        self.trailer.clone()
+    }
 }
 
 /// Fully resolved structural information about a document.
@@ -464,4 +487,63 @@ fn parse_decimal(token: &[u8], context: &str) -> Result<usize> {
         .map_err(|_| Error::MalformedXref(format!("{context} is not UTF-8")))?;
     text.parse::<usize>()
         .map_err(|_| Error::MalformedXref(format!("invalid {context}: {text}")))
+}
+
+/// Return the byte offset recorded by the final `startxref` marker.
+///
+/// This is the offset an incremental save must reference through `/Prev`.
+pub(crate) fn startxref_offset(data: &[u8]) -> Result<usize> {
+    find_startxref(data)
+}
+
+/// Return the byte range covering the whole indirect object at `offset`.
+///
+/// The range starts at the xref offset and ends just after the `endobj`
+/// keyword. Stream bodies are skipped using their declared `/Length`, so an
+/// `endobj` byte sequence inside binary stream data cannot truncate the copy.
+pub(crate) fn object_range(data: &[u8], offset: usize) -> Result<Range<usize>> {
+    let mut lexer = Lexer::new(data, offset)?;
+    lexer.skip_ws();
+    lexer.read_regular().ok_or_else(|| Error::MalformedObject {
+        number: 0,
+        reason: "missing object number".to_owned(),
+    })?;
+    lexer.skip_ws();
+    lexer.read_regular().ok_or_else(|| Error::MalformedObject {
+        number: 0,
+        reason: "missing generation number".to_owned(),
+    })?;
+    lexer.expect_keyword(b"obj")?;
+    lexer.skip_ws();
+    lexer.parse_value(0)?;
+    let value_end = lexer.position();
+    let tail = data.get(value_end..).unwrap_or(&[]);
+    let relative_end = tail
+        .windows(6)
+        .position(|window| window == b"endobj")
+        .ok_or_else(|| Error::UnexpectedToken("missing endobj after object".to_owned()))?;
+    Ok(offset..value_end + relative_end + 6)
+}
+
+/// Return `true` when the bytes at `offset` look like an indirect object
+/// header (`N G obj`), which is how a cross-reference stream section begins.
+pub(crate) fn looks_like_xref_stream(data: &[u8], offset: usize) -> bool {
+    let Ok(mut lexer) = Lexer::new(data, offset) else {
+        return false;
+    };
+    lexer.skip_ws();
+    let Some(number) = lexer.read_regular() else {
+        return false;
+    };
+    if number.is_empty() || !number.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    lexer.skip_ws();
+    let Some(generation) = lexer.read_regular() else {
+        return false;
+    };
+    if generation.is_empty() || !generation.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    lexer.expect_keyword(b"obj").is_ok()
 }

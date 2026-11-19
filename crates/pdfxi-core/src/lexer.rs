@@ -35,6 +35,11 @@ impl<'a> Lexer<'a> {
         self.data.get(self.pos).copied()
     }
 
+    /// Return the current byte offset of the cursor within the input.
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
     /// Advance past white space and `%` comments.
     pub(crate) fn skip_ws(&mut self) {
         while let Some(byte) = self.byte() {
