@@ -147,7 +147,7 @@ struct FeatureRow {
     #[serde(default)]
     tests: Vec<String>,
     #[serde(default)]
-    docs: String,
+    docs: Option<toml::Value>,
     #[serde(default)]
     evidence: String,
     #[serde(default)]
@@ -367,7 +367,7 @@ fn features_verify() -> Result<()> {
             if row.tests.is_empty() {
                 bail!("verified feature {} has no tests", row.id);
             }
-            if row.docs.trim().is_empty() {
+            if !docs_present(&row.docs) {
                 bail!("verified feature {} has no docs path", row.id);
             }
             if row.evidence.trim().is_empty() {
@@ -377,6 +377,15 @@ fn features_verify() -> Result<()> {
     }
     println!("FEATURES OK: {} rows, {} verified", rows.len(), verified);
     Ok(())
+}
+
+fn docs_present(docs: &Option<toml::Value>) -> bool {
+    match docs {
+        Some(toml::Value::String(value)) => !value.trim().is_empty(),
+        Some(toml::Value::Array(values)) => !values.is_empty(),
+        Some(_) => true,
+        None => false,
+    }
 }
 
 fn features_apply(clean: bool, task: Option<&str>) -> Result<()> {
@@ -635,6 +644,18 @@ mod tests {
     fn normalize_glob_is_stable() {
         assert_eq!(normalize_glob("./crates/foo/**"), "crates/foo");
         assert_eq!(normalize_glob("docs\\PLAN.md"), "docs/plan.md");
+    }
+
+    #[test]
+    fn docs_present_accepts_string_and_array_forms() {
+        assert!(docs_present(&Some(toml::Value::String(
+            "docs/FEATURES.md".to_owned()
+        ))));
+        assert!(docs_present(&Some(toml::Value::Array(vec![
+            toml::Value::String("a".to_owned())
+        ]))));
+        assert!(!docs_present(&Some(toml::Value::String(String::new()))));
+        assert!(!docs_present(&None));
     }
 
     #[test]
