@@ -1,0 +1,49 @@
+%PDF-1.7
+%PDFXI
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R 7 0 R 8 0 R 9 0 R] >>
+endobj
+4 0 obj
+<< /Length 45 >>
+stream
+BT /F1 18 Tf 72 720 Td (Annotated page) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Type /Annot /Subtype /Text /Rect [100 100 120 120] /Contents (Sticky note) /T (QA) /Name /Comment /F 4 >>
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /Highlight /Rect [50 700 300 720] /QuadPoints [50 720 300 720 50 700 300 700] /C [1 1 0] /Contents (Highlighted) /F 4 >>
+endobj
+8 0 obj
+<< /Type /Annot /Subtype /Link /Rect [72 600 240 620] /Border [0 0 1] /A << /S /URI /URI (https://example.invalid/doc) >> /F 4 >>
+endobj
+9 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (inline-widget) /V (widget value) /Rect [72 500 272 520] /F 4 >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000016 00000 n 
+0000000065 00000 n 
+0000000122 00000 n 
+0000000282 00000 n 
+0000000377 00000 n 
+0000000447 00000 n 
+0000000572 00000 n 
+0000000733 00000 n 
+0000000878 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+1002
+%%EOF

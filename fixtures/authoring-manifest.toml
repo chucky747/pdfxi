@@ -1,0 +1,58 @@
+# Committed M2 authoring fixture manifest (T-0064).
+#
+# Deterministic fixtures for page boxes, rotation, page labels, annotations,
+# forms, and a documented-password encrypted sample. Regenerate with:
+#   cargo run -p pdfxi-testkit --example generate_authoring_fixtures
+# The generator writes every file and computes each size and SHA-256 from the
+# bytes it wrote, so this manifest cannot drift from fixtures/authoring/.
+# The test tests/authoring_corpus.rs verifies every value.
+
+version = 1
+
+[[fixture]]
+name = "authoring-page-boxes.pdf"
+feature = "page-boxes"
+tags = ["page-boxes", "geometry", "page-tree", "crop"]
+pages = 1
+size = 699
+sha256 = "b588131822267e06831ad768a5fd103f4fb637f7bb9464b76c8c15bd9a75f2bf"
+
+[[fixture]]
+name = "authoring-rotation.pdf"
+feature = "rotation"
+tags = ["rotation", "page-tree", "geometry", "rotate"]
+pages = 3
+size = 1175
+sha256 = "14ab371805cc86e73a333eec14b6a3bbcb3e5da3a23a63783dbd1aba6c094cda"
+
+[[fixture]]
+name = "authoring-page-labels.pdf"
+feature = "page-labels"
+tags = ["page-labels", "multipage", "number-tree", "navigation"]
+pages = 3
+size = 1254
+sha256 = "74cfbdb487fb08829b52c9aa47fa8c7e5c914e47506e9d1a2cc8f5f4072b1c84"
+
+[[fixture]]
+name = "authoring-annotations.pdf"
+feature = "annotations"
+tags = ["annotations", "subtypes", "geometry", "review"]
+pages = 1
+size = 1268
+sha256 = "622be80417755211f3564c855ce891de5662b90a58480c9687c5315f61acec5d"
+
+[[fixture]]
+name = "authoring-forms.pdf"
+feature = "forms"
+tags = ["forms", "acroform", "fields", "widgets"]
+pages = 1
+size = 1195
+sha256 = "31004820fab4fe929b24a1ba5ac49aea32e6677d9fde7c2ee1ea53e692190190"
+
+[[fixture]]
+name = "authoring-encrypted.pdf"
+feature = "encrypted"
+tags = ["encrypted", "security", "password", "standard-handler"]
+pages = 1
+size = 914
+sha256 = "c5156f7b4edc30013fe1fae9499bb94186b805e0de088e6fae65abe25d60294c"

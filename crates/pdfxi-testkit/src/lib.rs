@@ -22,10 +22,18 @@
 //!
 //! A single-page document therefore contains five objects, matching the
 //! original [`minimal_pdf`] output byte for byte.
+//!
+//! # Authoring corpus
+//!
+//! [`authoring`] adds six committed M2 fixtures covering page boxes, rotation,
+//! page labels, annotations, forms, and a documented-password encrypted sample.
+//! Their builders, manifest, and golden snapshot helpers are described in that
+//! module; the files live under `fixtures/authoring/`.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod authoring;
 pub mod bench;
 pub mod fixtures;
 pub mod golden;

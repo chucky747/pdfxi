@@ -2510,6 +2510,9 @@ version = "0.1.0"
 [[package]]
 name = "pdfxi-testkit"
 version = "0.1.0"
+dependencies = [
+ "pdfxi-core",
+]
 
 [[package]]
 name = "pdfxi-text"

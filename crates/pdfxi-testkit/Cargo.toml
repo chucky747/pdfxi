@@ -10,3 +10,10 @@ publish = false
 
 [dependencies]
 
+[dev-dependencies]
+# Test-only reverse edge used by the authoring corpus integration tests so every
+# committed fixture can be parsed through the real `pdfxi_core::Document`.
+# `pdfxi-core` already dev-depends on this crate; Cargo permits cycles made only
+# of dev-dependencies, and this edge is never present in a normal build.
+pdfxi-core = { path = "../pdfxi-core" }
+

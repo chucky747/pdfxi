@@ -43,6 +43,56 @@ files. The integration test `crates/pdfxi-testkit/tests/committed_fixtures.rs`
 verifies every hash, page count, text marker, the corpus size budget, and that
 regeneration is byte-identical.
 
+## M2 authoring corpus (6 fixtures)
+
+`fixtures/authoring-manifest.toml` lists **6** deterministic fixtures under
+`fixtures/authoring/` (T-0064). Each entry records its file name, primary
+`feature`, searchable `tags`, `pages`, exact byte `size`, and SHA-256 `sha256`.
+The set covers:
+
+- **Page boxes** — all five boxes (Media/Crop/Bleed/Trim/Art) on one page with
+  distinct values (`authoring-page-boxes.pdf`).
+- **Rotation** — three pages carrying `/Rotate` 90, 180 and 270 degrees
+  (`authoring-rotation.pdf`).
+- **Page labels** — a three-page document with a `/PageLabels` number tree
+  (`authoring-page-labels.pdf`).
+- **Annotations** — `/Text`, `/Highlight`, `/Link` and `/Widget` dictionaries
+  (`authoring-annotations.pdf`).
+- **Forms** — an `/AcroForm` with `/Tx`, `/Btn` and `/Ch` fields
+  (`authoring-forms.pdf`).
+- **Encryption** — a standard-security-handler revision 2 sample
+  (`authoring-encrypted.pdf`).
+
+Regenerate all six files and the manifest from the single source of truth:
+
+```text
+cargo run -p pdfxi-testkit --example generate_authoring_fixtures
+```
+
+The generator computes sizes and digests from the bytes it writes, so the
+manifest cannot drift from the files. `crates/pdfxi-testkit/tests/authoring_corpus.rs`
+verifies manifest integrity, checksum stability, parsing through
+`pdfxi_core::Document`, every feature value, and byte-identical regeneration.
+Golden helpers in `pdfxi_testkit::golden` record stable structural snapshots.
+`ContentSnapshot` preserves every content-stream byte except trailing ASCII
+whitespace. `PageTreeSnapshot` records exactly three facts per page — object
+number, the five page-box arrays, and `/Rotate` — and first strips the
+documented volatile dictionary keys `/CreationDate`, `/ModDate`, `/ID` and
+`/Producer` with `normalize_volatile_fields`. Other dictionary entries are out
+of scope for the snapshot rather than normalized; changes to any recorded field
+are detected by `fingerprint()`.
+
+### Encrypted fixture password (public test value only)
+
+`authoring-encrypted.pdf` uses a **documented, public** test password so the
+corpus contains no secret. The user password is `pdfxi-test` and the owner
+password is `pdfxi-owner` (constants `TEST_USER_PASSWORD` and
+`TEST_OWNER_PASSWORD` in `pdfxi_testkit::authoring`). The `/O` and `/U` values
+are derived deterministically from those constants with the R2 algorithm; the
+test proves the documented password is accepted and a wrong one is rejected.
+The sample exists for parser recognition of `/Encrypt` and `/ID` only — never to
+protect real data.
+
 ## Generated fixtures
 
 All fixtures are **generated in memory at test time** by `pdfxi-testkit`:
