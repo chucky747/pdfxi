@@ -1,0 +1,19 @@
+{
+    "acceptance":  "cargo test -p pdfxi-core --test malformed",
+    "id":  "T-0039",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-testkit/**",
+                 "crates/pdfxi-core/tests/**",
+                 "fixtures/**",
+                 "orchestration/feature-updates/T-0039.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0024",
+                       "T-0023"
+                   ],
+    "title":  "Add malformed fixture corpus with no-panic tests",
+    "priority":  "P0",
+    "lane":  "qa"
+}
