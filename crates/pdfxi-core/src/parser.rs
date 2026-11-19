@@ -658,7 +658,7 @@ fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
 /// Both xref entry forms are handled: type-1 entries are read at their byte
 /// offset, while type-2 entries are expanded from their `/ObjStm`. The `depth`
 /// argument bounds nested object-stream resolution.
-fn load_object(data: &[u8], xref: &XrefTable, id: ObjectId) -> Result<Object> {
+pub(crate) fn load_object(data: &[u8], xref: &XrefTable, id: ObjectId) -> Result<Object> {
     load_object_inner(data, xref, id, 0)
 }
 

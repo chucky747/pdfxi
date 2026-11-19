@@ -19,6 +19,7 @@ pub mod content;
 pub mod filter;
 pub mod object;
 pub mod page;
+pub mod pages;
 
 mod lexer;
 mod parser;
@@ -33,6 +34,7 @@ pub use filter::{
 };
 pub use object::{Object, ObjectId};
 pub use page::{Page, Rectangle};
+pub use pages::{PageOperation, PagePlan, RotationTarget};
 
 use std::collections::BTreeMap;
 
@@ -106,6 +108,33 @@ pub enum Error {
     /// The requested page index does not exist.
     #[error("page index {0} is out of range")]
     PageNotFound(usize),
+    /// A page operation was given an empty selection.
+    #[error("page operation requires at least one page")]
+    EmptyPageSelection,
+    /// A page index supplied to a page plan is outside the valid range.
+    #[error("page index {index} is out of range for {context} (length {len})")]
+    InvalidPageIndex {
+        /// The rejected index.
+        index: usize,
+        /// The number of valid positions.
+        len: usize,
+        /// A human-readable description of what was being indexed.
+        context: &'static str,
+    },
+    /// An order plan contained the same page position more than once.
+    #[error("duplicate page index {0} in page order")]
+    DuplicatePageIndex(usize),
+    /// A merge referenced a source document that is not part of the plan.
+    #[error("source document index {index} is out of range (sources: {len})")]
+    InvalidSourceDocument {
+        /// The rejected document index.
+        index: usize,
+        /// The number of source documents.
+        len: usize,
+    },
+    /// A `/Rotate` entry was not a multiple of 90 degrees.
+    #[error("page rotation {0} is not a multiple of 90 degrees")]
+    InvalidPageRotation(i64),
     /// The input ended before a value was complete.
     #[error("unexpected end of PDF data")]
     UnexpectedEof,
@@ -434,6 +463,38 @@ impl Document {
         Ok(out)
     }
 
+    /// Begin a page plan whose sole source and initial selection are this
+    /// document's pages in document order.
+    ///
+    /// The returned plan is a value object: it can be inspected, cloned and
+    /// chained with additional [`PageOperation`]s before being handed back to
+    /// [`Document::apply_page_plan`]. Use the static constructors on
+    /// [`PagePlan`] when the desired operation is already known.
+    pub fn page_plan(&self) -> PagePlan {
+        PagePlan::identity()
+    }
+
+    /// Apply `plan` to this document (the plan's primary source) and return a
+    /// standalone, classic-table PDF byte stream.
+    ///
+    /// This is the single entry point for merge, split, extract, reorder and
+    /// rotate. The plan's operations are validated against the real page counts
+    /// of this document and any documents added through
+    /// [`PagePlan::merge`]; hostile or out-of-range indices are rejected with
+    /// structured errors before any bytes are written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EmptyPageSelection`], [`Error::InvalidPageIndex`],
+    /// [`Error::InvalidSourceDocument`], [`Error::DuplicatePageIndex`] or
+    /// [`Error::InvalidPageRotation`] for invalid plans,
+    /// [`Error::UnsupportedState`] for encrypted or xref-stream sources, and
+    /// any structural or serialization error from the underlying parser and
+    /// writer.
+    pub fn apply_page_plan(&self, plan: &PagePlan) -> Result<Vec<u8>> {
+        pages::apply(self, plan)
+    }
+
     /// Return the parsed structure only when the document can be saved.
     ///
     /// Xref-stream inputs (including documents that reach one through a
@@ -441,7 +502,7 @@ impl Document {
     /// silently rewritten: the writer emits only classic tables and would drop
     /// objects held in object streams. Encrypted documents are declined for the
     /// same reason — the writer does not encrypt its output.
-    fn supported_structure(&self) -> Result<&Structure> {
+    pub(crate) fn supported_structure(&self) -> Result<&Structure> {
         match &self.structure {
             Ok(structure) => {
                 if structure.xref.trailer().contains_key("Encrypt") {
