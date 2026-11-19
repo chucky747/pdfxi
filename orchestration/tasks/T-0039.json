@@ -1,14 +1,14 @@
 {
     "acceptance":  "cargo test -p pdfxi-core --test malformed",
     "id":  "T-0039",
-    "evidence":  "",
+    "evidence":  "docs/evidence/qa/T-0039.md",
     "owns":  [
                  "crates/pdfxi-testkit/**",
                  "crates/pdfxi-core/tests/**",
                  "fixtures/**",
                  "orchestration/feature-updates/T-0039.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0024",
                        "T-0023"

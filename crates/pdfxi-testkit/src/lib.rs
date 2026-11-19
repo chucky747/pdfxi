@@ -30,6 +30,7 @@ pub mod bench;
 pub mod fixtures;
 pub mod golden;
 pub mod hash;
+pub mod malformed;
 pub mod perf;
 
 /// Default page width in PDF points (US Letter portrait).
