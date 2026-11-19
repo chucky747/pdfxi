@@ -1,10 +1,10 @@
 //! Desktop application shell, document tabs, toolsets, panels, and canvas.
 //!
-//! This crate currently provides a pure-Rust model of the viewer shell: open
-//! document tabs, per-tab layout/zoom/rotation state, and the active selection
-//! tool. It intentionally has no `egui`, renderer, or platform dependency so
-//! the state machine can be tested deterministically. The rendering and widget
-//! layers will be built on top of these types in later milestones.
+//! This crate provides a pure-Rust model of the viewer shell: open document
+//! tabs, per-tab layout/zoom/rotation state, and the active selection tool. The
+//! core model has no `egui`, renderer, or platform dependency so the state
+//! machine can be tested deterministically. An optional native viewer shell
+//! built on `egui`/`eframe` is available behind the `ui` feature.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -13,6 +13,10 @@ mod state;
 mod tabs;
 mod toolset;
 mod view;
+
+/// Native egui/eframe viewer shell, available behind the `ui` feature.
+#[cfg(feature = "ui")]
+pub mod ui;
 
 pub use state::{AppError, AppState};
 pub use tabs::{DocumentTab, TabId, display_name_from_path};

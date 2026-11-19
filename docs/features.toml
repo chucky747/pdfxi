@@ -10,17 +10,32 @@ tests = []
 title = "Open and print PDF documents"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/view.rs"
+docs = "crates/pdfxi-app/src/ui.rs"
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-app (T-0011)"
+evidence = "cargo check -p pdfxi-app --features ui (CARGO_TARGET_DIR=target/lanes/app, installed rustc 1.100.0): Finished dev profile, EXITCODE=0. cargo test -p pdfxi-app --features ui: 26 passed, 0 failed. cargo test -p pdfxi-app (default): 17 passed, 0 failed. cargo fmt -p pdfxi-app -- --check: EXITCODE=0. cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: EXITCODE=0."
 id = "VIEW-002"
-notes = "ViewMode (single, continuous, two-page, two-page-continuous) and fit/custom Zoom with deterministic clamping are modeled. Layout is data-only; the canvas that arranges real pages is future app work."
+notes = """
+The optional `ui` feature now builds a native egui/eframe shell (eframe/egui
+0.33, MSRV 1.88 matching the workspace pin; default builds stay dependency-light
+with default = []). PdfxiApp implements eframe::App with a toolbar (open demo,
+close, zoom +/-, rotate CW/CCW), a tool selector, a view-mode selector, a tab
+strip, a status header, and a placeholder canvas area. The status header shows
+the active tab's title, zoom, rotation, and view mode via the pure helper
+active_tab_status(); canvas_placeholder() reports the active page and page count.
+Toolbar buttons and Ctrl+N/W/+/-/R keyboard chords all route through AppState
+methods (open/activate/close tab, zoom, rotate, view mode). The layout primitives
+in view.rs remain the data model; arranging rendered pages on the canvas is
+future work, hence in-progress.
+"""
 priority = "P0"
 status = "in-progress"
 tests = [
-    "view::tests::view_mode_classification_is_consistent",
-    "view::tests::zoom_fit_modes_resolve_to_provided_scales",
-    "state::tests::set_zoom_rotation_and_view_mode_on_active_tab",
+    "ui::tests::active_tab_status_without_document_has_fixed_message",
+    "ui::tests::active_tab_status_includes_title_zoom_rotation_and_view",
+    "ui::tests::canvas_placeholder_reports_page_count_and_prompts_when_empty",
+    "ui::tests::zoom_in_and_out_change_active_tab_zoom",
+    "ui::tests::zoom_without_active_tab_reports_status_without_panicking",
+    "ui::tests::rotate_and_view_mode_commands_update_active_tab",
 ]
 title = "Single page continuous and two-page layouts"
 
@@ -51,19 +66,27 @@ tests = []
 title = "Rotate view and page display"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/state.rs"
+docs = "crates/pdfxi-app/src/ui.rs"
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-app (T-0011)"
+evidence = "cargo check -p pdfxi-app --features ui (CARGO_TARGET_DIR=target/lanes/app): EXITCODE=0. cargo test -p pdfxi-app --features ui: 26 passed, 0 failed (includes 9 new ui::tests). cargo test -p pdfxi-app (default): 17 passed, 0 failed. cargo fmt/clippy on pdfxi-app: clean."
 id = "VIEW-005"
-notes = "AppState owns open DocumentTabs with allocation/activation/close semantics and per-tab view state; deterministic tab titles are derived from display name plus a dirty marker. Dock widgets are future work."
+notes = """
+The eframe shell renders the AppState document tab strip with selectable labels;
+clicking a tab activates it through AppState::activate_tab, and the Close action
+and Ctrl+W remove the active tab with neighbor fallback. Demo tabs carry a
+placeholder page count. All tab/tool/view mutations are exposed as PdfxiApp
+methods that only touch the UI-agnostic AppState, so they are unit tested
+without a window. Real docking/split-panel window management is future work,
+hence in-progress.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
+    "ui::tests::open_demo_tab_registers_tab_with_placeholder_page_count",
+    "ui::tests::activate_and_close_tab_switch_and_remove_documents",
+    "ui::tests::tool_selection_updates_shared_state",
+    "ui::tests::active_tab_status_without_document_has_fixed_message",
     "state::tests::tab_open_close_and_activate_lifecycle",
-    "state::tests::closing_active_tab_prefers_the_following_neighbor",
-    "state::tests::unknown_tab_operations_return_errors",
-    "state::tests::active_tab_operations_fail_without_a_tab",
-    "tabs::tests::tab_title_is_deterministic",
 ]
 title = "Tabbed multi-document interface"
 

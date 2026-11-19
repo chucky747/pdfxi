@@ -8,5 +8,17 @@ license.workspace = true
 authors.workspace = true
 publish = false
 
-[dependencies]
+[features]
+default = []
+# The native egui/eframe viewer shell. Default builds stay dependency-light;
+# enabling `ui` pulls in the GUI stack (winit, the renderer, and egui).
+ui = ["dep:eframe", "dep:egui"]
 
+[dependencies]
+eframe = { version = "0.33", optional = true }
+egui = { version = "0.33", optional = true }
+
+[[bin]]
+name = "pdfxi-ui"
+path = "src/bin/pdfxi-ui.rs"
+required-features = ["ui"]

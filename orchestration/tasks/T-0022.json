@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo check -p pdfxi-app --features ui",
     "id":  "T-0022",
-    "evidence":  "",
+    "evidence":  "docs/evidence/app/T-0022.md",
     "owns":  [
                  "crates/pdfxi-app/**",
                  "orchestration/feature-updates/T-0022.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0011"
                    ],
