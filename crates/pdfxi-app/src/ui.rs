@@ -8,7 +8,10 @@
 //!
 //! The canvas draws page rectangles laid out by [`crate::canvas::CanvasLayout`],
 //! reports the page under the cursor, and shows copied text from a
-//! [`crate::selection::SelectionModel`] in the status line.
+//! [`crate::selection::SelectionModel`] in the status line. An in-document find
+//! bar drives [`crate::find::FindState`]: matches are highlighted on the page
+//! rectangles, the view scrolls to the current match, and Ctrl+C copies the
+//! current selection through egui's clipboard API.
 //!
 //! # Raster integration
 //!
@@ -25,8 +28,9 @@
 use egui::Key;
 
 use crate::{
-    AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasSize, DEFAULT_ZOOM, OwnedSpan,
-    OwnedTextPage, PageSize, SelectionModel, TabId, Toolset, ViewMode, Zoom, app_name,
+    AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, DEFAULT_ZOOM,
+    FindMatch, FindOptions, FindState, OwnedSpan, OwnedTextPage, PageSize, SelectionModel, TabId,
+    Toolset, ViewMode, Zoom, app_name,
 };
 
 #[cfg(feature = "pdfium")]
@@ -157,6 +161,109 @@ pub fn canvas_info_line(hit: CanvasHit, selection_text: &str) -> String {
     }
 }
 
+/// Build find input pairs from the demo viewer's selectable text pages.
+///
+/// The canvas, selection copy, and find bar all read from the same
+/// [`OwnedTextPage`] snapshot, so a highlighted match corresponds exactly to
+/// text the user can select and copy. Each page's spans are concatenated in
+/// reading order to form the page's searchable text.
+///
+/// The viewer has no text-extraction backend of its own: `pdfxi-render` exposes
+/// only rasters (no `text_page` method), and adding a direct `pdfxi-core` or
+/// `pdfxi-text` dependency would break the deliberately dependency-light
+/// default build and touch the shared lockfile. The demo therefore searches the
+/// synthetic text it actually displays; a production loader can feed real
+/// extracted text through [`FindState::set_pages`] instead.
+pub fn demo_find_pages(pages: &[OwnedTextPage]) -> Vec<(usize, String)> {
+    pages
+        .iter()
+        .map(|page| {
+            let mut text = String::new();
+            for span in page.spans() {
+                text.push_str(&span.text);
+            }
+            (page.page_number(), text)
+        })
+        .collect()
+}
+
+/// Map a find match's character range to a highlight rectangle in page-local
+/// points (origin at the page's top-left, `y` increasing downward).
+///
+/// Character offsets are resolved against the spans of the matched page using
+/// the same even interpolation as selection hit testing. Returns `None` when the
+/// page has no spans or the range is empty. The rectangle covers every touched
+/// span so multi-line matches are fully highlighted.
+pub fn match_rect(hit: &FindMatch, pages: &[OwnedTextPage]) -> Option<CanvasRect> {
+    let page = pages.iter().find(|page| page.page_number() == hit.page())?;
+    let spans = page.spans();
+    if spans.is_empty() || hit.start() >= hit.end() {
+        return None;
+    }
+
+    let mut cursor = 0usize;
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for span in spans {
+        let count = span.text.chars().count();
+        let span_start = cursor;
+        let span_end = cursor.saturating_add(count);
+        if count > 0 && span_end > hit.start() && span_start < hit.end() {
+            let from = hit.start().saturating_sub(span_start);
+            let to = hit.end().min(span_end).saturating_sub(span_start);
+            let char_width = if span.width > 0.0 {
+                span.width / count as f32
+            } else {
+                0.0
+            };
+            let x0 = span.x + from as f32 * char_width;
+            let x1 = span.x + to as f32 * char_width;
+            min_x = min_x.min(x0);
+            max_x = max_x.max(x1);
+            min_y = min_y.min(span.y);
+            max_y = max_y.max(span.y + span.height);
+        }
+        cursor = span_end;
+    }
+
+    if min_x.is_finite()
+        && max_x.is_finite()
+        && min_y.is_finite()
+        && max_y.is_finite()
+        && max_x > min_x
+        && max_y > min_y
+    {
+        return Some(CanvasRect::new(min_x, min_y, max_x - min_x, max_y - min_y));
+    }
+
+    // Zero-width spans cannot form a visible box; fall back to the first span's
+    // box so the match is still indicated rather than silently dropped.
+    let first = spans.first()?;
+    Some(CanvasRect::new(
+        first.x,
+        first.y,
+        first.width.max(1.0),
+        first.height.max(1.0),
+    ))
+}
+
+/// Compute the vertical scroll offset that brings `page` into view.
+///
+/// The page is centred in the viewport when it is smaller than the viewport and
+/// aligned to the top otherwise; the result is clamped to the layout's scroll
+/// bounds so it is always finite and non-negative.
+pub fn scroll_offset_for_page(layout: &CanvasLayout, page: usize) -> f32 {
+    let Some(geometry) = layout.page(page) else {
+        return 0.0;
+    };
+    let viewport_height = layout.viewport().height;
+    let desired = geometry.rect.y - (viewport_height - geometry.rect.height) * 0.5;
+    layout.clamp_scroll(0.0, desired).y
+}
+
 /// Launch the native PDFXI viewer window.
 ///
 /// This is the entry point used by the `pdfxi-ui` binary. It builds a
@@ -195,6 +302,18 @@ pub struct PdfxiApp {
     scroll_y: f32,
     selection: SelectionModel,
     demo_text: Vec<OwnedTextPage>,
+    /// In-document find model, fed from `demo_text` when a tab opens.
+    find: FindState,
+    /// Editable query mirrored into `find` on change.
+    find_query: String,
+    /// Checkbox state for case-sensitive matching.
+    find_case: bool,
+    /// Checkbox state for whole-word matching.
+    find_word: bool,
+    /// Whether the find bar is visible.
+    find_open: bool,
+    /// Set when navigation should scroll to the current match next frame.
+    pending_scroll: bool,
     /// Bounded cache of real page rasters, filled from the demo fixture.
     #[cfg(feature = "pdfium")]
     raster_cache: RasterCache,
@@ -256,9 +375,12 @@ impl PdfxiApp {
             tab.set_page_count(page_count);
         }
         self.demo_text = demo_text_pages(page_count);
+        // Search, selection, and copy all read the same displayed text snapshot.
+        self.find.set_pages(demo_find_pages(&self.demo_text));
         self.selection.clear();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
+        self.pending_scroll = false;
         self.status = format!("Opened demo tab {id}");
         id
     }
@@ -339,6 +461,55 @@ impl PdfxiApp {
     /// Copy text of the current selection, using the placeholder text pages.
     pub fn selected_text(&self) -> String {
         self.selection.selected_text(&self.demo_text)
+    }
+
+    /// Show the find bar (bound to Ctrl+F).
+    pub fn open_find(&mut self) {
+        self.find_open = true;
+        self.status = "Find".to_string();
+    }
+
+    /// Hide the find bar (bound to Escape while it is open).
+    pub fn close_find(&mut self) {
+        self.find_open = false;
+    }
+
+    /// Whether the find bar is currently visible.
+    pub fn is_find_open(&self) -> bool {
+        self.find_open
+    }
+
+    /// Borrow the find state for introspection.
+    pub fn find_state(&self) -> &FindState {
+        &self.find
+    }
+
+    /// Set the find query from the UI and recompute matches.
+    pub fn set_find_query(&mut self, query: &str) {
+        self.find_query = query.to_string();
+        self.find.set_query(query);
+    }
+
+    /// Apply the checkbox options to the find model and recompute.
+    pub fn set_find_options(&mut self, case_sensitive: bool, whole_word: bool) {
+        self.find_case = case_sensitive;
+        self.find_word = whole_word;
+        self.find
+            .set_options(FindOptions::new(case_sensitive).with_whole_word(whole_word));
+    }
+
+    /// Move to the next match and request a scroll on the next canvas frame.
+    pub fn find_next(&mut self) {
+        self.find.next_match();
+        self.pending_scroll = true;
+        self.status = self.find.match_summary();
+    }
+
+    /// Move to the previous match and request a scroll on the next canvas frame.
+    pub fn find_previous(&mut self) {
+        self.find.previous_match();
+        self.pending_scroll = true;
+        self.status = self.find.match_summary();
     }
 
     /// Change the active tab's view mode.
@@ -444,6 +615,37 @@ impl PdfxiApp {
         self.textures.get(&page).map(|live| live.handle.clone())
     }
 
+    /// Render the in-document find bar.
+    ///
+    /// The query field mirrors into [`FindState`] on change; the two toggles
+    /// rebuild the search with new options; Next/Previous navigate with
+    /// wrap-around and request a scroll to the current match.
+    fn find_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Find:");
+            let response = ui.text_edit_singleline(&mut self.find_query);
+            if response.changed() {
+                self.find.set_query(self.find_query.as_str());
+            }
+            if ui.checkbox(&mut self.find_case, "Match case").changed() {
+                self.set_find_options(self.find_case, self.find_word);
+            }
+            if ui.checkbox(&mut self.find_word, "Whole word").changed() {
+                self.set_find_options(self.find_case, self.find_word);
+            }
+            if ui.button("Previous").clicked() {
+                self.find_previous();
+            }
+            if ui.button("Next").clicked() {
+                self.find_next();
+            }
+            ui.label(self.find.match_summary());
+            if ui.button("Close").clicked() {
+                self.close_find();
+            }
+        });
+    }
+
     /// Render the toolbar panel.
     fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -536,6 +738,10 @@ impl PdfxiApp {
         if !self.status.is_empty() {
             ui.label(&self.status);
         }
+        let selected = self.selection.selected_text(&self.demo_text);
+        if !selected.is_empty() {
+            ui.label(format!("Selected: {selected}"));
+        }
         ui.separator();
 
         egui::Frame::new()
@@ -582,6 +788,15 @@ impl PdfxiApp {
                 );
                 self.scroll_x = scrolled.x;
                 self.scroll_y = scrolled.y;
+
+                // A find navigation request scrolls the current match into view
+                // once a layout is available, using the pure helper below.
+                if self.pending_scroll {
+                    if let Some(page) = self.find.current().map(FindMatch::page) {
+                        self.scroll_y = scroll_offset_for_page(&layout, page);
+                    }
+                    self.pending_scroll = false;
+                }
 
                 // Text drag: anchor on press, advance the head while dragging.
                 if text_tool && let Some(pos) = hover {
@@ -631,14 +846,64 @@ impl PdfxiApp {
                     );
                 }
 
+                // Highlight every find match; the current one gets a stronger
+                // fill and an outline. Geometry is computed by pure helpers so
+                // the coordinate mapping is testable without a window.
+                let current_index = self.find.current_index();
+                let mut highlights: Vec<(egui::Rect, bool)> = Vec::new();
+                for (index, find_hit) in self.find.matches().iter().enumerate() {
+                    let Some(local) = match_rect(find_hit, &self.demo_text) else {
+                        continue;
+                    };
+                    let Some(geometry) = layout.page(find_hit.page()) else {
+                        continue;
+                    };
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            origin.x + geometry.rect.x + local.x * geometry.scale - self.scroll_x,
+                            origin.y + geometry.rect.y + local.y * geometry.scale - self.scroll_y,
+                        ),
+                        egui::vec2(local.width * geometry.scale, local.height * geometry.scale),
+                    );
+                    highlights.push((rect, Some(index) == current_index));
+                }
+                for (rect, is_current) in highlights {
+                    let fill = if is_current {
+                        egui::Color32::from_rgba_unmultiplied(255, 196, 0, 130)
+                    } else {
+                        egui::Color32::from_rgba_unmultiplied(255, 230, 80, 70)
+                    };
+                    painter.rect_filled(rect, 2.0, fill);
+                    if is_current {
+                        painter.rect_stroke(
+                            rect,
+                            2.0,
+                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 180, 0)),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                }
+
                 let copy_text = self.selection.selected_text(&self.demo_text);
                 ui.label(canvas_info_line(hit, &copy_text));
             });
     }
 
-    /// Apply keyboard shortcuts for the main commands (all with a Ctrl chord).
+    /// Apply keyboard shortcuts for the main find, copy, and view commands.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let (open, close, zoom_in, zoom_out, rotate_cw, rotate_ccw, escape) = ctx.input(|input| {
+        let (
+            open,
+            close,
+            zoom_in,
+            zoom_out,
+            rotate_cw,
+            rotate_ccw,
+            escape,
+            open_find,
+            next,
+            prev,
+            copy,
+        ) = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl;
             let shift = input.modifiers.shift;
             (
@@ -649,6 +914,10 @@ impl PdfxiApp {
                 ctrl && !shift && input.key_pressed(Key::R),
                 ctrl && shift && input.key_pressed(Key::R),
                 input.key_pressed(Key::Escape),
+                ctrl && input.key_pressed(Key::F),
+                !shift && input.key_pressed(Key::F3),
+                shift && input.key_pressed(Key::F3),
+                ctrl && input.key_pressed(Key::C),
             )
         });
 
@@ -670,8 +939,28 @@ impl PdfxiApp {
         if rotate_ccw {
             self.rotate_counterclockwise();
         }
+        if open_find {
+            self.open_find();
+        }
+        if next {
+            self.find_next();
+        }
+        if prev {
+            self.find_previous();
+        }
+        if copy {
+            let text = self.selected_text();
+            if !text.is_empty() {
+                ctx.copy_text(text);
+                self.status = "Copied selection to clipboard".to_string();
+            }
+        }
         if escape {
-            self.clear_selection();
+            if self.find_open {
+                self.close_find();
+            } else {
+                self.clear_selection();
+            }
         }
     }
 }
@@ -682,6 +971,9 @@ impl eframe::App for PdfxiApp {
 
         egui::TopBottomPanel::top("pdfxi_toolbar").show(ctx, |ui| self.toolbar_ui(ui));
         egui::TopBottomPanel::top("pdfxi_tabs").show(ctx, |ui| self.tabs_ui(ui));
+        if self.find_open {
+            egui::TopBottomPanel::top("pdfxi_find").show(ctx, |ui| self.find_ui(ui));
+        }
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
     }
 }
@@ -689,7 +981,7 @@ impl eframe::App for PdfxiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Rotation;
+    use crate::{Rotation, TextAnchor};
 
     #[test]
     fn active_tab_status_without_document_has_fixed_message() {
@@ -884,6 +1176,96 @@ mod tests {
         app.clear_selection();
         assert_eq!(app.status(), "Selection cleared");
         assert_eq!(app.selected_text(), "");
+    }
+
+    #[test]
+    fn demo_find_pages_builds_searchable_text_from_spans() {
+        let pages = demo_text_pages(3);
+        let pairs = demo_find_pages(&pages);
+        assert_eq!(
+            pairs,
+            vec![
+                (0, "Page 1 demo text".to_string()),
+                (1, "Page 2 demo text".to_string()),
+                (2, "Page 3 demo text".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn match_rect_maps_character_range_to_span_geometry() {
+        let pages = [OwnedTextPage::new(
+            0,
+            vec![
+                OwnedSpan::new("Hello", 0.0, 10.0, 50.0, 10.0),
+                OwnedSpan::new("world", 60.0, 10.0, 50.0, 10.0),
+            ],
+        )];
+        // Concatenated "Helloworld": 3..7 is "lowo", crossing both spans.
+        let hit = FindMatch::new(0, 3, 7, "lowo");
+        let rect = match_rect(&hit, &pages).expect("a matching page with spans");
+        assert!((rect.x - 30.0).abs() < 0.001, "{}", rect.x);
+        assert!((rect.y - 10.0).abs() < 0.001, "{}", rect.y);
+        assert!((rect.width - 50.0).abs() < 0.001, "{}", rect.width);
+        assert!((rect.height - 10.0).abs() < 0.001, "{}", rect.height);
+        assert_eq!(match_rect(&FindMatch::new(0, 2, 2, ""), &pages), None);
+        assert_eq!(match_rect(&FindMatch::new(9, 0, 1, "x"), &pages), None);
+    }
+
+    #[test]
+    fn scroll_offset_for_page_centers_and_clamps() {
+        let sizes = vec![PageSize::new(612.0, 792.0); 3];
+        let layout = CanvasLayout::standard(
+            ViewMode::Continuous,
+            Zoom::custom(1.0),
+            CanvasSize::new(800.0, 600.0),
+            &sizes,
+        );
+        let geometry = layout.page(1).expect("page 1 exists");
+        let expected = geometry.rect.y - (600.0 - geometry.rect.height) * 0.5;
+        let offset = scroll_offset_for_page(&layout, 1);
+        assert!((offset - expected).abs() < 0.001, "{offset}");
+        assert!(offset >= 0.0);
+        assert_eq!(scroll_offset_for_page(&layout, 999), 0.0);
+    }
+
+    #[test]
+    fn find_bar_query_and_navigation_update_the_model() {
+        let mut app = PdfxiApp::new();
+        app.open_demo_tab();
+        assert!(!app.is_find_open());
+        app.open_find();
+        assert!(app.is_find_open());
+
+        app.set_find_query("demo");
+        assert_eq!(app.find_state().match_count(), app.demo_text.len());
+        assert_eq!(
+            app.find_state().match_summary(),
+            format!("1 of {}", app.demo_text.len())
+        );
+
+        app.find_next();
+        assert!(app.pending_scroll, "navigation requests a scroll");
+        app.find_previous();
+        app.set_find_options(true, false);
+        assert!(app.find_state().options().case_sensitive);
+        app.close_find();
+        assert!(!app.is_find_open());
+    }
+
+    #[test]
+    fn find_and_selection_share_the_same_demo_text() {
+        let pages = demo_text_pages(2);
+        let mut finder = FindState::new();
+        finder.set_pages(demo_find_pages(&pages));
+        finder.set_query("demo");
+        assert_eq!(finder.match_count(), 2);
+        let matched = finder.current().expect("a first match").text();
+
+        let mut selection = SelectionModel::new();
+        selection.drag(TextAnchor::new(0, 7), TextAnchor::new(0, 11));
+        assert_eq!(selection.selected_text(&pages), "demo");
+        assert_eq!(selection.selected_text(&pages), matched);
     }
 
     #[cfg(feature = "pdfium")]

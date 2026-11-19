@@ -2117,27 +2117,64 @@ title = "Open PDF and render pages in the viewer"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-text/src/lib.rs",
-    "crates/pdfxi-cli/src/main.rs",
-    "crates/pdfxi-cli/tests/cli.rs",
+    "crates/pdfxi-app/src/find.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/lib.rs",
 ]
 domain = "View & Navigate"
-evidence = '''
-cargo test -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 18 integration passed, 0 failed, EXIT=0 (8 new search_* tests plus the 10 pre-existing tests).
-cargo test -p pdfxi-cli --features pdfium (CARGO_TARGET_DIR=target/lanes/core, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 12 unit + 21 integration passed, 0 failed, EXIT=0.
-cargo fmt -p pdfxi-cli -- --check: EXIT=0. cargo clippy -p pdfxi-cli --all-targets -- -D warnings: EXIT=0. cargo clippy -p pdfxi-cli --all-targets --features pdfium -- -D warnings: EXIT=0.
-cargo doc -p pdfxi-cli --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
-Manual smoke: `pdfxi search fixtures/minimal.pdf PDFXI` printed `page 1 offset 7 PDFXI`, EXIT=0; --json emitted {"file":"fixtures/minimal.pdf","query":"PDFXI","matches":[{"page":1,"offset":7,"text":"PDFXI"}]}; a no-match query printed `no matches` on stderr with empty stdout and EXIT=0.
-'''
+evidence = """
+CARGO_TARGET_DIR=target/lanes/app (via scripts/env.ps1 -Lane app).
+cargo test -p pdfxi-app: 52 passed; 0 failed; 0 ignored; doc-tests 0 failed.
+cargo test -p pdfxi-app --features ui: 71 passed; 0 failed; doc-tests 0 failed.
+cargo test -p pdfxi-app --features ui,pdfium: 73 passed; 0 failed; doc-tests 0 failed.
+cargo fmt -p pdfxi-app -- --check: EXIT=0.
+cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: EXIT=0 (clean).
+"""
 id = "VIEW-017"
 notes = """
-Multi-page SearchIndex (ordered by page then character offset, case-insensitive, whole-word, documented leftmost-first overlap policy), TextSelection with two-way normalization and cross-page copy, plain-text span offsets, and shared boundary rules.
+T-0040 completes the UI half of VIEW-017. A new dependency-light `find` module
+(no egui types, no pdfxi-text dependency, default = [] unchanged) exposes
+FindState with query/options/results/current-index, set_query, set_options,
+next_match/previous_match with deterministic wrap-around, current(), and
+match_summary() ("n of m", with a trailing + when the documented 10,000-match
+cap truncates). Matching uses Unicode-scalar character offsets, ASCII-only case
+folding, whole-word boundaries, leftmost-first non-overlapping results, and
+page-index sorting for supply-order independence.
 
-T-0033 adds a headless consumer of that index: `pdfxi search <FILE> <QUERY> [--case-sensitive] [--whole-word] [--json]`. For each page it builds one TextPage from `pdfxi_core::page_text` with the page's entire extracted text in a single TextSpan, so reported offsets are zero-based Unicode-scalar (character) offsets into each page's concatenated text -- the same offset space `pdfxi-text` documents. Results are sorted by page then offset by SearchIndex. Text mode prints `page N offset M matched text`; --json emits stable fields `file`, `query`, and `matches` with `page`/`offset`/`text` per match. --case-sensitive and --whole-word map directly to SearchOptions. No-match is deliberately not an error: exit 0, zero stdout lines, and a `no matches` stderr note in both modes, so an empty result is never confused with a failure. Missing/unreadable files, invalid documents, and unsupported content filters produce non-zero exits with actionable, page-contextual stderr. The UI find bar and match highlighting are still unwired, so this row stays in-progress.
+ui.rs (behind `ui`) adds a find bar (query field, Match case / Whole word
+toggles, Previous / Next, "n of m" summary, Close/Escape) opened with Ctrl+F;
+F3 / Shift+F3 navigate. Matches are highlighted on the canvas page rectangles
+(the current match gets a stronger fill and outline), and the view scrolls to
+the current match via a pure, clamped scroll helper when a layout is available.
+A text selection is shown in the status line and copied through egui's
+Context::copy_text on Ctrl+C. Highlight geometry, find-page construction, and
+scroll targeting are pure, window-free helpers with unit tests.
+
+Demo page text: pdfxi-render exposes only rasters (no text_page method), and a
+direct pdfxi-core/pdfxi-text dependency would break the dependency-light default
+build and touch the shared Cargo.lock. The demo viewer therefore feeds the same
+synthetic OwnedTextPage text it displays into both find and selection copy, so a
+highlighted match is exactly the text a user can select and copy. A production
+loader can supply real extracted text through FindState::set_pages.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
+    "find::tests::query_and_option_transitions_recompute_results",
+    "find::tests::whole_word_option_filters_substrings",
+    "find::tests::empty_query_clears_results_and_resets_summary",
+    "find::tests::no_match_state_is_reported_cleanly",
+    "find::tests::next_and_previous_wrap_around_deterministically",
+    "find::tests::navigation_after_query_change_starts_at_the_first_match",
+    "find::tests::match_cap_bounds_results_and_marks_truncation",
+    "find::tests::summary_formats_all_states",
+    "find::tests::character_offsets_are_stable_for_multibyte_text",
+    "find::tests::pages_are_sorted_before_searching",
+    "ui::tests::demo_find_pages_builds_searchable_text_from_spans",
+    "ui::tests::match_rect_maps_character_range_to_span_geometry",
+    "ui::tests::scroll_offset_for_page_centers_and_clamps",
+    "ui::tests::find_bar_query_and_navigation_update_the_model",
+    "ui::tests::find_and_selection_share_the_same_demo_text",
     "tests::index_orders_results_by_page_then_offset",
     "tests::index_is_case_insensitive_by_default_and_can_be_exact",
     "tests::index_honors_whole_word_option",

@@ -7,14 +7,17 @@
 //! pages and answers hit-testing/coordinate questions, and [`selection`] maps
 //! drag points to ordered text ranges — both without any renderer dependency.
 //! The [`raster`] module adds a dependency-light, LRU-bounded cache that feeds
-//! [`pdfxi_render::Renderer`] rasters to the canvas; it has no `egui` types.
-//! An optional native viewer shell built on `egui`/`eframe` is available behind
-//! the `ui` feature.
+//! [`pdfxi_render::Renderer`] rasters to the canvas; it has no `egui` types. The
+//! [`find`] module holds deterministic, bounded in-document search state over
+//! caller-supplied page text, also without any GUI dependency. An optional
+//! native viewer shell built on `egui`/`eframe` is available behind the `ui`
+//! feature; it wires [`find`] and [`selection`] into a find bar and copy command.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod canvas;
+pub mod find;
 pub mod raster;
 pub mod selection;
 mod state;
@@ -29,6 +32,7 @@ pub mod ui;
 pub use canvas::{
     CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, PageGeometry, PageSize,
 };
+pub use find::{DEFAULT_MATCH_CAP, FindMatch, FindOptions, FindState};
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
