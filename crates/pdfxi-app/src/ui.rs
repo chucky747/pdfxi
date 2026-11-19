@@ -58,6 +58,17 @@
 //! overlay placement, and scroll clamping all follow what is displayed. Every
 //! command goes through [`AppState`] and returns immediately — no UI action
 //! performs blocking I/O.
+//!
+//! # Optional content layers
+//!
+//! A right-side Layers panel lists the active tab's optional content groups in
+//! deterministic order, with checkboxes for ordinary layers, radio buttons for
+//! radio groups, disabled rows for locked groups, and show-all / hide-all
+//! controls. State is isolated per tab by [`crate::LayerRegistry`]. Panel actions
+//! call window-free `PdfxiApp` methods that only mutate in-memory state, so the
+//! UI never blocks. The visibility plan these methods expose is a boundary for a
+//! renderer backend; actual optional-content rasterization depends on backend
+//! support that `pdfxi-render` does not yet provide.
 
 use std::path::Path;
 
@@ -65,9 +76,10 @@ use egui::Key;
 
 use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
-    DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, OpenOutcome, OwnedSpan,
-    OwnedTextPage, PageSize, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
-    ThumbnailPaneState, Toolset, ViewCommand, ViewMode, Zoom, app_name, map_shortcut,
+    DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, LayerRegistry,
+    OcPropertiesSummary, OcgInfo, OpenOutcome, OwnedSpan, OwnedTextPage, PageSize, RadioGroup,
+    SelectionModel, ShortcutKey, ShortcutModifiers, TabId, ThumbnailPaneState, Toolset,
+    ViewCommand, ViewMode, VisibilityPlan, Zoom, app_name, map_shortcut,
 };
 
 #[cfg(feature = "pdfium")]
@@ -190,6 +202,23 @@ pub fn demo_page_sizes(count: usize) -> Vec<PageSize> {
     (0..count)
         .map(|_| PageSize::new(DEMO_PAGE_WIDTH_PT, DEMO_PAGE_HEIGHT_PT))
         .collect()
+}
+
+/// Build a deterministic demo `/OCProperties` summary for the shell.
+///
+/// The demo document has ordinary layers (Background, Annotations, Grid) plus a
+/// radio-button group (English / French labels). It lets the Layers panel and
+/// its radio/locked/visibility logic be exercised without loading a real PDF.
+/// A production loader would feed the caller's parsed summary through
+/// [`LayerRegistry::install`] instead.
+pub fn demo_oc_properties() -> OcPropertiesSummary {
+    OcPropertiesSummary::new()
+        .add_group(OcgInfo::new("oc-bg", "Background", true, false))
+        .add_group(OcgInfo::new("oc-anno", "Annotations", true, false))
+        .add_group(OcgInfo::new("oc-grid", "Grid", false, false))
+        .add_group(OcgInfo::new("oc-en", "English labels", true, false))
+        .add_group(OcgInfo::new("oc-fr", "French labels", false, false))
+        .with_radio_group(RadioGroup::new(["oc-en", "oc-fr"]))
 }
 
 /// Build placeholder text pages so selection can be demonstrated without a
@@ -494,6 +523,8 @@ pub struct PdfxiApp {
     thumbs: ThumbnailPaneState,
     /// When true, the next pane frame scrolls its active row into view.
     thumb_follow_active: bool,
+    /// Per-tab optional content layer models and viewing states.
+    layers: LayerRegistry,
     /// GPU textures for generated thumbnails, keyed by page.
     #[cfg(feature = "pdfium")]
     thumb_textures: std::collections::HashMap<usize, egui::TextureHandle>,
@@ -581,6 +612,10 @@ impl PdfxiApp {
         self.pending_page_scroll = None;
         self.thumbs.reset(page_count);
         self.thumb_follow_active = true;
+        // Each tab gets its own optional content state, isolated by tab id.
+        // The demo summary is caller-controlled and always valid; a real loader
+        // would install its parsed summary through the same registry method.
+        let _ = self.layers.install(id, demo_oc_properties());
         #[cfg(feature = "pdfium")]
         self.thumb_textures.clear();
     }
@@ -634,6 +669,7 @@ impl PdfxiApp {
         };
         match outcome {
             crate::CloseOutcome::Closed { .. } => {
+                self.layers.remove(id);
                 self.status = format!("Closed tab {id}");
                 self.restore_scroll_from_active();
                 true
@@ -1236,6 +1272,198 @@ impl PdfxiApp {
         self.textures.get(&page).map(|live| live.handle.clone())
     }
 
+    /// Install the demo layer set on the active tab.
+    ///
+    /// Returns `false` with a status message when no tab is active.
+    pub fn install_demo_layers(&mut self) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.layers.install(tab, demo_oc_properties()) {
+            Ok(()) => {
+                self.status = format!("Installed demo layers for tab {tab}");
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Toggle an optional content layer on the active tab.
+    ///
+    /// All work is in-memory and returns immediately — the UI never blocks on
+    /// I/O for a layer change. Locked or unknown ids report a typed error
+    /// through [`Self::status`] and return `false`.
+    pub fn toggle_layer(&mut self, id: &str) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.layers.toggle(tab, id) {
+            Ok(visible) => {
+                self.status = format!("Layer {id} {}", if visible { "shown" } else { "hidden" });
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Explicitly show or hide a layer on the active tab.
+    pub fn set_layer_visible(&mut self, id: &str, visible: bool) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.layers.set_visible(tab, id, visible) {
+            Ok(value) => {
+                self.status = format!("Layer {id} {}", if value { "shown" } else { "hidden" });
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Show all unlocked layers on the active tab, preserving radio exclusivity.
+    pub fn show_all_layers(&mut self) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.layers.show_all(tab) {
+            Ok(()) => {
+                self.status = "All layers shown".to_string();
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Hide all unlocked layers on the active tab.
+    pub fn hide_all_layers(&mut self) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.layers.hide_all(tab) {
+            Ok(()) => {
+                self.status = "All layers hidden".to_string();
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// The visibility plan for the active tab, if it has layers installed.
+    pub fn layer_visibility_plan(&self) -> Option<VisibilityPlan> {
+        self.state
+            .active_tab_id()
+            .and_then(|tab| self.layers.visibility_plan(tab))
+    }
+
+    /// Borrow the per-tab layer registry (for consumers and tests).
+    pub fn layers(&self) -> &LayerRegistry {
+        &self.layers
+    }
+
+    /// Render the optional content Layers side panel.
+    ///
+    /// The panel lists the active tab's layers in deterministic display order.
+    /// Ordinary layers use checkboxes; radio-group members use radio buttons so
+    /// the UI mirrors the model's exclusivity. Locked layers are rendered
+    /// disabled. Show all / hide all drive the same window-free model methods as
+    /// any other command. Row data is snapshotted before rendering so no
+    /// immutable model borrow is held while a click mutates state.
+    fn layers_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(tab) = self.state.active_tab_id() else {
+            ui.label("No document open");
+            return;
+        };
+
+        // Snapshot (id, name, locked, radio group, visible) rows up front.
+        let rows: Vec<(String, String, bool, Option<usize>, bool)> =
+            match (self.layers.model(tab), self.layers.state(tab)) {
+                (Some(model), Some(state)) => model
+                    .layers()
+                    .map(|layer| {
+                        let id = layer.id().to_string();
+                        let visible = state.is_visible(model, id.as_str()).unwrap_or(false);
+                        (
+                            id,
+                            layer.name().to_string(),
+                            layer.is_locked(),
+                            layer.radio_group(),
+                            visible,
+                        )
+                    })
+                    .collect(),
+                _ => {
+                    ui.label("No optional content layers");
+                    return;
+                }
+            };
+
+        ui.heading("Layers");
+        ui.horizontal(|ui| {
+            if ui.button("Show all").clicked() {
+                let _ = self.show_all_layers();
+            }
+            if ui.button("Hide all").clicked() {
+                let _ = self.hide_all_layers();
+            }
+        });
+        ui.separator();
+
+        // Derive the selected radio member per group from the current snapshot.
+        let mut selected_by_group: std::collections::HashMap<usize, String> =
+            std::collections::HashMap::new();
+        for (id, _, _, radio_group, visible) in &rows {
+            if let Some(group) = radio_group
+                && *visible
+            {
+                selected_by_group.insert(*group, id.clone());
+            }
+        }
+
+        for (id, name, locked, radio_group, visible) in rows {
+            ui.horizontal(|ui| match radio_group {
+                Some(group) => {
+                    if locked {
+                        ui.add_enabled(false, egui::RadioButton::new(visible, &name));
+                    } else {
+                        let selected = selected_by_group.entry(group).or_default();
+                        let response = ui.radio_value(selected, id.clone(), name);
+                        if response.clicked() {
+                            let _ = self.set_layer_visible(id.as_str(), true);
+                        }
+                    }
+                }
+                None => {
+                    let mut checked = visible;
+                    if locked {
+                        ui.add_enabled(false, egui::Checkbox::new(&mut checked, &name));
+                    } else if ui.checkbox(&mut checked, &name).changed() {
+                        let _ = self.set_layer_visible(id.as_str(), checked);
+                    }
+                }
+            });
+        }
+    }
+
     /// Render the in-document find bar.
     ///
     /// The query field mirrors into [`FindState`] on change; the two toggles
@@ -1670,6 +1898,10 @@ impl eframe::App for PdfxiApp {
             .resizable(true)
             .default_width(156.0)
             .show(ctx, |ui| self.thumbnails_ui(ui));
+        egui::SidePanel::right("pdfxi_layers")
+            .resizable(true)
+            .default_width(168.0)
+            .show(ctx, |ui| self.layers_ui(ui));
         egui::TopBottomPanel::top("pdfxi_toolbar").show(ctx, |ui| self.toolbar_ui(ui));
         egui::TopBottomPanel::top("pdfxi_tabs").show(ctx, |ui| self.tabs_ui(ui));
         if self.find_open {
@@ -2460,5 +2692,121 @@ mod tests {
         assert_eq!(app.state().active_tab_id(), Some(b));
         assert_eq!(app.state().tab_count(), 1);
         assert_eq!(app.status(), format!("Closed tab {a}"));
+    }
+
+    // ---- T-0089 optional content layers ---------------------------------
+
+    #[test]
+    fn demo_tab_installs_layers_and_exposes_a_visibility_plan() {
+        let mut app = PdfxiApp::new();
+        assert!(app.layer_visibility_plan().is_none(), "no tab yet");
+        let id = app.open_demo_tab();
+        assert!(app.layers().contains(id));
+        let plan = app.layer_visibility_plan().expect("layers installed");
+        assert_eq!(plan.visible_ids(), &["oc-bg", "oc-anno", "oc-en"]);
+        assert!(plan.is_visible("oc-bg"));
+        assert!(!plan.is_visible("oc-grid"));
+    }
+
+    #[test]
+    fn layer_toggle_and_bulk_actions_via_ui_helpers() {
+        let mut app = PdfxiApp::new();
+        app.open_demo_tab();
+        assert!(app.toggle_layer("oc-grid"));
+        assert!(
+            app.layer_visibility_plan()
+                .expect("plan")
+                .is_visible("oc-grid")
+        );
+        assert!(app.status().contains("oc-grid shown"), "{}", app.status());
+
+        assert!(app.show_all_layers());
+        let plan = app.layer_visibility_plan().expect("plan");
+        // Radio group keeps only its first member visible.
+        assert_eq!(
+            plan.visible_ids(),
+            &["oc-bg", "oc-anno", "oc-grid", "oc-en"]
+        );
+
+        assert!(app.hide_all_layers());
+        assert!(app.layer_visibility_plan().expect("plan").is_empty());
+    }
+
+    #[test]
+    fn radio_group_is_exclusive_through_ui_helpers() {
+        let mut app = PdfxiApp::new();
+        app.open_demo_tab();
+        let plan = app.layer_visibility_plan().expect("plan");
+        assert!(plan.is_visible("oc-en"));
+        assert!(!plan.is_visible("oc-fr"));
+
+        assert!(app.set_layer_visible("oc-fr", true));
+        let plan = app.layer_visibility_plan().expect("plan");
+        assert!(!plan.is_visible("oc-en"));
+        assert!(plan.is_visible("oc-fr"));
+    }
+
+    #[test]
+    fn per_tab_layer_state_is_isolated_and_removed_with_the_tab() {
+        let mut app = PdfxiApp::new();
+        let a = app.open_demo_tab();
+        assert!(app.toggle_layer("oc-grid"));
+        let b = app.open_demo_tab();
+        // The new tab starts from the demo defaults, not tab A's toggled state.
+        assert!(
+            !app.layer_visibility_plan()
+                .expect("plan b")
+                .is_visible("oc-grid")
+        );
+
+        app.activate_tab(a);
+        assert!(
+            app.layer_visibility_plan()
+                .expect("plan a")
+                .is_visible("oc-grid")
+        );
+        app.activate_tab(b);
+        assert!(
+            !app.layer_visibility_plan()
+                .expect("plan b")
+                .is_visible("oc-grid")
+        );
+
+        assert!(app.close_tab_by_id(b));
+        assert!(!app.layers().contains(b));
+        assert!(app.layers().contains(a));
+    }
+
+    #[test]
+    fn locked_unknown_and_no_tab_layer_actions_report_errors() {
+        let mut app = PdfxiApp::new();
+        assert!(!app.toggle_layer("oc-bg"), "no active tab");
+        assert!(app.status().contains("No document open"));
+
+        let tab = app.open_demo_tab();
+        assert!(!app.toggle_layer("ghost"));
+        assert!(
+            app.status().contains("no optional content group"),
+            "{}",
+            app.status()
+        );
+
+        let locked =
+            OcPropertiesSummary::new().add_group(OcgInfo::new("locked", "Locked", true, true));
+        assert!(app.layers.install(tab, locked).is_ok());
+        assert!(!app.toggle_layer("locked"));
+        assert!(app.status().contains("locked"), "{}", app.status());
+        assert!(
+            app.layer_visibility_plan()
+                .expect("plan")
+                .is_visible("locked")
+        );
+
+        assert!(app.install_demo_layers(), "reinstall resets state");
+        assert!(
+            app.layer_visibility_plan()
+                .expect("plan")
+                .is_visible("oc-bg")
+        );
     }
 }

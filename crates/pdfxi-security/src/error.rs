@@ -135,6 +135,16 @@ pub enum SecurityError {
     },
     /// A metadata field identifier (key, name, prefix, or local name) was empty.
     ScrubInvalidFieldIdentifier,
+    /// An XMP namespace prefix was not a valid XML NCName.
+    ///
+    /// Used when a prefix is non-empty but contains characters that would make
+    /// `to_xml` emit malformed markup (for example a quote, space, or colon).
+    ScrubInvalidXmpPrefix,
+    /// An XMP property local name was not a valid XML NCName.
+    ///
+    /// Used when a local name is non-empty but contains a colon or another
+    /// character outside the accepted NCName subset.
+    ScrubInvalidXmpLocalName,
     /// An XMP packet could not be parsed into the canonical structured subset.
     ScrubXmpMalformed,
     /// Strict scrub verification found a removed string still present.
@@ -254,6 +264,12 @@ impl fmt::Display for SecurityError {
             }
             Self::ScrubInvalidFieldIdentifier => {
                 write!(f, "metadata field identifier must not be empty")
+            }
+            Self::ScrubInvalidXmpPrefix => {
+                write!(f, "XMP namespace prefix is not a valid XML NCName")
+            }
+            Self::ScrubInvalidXmpLocalName => {
+                write!(f, "XMP property local name is not a valid XML NCName")
             }
             Self::ScrubXmpMalformed => write!(f, "XMP packet was not well-formed"),
             Self::ScrubVerificationFailed { category, target } => {

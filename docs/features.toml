@@ -327,14 +327,30 @@ tests = [
 title = "Attachments and embedded files"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/layers.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0089.md",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-app --features ui: EXIT=0 (151 passed); cargo test -p pdfxi-app: EXIT=0 (107 passed); clippy all-targets/all-features -D warnings and rustdoc -D warnings clean. Full output in docs/evidence/app/T-0089.md."
 id = "VIEW-010"
-notes = ""
+notes = "OCG layer model, per-tab state, radio/locked handling, visibility plan, and Layers UI panel implemented and tested. Actual optional-content rasterization depends on a renderer backend without an OC API (pdfxi-render exposes only rasters), so VIEW-010 remains in-progress."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "layers::tests::default_states_are_applied_from_summary",
+    "layers::tests::toggle_flips_visibility_and_returns_the_new_value",
+    "layers::tests::radio_group_enforces_exclusivity",
+    "layers::tests::locked_ocg_rejects_user_changes",
+    "layers::tests::layer_order_is_deterministic_and_appends_unlisted_ids",
+    "layers::tests::per_tab_layer_state_is_isolated",
+    "layers::tests::show_all_and_hide_all_respect_locked_and_radio_groups",
+    "layers::tests::unknown_ocg_returns_a_typed_error",
+    "layers::tests::visibility_plan_reflects_state_in_display_order",
+    "layers::tests::visibility_plan_updates_after_state_changes_and_registry_access",
+]
 title = "Optional content layers"
 
 [[feature]]
@@ -1278,14 +1294,32 @@ tests = [
 title = "Field properties calculations and validation"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-forms/src/taborder.rs",
+    "crates/pdfxi-forms/src/actions.rs",
+    "docs/evidence/forms/T-0090.md",
+]
 domain = "Forms"
-evidence = ""
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 184 passed, 0 failed; 22 new tests cover all four /Tabs orders, wrap and no-wrap traversal, hidden/read-only skipping, page subsets, K/F/V/C action parsing, typed rejection of JavaScript/URI/Launch/Import/Export, reset/submit plans, deterministic reports, unknown actions and malformed actions. Full output in docs/evidence/forms/T-0090.md."
 id = "FORMS-004"
-notes = ""
+notes = "Model-level implementation in pdfxi-forms: /Tabs order parsing, deterministic widget ordering and next/previous navigation with a skip policy; /AA K/F/V/C and /A parsing into a typed safe whitelist (reset/submit only) with dangerous actions rejected and reported. No scripts are executed. Host adapters for structure-tree order, page geometry and plan execution are out of scope. See T-0090 notes."
 priority = "P3"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "taborder::tests::tabs_policy_parses_all_names_and_defaults",
+    "taborder::tests::rows_order_is_top_to_bottom_then_left_to_right",
+    "taborder::tests::columns_order_is_left_to_right_then_top_to_bottom",
+    "taborder::tests::annotation_order_follows_annotation_index",
+    "taborder::tests::structure_order_follows_supplied_names",
+    "taborder::tests::next_and_previous_wrap_at_the_ends",
+    "taborder::tests::hidden_and_read_only_widgets_are_skipped",
+    "taborder::tests::page_subset_traverses_only_selected_pages",
+    "actions::tests::parses_aa_entries_for_k_f_v_c",
+    "actions::tests::dangerous_actions_are_rejected_with_typed_errors",
+    "actions::tests::reset_and_submit_actions_are_modelled",
+    "actions::tests::report_is_deterministic_and_orders_steps",
+    "actions::tests::unknown_action_is_reported_not_fatal",
+]
 title = "Form field actions and tab order"
 
 [[feature]]
@@ -1696,13 +1730,26 @@ title = "Sanitize document and remove hidden information"
 [[feature]]
 docs = [
     "crates/pdfxi-security/src/scrub.rs",
-    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "docs/book/src/security.md",
     "docs/evidence/security/T-0078.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security: 170 passed / 0 failed (17 new scrub tests); crate fmt, clippy -D warnings, rustdoc -D warnings EXIT=0. See docs/evidence/security/T-0078.md."
+evidence = "cargo test -p pdfxi-security: 174 passed, 0 failed (17 original + 4 new scrub regression tests); fmt/clippy -D warnings/rustdoc -D warnings all EXIT=0 with CARGO_TARGET_DIR=target/lanes/security. See docs/evidence/security/T-0078.md (Reviewer fix pass (T-0091))."
 id = "SEC-009"
-notes = "Copy-on-write security-layer scrubber complete with profiles (all/keep_producer/custom), deterministic XMP replacement and selective namespace-aware filtering, before/after inventory and residual verification. Real PDF object deletion/byte output remains owned by the core writer; row stays in-progress."
+notes = """
+Copy-on-write security-layer scrubber with profiles (All / KeepProducer /
+Custom allowlist), three XMP strategies (deterministic ReplaceCanonical default,
+RemovePacket, and Selective round-trip), before/after inventory, and residual
+verification. Reviewer pass hardened XMP identifiers to XML NCNames with typed
+errors (ScrubInvalidXmpPrefix / ScrubInvalidXmpLocalName) and made from_xml accept
+only a bounded, case-insensitive <rdf:RDF> root with a matching close tag;
+arbitrary text, truncated/mismatched roots, and huge nesting are rejected.
+Rustdoc and docs/book/src/security.md now state exactly what is validated and
+escaped and that selective parsing only reads the crate's structured packet.
+Real PDF object/stream deletion and byte output remain owned by the core writer;
+row stays in-progress.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
@@ -1723,6 +1770,10 @@ tests = [
     "scrub::tests::malformed_xmp_and_empty_identifiers_are_typed_errors",
     "scrub::tests::debug_output_never_contains_document_values",
     "scrub::tests::category_and_operation_identifiers_round_trip",
+    "scrub::tests::hostile_xmp_identifiers_are_rejected_as_typed_errors",
+    "scrub::tests::from_xml_rejects_non_root_rdf_and_malformed_roots",
+    "scrub::tests::from_xml_is_case_insensitive_and_accepts_a_bare_root",
+    "scrub::tests::from_xml_bounds_huge_nesting_and_oversized_input",
 ]
 title = "Metadata and XMP scrubbing"
 
@@ -2599,28 +2650,52 @@ tests = [
 title = "PDF 1.0 through 2.0 compatibility"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/parser.rs"
+docs = [
+    "crates/pdfxi-core/src/parser.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-core/src/xref_tests.rs",
+    "docs/evidence/core/T-0092.md",
+]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 48 passed; 0 failed. cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings: clean. cargo fmt -p pdfxi-core -- --check: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps: clean. docs/evidence/core/T-0023.md"
+evidence = "cargo test -p pdfxi-core -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 242 passed, 0 failed (18 xref_tests incl. 10 new); fmt/clippy -D warnings/rustdoc -D warnings all EXIT=0. Full output in docs/evidence/core/T-0092.md."
 id = "STD-002"
-notes = "Classic xref tables are fully parsed: final startxref lookup, subsection headers, n/f entries, trailer dictionary, /Root, and /Prev chains with newest-wins merging and cycle detection. The /Pages tree is walked recursively with cycle guards and inherited MediaBox/Resources; /Count, leaf page MediaBox and /Contents references are exposed via Document::page_count, page, pages, root, trailer_size and declared_page_count. FlateDecode is decoded by a dependency-free, cap-bounded inflater with PNG predictor support, and page_content/page_text decode compressed streams transparently. Unsupported filters return a named FilteredContent error. Xref streams remain out of scope and keep the row in-progress."
+notes = """
+Classic xref tables and xref streams are fully parsed and merged newest-wins
+across /Prev chains with cycle detection. Hybrid /XRefStm files now parse the
+companion xref stream at the same revision; its entries supersede the classic
+placeholders. /W widths are validated (per field <= 8, sum 1..=16), /Index
+subsections and /Size fallback are bounded, and a typed public report exposes
+section kind, entries and /Prev pointer via inspect_xref and
+Document::xref_report. FlateDecode with PNG predictors handles compressed
+xref data, and type-2 entries resolve /ObjStm members through the bounded
+parser reader. Ten new tests cover widths 1-4, multiple /Index subsections,
+compressed retrieval, mixed /Prev chains, hybrid fallback and cycle, bad and
+out-of-range widths/offsets/indexes, predictor, and a writer round-trip.
+
+Row stays in-progress: general xref-stream *writing* for Document::save /
+save_incremental is not implemented by this task; only the pre-existing
+object-stream writer produces xref streams, and classic save paths still
+decline stream-based sources.
+"""
 priority = "P0"
 status = "in-progress"
 tests = [
-    "pdfxi_core::filter::tests::decodes_known_zlib_vector",
-    "pdfxi_core::filter::tests::decodes_dynamic_huffman_vector",
-    "pdfxi_core::filter::tests::png_paeth_predictor_reconstructs_rows",
-    "pdfxi_core::filter::tests::unsupported_filter_error_names_the_filter",
-    "pdfxi_core::filter::tests::decode_cap_is_enforced",
-    "pdfxi_core::tests::flate_compressed_page_content_is_decoded_transparently",
-    "pdfxi_core::tests::page_content_rejects_unsupported_filter_and_names_it",
-    "pdfxi_core::tests::parses_one_page_pdf_from_testkit",
-    "pdfxi_core::tests::parses_multi_page_pdf_and_preserves_order",
-    "pdfxi_core::tests::rejects_missing_xref",
-    "pdfxi_core::tests::rejects_bad_startxref",
-    "pdfxi_core::tests::rejects_malformed_xref_entry",
-    "pdfxi_core::tests::rejects_missing_root_and_pages",
-    "pdfxi_core::tests::rejects_invalid_media_box_and_page_tree_cycle",
+    "xref_tests::xref_stream_parses_page_tree_content_and_decode_parms",
+    "xref_tests::xref_stream_accepts_field_widths_one_through_four",
+    "xref_tests::xref_stream_multiple_index_subsections_are_merged",
+    "xref_tests::object_stream_resolves_page_and_content_via_type_two_entries",
+    "xref_tests::mixed_classic_and_stream_prev_chain_is_newest_wins",
+    "xref_tests::hybrid_xrefstm_supplies_compressed_entries",
+    "xref_tests::hybrid_xrefstm_prev_cycle_is_detected",
+    "xref_tests::cyclic_prev_offset_is_detected",
+    "xref_tests::hostile_xref_field_width_is_rejected",
+    "xref_tests::wrong_width_array_length_is_rejected",
+    "xref_tests::xref_stream_row_width_over_sixteen_is_rejected",
+    "xref_tests::xref_stream_zero_width_sum_is_rejected",
+    "xref_tests::xref_stream_out_of_range_offset_is_rejected",
+    "xref_tests::out_of_range_compressed_index_is_rejected",
+    "xref_tests::xref_stream_writer_round_trip_is_readable",
+    "xref_tests::public_inspect_xref_matches_document_report",
 ]
 title = "Cross-reference tables and streams"
 

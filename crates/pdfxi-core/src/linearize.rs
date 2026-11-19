@@ -475,7 +475,9 @@ pub fn write_linearized_document_with_layout(
 
 /// Total hint data length (page table plus shared table).
 fn merged_hint_length(layout: &Layout) -> u64 {
-    layout.page_table_len.saturating_add(layout.shared_table_len)
+    layout
+        .page_table_len
+        .saturating_add(layout.shared_table_len)
 }
 
 /// Build the offsets to embed in the hint stream from a measured layout.

@@ -3,7 +3,7 @@
   "lane": "core",
   "title": "Cross-reference streams and hybrid files",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0023"],
   "owns": [
     "crates/pdfxi-core/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0092.toml"
   ],
   "acceptance": "cargo test -p pdfxi-core",
-  "evidence": ""
+  "evidence": "docs/evidence/core/T-0092.md"
 }

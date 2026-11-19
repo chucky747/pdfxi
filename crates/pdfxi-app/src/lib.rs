@@ -10,6 +10,11 @@
 //! [`pdfxi_render::Renderer`] rasters to the canvas; it has no `egui` types. The
 //! [`find`] module holds deterministic, bounded in-document search state over
 //! caller-supplied page text, also without any GUI dependency.
+//! The [`layers`] module models optional content groups (OCGs) from a caller-
+//! supplied `/OCProperties` summary: deterministic layer ordering, per-tab
+//! visibility state with radio-group exclusivity and locked layers, and a
+//! backend-agnostic visibility plan the canvas can consume. It has no GUI or
+//! renderer dependency.
 //! The [`thumbs`] module adds the window-free state and math for a page-thumbnail
 //! navigation pane: visible-row ranges, page/row mapping, active-page tracking,
 //! and a bounded prefetch request queue backed by `pdfxi-render`'s cache.
@@ -31,6 +36,7 @@
 pub mod canvas;
 pub mod commands;
 pub mod find;
+pub mod layers;
 pub mod raster;
 pub mod selection;
 mod state;
@@ -49,6 +55,10 @@ pub use canvas::{
 };
 pub use commands::{ShortcutKey, ShortcutModifiers, ViewCommand, map_shortcut};
 pub use find::{DEFAULT_MATCH_CAP, FindMatch, FindOptions, FindState};
+pub use layers::{
+    LayerError, LayerInfo, LayerModel, LayerRegistry, LayerState, OcPropertiesSummary, OcgId,
+    OcgInfo, RadioGroup, VisibilityPlan,
+};
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,

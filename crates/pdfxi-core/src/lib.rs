@@ -64,6 +64,7 @@ pub use objstm::{
 pub use optimizer::{CancellationToken, OptimizationReport, OptimizationResult, OptimizeOptions};
 pub use page::{Page, Rectangle};
 pub use pages::{PageOperation, PagePlan, RotationTarget};
+pub use parser::{XrefReport, XrefSectionKind, XrefSectionReport, inspect_xref};
 pub use printer_marks::{
     MarkCircle, MarkGeometry, MarkSegment, PrinterMarkOptions, PrinterMarks, generate_printer_marks,
 };
@@ -434,6 +435,25 @@ impl Document {
     pub fn root(&self) -> Result<ObjectId> {
         let structure = self.structure.as_ref().map_err(Clone::clone)?;
         Ok(structure.root_id)
+    }
+
+    /// Return a typed report of this document's cross-reference structure.
+    ///
+    /// The report lists every classic table, xref stream and hybrid `/XRefStm`
+    /// companion in visit order (newest first), with its byte offset, entry
+    /// count and `/Prev` pointer. It also records how many object numbers the
+    /// merged newest-wins table contains and whether any section was a stream.
+    /// [`inspect_xref`] produces the same report directly from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stored structural error when the cross-reference layer could
+    /// not be parsed, including [`Error::XrefCycle`] for cyclic chains.
+    pub fn xref_report(&self) -> Result<XrefReport> {
+        self.structure
+            .as_ref()
+            .map(|structure| structure.xref.report.clone())
+            .map_err(Clone::clone)
     }
 
     /// Load and return the indirect object identified by `id`.

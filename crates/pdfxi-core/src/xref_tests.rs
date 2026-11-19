@@ -7,7 +7,7 @@
 //! which keeps the cross-reference data self-consistent.
 
 use crate::parser;
-use crate::{Document, Error, ObjectId};
+use crate::{Document, Error, ObjectId, ObjectStreamOptions, XrefSectionKind, inspect_xref};
 
 /// Adler-32 of `data` (RFC 1950), used to build valid zlib fixtures.
 fn adler32(data: &[u8]) -> u32 {
@@ -23,6 +23,11 @@ fn adler32(data: &[u8]) -> u32 {
 /// Wrap `data` in a valid zlib stream made of stored DEFLATE blocks.
 fn zlib_stored(data: &[u8]) -> Vec<u8> {
     let mut out = vec![0x78, 0x01];
+    if data.is_empty() {
+        // `chunks` yields nothing for an empty slice; emit one final, empty
+        // stored block so the fixture is still a valid zlib stream.
+        out.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
+    }
     let mut chunks = data.chunks(0xffff).peekable();
     while let Some(chunk) = chunks.next() {
         let last = chunks.peek().is_none();
@@ -61,6 +66,8 @@ enum Entry {
     XrefSelf,
     /// A type-2 entry: `(object stream number, index)`.
     Compressed(u32, u32),
+    /// A type-1 entry whose byte offset lies beyond any plausible file length.
+    OutOfRangeOffset,
 }
 
 /// Optional knobs for the xref-stream builder.
@@ -141,6 +148,7 @@ fn build_xref_stream_pdf(
             Entry::Object(number) => (1, offsets[&number] as u64, 0),
             Entry::XrefSelf => (1, xref_offset as u64, 0),
             Entry::Compressed(objstm, index) => (2, u64::from(objstm), u64::from(index)),
+            Entry::OutOfRangeOffset => (1, 0xffff_ffff, 0),
         };
         push_field(&mut decoded, options.widths[0], kind);
         push_field(&mut decoded, options.widths[1], field_two);
@@ -269,6 +277,80 @@ fn patch_ascii(bytes: &mut [u8], position: usize, replacement: &[u8]) {
         replacement.len()
     );
     bytes[position..position + replacement.len()].copy_from_slice(replacement);
+}
+
+/// Build a hybrid-reference file with a classic table and an `/XRefStm`.
+///
+/// The classic table marks the page (3) and its content (4) free because a
+/// reader without stream support cannot resolve compressed objects. The
+/// companion xref stream at `/XRefStm` supplies type-2 entries for both,
+/// pointing at object stream 5. `stream_prev_classic` makes the stream's
+/// `/Prev` point back at the classic table so cycle detection can be tested.
+fn build_hybrid_pdf(stream_prev_classic: bool) -> Vec<u8> {
+    let objects = vec![
+        (1u32, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+        (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+        (5, build_objstm("2")),
+    ];
+    let mut out = b"%PDF-1.7\n%PDFXI\n".to_vec();
+    let mut offsets = std::collections::HashMap::new();
+    for (number, body) in &objects {
+        offsets.insert(*number, out.len());
+        out.extend_from_slice(format!("{number} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let classic_offset = out.len();
+
+    out.extend_from_slice(b"xref\n0 5\n");
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for number in [1u32, 2] {
+        out.extend_from_slice(format!("{:010} 00000 n \n", offsets[&number]).as_bytes());
+    }
+    out.extend_from_slice(b"0000000000 00000 f \n");
+    out.extend_from_slice(b"0000000000 00000 f \n");
+    out.extend_from_slice(b"trailer\n<< /Size 7 /Root 1 0 R /XRefStm 0000000000 >>\n");
+
+    // The stream begins immediately after the classic trailer. Patch the
+    // fixed-width placeholder now that its offset is known.
+    let xrefstm_offset = out.len();
+    let placeholder =
+        rfind_bytes(&out, b"/XRefStm 0000000000").expect("xrefstm placeholder") + "/XRefStm ".len();
+    patch_ascii(
+        &mut out,
+        placeholder,
+        format!("{xrefstm_offset:010}").as_bytes(),
+    );
+
+    let rows = [
+        (0u32, 0u64, 0u64, 0u64),
+        (1, 1, offsets[&1] as u64, 0),
+        (2, 1, offsets[&2] as u64, 0),
+        (3, 2, 5, 0),
+        (4, 2, 5, 1),
+        (5, 1, offsets[&5] as u64, 0),
+        (6, 1, xrefstm_offset as u64, 0),
+    ];
+    let mut decoded = Vec::new();
+    for (_, kind, field_two, field_three) in rows {
+        push_field(&mut decoded, 1, kind);
+        push_field(&mut decoded, 4, field_two);
+        push_field(&mut decoded, 2, field_three);
+    }
+    let encoded = zlib_stored(&decoded);
+    let mut dictionary = format!(
+        "<< /Type /XRef /Size 7 /Index [0 7] /W [1 4 2] /Root 1 0 R /Length {}",
+        encoded.len()
+    );
+    if stream_prev_classic {
+        dictionary.push_str(&format!(" /Prev {classic_offset}"));
+    }
+    dictionary.push_str(" /Filter /FlateDecode >>");
+    out.extend_from_slice(format!("6 0 obj\n{dictionary}\nstream\n").as_bytes());
+    out.extend_from_slice(&encoded);
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+    out.extend_from_slice(format!("startxref\n{classic_offset}\n%%EOF\n").as_bytes());
+    out
 }
 
 #[test]
@@ -555,4 +637,243 @@ fn cyclic_prev_offset_is_detected() {
     let pdf = build_xref_stream_pdf(&[], &objects, 3, 4, &entries, "", options);
     let document = Document::from_bytes(pdf).expect("header is valid");
     assert!(matches!(document.page_count(), Err(Error::XrefCycle(_))));
+}
+
+/// Build a one-page xref-stream PDF with the given `/W` widths.
+fn one_page_with_widths(widths: [u8; 3]) -> Vec<u8> {
+    let content = b"BT (Widths) Tj ET";
+    let stream_body = format!(
+        "<< /Length {} >>\nstream\n{}\nendstream",
+        content.len(),
+        String::from_utf8_lossy(content)
+    )
+    .into_bytes();
+    let objects = vec![
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+        (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+        (
+            3,
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        ),
+        (4, stream_body),
+    ];
+    let entries = vec![
+        (0, Entry::Free),
+        (1, Entry::Object(1)),
+        (2, Entry::Object(2)),
+        (3, Entry::Object(3)),
+        (4, Entry::Object(4)),
+        (5, Entry::XrefSelf),
+    ];
+    build_xref_stream_pdf(
+        &[],
+        &objects,
+        5,
+        6,
+        &entries,
+        "",
+        XrefOptions {
+            widths,
+            ..XrefOptions::default()
+        },
+    )
+}
+
+#[test]
+fn xref_stream_accepts_field_widths_one_through_four() {
+    // The type and index fields exercise every width from one to four bytes;
+    // the offset field stays four bytes so offsets remain representable.
+    for widths in [[1, 4, 1], [2, 4, 2], [3, 4, 3], [4, 4, 4]] {
+        let pdf = one_page_with_widths(widths);
+        let document = Document::from_bytes(pdf).expect("width fixture parses");
+        assert_eq!(document.page_count().expect("page count"), 1);
+        assert_eq!(document.page_text(0).expect("page text"), "Widths");
+        let report = document.xref_report().expect("typed report");
+        assert_eq!(report.sections.len(), 1);
+        assert_eq!(report.sections[0].kind, XrefSectionKind::Stream);
+        assert_eq!(report.sections[0].entries, 6);
+    }
+}
+
+#[test]
+fn xref_stream_multiple_index_subsections_are_merged() {
+    let content = b"BT (Subsections) Tj ET";
+    let stream_body = format!(
+        "<< /Length {} >>\nstream\n{}\nendstream",
+        content.len(),
+        String::from_utf8_lossy(content)
+    )
+    .into_bytes();
+    let objects = vec![
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+        (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+        (
+            3,
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        ),
+        (4, stream_body),
+    ];
+    let entries = vec![
+        (0, Entry::Free),
+        (1, Entry::Object(1)),
+        (2, Entry::Object(2)),
+        (3, Entry::Object(3)),
+        (4, Entry::Object(4)),
+        (5, Entry::Free),
+        (6, Entry::XrefSelf),
+    ];
+    // Four subsections, including a gap at object 5.
+    let options = XrefOptions {
+        index: Some("[0 1 1 2 3 3 6 1]".to_owned()),
+        ..XrefOptions::default()
+    };
+    let pdf = build_xref_stream_pdf(&[], &objects, 6, 7, &entries, "", options);
+    let document = Document::from_bytes(pdf).expect("subsection fixture parses");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    assert_eq!(document.page_text(0).expect("page text"), "Subsections");
+    assert!(matches!(
+        document.object(ObjectId::new(5, 0)),
+        Err(Error::FreeObject(5))
+    ));
+}
+
+#[test]
+fn hybrid_xrefstm_supplies_compressed_entries() {
+    let pdf = build_hybrid_pdf(false);
+    let document = Document::from_bytes(pdf).expect("hybrid fixture parses");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    assert_eq!(
+        document.page_text(0).expect("text from compressed page"),
+        "From ObjStm"
+    );
+    let report = document.xref_report().expect("typed report");
+    assert_eq!(report.sections.len(), 2);
+    assert_eq!(report.sections[0].kind, XrefSectionKind::Stream);
+    assert_eq!(report.sections[1].kind, XrefSectionKind::Classic);
+    assert!(report.uses_xref_stream);
+    assert_eq!(report.sections[1].previous, None);
+    assert_eq!(report.sections[1].entries, 5);
+}
+
+#[test]
+fn hybrid_xrefstm_prev_cycle_is_detected() {
+    let pdf = build_hybrid_pdf(true);
+    let document = Document::from_bytes(pdf).expect("header is valid");
+    assert!(matches!(document.page_count(), Err(Error::XrefCycle(_))));
+}
+
+#[test]
+fn xref_stream_out_of_range_offset_is_rejected() {
+    let content = b"BT (Never) Tj ET";
+    let stream_body = format!(
+        "<< /Length {} >>\nstream\n{}\nendstream",
+        content.len(),
+        String::from_utf8_lossy(content)
+    )
+    .into_bytes();
+    let objects = vec![
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+        (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+        (
+            3,
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        ),
+        (4, stream_body),
+    ];
+    let entries = vec![
+        (0, Entry::Free),
+        (1, Entry::Object(1)),
+        (2, Entry::Object(2)),
+        (3, Entry::Object(3)),
+        (4, Entry::OutOfRangeOffset),
+        (5, Entry::XrefSelf),
+    ];
+    let pdf = build_xref_stream_pdf(&[], &objects, 5, 6, &entries, "", XrefOptions::default());
+    let document = Document::from_bytes(pdf).expect("header is valid");
+    assert!(matches!(
+        document.page_count(),
+        Err(Error::MalformedXrefStream(_))
+    ));
+}
+
+#[test]
+fn xref_stream_row_width_over_sixteen_is_rejected() {
+    // Each field width is individually legal, but the row is 18 bytes.
+    let pdf = one_page_with_widths([6, 6, 6]);
+    let document = Document::from_bytes(pdf).expect("header is valid");
+    assert!(matches!(
+        document.page_count(),
+        Err(Error::MalformedXrefStream(_))
+    ));
+}
+
+#[test]
+fn xref_stream_zero_width_sum_is_rejected() {
+    let pdf = one_page_with_widths([0, 0, 0]);
+    let document = Document::from_bytes(pdf).expect("header is valid");
+    assert!(matches!(
+        document.page_count(),
+        Err(Error::MalformedXrefStream(_))
+    ));
+}
+
+#[test]
+fn out_of_range_compressed_index_is_rejected() {
+    let objects = vec![
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+        (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+        (5, build_objstm("2")),
+    ];
+    let entries = vec![
+        (0, Entry::Free),
+        (1, Entry::Object(1)),
+        (2, Entry::Object(2)),
+        (3, Entry::Compressed(5, 99)),
+        (4, Entry::Compressed(5, 1)),
+        (5, Entry::Object(5)),
+        (6, Entry::XrefSelf),
+    ];
+    let pdf = build_xref_stream_pdf(&[], &objects, 6, 7, &entries, "", XrefOptions::default());
+    let document = Document::from_bytes(pdf).expect("header is valid");
+    assert!(matches!(
+        document.page_count(),
+        Err(Error::MalformedObjectStream(_))
+    ));
+}
+
+#[test]
+fn xref_stream_writer_round_trip_is_readable() {
+    let source = Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("source fixture");
+    let saved = source
+        .save_with_object_streams(&ObjectStreamOptions::default())
+        .expect("object-stream save");
+    let reopened = Document::from_bytes(saved).expect("reopened xref-stream file");
+    assert_eq!(reopened.page_count().expect("page count"), 1);
+    assert_eq!(
+        reopened.page_text(0).expect("decoded page text"),
+        "Hello, PDFXI!"
+    );
+    let report = reopened.xref_report().expect("typed report");
+    assert_eq!(report.sections.len(), 1);
+    assert_eq!(report.sections[0].kind, XrefSectionKind::Stream);
+    assert!(report.uses_xref_stream);
+}
+
+#[test]
+fn public_inspect_xref_matches_document_report() {
+    let pdf = classic_one_page_pdf("Inspected");
+    let expected_start = parser::startxref_offset(&pdf).expect("classic startxref");
+    let from_bytes = inspect_xref(&pdf).expect("inspect_xref");
+    let document = Document::from_bytes(pdf).expect("document");
+    let from_document = document.xref_report().expect("document report");
+    assert_eq!(from_bytes, from_document);
+    assert_eq!(from_bytes.startxref, expected_start);
+    assert!(!from_bytes.uses_xref_stream);
+    assert_eq!(from_bytes.sections.len(), 1);
+    let section = &from_bytes.sections[0];
+    assert_eq!(section.kind, XrefSectionKind::Classic);
+    assert_eq!(section.offset, expected_start);
+    assert_eq!(section.entries, 5);
+    assert_eq!(section.previous, None);
+    assert_eq!(from_bytes.merged_entries, 5);
 }

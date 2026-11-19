@@ -33,6 +33,62 @@ const XREF_ENTRY_MIN_BYTES: usize = 4;
 ///
 /// PDF field values are at most 64 bits, so any width above eight is hostile.
 const MAX_XREF_FIELD_WIDTH: u8 = 8;
+/// Largest combined width of an xref stream's three `/W` fields.
+///
+/// Eight bytes per field would allow a 24-byte row; real files use at most
+/// `[1 4 2]`. Sixteen bytes is a generous but still bounded ceiling that also
+/// rejects a hostile row built from several wide fields.
+const MAX_XREF_ROW_WIDTH: usize = 16;
+
+/// The structural kind of one cross-reference section.
+///
+/// Hybrid files contain both kinds at the same revision: a classic table for
+/// readers that cannot handle xref streams and a `/Type /XRef` stream for
+/// readers that can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XrefSectionKind {
+    /// A classic `xref` table followed by a `trailer` dictionary.
+    Classic,
+    /// A `/Type /XRef` stream object (PDF 1.5 and later).
+    Stream,
+}
+
+/// A typed description of one cross-reference section.
+///
+/// Sections are reported in the order they were visited: newest first, then
+/// older sections through their `/Prev` pointers. A hybrid file contributes two
+/// adjacent reports for one revision: the `/XRefStm` stream first, followed by
+/// the classic table that references it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrefSectionReport {
+    /// Whether this section is a classic table or an xref stream.
+    pub kind: XrefSectionKind,
+    /// Byte offset in the source file where this section begins.
+    pub offset: usize,
+    /// Number of object entries declared by this section.
+    pub entries: usize,
+    /// Byte offset of the next older section from `/Prev`, when present.
+    pub previous: Option<usize>,
+}
+
+/// A typed, deterministic report of a document's cross-reference structure.
+///
+/// The report is derived solely from the source bytes and does not depend on
+/// page-tree resolution, so it is available even when `/Root` or `/Pages` is
+/// damaged. Entry counts are per section; [`Self::merged_entries`] is the size
+/// of the newest-wins map actually used to resolve objects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrefReport {
+    /// Every visited section, newest first.
+    pub sections: Vec<XrefSectionReport>,
+    /// Number of distinct object numbers in the merged cross-reference table.
+    pub merged_entries: usize,
+    /// `true` when any visited section (including a hybrid `/XRefStm`) was a
+    /// stream. Write paths use this to decline xref-stream sources explicitly.
+    pub uses_xref_stream: bool,
+    /// Byte offset read from the final `startxref` marker.
+    pub startxref: usize,
+}
 /// Upper bound on entries declared by a single xref stream or subsection.
 ///
 /// This is independent of the stream-length check: it keeps a hostile `/Index`
@@ -73,6 +129,8 @@ struct XrefSection {
     entries: HashMap<u32, XrefEntry>,
     trailer: Dictionary,
     prev: Option<usize>,
+    kind: XrefSectionKind,
+    offset: usize,
 }
 
 /// The merged cross-reference table for a document.
@@ -85,6 +143,8 @@ pub(crate) struct XrefTable {
     /// The write path uses this to decline such documents explicitly instead of
     /// dropping compressed objects during a save.
     pub(crate) uses_xref_stream: bool,
+    /// Typed structural report captured while the sections were parsed.
+    pub(crate) report: XrefReport,
 }
 
 impl XrefTable {
@@ -345,6 +405,8 @@ fn parse_xref_section(data: &[u8], offset: usize) -> Result<XrefSection> {
         entries,
         trailer,
         prev,
+        kind: XrefSectionKind::Classic,
+        offset,
     })
 }
 
@@ -393,22 +455,26 @@ fn parse_xref_stream(data: &[u8], offset: usize) -> Result<XrefSection> {
             "xref stream declares too many entries".to_owned(),
         ));
     }
+    // Both a zero row and an oversized row are hostile, even when /Index is
+    // empty: the widths describe the entry layout and must stay bounded.
     if row_width == 0 {
-        if total_entries > 0 {
-            return Err(Error::MalformedXrefStream(
-                "xref stream has entries but no field width".to_owned(),
-            ));
-        }
-    } else {
-        let required = total_entries.checked_mul(row_width as u64).ok_or_else(|| {
-            Error::MalformedXrefStream("xref stream data size overflow".to_owned())
-        })?;
-        if required > decoded.len() as u64 {
-            return Err(Error::MalformedXrefStream(format!(
-                "xref stream data is truncated: need {required} bytes, have {}",
-                decoded.len()
-            )));
-        }
+        return Err(Error::MalformedXrefStream(
+            "xref /W field widths sum to zero".to_owned(),
+        ));
+    }
+    if row_width > MAX_XREF_ROW_WIDTH {
+        return Err(Error::MalformedXrefStream(format!(
+            "xref /W field widths sum to {row_width}, above the {MAX_XREF_ROW_WIDTH} byte limit"
+        )));
+    }
+    let required = total_entries
+        .checked_mul(row_width as u64)
+        .ok_or_else(|| Error::MalformedXrefStream("xref stream data size overflow".to_owned()))?;
+    if required > decoded.len() as u64 {
+        return Err(Error::MalformedXrefStream(format!(
+            "xref stream data is truncated: need {required} bytes, have {}",
+            decoded.len()
+        )));
     }
 
     let mut entries = HashMap::new();
@@ -468,6 +534,8 @@ fn parse_xref_stream(data: &[u8], offset: usize) -> Result<XrefSection> {
         entries,
         trailer: dictionary,
         prev,
+        kind: XrefSectionKind::Stream,
+        offset,
     })
 }
 
@@ -648,13 +716,66 @@ fn section_kind(data: &[u8], offset: usize) -> Result<SectionKind> {
     }
 }
 
+/// Return a typed report for one parsed section.
+fn section_report(section: &XrefSection) -> XrefSectionReport {
+    XrefSectionReport {
+        kind: section.kind,
+        offset: section.offset,
+        entries: section.entries.len(),
+        previous: section.prev,
+    }
+}
+
+/// Parse the `/XRefStm` companion of a classic section in a hybrid-reference
+/// file (ISO 32000-1, 7.5.8.4).
+///
+/// The pointer is validated and registered in `seen` before the stream is
+/// parsed, so a self-reference or a pointer into an already visited section is
+/// reported as [`Error::XrefCycle`]. The xref stream's entries supersede the
+/// classic table's placeholders for the same object numbers; its `/Prev` is
+/// used only when the classic trailer has none.
+fn hybrid_xref_stream(
+    data: &[u8],
+    classic: &XrefSection,
+    seen: &mut HashSet<usize>,
+) -> Result<Option<XrefSection>> {
+    let Some(value) = classic.trailer.get("XRefStm").and_then(Object::as_i64) else {
+        return Ok(None);
+    };
+    let offset = usize::try_from(value).map_err(|_| {
+        Error::MalformedXref("/XRefStm must be a non-negative byte offset".to_owned())
+    })?;
+    if offset >= data.len() {
+        return Err(Error::MalformedXref(format!(
+            "/XRefStm offset {offset} is outside the file"
+        )));
+    }
+    if !seen.insert(offset) {
+        return Err(Error::XrefCycle(offset));
+    }
+    let section = parse_xref_stream(data, offset).map_err(|error| match error {
+        Error::MissingXref(_) => Error::MalformedXrefStream(format!(
+            "/XRefStm at {offset} does not reference a /Type /XRef stream"
+        )),
+        other => other,
+    })?;
+    Ok(Some(section))
+}
+
 /// Merge all xref sections reachable through `/Prev`, classic and stream alike.
 ///
 /// Sections are visited newest first. Entries are merged newest-wins through
 /// `or_insert`, and trailer keys are applied oldest-first so the newest section
 /// wins there too. Revisiting an offset is a cycle and is rejected.
+///
+/// When a classic table carries `/XRefStm`, its companion stream is parsed as
+/// part of the same revision and pushed first so that the stream's type-2
+/// entries replace the classic table's free placeholders. The classic
+/// trailer's `/Prev` takes precedence for continuing the chain; the stream's
+/// `/Prev` is used as a fallback when the classic one is absent.
 fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
     let mut sections = Vec::new();
+    let mut reports = Vec::new();
     let mut next = Some(start);
     let mut seen = HashSet::new();
     let mut uses_xref_stream = false;
@@ -675,7 +796,20 @@ fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
                 parse_xref_stream(data, offset)?
             }
         };
-        next = section.prev;
+        let hybrid = if section.kind == XrefSectionKind::Classic {
+            hybrid_xref_stream(data, &section, &mut seen)?
+        } else {
+            None
+        };
+        next = section
+            .prev
+            .or_else(|| hybrid.as_ref().and_then(|stream| stream.prev));
+        if let Some(stream) = hybrid {
+            uses_xref_stream = true;
+            reports.push(section_report(&stream));
+            sections.push(stream);
+        }
+        reports.push(section_report(&section));
         sections.push(section);
     }
 
@@ -691,11 +825,34 @@ fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
             trailer.insert(key.clone(), value.clone());
         }
     }
+    let merged_entries = entries.len();
     Ok(XrefTable {
         entries,
         trailer,
         uses_xref_stream,
+        report: XrefReport {
+            sections: reports,
+            merged_entries,
+            uses_xref_stream,
+            startxref: start,
+        },
     })
+}
+
+/// Inspect a PDF's cross-reference structure without resolving its page tree.
+///
+/// The returned report is deterministic: it lists classic tables, xref streams
+/// and hybrid `/XRefStm` companions in visit order, together with their entry
+/// counts and `/Prev` pointers. Only the header-independent structural layer is
+/// read; a malformed section is reported as an error rather than recovered.
+///
+/// # Errors
+///
+/// Returns any [`Error`] produced by locating `startxref` or parsing a section,
+/// including [`Error::XrefCycle`] for a cyclic `/Prev` or `/XRefStm` chain.
+pub fn inspect_xref(data: &[u8]) -> Result<XrefReport> {
+    let start = find_startxref(data)?;
+    Ok(load_xref(data, start)?.report)
 }
 
 /// Parse and return the indirect object identified by `id`.

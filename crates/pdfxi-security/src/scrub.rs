@@ -22,17 +22,39 @@
 //!
 //! - [`XmpStrategy::RemovePacket`] — removes the `/Metadata` stream entirely,
 //! - [`XmpStrategy::ReplaceCanonical`] (the default) — deterministically
-//!   replaces it with a minimal, well-formed RDF/XML packet containing only
-//!   allowlisted properties, or
+//!   replaces it with a minimal RDF/XML packet containing only allowlisted
+//!   properties, or
 //! - [`XmpStrategy::Selective`] — parses a canonical packet with
 //!   [`XmpPacket::from_xml`], filters properties against the allowlist, and
-//!   re-serialises a well-formed packet.
+//!   re-serialises the packet.
 //!
-//! [`XmpPacket::to_xml`] always emits well-formed XML with escaped values.
-//! [`XmpPacket::from_xml`] parses the canonical subset this module emits, which
-//! keeps the parser small and dependency-free while still understanding XMP
-//! namespaces and properties. For arbitrary third-party XMP, callers supply
-//! the structured properties directly.
+//! ### What is validated and what is escaped
+//!
+//! [`XmpPacket::to_xml`] does not perform general XML validation. Instead it
+//! relies on construction-time guarantees and escaping:
+//!
+//! - `prefix` and `local_name` are validated as XML NCNames when an
+//!   [`XmpProperty`] is constructed or deserialised: they must be non-empty,
+//!   must not contain `:`, must start with an ASCII letter or `_`, and may
+//!   contain only ASCII letters, digits, `_`, `-`, and `.` thereafter. Invalid
+//!   identifiers return [`SecurityError::ScrubInvalidXmpPrefix`] or
+//!   [`SecurityError::ScrubInvalidXmpLocalName`] (empty values return
+//!   [`SecurityError::ScrubInvalidFieldIdentifier`]). Names are therefore safe
+//!   to interpolate into element and attribute names without further escaping.
+//! - `namespace_uri` and property `value` are XML-escaped: `&`, `<`, `>`, `"`,
+//!   and `'` are replaced by their entity forms before serialization. This
+//!   keeps attribute values and element text well-formed for arbitrary values;
+//!   it is escaping, not validation.
+//!
+//! [`XmpPacket::from_xml`] is deliberately **not** a general XML parser. It
+//! accepts only the bounded, canonical structured subset this module emits:
+//! the input length, tag count, and `rdf:RDF` nesting depth are capped; a
+//! case-insensitive `<rdf:RDF ...>` root (optionally wrapped in `x:xmpmeta`
+//! and preceded by a prolog) must appear in document order with a matching
+//! `</rdf:RDF>` close tag. Arbitrary text that merely contains the substring
+//! `rdf:RDF`, a truncated root, a mismatched close tag, or excessive nesting
+//! is rejected with [`SecurityError::ScrubXmpMalformed`]. For third-party XMP,
+//! callers supply the structured properties directly rather than raw XML.
 //!
 //! ## Verification
 //!
@@ -57,6 +79,15 @@ const PDF_NAMESPACE_URI: &str = "http://ns.adobe.com/pdf/1.3/";
 const PRODUCER_INFO_KEY: &str = "Producer";
 /// XMP local name for the producer.
 const PRODUCER_XMP_LOCAL: &str = "Producer";
+/// Upper bound on the length of a packet accepted by [`XmpPacket::from_xml`].
+///
+/// Bounds work so hostile input cannot force unbounded scanning. Canonical
+/// packets emitted by [`XmpPacket::to_xml`] are far smaller than this.
+const MAX_XMP_BYTES: usize = 1 << 20;
+/// Upper bound on the number of element tags processed while parsing a packet.
+const MAX_XMP_TAGS: usize = 50_000;
+/// Upper bound on nested `rdf:RDF` elements in a parsed packet.
+const MAX_RDF_DEPTH: usize = 32;
 
 /// A category of metadata that can be scrubbed.
 ///
@@ -242,12 +273,22 @@ pub struct XmpProperty {
 }
 
 impl XmpProperty {
-    /// Build a property, rejecting empty namespace, prefix, or local name.
+    /// Build a property, validating its identifiers as XML NCNames.
+    ///
+    /// `prefix` and `local_name` must be non-empty XML NCNames in the ASCII
+    /// subset: no colon, first character an ASCII letter or `_`, and remaining
+    /// characters ASCII letters, digits, `_`, `-`, or `.`. This prevents
+    /// identifier injection when the property is serialized by
+    /// [`XmpPacket::to_xml`]. `namespace_uri` must be non-empty.
     ///
     /// # Errors
     ///
-    /// Returns [`SecurityError::ScrubInvalidFieldIdentifier`] when `prefix`,
-    /// `namespace_uri`, or `local_name` is empty or whitespace-only.
+    /// - [`SecurityError::ScrubInvalidFieldIdentifier`] when `prefix`,
+    ///   `namespace_uri`, or `local_name` is empty or whitespace-only.
+    /// - [`SecurityError::ScrubInvalidXmpPrefix`] when `prefix` is not a valid
+    ///   NCName.
+    /// - [`SecurityError::ScrubInvalidXmpLocalName`] when `local_name` is not a
+    ///   valid NCName (including when it contains `:`).
     pub fn new(
         prefix: impl Into<String>,
         namespace_uri: impl Into<String>,
@@ -257,11 +298,14 @@ impl XmpProperty {
         let prefix = prefix.into();
         let namespace_uri = namespace_uri.into();
         let local_name = local_name.into();
-        if prefix.trim().is_empty()
-            || namespace_uri.trim().is_empty()
-            || local_name.trim().is_empty()
-        {
+        if prefix.is_empty() || namespace_uri.trim().is_empty() || local_name.is_empty() {
             return Err(SecurityError::ScrubInvalidFieldIdentifier);
+        }
+        if !is_ncname(&prefix) {
+            return Err(SecurityError::ScrubInvalidXmpPrefix);
+        }
+        if !is_ncname(&local_name) {
+            return Err(SecurityError::ScrubInvalidXmpLocalName);
         }
         Ok(Self {
             prefix,
@@ -381,21 +425,29 @@ impl XmpPacket {
 
     /// Parse a packet produced by [`Self::to_xml`] (the canonical subset).
     ///
+    /// This is deliberately not a general XML parser. It requires a bounded
+    /// input with a case-insensitive `<rdf:RDF ...>` root in document order and
+    /// a matching close tag (see the module documentation). Descriptions are
+    /// parsed only within that root's element content.
+    ///
     /// # Errors
     ///
-    /// Returns [`SecurityError::ScrubXmpMalformed`] when required `rdf:RDF`
-    /// structure, namespace declarations, or closing tags are missing, and
-    /// [`SecurityError::ScrubInvalidFieldIdentifier`] when a parsed property has
-    /// an empty identifier.
+    /// Returns [`SecurityError::ScrubXmpMalformed`] when the root or its close
+    /// tag is missing, the input exceeds a size/tag/depth bound, or required
+    /// namespace declarations are absent. Identifier errors from parsed
+    /// properties are returned as the typed `ScrubInvalid*` variants.
     pub fn from_xml(xml: &str) -> Result<Self> {
-        if !xml.contains("rdf:RDF") {
-            return Err(SecurityError::ScrubXmpMalformed);
-        }
+        let (content_start, content_end) = validate_rdf_root(xml)?;
         let mut properties = Vec::new();
-        let mut rest = xml;
+        let mut rest = &xml[content_start..content_end];
         const OPEN: &str = "<rdf:Description";
         const CLOSE: &str = "</rdf:Description>";
+        let mut tags = 0usize;
         while let Some(start_rel) = rest.find(OPEN) {
+            tags += 1;
+            if tags > MAX_XMP_TAGS {
+                return Err(SecurityError::ScrubXmpMalformed);
+            }
             let start = start_rel;
             let open_end_rel = rest[start..]
                 .find('>')
@@ -424,6 +476,65 @@ impl fmt::Debug for XmpPacket {
     }
 }
 
+/// Return `true` when `name` is a non-empty XML NCName in the accepted ASCII
+/// subset.
+///
+/// A valid name starts with an ASCII letter or `_` and continues with ASCII
+/// letters, digits, `_`, `-`, or `.`. Colons, whitespace, quotes, angle
+/// brackets, and every other character are rejected. This is a conservative
+/// subset of the XML 1.0 NCName production and is sufficient for the canonical
+/// packets this crate emits and parses.
+fn is_ncname(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+}
+
+/// Case-insensitive ASCII `starts_with` over byte slices.
+fn starts_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.len() >= needle.len() && haystack[..needle.len()].eq_ignore_ascii_case(needle)
+}
+
+/// Find the first case-insensitive ASCII occurrence of `needle` in `haystack`.
+fn find_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
+}
+
+/// Advance past ASCII whitespace starting at `pos`.
+fn skip_ws(bytes: &[u8], mut pos: usize) -> usize {
+    while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    pos
+}
+
+/// Return `true` when the byte at `pos` ends an element name (whitespace or
+/// `>`), so `<rdf:RDF` cannot match `<rdf:RDFFoo`.
+fn is_name_end(bytes: &[u8], pos: usize) -> bool {
+    bytes
+        .get(pos)
+        .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'>' || *byte == b'/')
+}
+
+/// Locate the `>` that closes the tag beginning at `pos`, within the bound.
+fn tag_end(bytes: &[u8], pos: usize) -> Result<usize> {
+    bytes[pos..]
+        .iter()
+        .position(|byte| *byte == b'>')
+        .map(|offset| pos + offset)
+        .ok_or(SecurityError::ScrubXmpMalformed)
+}
+
 /// Escape five XML special characters so a value stays well-formed XML.
 fn xml_escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -448,6 +559,107 @@ fn xml_unescape(value: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&amp;", "&")
+}
+
+/// Validate that `xml` has a bounded `rdf:RDF` root element in document order.
+///
+/// Returns the byte range `[content_start, content_end)` covering the root's
+/// element content. An XML prolog (whitespace, processing instructions, and
+/// comments) and a single `x:xmpmeta` wrapper are skipped; any other content
+/// before the root, a missing or mismatched close tag, or work beyond the
+/// configured bounds is rejected with [`SecurityError::ScrubXmpMalformed`].
+fn validate_rdf_root(xml: &str) -> Result<(usize, usize)> {
+    if xml.len() > MAX_XMP_BYTES {
+        return Err(SecurityError::ScrubXmpMalformed);
+    }
+    let bytes = xml.as_bytes();
+    let mut pos = 0usize;
+    let mut tags = 0usize;
+
+    // Skip the prolog: whitespace, processing instructions, and comments.
+    loop {
+        pos = skip_ws(bytes, pos);
+        if tags > MAX_XMP_TAGS {
+            return Err(SecurityError::ScrubXmpMalformed);
+        }
+        match bytes.get(pos) {
+            Some(b'<') => {}
+            _ => return Err(SecurityError::ScrubXmpMalformed),
+        }
+        if starts_with_ci(&bytes[pos..], b"<?") {
+            let end = find_ci(&bytes[pos..], b"?>").ok_or(SecurityError::ScrubXmpMalformed)?;
+            pos += end + 2;
+            tags += 1;
+            continue;
+        }
+        if starts_with_ci(&bytes[pos..], b"<!--") {
+            let end = find_ci(&bytes[pos..], b"-->").ok_or(SecurityError::ScrubXmpMalformed)?;
+            pos += end + 3;
+            tags += 1;
+            continue;
+        }
+        break;
+    }
+
+    // Skip the single `x:xmpmeta` wrapper emitted by `to_xml`, if present.
+    const META: &[u8] = b"<x:xmpmeta";
+    if starts_with_ci(&bytes[pos..], META) && is_name_end(bytes, pos + META.len()) {
+        pos = tag_end(bytes, pos + 1)? + 1;
+        pos = skip_ws(bytes, pos);
+        tags += 1;
+    }
+
+    // The next element must be the `rdf:RDF` root (case-insensitive).
+    const RDF_OPEN: &[u8] = b"<rdf:RDF";
+    if !starts_with_ci(&bytes[pos..], RDF_OPEN) || !is_name_end(bytes, pos + RDF_OPEN.len()) {
+        return Err(SecurityError::ScrubXmpMalformed);
+    }
+    let content_start = tag_end(bytes, pos + 1)? + 1;
+    tags += 1;
+    if tags > MAX_XMP_TAGS {
+        return Err(SecurityError::ScrubXmpMalformed);
+    }
+
+    let content_end = find_matching_rdf_close(bytes, content_start, &mut tags)?;
+    Ok((content_start, content_end))
+}
+
+/// Find the byte index where the `</rdf:RDF>` matching the root at `pos` opens.
+///
+/// Nested roots are tracked up to [`MAX_RDF_DEPTH`]; every candidate tag is
+/// charged to the shared `tags` budget so hostile input cannot spin forever.
+fn find_matching_rdf_close(bytes: &[u8], mut pos: usize, tags: &mut usize) -> Result<usize> {
+    const OPEN: &[u8] = b"<rdf:RDF";
+    const CLOSE: &[u8] = b"</rdf:RDF";
+    let mut depth = 1usize;
+    while pos < bytes.len() {
+        if *tags > MAX_XMP_TAGS {
+            return Err(SecurityError::ScrubXmpMalformed);
+        }
+        let Some(rel) = find_ci(&bytes[pos..], b"<") else {
+            break;
+        };
+        pos += rel;
+        if starts_with_ci(&bytes[pos..], OPEN) && is_name_end(bytes, pos + OPEN.len()) {
+            depth += 1;
+            if depth > MAX_RDF_DEPTH {
+                return Err(SecurityError::ScrubXmpMalformed);
+            }
+            *tags += 1;
+            pos += OPEN.len();
+        } else if starts_with_ci(&bytes[pos..], CLOSE) && is_name_end(bytes, pos + CLOSE.len()) {
+            *tags += 1;
+            depth -= 1;
+            if depth == 0 {
+                return Ok(pos);
+            }
+            pos += CLOSE.len();
+        } else {
+            pos += 1;
+            *tags += 1;
+        }
+    }
+    Err(SecurityError::ScrubXmpMalformed)
 }
 
 /// Extract `xmlns:prefix="uri"` declarations from an opening tag.
@@ -1825,5 +2037,106 @@ mod tests {
         assert_eq!(ScrubProfile::All.to_string(), "all");
         assert_eq!(ScrubProfile::KeepProducer.to_string(), "keep_producer");
         assert_eq!(XmpStrategy::Selective.as_id(), "selective");
+    }
+
+    #[test]
+    fn hostile_xmp_identifiers_are_rejected_as_typed_errors() {
+        // Empty identifiers keep the original typed error.
+        assert_eq!(
+            XmpProperty::new("", "urn:test", "name", "value"),
+            Err(SecurityError::ScrubInvalidFieldIdentifier)
+        );
+        assert_eq!(
+            XmpProperty::new("dc", "urn:test", "", "value"),
+            Err(SecurityError::ScrubInvalidFieldIdentifier)
+        );
+        // A quote, a space, and a colon in the prefix would break attribute
+        // and element names in to_xml; each is a typed prefix error.
+        for prefix in ["dc\"evil", "dc evil", "a:b", "1bad", "-lead"] {
+            assert_eq!(
+                XmpProperty::new(prefix, "urn:test", "name", "value"),
+                Err(SecurityError::ScrubInvalidXmpPrefix),
+                "prefix {prefix} must be rejected"
+            );
+        }
+        // Angle brackets, a colon, and quotes in the local name are rejected.
+        for local in ["na<me", "a:b", "na\"me", "with space", "9lives"] {
+            assert_eq!(
+                XmpProperty::new("dc", "urn:test", local, "value"),
+                Err(SecurityError::ScrubInvalidXmpLocalName),
+                "local name {local} must be rejected"
+            );
+        }
+        // Valid NCNames still construct successfully.
+        assert!(XmpProperty::new("dc_1", "urn:test", "my-name.ok", "v").is_ok());
+    }
+
+    #[test]
+    fn from_xml_rejects_non_root_rdf_and_malformed_roots() -> Result<()> {
+        // Arbitrary text that merely mentions rdf:RDF is not a packet.
+        for xml in [
+            "just some rdf:RDF text",
+            "prefix <rdf:RDF></rdf:RDF>",
+            "<foo><rdf:RDF></rdf:RDF></foo>",
+        ] {
+            assert_eq!(
+                XmpPacket::from_xml(xml),
+                Err(SecurityError::ScrubXmpMalformed),
+                "non-root input {xml:?} must be rejected"
+            );
+        }
+        // Truncated root: no close tag.
+        assert_eq!(
+            XmpPacket::from_xml("<rdf:RDF xmlns:rdf=\"urn:rdf\">"),
+            Err(SecurityError::ScrubXmpMalformed)
+        );
+        // Mismatched close tag.
+        assert_eq!(
+            XmpPacket::from_xml("<rdf:RDF></rdf:Description>"),
+            Err(SecurityError::ScrubXmpMalformed)
+        );
+        // A canonical packet still round-trips (guards against over-rejection).
+        let original = sample_document()?.xmp().expect("packet present").to_xml();
+        assert_eq!(XmpPacket::from_xml(&original)?.to_xml(), original);
+        Ok(())
+    }
+
+    #[test]
+    fn from_xml_is_case_insensitive_and_accepts_a_bare_root() -> Result<()> {
+        let bare = "<RDF:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n \
+                    <rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n \
+                    <dc:title>Hello</dc:title>\n \
+                    </rdf:Description>\n \
+                    </RDF:RDF>";
+        let parsed = XmpPacket::from_xml(bare)?;
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed.properties()[0].local_name(), "title");
+        assert_eq!(parsed.properties()[0].value(), "Hello");
+        Ok(())
+    }
+
+    #[test]
+    fn from_xml_bounds_huge_nesting_and_oversized_input() {
+        // Deeply nested rdf:RDF roots are rejected once the depth bound is hit.
+        let mut deep = String::from("<rdf:RDF>");
+        for _ in 0..(MAX_RDF_DEPTH + 2) {
+            deep.push_str("<rdf:RDF>");
+        }
+        for _ in 0..(MAX_RDF_DEPTH + 2) {
+            deep.push_str("</rdf:RDF>");
+        }
+        assert_eq!(
+            XmpPacket::from_xml(&deep),
+            Err(SecurityError::ScrubXmpMalformed)
+        );
+
+        // An input larger than the byte cap is rejected before any scanning.
+        let mut huge = String::from("<rdf:RDF>");
+        huge.push_str(&"x".repeat(MAX_XMP_BYTES));
+        huge.push_str("</rdf:RDF>");
+        assert_eq!(
+            XmpPacket::from_xml(&huge),
+            Err(SecurityError::ScrubXmpMalformed)
+        );
     }
 }
