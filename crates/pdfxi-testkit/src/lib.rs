@@ -26,6 +26,10 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod fixtures;
+pub mod golden;
+pub mod hash;
+
 /// Default page width in PDF points (US Letter portrait).
 const DEFAULT_WIDTH: f64 = 612.0;
 /// Default page height in PDF points (US Letter portrait).

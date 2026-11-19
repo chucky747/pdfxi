@@ -1,0 +1,31 @@
+# Committed PDF fixture manifest (T-0016).
+#
+# These are small, deterministic, synthetic PDFs generated from pdfxi-testkit
+# builders. Regenerate with:
+#   cargo run -p pdfxi-testkit --example generate_fixtures
+# Then refresh the SHA-256 values below with `Get-FileHash -Algorithm SHA256`
+# or the digest printed by the generator. The integration test
+# `tests/committed_fixtures.rs` verifies every hash, page count, and text marker.
+
+version = 1
+
+[[fixture]]
+name = "minimal.pdf"
+builder = "minimal_pdf()"
+sha256 = "5ff2d28030127f2586049af2c68fc73baa0b33d65d1dc54c21c6200e8c546914"
+pages = 1
+text = "Hello, PDFXI!"
+
+[[fixture]]
+name = "text.pdf"
+builder = "text_pdf(\"PDFXI golden fixture text\")"
+sha256 = "01c4a6aec8e4c67ff984f6c4937e44fec77cba3c268952ef9ba6c07ef9c377db"
+pages = 1
+text = "PDFXI golden fixture text"
+
+[[fixture]]
+name = "multipage-3.pdf"
+builder = "multipage_pdf(3)"
+sha256 = "7dcdcff913a0992201feed514d3f1e31e9ed8cd54b134ae7e09fa207f72f4f42"
+pages = 3
+text = "Page 1 of 3|Page 2 of 3|Page 3 of 3"

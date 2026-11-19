@@ -1,14 +1,14 @@
 {
     "acceptance":  "cargo test -p pdfxi-testkit",
     "id":  "T-0016",
-    "evidence":  "",
+    "evidence":  "docs/evidence/qa/T-0016.md",
     "owns":  [
                  "crates/pdfxi-testkit/**",
                  "fixtures/**",
                  "corpus/**",
                  "orchestration/feature-updates/T-0016.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0007"
                    ],

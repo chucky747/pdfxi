@@ -1,0 +1,19 @@
+# Corpus descriptors for checksum-verified, on-demand fetches.
+#
+# No corpus data is committed. Each [[corpus]] entry records where an archive
+# can be fetched and the SHA-256 digest/size it must match before use. The list
+# is intentionally empty for M1: no large corpus has been approved, so no tool
+# should initiate a download based on this file. See corpus/README.md.
+
+version = 1
+
+# Example descriptor shape (commented out; do not enable without an approved
+# license and a verified digest):
+#
+# [[corpus]]
+# id = "example-public-domain"
+# url = "https://example.invalid/corpus.tar.zst"
+# sha256 = "<64 lower-case hex digits>"
+# bytes = 0
+# license = "Public domain"
+# source = "Upstream project name and release"
