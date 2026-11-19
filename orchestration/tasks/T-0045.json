@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-convert",
+    "id":  "T-0045",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-convert/**",
+                 "orchestration/feature-updates/T-0045.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0019"
+                   ],
+    "title":  "Export page images through the renderer",
+    "priority":  "P1",
+    "lane":  "convert"
+}

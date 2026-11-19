@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-edit",
+    "id":  "T-0044",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-edit/**",
+                 "orchestration/feature-updates/T-0044.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0013",
+                       "T-0034"
+                   ],
+    "title":  "Model and serialize bookmarks links and attachments",
+    "priority":  "P1",
+    "lane":  "author"
+}

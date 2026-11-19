@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-forms",
+    "id":  "T-0043",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-forms/**",
+                 "orchestration/feature-updates/T-0043.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0014",
+                       "T-0035"
+                   ],
+    "title":  "Load AcroForm dictionaries into the forms model",
+    "priority":  "P1",
+    "lane":  "forms"
+}

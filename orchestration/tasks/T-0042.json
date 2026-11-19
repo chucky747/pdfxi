@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo test -p pdfxi-render --features pdfium",
+    "id":  "T-0042",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-render/**",
+                 "crates/pdfxi-text/**",
+                 "orchestration/feature-updates/T-0042.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0021",
+                       "T-0026"
+                   ],
+    "title":  "Extract real text through PDFium text pages",
+    "priority":  "P0",
+    "lane":  "render"
+}

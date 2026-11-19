@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-app --features ui",
+    "id":  "T-0046",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-app/**",
+                 "orchestration/feature-updates/T-0046.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0032",
+                       "T-0028"
+                   ],
+    "title":  "Add page thumbnail navigation pane",
+    "priority":  "P1",
+    "lane":  "app"
+}
