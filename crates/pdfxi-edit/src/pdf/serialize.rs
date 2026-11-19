@@ -1,4 +1,4 @@
-//! Mapping between the [`Annotation`](crate::Annotation) model and PDF dictionaries.
+//! Mapping between the [`Annotation`] model and PDF dictionaries.
 //!
 //! [`PdfAnnotation`] is the dictionary-backed representation. It stores every
 //! common annotation entry (`/Subtype`, `/Rect`, `/Contents`, `/T`, `/NM`,
@@ -7,14 +7,14 @@
 //!
 //! # Extension keys
 //!
-//! The older [`Annotation`](crate::Annotation) model carries an id and a page
+//! The older [`Annotation`] model carries an id and a page
 //! index that standard PDF annotation dictionaries do not have. They are
 //! preserved through the intermediate dictionary with private keys:
 //!
-//! - `XI_Id` — decimal annotation id (text).
-//! - `XI_Page` — decimal zero-based page index (text).
-//! - `XI_Alpha` — alpha channel of the colour, 0..=255 (integer).
-//! - `XI_FontSize` — FreeText font size in points (real).
+//! - `XI_Id` â€” decimal annotation id (text).
+//! - `XI_Page` â€” decimal zero-based page index (text).
+//! - `XI_Alpha` â€” alpha channel of the colour, 0..=255 (integer).
+//! - `XI_FontSize` â€” FreeText font size in points (real).
 //!
 //! An unrecognised `/Subtype` is never dropped: it becomes
 //! [`PdfSubtype::Opaque`], which retains the subtype name and all unmodelled

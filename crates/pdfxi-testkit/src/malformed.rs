@@ -8,11 +8,11 @@
 //! [`all`] is the single source of truth. The `generate_malformed` example uses
 //! it to write `fixtures/malformed/` and its `manifest.toml`, and the
 //! `crates/pdfxi-core/tests/malformed.rs` integration test reads the on-disk
-//! manifest back to verify hashes, budgets, and — most importantly — that
+//! manifest back to verify hashes, budgets, and â€” most importantly â€” that
 //! `pdfxi_core::Document` never panics on any of these inputs.
 //!
 //! Each fixture declares a `probe`: the operation whose outcome the manifest's
-//! `category` describes. `open` is [`pdfxi_core::Document::from_bytes`],
+//! `category` describes. `open` is `pdfxi_core::Document::from_bytes`,
 //! `pages` is the structural accessor `page_count`, `content` is
 //! `page_content(0)`, and `save` is `save()`. The core test still runs *every*
 //! probe under `catch_unwind`; the declared probe is only the one asserted

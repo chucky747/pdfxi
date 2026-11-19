@@ -48,7 +48,7 @@ pub fn page_text_marker(index: usize) -> String {
 /// Build the deterministic 500-page benchmark PDF entirely in memory.
 ///
 /// Each page has a distinct [`page_text_marker`] and cycles through the
-/// [`PAGE_SIZES`] media boxes. The returned bytes are byte-stable across calls
+/// `PAGE_SIZES` media boxes. The returned bytes are byte-stable across calls
 /// and stay well below [`BENCH_SIZE_CAP`]. No file is written.
 pub fn large_pdf() -> Vec<u8> {
     let specs: Vec<PageSpec> = (0..BENCH_PAGE_COUNT)
@@ -98,7 +98,7 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 ///
 /// Relative paths are resolved against [`perf_dir`]. The resolved path is
 /// normalized and checked before any write, so the fixture can only ever land
-/// under `target/perf/` — it is never committed and cannot escape via `..`.
+/// under `target/perf/` Ã¢â‚¬â€ it is never committed and cannot escape via `..`.
 /// Parent directories are created as needed. Returns the bytes written via
 /// [`large_pdf`], which the caller may reuse to avoid a second regeneration.
 ///

@@ -2,7 +2,7 @@
 //!
 //! This module bridges the backend-agnostic [`Renderer`] contract from
 //! `pdfxi-render` to the geometry produced by [`CanvasLayout`]. It has **no
-//! `egui` types**: the GUI layer in [`crate::ui`] is responsible for uploading a
+//! `egui` types**: the GUI layer in the `ui` module is responsible for uploading a
 //! cached [`RenderedPage`] into a texture. Keeping the cache GUI-free means the
 //! render/zoom/rotate/eviction behaviour is fully testable with a mock renderer
 //! and no window.
