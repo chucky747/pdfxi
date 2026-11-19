@@ -256,7 +256,7 @@ fn goal_verify(milestone: Option<&str>, all: bool, allow_dirty: bool) -> Result<
         if milestone == "M1" {
             let rows = load_features()?;
             let required = [
-                "STD-011", "STD-012", "AUTO-009", "AUTO-010", "VIEW-001", "VIEW-002", "VIEW-003",
+                "STD-011", "STD-012", "AUTO-009", "AUTO-010", "VIEW-002", "VIEW-003", "VIEW-016",
             ];
             let missing: Vec<&str> = required
                 .iter()

@@ -1752,3 +1752,14 @@ tests = [
     "cli::text_filtered_stream_fails",
 ]
 title = "CLI text extraction for uncompressed content streams"
+
+[[feature]]
+docs = "docs/evidence/M1.md"
+domain = "View & Navigate"
+evidence = ""
+id = "VIEW-016"
+notes = "M1 open/display slice, split from VIEW-001 so printing stays an M2 row. See docs/decisions/0006-m1-gate.md."
+priority = "P0"
+status = "planned"
+tests = []
+title = "Open PDF and render pages in the viewer"
