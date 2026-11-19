@@ -103,18 +103,25 @@ lane.
 
 | Capability | Matrix row | Priority | M1 status |
 |---|---|---|---|
-| Open / metadata | `VIEW-001` | P0 | in progress |
+| Open / display pages | `VIEW-016` | P0 | in progress — PDFium backend and viewer shell landed |
+| Open / print | `VIEW-001` | P0 | in progress — print stays in M2 |
 | Page layouts | `VIEW-002` | P0 | in progress |
 | Zoom / pan / fit | `VIEW-003` | P0 | in progress |
 | Rotate view | `VIEW-004` | P0 | in progress |
 | Thumbnails / navigation pane | `VIEW-007` | P0 | in progress |
 | Bookmarks / destinations | `VIEW-008` | P1 | in progress |
-| In-document search | — (gap) | — | in progress, no row |
-| Text selection / copy | — (gap) | — | in progress, no row |
+| In-document search | `EDIT-003` / `MANAGE-003` | P1 | in progress, closest rows |
 
-No row in this slice is `verified` yet. A row becomes `verified` only with a
-test identifier, a docs path, and an evidence path, recorded through a lane
-fragment in `orchestration/feature-updates/` and merged by the integrator.
+`docs/decisions/0006-m1-gate.md` splits open/display (`VIEW-016`) from
+open/print (`VIEW-001`) so the M1 gate does not claim M2 print parity. A row
+becomes `verified` only with a test identifier, a docs path, and an evidence
+path, recorded through a lane fragment in `orchestration/feature-updates/` and
+merged by the integrator.
+
+Implemented so far: a native PDFium backend (`PdfiumRenderer`, optional
+`pdfium` feature) rasterizes pages to RGBA with cancellation and structured
+errors, and a native egui/eframe shell (optional `ui` feature) provides the tab
+strip, toolbar, status header, and placeholder canvas.
 
 ## Verification
 
