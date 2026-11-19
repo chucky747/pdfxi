@@ -4,7 +4,7 @@ Source: `docs/GOAL.md`. A criterion is checked only when the listed command
 output or file evidence is current at HEAD. This file is the integrator's
 single view of the end condition; task evidence lives in `docs/evidence/`.
 
-Last updated: 2026-11-19 (M1 in progress, 4 verified feature rows).
+Last updated: 2026-11-19 (M1 in progress, 7 verified feature rows of 140).
 
 | ID | Criterion | Status | Evidence | Blocker |
 |---|---|---|---|---|
