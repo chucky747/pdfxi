@@ -9,9 +9,13 @@
 //! The [`raster`] module adds a dependency-light, LRU-bounded cache that feeds
 //! [`pdfxi_render::Renderer`] rasters to the canvas; it has no `egui` types. The
 //! [`find`] module holds deterministic, bounded in-document search state over
-//! caller-supplied page text, also without any GUI dependency. An optional
-//! native viewer shell built on `egui`/`eframe` is available behind the `ui`
-//! feature; it wires [`find`] and [`selection`] into a find bar and copy command.
+//! caller-supplied page text, also without any GUI dependency.
+//! The [`thumbs`] module adds the window-free state and math for a page-thumbnail
+//! navigation pane: visible-row ranges, page/row mapping, active-page tracking,
+//! and a bounded prefetch request queue backed by `pdfxi-render`'s cache.
+//! An optional native viewer shell built on `egui`/`eframe` is available behind
+//! the `ui` feature; it wires [`find`], [`selection`], and [`thumbs`] into a find
+//! bar, copy command, and thumbnail side panel.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -22,6 +26,7 @@ pub mod raster;
 pub mod selection;
 mod state;
 mod tabs;
+pub mod thumbs;
 mod toolset;
 mod view;
 
@@ -39,6 +44,7 @@ pub use selection::{
 };
 pub use state::{AppError, AppState};
 pub use tabs::{DocumentTab, TabId, display_name_from_path};
+pub use thumbs::*;
 pub use toolset::Toolset;
 pub use view::{DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, Rotation, ViewMode, Zoom};
 

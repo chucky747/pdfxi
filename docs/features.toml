@@ -146,9 +146,8 @@ title = "Split and tile document windows"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-render/src/thumbnail.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "crates/pdfxi-render/tests/thumbnail_pdfium.rs",
+    "crates/pdfxi-app/src/thumbs.rs",
+    "crates/pdfxi-app/src/ui.rs",
 ]
 domain = "View & Navigate"
 evidence = '''
@@ -170,24 +169,28 @@ Tests use a scale-aware counting mock renderer: wide/tall/square aspect fit, exa
 Collateral (rustdoc hygiene only): replaced two pre-existing broken/redundant intra-doc links in lib.rs and pdfium_backend.rs so `RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-render --no-deps` passes both with and without the `pdfium` feature. VIEW-007 remains in-progress because the navigation-pane UI (dock widget, scroll list, selection wiring) belongs to the app lane; the thumbnail engine it consumes is now delivered here.
 """
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
-    "thumbnail::tests::contain_fit_preserves_aspect_for_wide_tall_and_square_pages",
-    "thumbnail::tests::thumbnail_fit_is_aspect_preserving_for_wide_tall_and_square_pages",
-    "thumbnail::tests::resize_rgba_uses_nearest_neighbor_at_corners_and_replicates_on_upscale",
-    "thumbnail::tests::resize_rgba_rejects_zero_dims_overflow_and_buffer_mismatch",
-    "thumbnail::tests::zero_size_spec_is_rejected_without_rendering",
-    "thumbnail::tests::invalid_scale_is_rejected_without_rendering",
-    "thumbnail::tests::out_of_range_page_error_propagates",
-    "thumbnail::tests::cancellation_is_propagated_before_and_between_phases",
-    "thumbnail::tests::cache_hit_avoids_rendering_again_and_is_deterministic",
-    "thumbnail::tests::cache_eviction_order_is_least_recently_used",
-    "thumbnail::tests::clear_drops_entries_history_and_hits",
-    "thumbnail::tests::zero_limit_cache_never_retains_entries",
-    "thumbnail::tests::progress_is_reported_across_both_phases",
-    "thumbnail::tests::oversampling_yields_the_same_fit_dimensions",
-    "thumbnail_of_minimal_pdf_is_nonzero_sized_and_non_uniform",
-    "cached_pdfium_thumbnail_matches_a_fresh_generation",
+    "thumbs::tests::visible_range_short_document_shows_all_pages",
+    "thumbs::tests::visible_range_long_document_tracks_scroll_offset",
+    "thumbs::tests::visible_range_empty_and_degenerate_inputs_are_safe",
+    "thumbs::tests::visible_range_method_uses_pane_state",
+    "thumbs::tests::page_row_mapping_boundaries_are_inverse",
+    "thumbs::tests::page_at_offset_clamps_to_document",
+    "thumbs::tests::prefetch_range_expands_visible_range_and_clamps",
+    "thumbs::tests::enqueue_visible_deduplicates_and_is_bounded",
+    "thumbs::tests::enqueue_marks_metadata_queued_and_dedupes_across_scroll",
+    "thumbs::tests::active_page_tracking_clamps_and_reports_changes",
+    "thumbs::tests::select_page_on_click_sets_active_and_selected",
+    "thumbs::tests::reset_clears_all_document_scoped_state",
+    "thumbs::tests::generate_pending_uses_renderer_and_marks_ready",
+    "thumbs::tests::repeated_visible_queries_reuse_the_cache",
+    "thumbs::tests::direct_page_fetch_records_a_cache_hit",
+    "thumbs::tests::generate_pending_honours_cancellation",
+    "thumbs::tests::clear_cache_resets_status_but_keeps_selection",
+    "ui::tests::active_page_from_canvas_scroll_picks_the_page_at_the_centre",
+    "ui::tests::thumbnail_click_marks_page_active_and_requests_canvas_scroll",
+    "ui::tests::active_page_follows_canvas_scrolling",
 ]
 title = "Page thumbnails and navigation pane"
 

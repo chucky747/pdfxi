@@ -24,13 +24,23 @@
 //! Without `pdfium`, no native library is loaded and the canvas keeps drawing
 //! the outlined placeholder pages. All layout, selection, and cache logic lives
 //! in window-free modules so it can be tested without this GUI layer.
+//!
+//! # Thumbnail navigation pane
+//!
+//! A left side panel lists one thumbnail tile per page, driven by the
+//! window-free [`crate::ThumbnailPaneState`]. With `pdfium` the visible tiles are
+//! generated through `pdfxi-render`'s LRU [`pdfxi_render::thumbnail::ThumbnailCache`]
+//! and uploaded into reusable `egui` textures; otherwise they are drawn as
+//! placeholders. Clicking a tile marks that page active and scrolls the canvas
+//! to it, while canvas scrolling updates the active tile so the two views stay
+//! in sync. Only visible rows (plus a documented prefetch margin) are requested.
 
 use egui::Key;
 
 use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, DEFAULT_ZOOM,
     FindMatch, FindOptions, FindState, OwnedSpan, OwnedTextPage, PageSize, SelectionModel, TabId,
-    Toolset, ViewMode, Zoom, app_name,
+    ThumbnailPaneState, Toolset, ViewMode, Zoom, app_name,
 };
 
 #[cfg(feature = "pdfium")]
@@ -38,7 +48,7 @@ use crate::Rotation;
 #[cfg(feature = "pdfium")]
 use crate::raster::{RasterCache, RasterKey, workspace_fixture_path};
 #[cfg(feature = "pdfium")]
-use pdfxi_render::{CancellationToken, PdfiumRenderer, Renderer};
+use pdfxi_render::{CancellationToken, PdfiumRenderer, Renderer, thumbnail::ThumbnailSpec};
 
 /// An `egui` texture plus the raster key it currently holds.
 ///
@@ -53,6 +63,25 @@ struct LiveTexture {
 
 /// Amount by which each zoom-in / zoom-out step changes a custom zoom scale.
 const ZOOM_STEP: f32 = 0.25;
+
+/// Height of one row in the thumbnail side panel, in UI points.
+const THUMB_ROW_HEIGHT: f32 = 140.0;
+
+/// Maximum side (width and height) of a generated thumbnail, in pixels.
+#[cfg(feature = "pdfium")]
+const THUMB_MAX_SIDE: u32 = 120;
+
+/// Width of a thumbnail tile in the side panel, in UI points.
+const THUMB_TILE_WIDTH: f32 = 96.0;
+
+/// Height of a thumbnail tile in the side panel, in UI points.
+const THUMB_TILE_HEIGHT: f32 = 124.0;
+
+/// Maximum number of thumbnails generated in a single frame.
+///
+/// Bounding per-frame work keeps scrolling responsive even for long documents.
+#[cfg(feature = "pdfium")]
+const THUMBS_PER_FRAME: usize = 4;
 
 /// Placeholder page count assigned to a demo tab (no real document is loaded).
 pub const DEMO_PAGE_COUNT: usize = 3;
@@ -264,6 +293,39 @@ pub fn scroll_offset_for_page(layout: &CanvasLayout, page: usize) -> f32 {
     layout.clamp_scroll(0.0, desired).y
 }
 
+/// Determine the active page from a canvas scroll offset.
+///
+/// The page whose rectangle contains the vertical centre of the viewport wins;
+/// if the centre falls in a gap, the page containing the viewport's top edge is
+/// used, and finally the closest page above the top edge. This pure helper lets
+/// the thumbnail pane follow canvas scrolling without any GUI context.
+pub fn active_page_from_canvas_scroll(layout: &CanvasLayout, scroll_y: f32) -> usize {
+    let viewport_height = layout.viewport().height;
+    let centre = scroll_y + viewport_height.max(0.0) * 0.5;
+    let top = scroll_y + 1.0;
+
+    for page in layout.pages() {
+        if centre >= page.rect.y && centre < page.rect.y + page.rect.height {
+            return page.page;
+        }
+    }
+    for page in layout.pages() {
+        if top >= page.rect.y && top < page.rect.y + page.rect.height {
+            return page.page;
+        }
+    }
+
+    let mut best_page = 0usize;
+    let mut best_top = f32::NEG_INFINITY;
+    for page in layout.pages() {
+        if page.rect.y <= scroll_y && page.rect.y > best_top {
+            best_top = page.rect.y;
+            best_page = page.page;
+        }
+    }
+    best_page
+}
+
 /// Launch the native PDFXI viewer window.
 ///
 /// This is the entry point used by the `pdfxi-ui` binary. It builds a
@@ -314,6 +376,15 @@ pub struct PdfxiApp {
     find_open: bool,
     /// Set when navigation should scroll to the current match next frame.
     pending_scroll: bool,
+    /// Set when a thumbnail click should scroll the canvas next frame.
+    pending_page_scroll: Option<usize>,
+    /// Window-free thumbnail navigation pane model.
+    thumbs: ThumbnailPaneState,
+    /// When true, the next pane frame scrolls its active row into view.
+    thumb_follow_active: bool,
+    /// GPU textures for generated thumbnails, keyed by page.
+    #[cfg(feature = "pdfium")]
+    thumb_textures: std::collections::HashMap<usize, egui::TextureHandle>,
     /// Bounded cache of real page rasters, filled from the demo fixture.
     #[cfg(feature = "pdfium")]
     raster_cache: RasterCache,
@@ -381,6 +452,11 @@ impl PdfxiApp {
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.pending_scroll = false;
+        self.pending_page_scroll = None;
+        self.thumbs.reset(page_count);
+        self.thumb_follow_active = true;
+        #[cfg(feature = "pdfium")]
+        self.thumb_textures.clear();
         self.status = format!("Opened demo tab {id}");
         id
     }
@@ -517,6 +593,172 @@ impl PdfxiApp {
         match self.state.set_view_mode(mode) {
             Ok(()) => self.status = format!("View mode: {}", mode.label()),
             Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Borrow the window-free thumbnail pane state for introspection.
+    pub fn thumbnail_state(&self) -> &ThumbnailPaneState {
+        &self.thumbs
+    }
+
+    /// Select a thumbnail: mark its page active and scroll the canvas to it.
+    ///
+    /// This is the click handler for the thumbnail side panel. It returns `true`
+    /// when a valid page was selected and `false` for an out-of-range click.
+    pub fn select_thumbnail_page(&mut self, page: usize) -> bool {
+        if self.thumbs.select_page(page).is_none() {
+            return false;
+        }
+        if let Some(tab) = self.state.active_tab_mut() {
+            tab.set_current_page(page);
+        }
+        self.pending_page_scroll = Some(page);
+        self.thumb_follow_active = true;
+        self.status = format!("Page {} of {}", page + 1, self.thumbs.page_count());
+        true
+    }
+
+    /// Update the active thumbnail page from the current canvas scroll offset.
+    ///
+    /// The canvas calls this every frame; it is exposed so the follow behavior
+    /// is testable without a window. Returns `true` when the active page changed.
+    pub fn sync_active_page_from_canvas(&mut self, layout: &CanvasLayout) -> bool {
+        let active = active_page_from_canvas_scroll(layout, self.scroll_y);
+        if self.thumbs.set_active_page(active) {
+            self.thumb_follow_active = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Upload (or refresh) the cached thumbnail for `page` into an egui texture.
+    ///
+    /// The texture handle is reused across frames and re-uploaded only when the
+    /// cached thumbnail changes, avoiding a new GPU allocation every frame.
+    #[cfg(feature = "pdfium")]
+    fn thumbnail_texture(
+        &mut self,
+        ctx: &egui::Context,
+        page: usize,
+        spec: &ThumbnailSpec,
+    ) -> Option<egui::TextureHandle> {
+        let thumbnail = self.thumbs.cached_thumbnail(page, spec)?.clone();
+        let width = thumbnail.width() as usize;
+        let height = thumbnail.height() as usize;
+        let pixels = thumbnail.pixels();
+        let expected = width.checked_mul(height)?.checked_mul(4)?;
+        if width == 0 || height == 0 || pixels.len() != expected {
+            return None;
+        }
+        let image = || egui::ColorImage::from_rgba_unmultiplied([width, height], pixels);
+        match self.thumb_textures.get_mut(&page) {
+            Some(handle) => handle.set(image(), egui::TextureOptions::LINEAR),
+            None => {
+                let handle = ctx.load_texture(
+                    format!("pdfxi-thumb-{page}"),
+                    image(),
+                    egui::TextureOptions::LINEAR,
+                );
+                self.thumb_textures.insert(page, handle);
+            }
+        }
+        self.thumb_textures.get(&page).cloned()
+    }
+
+    /// Render the left thumbnail navigation side panel.
+    ///
+    /// With `pdfium`, only visible rows (plus the pane's documented prefetch
+    /// margin) are enqueued, and at most [`THUMBS_PER_FRAME`] are generated per
+    /// frame so scrolling never blocks on rasterization. Without it, every tile
+    /// is drawn as a placeholder. Clicking a tile calls
+    /// [`Self::select_thumbnail_page`]; scrolling updates the pane's visible
+    /// range so the next frame requests the right thumbnails.
+    fn thumbnails_ui(&mut self, ui: &mut egui::Ui) {
+        let page_count = self.state.active_tab().map_or(0, |tab| tab.page_count());
+        if self.thumbs.page_count() != page_count {
+            self.thumbs.reset(page_count);
+            #[cfg(feature = "pdfium")]
+            self.thumb_textures.clear();
+        }
+        self.thumbs.set_row_height(THUMB_ROW_HEIGHT);
+        self.thumbs
+            .set_viewport_height(ui.available_height().max(1.0));
+
+        #[cfg(feature = "pdfium")]
+        {
+            if let Some(renderer) = self.pdfium_renderer.as_ref() {
+                let spec = ThumbnailSpec::new(THUMB_MAX_SIDE, THUMB_MAX_SIDE);
+                let _ = self.thumbs.enqueue_visible(&spec);
+                let token = CancellationToken::new();
+                for _ in 0..THUMBS_PER_FRAME {
+                    match self
+                        .thumbs
+                        .generate_pending(renderer, &spec, 1, &token, &mut |_| {})
+                    {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(error) => {
+                            self.status = format!("Thumbnail error: {error}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let active = self.thumbs.active_page();
+        let follow = self.thumb_follow_active;
+        let mut clicked = None;
+        let tile_size = egui::vec2(THUMB_TILE_WIDTH, THUMB_TILE_HEIGHT);
+        #[cfg(feature = "pdfium")]
+        let spec = ThumbnailSpec::new(THUMB_MAX_SIDE, THUMB_MAX_SIDE);
+
+        let output = egui::ScrollArea::vertical().show(ui, |ui| {
+            for page in 0..page_count {
+                let is_active = page == active;
+                let (rect, response) = ui.allocate_exact_size(tile_size, egui::Sense::click());
+                let fill = if is_active {
+                    egui::Color32::from_rgb(214, 231, 252)
+                } else {
+                    ui.visuals().extreme_bg_color
+                };
+                let stroke = if is_active {
+                    egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(40, 110, 200))
+                } else {
+                    ui.visuals().widgets.inactive.fg_stroke
+                };
+                ui.painter().rect_filled(rect, 3.0, fill);
+                ui.painter()
+                    .rect_stroke(rect, 3.0, stroke, egui::StrokeKind::Outside);
+
+                #[cfg(feature = "pdfium")]
+                if let Some(texture) = self.thumbnail_texture(ui.ctx(), page, &spec) {
+                    let full_uv =
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    ui.painter()
+                        .image(texture.id(), rect, full_uv, egui::Color32::WHITE);
+                }
+
+                if response.clicked() {
+                    clicked = Some(page);
+                }
+                if follow && is_active {
+                    response.scroll_to_me(Some(egui::Align::Center));
+                }
+                if is_active {
+                    ui.label(egui::RichText::new(format!("Page {}", page + 1)).strong());
+                } else {
+                    ui.label(format!("Page {}", page + 1));
+                }
+                ui.add_space(8.0);
+            }
+        });
+
+        self.thumbs.set_scroll_offset(output.state.offset.y);
+        self.thumb_follow_active = false;
+        if let Some(page) = clicked {
+            self.select_thumbnail_page(page);
         }
     }
 
@@ -789,6 +1031,12 @@ impl PdfxiApp {
                 self.scroll_x = scrolled.x;
                 self.scroll_y = scrolled.y;
 
+                // A thumbnail click scrolls the canvas to that page. The scroll
+                // is applied here because this is where a layout is available.
+                if let Some(page) = self.pending_page_scroll.take() {
+                    self.scroll_y = scroll_offset_for_page(&layout, page);
+                }
+
                 // A find navigation request scrolls the current match into view
                 // once a layout is available, using the pure helper below.
                 if self.pending_scroll {
@@ -797,6 +1045,12 @@ impl PdfxiApp {
                     }
                     self.pending_scroll = false;
                 }
+
+                // Keep the thumbnail pane's active tile in sync with canvas
+                // scrolling. A change asks the pane to scroll that row into view
+                // on its next frame; an unchanged frame leaves manual pane
+                // scrolling alone.
+                let _ = self.sync_active_page_from_canvas(&layout);
 
                 // Text drag: anchor on press, advance the head while dragging.
                 if text_tool && let Some(pos) = hover {
@@ -969,6 +1223,10 @@ impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_keyboard(ctx);
 
+        egui::SidePanel::left("pdfxi_thumbnails")
+            .resizable(true)
+            .default_width(156.0)
+            .show(ctx, |ui| self.thumbnails_ui(ui));
         egui::TopBottomPanel::top("pdfxi_toolbar").show(ctx, |ui| self.toolbar_ui(ui));
         egui::TopBottomPanel::top("pdfxi_tabs").show(ctx, |ui| self.tabs_ui(ui));
         if self.find_open {
@@ -1266,6 +1524,155 @@ mod tests {
         selection.drag(TextAnchor::new(0, 7), TextAnchor::new(0, 11));
         assert_eq!(selection.selected_text(&pages), "demo");
         assert_eq!(selection.selected_text(&pages), matched);
+    }
+
+    #[test]
+    fn thumbnail_click_marks_active_and_requests_canvas_scroll() {
+        let mut app = PdfxiApp::new();
+        let id = app.open_demo_tab();
+        let count = app.thumbnail_state().page_count();
+        assert!(count > 0, "a demo tab has at least one page");
+        let target = count.saturating_sub(1);
+        assert!(app.select_thumbnail_page(target));
+        assert_eq!(app.thumbnail_state().active_page(), target);
+        assert_eq!(app.thumbnail_state().selected_page(), Some(target));
+        assert_eq!(app.pending_page_scroll, Some(target));
+        assert_eq!(
+            app.state().tab(id).map(|tab| tab.current_page()),
+            Some(target)
+        );
+        assert!(
+            !app.select_thumbnail_page(count),
+            "an out-of-range click is ignored"
+        );
+    }
+
+    #[test]
+    fn thumbnail_active_page_follows_canvas_scroll() {
+        // Use a five-page pane independent of the demo fixture's page count
+        // (the PDFium fixture has only one page).
+        let mut app = PdfxiApp::default();
+        app.thumbs.reset(5);
+        let sizes = vec![PageSize::new(DEMO_PAGE_WIDTH_PT, DEMO_PAGE_HEIGHT_PT); 5];
+        let layout = CanvasLayout::standard(
+            ViewMode::Continuous,
+            Zoom::custom(1.0),
+            CanvasSize::new(800.0, 600.0),
+            &sizes,
+        );
+        let second_top = layout.page(1).map(|page| page.rect.y).unwrap_or(0.0);
+        app.scroll_y = second_top;
+        assert!(app.sync_active_page_from_canvas(&layout));
+        assert_eq!(app.thumbnail_state().active_page(), 1);
+        assert!(
+            !app.sync_active_page_from_canvas(&layout),
+            "an unchanged frame is a no-op"
+        );
+        app.scroll_y = 0.0;
+        assert!(app.sync_active_page_from_canvas(&layout));
+        assert_eq!(app.thumbnail_state().active_page(), 0);
+    }
+
+    #[test]
+    fn thumbnail_pane_model_exposes_visible_range_without_a_window() {
+        let mut app = PdfxiApp::new();
+        app.open_demo_tab();
+        let count = app.thumbnail_state().page_count();
+        let mut state = crate::ThumbnailPaneState::new(count);
+        state.set_row_height(THUMB_ROW_HEIGHT);
+        state.set_viewport_height(600.0);
+        assert_eq!(state.visible_range().len(), count);
+        assert_eq!(state.active_page(), 0);
+        assert_eq!(state.metadata().len(), count);
+    }
+
+    #[test]
+    fn active_page_from_canvas_scroll_helper_is_deterministic() {
+        let sizes = vec![PageSize::new(612.0, 792.0); 4];
+        let layout = CanvasLayout::standard(
+            ViewMode::Continuous,
+            Zoom::custom(1.0),
+            CanvasSize::new(800.0, 600.0),
+            &sizes,
+        );
+        assert_eq!(active_page_from_canvas_scroll(&layout, 0.0), 0);
+        let third_top = layout.page(2).map(|page| page.rect.y).unwrap_or(0.0);
+        assert_eq!(active_page_from_canvas_scroll(&layout, third_top), 2);
+        let empty = CanvasLayout::standard(
+            ViewMode::Continuous,
+            Zoom::custom(1.0),
+            CanvasSize::new(800.0, 600.0),
+            &[],
+        );
+        assert_eq!(active_page_from_canvas_scroll(&empty, 10.0), 0);
+    }
+
+    #[test]
+    fn active_page_from_canvas_scroll_picks_the_page_at_the_centre() {
+        let sizes = vec![PageSize::new(612.0, 792.0); 3];
+        let layout = CanvasLayout::standard(
+            ViewMode::Continuous,
+            Zoom::custom(1.0),
+            CanvasSize::new(800.0, 600.0),
+            &sizes,
+        );
+        assert_eq!(active_page_from_canvas_scroll(&layout, 0.0), 0);
+        assert_eq!(active_page_from_canvas_scroll(&layout, 900.0), 1);
+        assert_eq!(active_page_from_canvas_scroll(&layout, 1800.0), 2);
+        // Beyond the last page the closest preceding page wins.
+        assert_eq!(active_page_from_canvas_scroll(&layout, 99_999.0), 2);
+    }
+
+    #[test]
+    fn thumbnail_click_marks_page_active_and_requests_canvas_scroll() {
+        let mut app = PdfxiApp::new();
+        let id = app.open_demo_tab();
+        if let Some(tab) = app.state.tab_mut(id) {
+            tab.set_page_count(5);
+        }
+        app.thumbs.reset(5);
+
+        assert!(app.select_thumbnail_page(3));
+        assert_eq!(app.thumbnail_state().active_page(), 3);
+        assert_eq!(app.thumbnail_state().selected_page(), Some(3));
+        assert_eq!(app.pending_page_scroll, Some(3));
+        assert_eq!(app.state.tab(id).map(|tab| tab.current_page()), Some(3));
+        assert!(app.status().contains("Page 4"));
+
+        // A click outside the document is ignored and leaves state intact.
+        assert!(!app.select_thumbnail_page(9));
+        assert_eq!(app.thumbnail_state().active_page(), 3);
+        assert_eq!(app.pending_page_scroll, Some(3));
+    }
+
+    #[test]
+    fn active_page_follows_canvas_scrolling() {
+        let mut app = PdfxiApp::new();
+        let id = app.open_demo_tab();
+        if let Some(tab) = app.state.tab_mut(id) {
+            tab.set_page_count(6);
+        }
+        app.thumbs.reset(6);
+
+        let sizes = vec![PageSize::new(612.0, 792.0); 6];
+        let layout = CanvasLayout::standard(
+            ViewMode::Continuous,
+            Zoom::custom(1.0),
+            CanvasSize::new(800.0, 600.0),
+            &sizes,
+        );
+
+        app.scroll_y = 0.0;
+        let _ = app.sync_active_page_from_canvas(&layout);
+        assert_eq!(app.thumbnail_state().active_page(), 0);
+
+        app.scroll_y = 900.0;
+        assert!(app.sync_active_page_from_canvas(&layout));
+        assert_eq!(app.thumbnail_state().active_page(), 1);
+        assert!(app.thumb_follow_active, "a change asks the pane to follow");
+
+        // An unchanged frame leaves the active page and follow flag settled.
+        assert!(!app.sync_active_page_from_canvas(&layout));
     }
 
     #[cfg(feature = "pdfium")]
