@@ -1383,18 +1383,18 @@ docs = [
 ]
 domain = "Automation"
 evidence = '''
-cargo test -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 10 integration passed, 0 failed, EXIT=0 (includes render_without_pdfium_reports_missing_feature).
-cargo test -p pdfxi-cli --features pdfium (CARGO_TARGET_DIR=target/lanes/core, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 12 unit + 13 integration passed, 0 failed, EXIT=0.
+cargo test -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 18 integration passed, 0 failed, EXIT=0 (8 new search_* tests plus the 10 pre-existing tests).
+cargo test -p pdfxi-cli --features pdfium (CARGO_TARGET_DIR=target/lanes/core, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 12 unit + 21 integration passed, 0 failed, EXIT=0.
 cargo fmt -p pdfxi-cli -- --check: EXIT=0. cargo clippy -p pdfxi-cli --all-targets -- -D warnings: EXIT=0. cargo clippy -p pdfxi-cli --all-targets --features pdfium -- -D warnings: EXIT=0.
-External validation: `pdfxi render fixtures/minimal.pdf --page 0 --scale 1.0 --out <tmp>.png` produced a file decoded by .NET System.Drawing as PNG (GUID b96b3caf-0728-11d3-9d7b-0000f81ef32e), 612x792 pixels, exit code 0.
+cargo doc -p pdfxi-cli --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
 '''
 id = "AUTO-005"
 notes = """
-Added `pdfxi render <file> --page N --scale S --out PATH [--format ppm|png]` on top of the frozen `pdfxi-render` Renderer contract. The CLI gained a `pdfium` feature (`dep:pdfxi-render`, `pdfxi-render/pdfium`) and an optional path dependency; the command is always compiled. Without the feature it exits non-zero with `built without pdfium support` instead of failing to compile. With the feature it validates scale (finite, positive, bounded) and zero-based page bounds, then maps renderer/encoder/write failures to contextual anyhow errors with actionable stderr.
+Added `pdfxi render <file> --page N --scale S --out PATH [--format ppm|png]` on top of the frozen pdfxi-render Renderer contract. The CLI gained a pdfium feature (dep:pdfxi-render, pdfxi-render/pdfium) and an optional path dependency; the command is always compiled. Without the feature it exits non-zero with `built without pdfium support` instead of failing to compile. With the feature it validates scale (finite, positive, bounded) and zero-based page bounds, then maps renderer/encoder/write failures to contextual anyhow errors with actionable stderr.
 
-PNG is written by a small pure-Rust encoder (no image crate): 8-byte signature, IHDR (8-bit RGBA, non-interlaced), one IDAT holding a zlib stream of uncompressed stored deflate blocks with correct CRC-32 and Adler-32, and IEND. The PNG is valid but uncompressed, which is documented in code. PPM is binary P6 with alpha discarded. Checked arithmetic rejects size overflow and mismatched buffers. Unit tests cover checksums, signature/chunk order, IHDR fields, stored-block decoding, chunk CRC, length invariants, multi-block splitting, and error paths; integration tests render fixtures/minimal.pdf to both formats and exercise invalid page, invalid scale, and unwritable output. Remaining scriptable operations are future work, so AUTO-005 stays in-progress.
+PNG is written by a small pure-Rust encoder (no image crate): 8-byte signature, IHDR (8-bit RGBA, non-interlaced), one IDAT holding a zlib stream of uncompressed stored deflate blocks with correct CRC-32 and Adler-32, and IEND. The PNG is valid but uncompressed, which is documented in code. PPM is binary P6 with alpha discarded. Checked arithmetic rejects size overflow and mismatched buffers. Unit tests cover checksums, signature/chunk order, IHDR fields, stored-block decoding, chunk CRC, length invariants, multi-block splitting, and error paths; integration tests render fixtures/minimal.pdf to both formats and exercise invalid page, invalid scale, and unwritable output.
 
-Collateral: the pre-existing text_filtered_stream_fails assertion now accepts the core's concurrent FlateDecode error wording ("DEFLATE") as well as the older "filtered" wording; its intent (no text from a malformed filtered stream) is unchanged.
+T-0033 adds a second scriptable operation, `pdfxi search`, backed by a new path dependency on pdfxi-text (no new external crates). It calls `pdfxi_core::page_text` per page, builds a SearchIndex, and prints deterministic `page N offset M text` lines or stable JSON. It supports --case-sensitive, --whole-word, and --json; no matches exit 0 with empty stdout and a stderr note. Eight new integration tests cover a single match, multi-page ordering, case folding, whole-word, no-match behavior, JSON field stability, a missing file, and an unsupported-filter error. Remaining scriptable operations are future work, so AUTO-005 stays in-progress.
 """
 priority = "P1"
 status = "in-progress"
@@ -1416,6 +1416,14 @@ tests = [
     "render_rejects_invalid_page",
     "render_rejects_invalid_scale",
     "render_rejects_unwritable_output_path",
+    "search_finds_single_match_in_single_page",
+    "search_orders_results_by_page_then_offset",
+    "search_is_case_insensitive_by_default_and_can_be_exact",
+    "search_honors_whole_word",
+    "search_no_match_exits_zero_with_stderr_note",
+    "search_json_has_stable_fields",
+    "search_missing_file_fails",
+    "search_unsupported_filter_reports_clear_error",
 ]
 title = "CLI for every scriptable operation"
 
@@ -1927,11 +1935,25 @@ tests = [
 title = "Open PDF and render pages in the viewer"
 
 [[feature]]
-docs = "crates/pdfxi-text/src/lib.rs"
+docs = [
+    "crates/pdfxi-text/src/lib.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 21 passed; 0 failed. clippy/fmt/doc clean. docs/evidence/render/T-0026.md"
+evidence = '''
+cargo test -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 18 integration passed, 0 failed, EXIT=0 (8 new search_* tests plus the 10 pre-existing tests).
+cargo test -p pdfxi-cli --features pdfium (CARGO_TARGET_DIR=target/lanes/core, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 12 unit + 21 integration passed, 0 failed, EXIT=0.
+cargo fmt -p pdfxi-cli -- --check: EXIT=0. cargo clippy -p pdfxi-cli --all-targets -- -D warnings: EXIT=0. cargo clippy -p pdfxi-cli --all-targets --features pdfium -- -D warnings: EXIT=0.
+cargo doc -p pdfxi-cli --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
+Manual smoke: `pdfxi search fixtures/minimal.pdf PDFXI` printed `page 1 offset 7 PDFXI`, EXIT=0; --json emitted {"file":"fixtures/minimal.pdf","query":"PDFXI","matches":[{"page":1,"offset":7,"text":"PDFXI"}]}; a no-match query printed `no matches` on stderr with empty stdout and EXIT=0.
+'''
 id = "VIEW-017"
-notes = "Multi-page SearchIndex (ordered by page then character offset, case-insensitive, whole-word, documented leftmost-first overlap policy), TextSelection with two-way normalization and cross-page copy, plain-text span offsets, and shared boundary rules. The UI find bar and match highlighting are not wired yet, so the row is in-progress."
+notes = """
+Multi-page SearchIndex (ordered by page then character offset, case-insensitive, whole-word, documented leftmost-first overlap policy), TextSelection with two-way normalization and cross-page copy, plain-text span offsets, and shared boundary rules.
+
+T-0033 adds a headless consumer of that index: `pdfxi search <FILE> <QUERY> [--case-sensitive] [--whole-word] [--json]`. For each page it builds one TextPage from `pdfxi_core::page_text` with the page's entire extracted text in a single TextSpan, so reported offsets are zero-based Unicode-scalar (character) offsets into each page's concatenated text -- the same offset space `pdfxi-text` documents. Results are sorted by page then offset by SearchIndex. Text mode prints `page N offset M matched text`; --json emits stable fields `file`, `query`, and `matches` with `page`/`offset`/`text` per match. --case-sensitive and --whole-word map directly to SearchOptions. No-match is deliberately not an error: exit 0, zero stdout lines, and a `no matches` stderr note in both modes, so an empty result is never confused with a failure. Missing/unreadable files, invalid documents, and unsupported content filters produce non-zero exits with actionable, page-contextual stderr. The UI find bar and match highlighting are still unwired, so this row stays in-progress.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
@@ -1946,6 +1968,14 @@ tests = [
     "tests::copy_range_uses_newline_and_space_rules",
     "tests::selection_normalizes_in_both_directions",
     "tests::selection_copies_text_across_pages",
+    "search_finds_single_match_in_single_page",
+    "search_orders_results_by_page_then_offset",
+    "search_is_case_insensitive_by_default_and_can_be_exact",
+    "search_honors_whole_word",
+    "search_no_match_exits_zero_with_stderr_note",
+    "search_json_has_stable_fields",
+    "search_missing_file_fails",
+    "search_unsupported_filter_reports_clear_error",
 ]
 title = "Find text in a document and select copy text"
 

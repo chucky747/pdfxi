@@ -16,6 +16,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 pdfxi-core = { path = "../pdfxi-core" }
+pdfxi-text = { path = "../pdfxi-text" }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.
 pdfxi-render = { path = "../pdfxi-render", optional = true }

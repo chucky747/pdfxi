@@ -460,3 +460,178 @@ fn render_rejects_unwritable_output_path() {
         stderr(&output)
     );
 }
+
+// ---------------------------------------------------------------------------
+// search
+// ---------------------------------------------------------------------------
+
+/// Collect trimmed stdout into owned lines for exact-order assertions.
+fn output_lines(output: &Output) -> Vec<String> {
+    stdout(output)
+        .trim_end()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn search_finds_single_match_in_single_page() {
+    // minimal_pdf() shows "Hello, PDFXI!"; "PDFXI" starts at char offset 7.
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let output = run(&["search", pdf.arg(), "PDFXI"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(output_lines(&output), vec!["page 1 offset 7 PDFXI"]);
+}
+
+#[test]
+fn search_orders_results_by_page_then_offset() {
+    let pdf = TempPdf::new(&pdfxi_testkit::multipage_pdf(3));
+    let output = run(&["search", pdf.arg(), "Page"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        output_lines(&output),
+        vec![
+            "page 1 offset 0 Page",
+            "page 2 offset 0 Page",
+            "page 3 offset 0 Page",
+        ]
+    );
+
+    // Matches within one page ascend by character offset.
+    let pdf2 = TempPdf::new(&one_page_pdf("", "BT (hit here and hit there) Tj ET"));
+    let output = run(&["search", pdf2.arg(), "hit"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        output_lines(&output),
+        vec!["page 1 offset 0 hit", "page 1 offset 13 hit"]
+    );
+}
+
+#[test]
+fn search_is_case_insensitive_by_default_and_can_be_exact() {
+    let pdf = TempPdf::new(&one_page_pdf("", "BT (Alpha alpha ALPHA) Tj ET"));
+
+    let folded = run(&["search", pdf.arg(), "alpha"]);
+    assert!(folded.status.success(), "stderr: {}", stderr(&folded));
+    assert_eq!(
+        output_lines(&folded),
+        vec![
+            "page 1 offset 0 Alpha",
+            "page 1 offset 6 alpha",
+            "page 1 offset 12 ALPHA",
+        ],
+        "matched text keeps its original casing"
+    );
+
+    let exact = run(&["search", pdf.arg(), "alpha", "--case-sensitive"]);
+    assert!(exact.status.success(), "stderr: {}", stderr(&exact));
+    assert_eq!(output_lines(&exact), vec!["page 1 offset 6 alpha"]);
+}
+
+#[test]
+fn search_honors_whole_word() {
+    // "cat" occurs at 0, inside "category" at 4, and at 13.
+    let pdf = TempPdf::new(&one_page_pdf("", "BT (cat category cat) Tj ET"));
+    let any = run(&["search", pdf.arg(), "cat"]);
+    assert!(any.status.success(), "stderr: {}", stderr(&any));
+    assert_eq!(output_lines(&any).len(), 3);
+
+    let words = run(&["search", pdf.arg(), "cat", "--whole-word"]);
+    assert!(words.status.success(), "stderr: {}", stderr(&words));
+    assert_eq!(
+        output_lines(&words),
+        vec!["page 1 offset 0 cat", "page 1 offset 13 cat"],
+        "the 'cat' inside 'category' is not a whole word"
+    );
+}
+
+#[test]
+fn search_no_match_exits_zero_with_stderr_note() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    for args in [
+        vec!["search", pdf.arg(), "zzzz"],
+        vec!["search", pdf.arg(), "zzzz", "--json"],
+    ] {
+        let output = run(&args);
+        assert!(
+            output.status.success(),
+            "no matches must exit 0: {}",
+            stderr(&output)
+        );
+        assert!(
+            stdout(&output).is_empty(),
+            "no matches must print zero lines: {:?}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains("no matches"),
+            "stderr: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn search_json_has_stable_fields() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let output = run(&["search", pdf.arg(), "PDFXI", "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let map = value.as_object().expect("JSON object");
+    for key in ["file", "query", "matches"] {
+        assert!(map.contains_key(key), "missing field {key}");
+    }
+    assert_eq!(map.len(), 3, "unexpected extra fields: {map:?}");
+    assert_eq!(value["file"].as_str(), Some(pdf.arg()));
+    assert_eq!(value["query"].as_str(), Some("PDFXI"));
+
+    let matches = value["matches"].as_array().expect("matches array");
+    assert_eq!(matches.len(), 1);
+    let first = matches[0].as_object().expect("match object");
+    for key in ["page", "offset", "text"] {
+        assert!(first.contains_key(key), "missing match field {key}");
+    }
+    assert_eq!(first.len(), 3, "unexpected extra match fields: {first:?}");
+    assert_eq!(matches[0]["page"].as_u64(), Some(1));
+    assert_eq!(matches[0]["offset"].as_u64(), Some(7));
+    assert_eq!(matches[0]["text"].as_str(), Some("PDFXI"));
+}
+
+#[test]
+fn search_missing_file_fails() {
+    let name = format!(
+        "pdfxi-cli-search-missing-{}-{}.pdf",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let path = std::env::temp_dir().join(name);
+    assert!(!path.exists(), "fixture path must not exist");
+    let display = path.to_string_lossy().into_owned();
+    let output = run(&["search", &display, "anything"]);
+    assert!(!output.status.success(), "missing file should fail");
+    assert!(
+        stderr(&output).contains("failed to read"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn search_unsupported_filter_reports_clear_error() {
+    let pdf = TempPdf::new(&one_page_pdf("/Filter /ASCII85Decode", "BT (Hello) Tj ET"));
+    let output = run(&["search", pdf.arg(), "Hello"]);
+    assert!(!output.status.success(), "unsupported filter should fail");
+    let message = stderr(&output);
+    assert!(
+        message.contains("unsupported filter") && message.contains("ASCII85Decode"),
+        "stderr: {message}"
+    );
+    assert!(
+        message.contains("page 1"),
+        "error should name the failing page: {message}"
+    );
+}

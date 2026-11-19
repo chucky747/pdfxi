@@ -8,6 +8,12 @@
 //! `pdfium` Cargo feature it rasterizes a page through the `pdfxi-render`
 //! `Renderer` contract and writes a PNG or PPM; without it, the command exits
 //! with an explanatory error instead of failing to compile.
+//!
+//! The `search` subcommand builds a `pdfxi-text` [`SearchIndex`]
+//! from one text page per PDF page and reports matches as one-based page numbers
+//! with zero-based character offsets. Offsets are Unicode scalar values (not
+//! bytes) into each page's concatenated text, the same offset space used by
+//! `pdfxi-text`.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -22,6 +28,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use pdfxi_core::Document;
+use pdfxi_text::{SearchIndex, SearchOptions, TextPage, TextSpan};
 use serde::Serialize;
 
 #[cfg(feature = "pdfium")]
@@ -59,6 +66,32 @@ enum Command {
     Text {
         /// Path to the PDF file.
         file: PathBuf,
+    },
+    /// Find text across every page of a PDF.
+    ///
+    /// One `pdfxi-text` `TextPage` is built per page from the core's extracted
+    /// text, then searched through a `SearchIndex`. Results are printed as
+    /// `page N offset M matched text` with `N` one-based and `M` a zero-based
+    /// character offset (Unicode scalar values, not bytes) into the matched
+    /// page's concatenated text. Matching is case-insensitive by default.
+    /// When nothing matches, the command exits 0, writes no lines to stdout and
+    /// writes `no matches` to stderr so an empty result is never mistaken for
+    /// an error.
+    Search {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Text to search for; an empty query yields no matches.
+        query: String,
+        /// Match case exactly instead of folding ASCII case.
+        #[arg(long)]
+        case_sensitive: bool,
+        /// Accept a match only when its neighbours are non-word characters or
+        /// page boundaries.
+        #[arg(long)]
+        whole_word: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Rasterize one page to a PNG or PPM image.
     ///
@@ -117,11 +150,40 @@ struct InfoOutput {
     pages: usize,
 }
 
+/// Stable, machine-readable shape of the `search --json` output.
+#[derive(Debug, Serialize)]
+struct SearchOutput {
+    /// Display path of the input file.
+    file: String,
+    /// The query exactly as supplied on the command line.
+    query: String,
+    /// Every match, ordered by page and then character offset.
+    matches: Vec<MatchOutput>,
+}
+
+/// One match in the `search --json` output.
+#[derive(Debug, Serialize)]
+struct MatchOutput {
+    /// One-based page number the match was found on.
+    page: usize,
+    /// Zero-based character offset into the page's concatenated text.
+    offset: usize,
+    /// The matched text, preserving its original casing.
+    text: String,
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Info { file, json } => print_info(&file, json),
         Command::Text { file } => extract_text(&file),
+        Command::Search {
+            file,
+            query,
+            case_sensitive,
+            whole_word,
+            json,
+        } => search(&file, &query, case_sensitive, whole_word, json),
         Command::Render {
             file,
             page,
@@ -157,6 +219,74 @@ fn extract_text(file: &PathBuf) -> anyhow::Result<()> {
     let doc = load(file)?;
     for index in 0..doc.page_count()? {
         println!("{}", doc.page_text(index)?);
+    }
+    Ok(())
+}
+
+/// Build a text index from every page and print all matches of `query`.
+///
+/// Each page's extracted text is placed in a single [`TextSpan`], so the
+/// character offsets reported by the index are plain indices into that page's
+/// concatenated text. Matches are emitted in page-then-offset order because
+/// [`SearchIndex`] sorts its entries by page and `find` orders matches within a
+/// page by ascending offset. A query with no matches is not an error: the
+/// command exits successfully, prints no lines to stdout, and writes a
+/// `no matches` note to stderr in both text and JSON modes.
+fn search(
+    file: &PathBuf,
+    query: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    let doc = load(file)?;
+    let page_count = doc.page_count()?;
+    let mut pages = Vec::with_capacity(page_count);
+    for index in 0..page_count {
+        let text = doc.page_text(index).with_context(|| {
+            format!(
+                "failed to extract text from page {} of '{}'",
+                index + 1,
+                file.display()
+            )
+        })?;
+        pages.push((
+            index,
+            TextPage::new(index, vec![TextSpan::new(text, 0.0, 0.0)]),
+        ));
+    }
+
+    let index = SearchIndex::new(pages);
+    let options = SearchOptions::with_options(case_sensitive, whole_word);
+    let found = index.find(query, &options);
+
+    let matches: Vec<MatchOutput> = found
+        .iter()
+        .flat_map(|page_matches| {
+            page_matches.matches().iter().map(|m| MatchOutput {
+                page: m.page() + 1,
+                offset: m.start(),
+                text: m.text().to_owned(),
+            })
+        })
+        .collect();
+
+    if matches.is_empty() {
+        eprintln!("no matches");
+        return Ok(());
+    }
+
+    if json {
+        let output = SearchOutput {
+            file: file.display().to_string(),
+            query: query.to_owned(),
+            matches,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        for m in &matches {
+            println!("page {} offset {} {}", m.page, m.offset, m.text);
+        }
     }
     Ok(())
 }
