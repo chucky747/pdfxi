@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-core",
+    "id":  "T-0031",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-core/**",
+                 "orchestration/feature-updates/T-0031.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0008",
+                       "T-0023"
+                   ],
+    "title":  "Parse xref streams and object streams",
+    "priority":  "P0",
+    "lane":  "core"
+}

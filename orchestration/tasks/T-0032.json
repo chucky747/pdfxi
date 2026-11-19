@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-render --features pdfium",
+    "id":  "T-0032",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-render/**",
+                 "orchestration/feature-updates/T-0032.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0021"
+                   ],
+    "title":  "Render page thumbnails through the renderer",
+    "priority":  "P1",
+    "lane":  "render"
+}
