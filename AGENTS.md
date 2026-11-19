@@ -38,6 +38,7 @@ cargo xtask goal-verify --all
 cargo xtask claim T-0001 --lane core
 cargo xtask release T-0001
 cargo xtask board
+cargo xtask features apply --clean
 ```
 
 If a command is not implemented yet, implement it rather than bypassing it.

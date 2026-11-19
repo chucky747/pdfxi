@@ -64,6 +64,7 @@ Lanes never edit `docs/features.toml` directly.
 ```text
 cargo xtask claim T-0001 --lane integrator
 cargo xtask release T-0001
+cargo xtask features apply --clean
 ```
 
 The claim helper normalizes globs and treats prefixes as overlapping. A conflict

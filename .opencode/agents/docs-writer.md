@@ -1,4 +1,4 @@
-﻿---
+---
 description: "Documentation and ADR writer"
 mode: subagent
 model: opencode-go/hy4-flash-free
@@ -22,6 +22,9 @@ permissions:
   - action: edit
     resource: "docs/features.toml"
     effect: deny
+  - action: edit
+    resource: "orchestration/feature-updates/**"
+    effect: allow
   - action: shell
     resource: "*"
     effect: allow

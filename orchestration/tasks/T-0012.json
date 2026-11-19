@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo xtask docs",
+    "id":  "T-0012",
+    "evidence":  "",
+    "owns":  [
+                 "docs/features/**",
+                 "docs/book/**",
+                 "docs/evidence/docs/**",
+                 "orchestration/feature-updates/T-0012.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0003"
+                   ],
+    "title":  "Document M1 viewer CLI and feature pages",
+    "priority":  "P1",
+    "lane":  "docs"
+}

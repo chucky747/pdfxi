@@ -96,6 +96,12 @@ enum Command {
 enum FeatureCommand {
     /// Validate every feature row.
     Verify,
+    /// Merge lane fragments into docs/features.toml.
+    Apply {
+        /// Remove successfully applied fragments.
+        #[arg(long)]
+        clean: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -162,6 +168,7 @@ fn main() -> Result<()> {
         } => goal_verify(milestone.as_deref(), all, allow_dirty),
         Command::Features { command } => match command {
             FeatureCommand::Verify => features_verify(),
+            FeatureCommand::Apply { clean } => features_apply(clean),
         },
         Command::Claim { task, lane } => claim(&task, &lane),
         Command::Release { task } => release(&task),
@@ -369,6 +376,74 @@ fn features_verify() -> Result<()> {
     Ok(())
 }
 
+fn features_apply(clean: bool) -> Result<()> {
+    let path = root().join("docs/features.toml");
+    let mut main: toml::Value =
+        toml::from_str(&fs::read_to_string(&path).context("read docs/features.toml")?)
+            .context("parse docs/features.toml")?;
+    let rows = main
+        .get_mut("feature")
+        .and_then(toml::Value::as_array_mut)
+        .context("docs/features.toml has no feature array")?;
+
+    let directory = root().join("orchestration/feature-updates");
+    if !directory.exists() {
+        println!("FEATURES APPLIED: 0 rows (no fragments)");
+        return Ok(());
+    }
+
+    let mut updated = 0usize;
+    let mut applied = Vec::new();
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let fragment_path = entry.path();
+        if fragment_path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        let fragment: toml::Value = toml::from_str(&fs::read_to_string(&fragment_path)?)
+            .with_context(|| format!("parse {}", fragment_path.display()))?;
+        let Some(fragment_rows) = fragment.get("feature").and_then(toml::Value::as_array) else {
+            continue;
+        };
+        for source in fragment_rows {
+            let id = source
+                .get("id")
+                .and_then(toml::Value::as_str)
+                .with_context(|| {
+                    format!("fragment row without id in {}", fragment_path.display())
+                })?;
+            let target = rows
+                .iter_mut()
+                .find(|row| row.get("id").and_then(toml::Value::as_str) == Some(id))
+                .with_context(|| format!("feature id {id} is not in docs/features.toml"))?;
+            merge_feature_row(target, source)?;
+            updated += 1;
+        }
+        applied.push(fragment_path);
+    }
+
+    fs::write(&path, toml::to_string_pretty(&main)?)?;
+    if clean {
+        for fragment in applied {
+            fs::remove_file(&fragment)?;
+        }
+    }
+    println!("FEATURES APPLIED: {updated} rows");
+    features_verify()
+}
+
+fn merge_feature_row(target: &mut toml::Value, source: &toml::Value) -> Result<()> {
+    let target = target
+        .as_table_mut()
+        .context("feature row is not a table")?;
+    for key in ["status", "tests", "docs", "evidence", "notes"] {
+        if let Some(value) = source.get(key) {
+            target.insert(key.to_owned(), value.clone());
+        }
+    }
+    Ok(())
+}
+
 fn task_path(task: &str) -> PathBuf {
     root()
         .join("orchestration/tasks")
@@ -551,5 +626,24 @@ mod tests {
     fn normalize_glob_is_stable() {
         assert_eq!(normalize_glob("./crates/foo/**"), "crates/foo");
         assert_eq!(normalize_glob("docs\\PLAN.md"), "docs/plan.md");
+    }
+
+    #[test]
+    fn merge_feature_row_updates_only_allowed_fields() {
+        let mut target: toml::Value =
+            toml::from_str("id = \"VIEW-001\"\nstatus = \"planned\"\ntitle = \"Open\"\n")
+                .expect("target");
+        let source: toml::Value =
+            toml::from_str("id = \"VIEW-001\"\nstatus = \"verified\"\ntitle = \"Ignored\"\n")
+                .expect("source");
+        merge_feature_row(&mut target, &source).expect("merge");
+        assert_eq!(
+            target.get("status").and_then(toml::Value::as_str),
+            Some("verified")
+        );
+        assert_eq!(
+            target.get("title").and_then(toml::Value::as_str),
+            Some("Open")
+        );
     }
 }
