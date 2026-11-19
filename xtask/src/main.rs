@@ -524,6 +524,19 @@ fn claim(task_id: &str, lane: &str) -> Result<()> {
             lane
         );
     }
+    for dependency in &task.depends_on {
+        let dependency_path = task_path(dependency);
+        if !dependency_path.exists() {
+            bail!("task {task_id} depends on {dependency}, which has no task file");
+        }
+        let dependency_task: Task = serde_json::from_str(&fs::read_to_string(&dependency_path)?)?;
+        if dependency_task.status != "verified" {
+            bail!(
+                "task {task_id} depends on {dependency}, whose status is {} (must be verified)",
+                dependency_task.status
+            );
+        }
+    }
     fs::create_dir_all(claims_dir())?;
     for entry in fs::read_dir(claims_dir())? {
         let entry = entry?;
