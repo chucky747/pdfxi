@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-edit",
+    "id":  "T-0053",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-edit/**",
+                 "orchestration/feature-updates/T-0053.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0013",
+                       "T-0034"
+                   ],
+    "title":  "Model comment threads and review workflow states",
+    "priority":  "P1",
+    "lane":  "author"
+}

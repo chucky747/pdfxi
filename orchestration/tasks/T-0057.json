@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-text",
+    "id":  "T-0057",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-text/**",
+                 "orchestration/feature-updates/T-0057.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0009"
+                   ],
+    "title":  "Add OCR sidecar contract and language routing",
+    "priority":  "P2",
+    "lane":  "render"
+}

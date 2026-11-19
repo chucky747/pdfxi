@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-convert",
+    "id":  "T-0056",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-convert/**",
+                 "orchestration/feature-updates/T-0056.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0019",
+                       "T-0026"
+                   ],
+    "title":  "Export text and structured JSON through the converter",
+    "priority":  "P1",
+    "lane":  "convert"
+}
