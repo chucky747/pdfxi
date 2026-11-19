@@ -578,14 +578,39 @@ tests = []
 title = "Export accessible text and tagged content"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-convert/src/lib.rs"
 domain = "Export"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 22 convert unit tests passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, because the host denies generated doctest binaries with os error 5). cargo fmt -p pdfxi-convert -p pdfxi-standards -- --check and cargo clippy -p pdfxi-convert -p pdfxi-standards --all-targets --all-features -- -D warnings both exit 0."
 id = "EXPORT-008"
-notes = ""
+notes = """
+Froze the conversion contract in pdfxi-convert: SourceKind and ExportKind
+classify file names (case-insensitive, dot-optional, Unknown fallback);
+ConversionOptions carries page range, image/annotation, and OCR settings with
+validate(); ConversionError names unsupported source/export/pair and invalid
+input; Converter exposes options(), can_import(), import(), and export(); and
+MockConverter is a deterministic in-memory implementation. Terms are documented
+as raw PDF bytes at the trait boundary so the crate has no dependencies. Real
+PDF/A-X-E export adapters and the standards fixups are future work, hence
+in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "converter::tests::mock_export_is_deterministic_and_respects_configured_targets",
+    "converter::tests::default_mock_supports_all_known_kinds",
+    "converter::tests::mock_validates_options_before_converting",
+    "converter::tests::mock_import_returns_registered_bytes",
+    "converter::tests::mock_import_rejects_unsupported_source",
+    "converter::tests::mock_import_without_registered_input_is_an_error",
+    "converter::tests::mock_can_import_respects_configured_sources",
+    "export::tests::export_kind_from_extension_is_case_insensitive_and_optional_dot",
+    "export::tests::export_kind_from_path_handles_missing_and_unknown_extensions",
+    "export::tests::export_kind_labels_and_flags_are_stable",
+    "source::tests::source_kind_from_extension_is_case_insensitive_and_optional_dot",
+    "source::tests::source_kind_from_path_handles_missing_and_unknown_extensions",
+    "error::tests::unsupported_variants_are_flagged_and_have_actionable_messages",
+    "options::tests::builders_store_every_option",
+]
 title = "Export to PDF/A PDF/X and PDF/E"
 
 [[feature]]
@@ -992,14 +1017,39 @@ tests = []
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-standards/src/lib.rs"
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 15 standards unit tests passed, 0 failed; 0 doctests executed (the lib.rs doc example is rendered as a ```text block, not compiled or run, due to the host's os error 5 on generated doctest binaries). cargo fmt -p pdfxi-convert -p pdfxi-standards -- --check and cargo clippy -p pdfxi-convert -p pdfxi-standards --all-targets --all-features -- -D warnings both exit 0."
 id = "PRINT-002"
-notes = ""
+notes = """
+Froze the standards/preflight contract in pdfxi-standards: Standard covers
+PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1, and PDF/UA-1 with canonical
+labels, families, and minimum PDF versions; Severity and PreflightFinding carry
+stable codes and actionable messages; PreflightFinding::Ord defines a canonical
+order (severity descending, then code/message/location) used by sort_findings,
+filter_by_severity, and the PreflightProfile provided methods; PreflightReport,
+StaticProfile, and HeaderProfile provide the report, a test double, and a
+shallow real header check. Full conformance rules and fixups are future work;
+veraPDF remains a CI oracle, never a runtime dependency. Hence in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "standard::tests::standard_labels_are_canonical",
+    "standard::tests::from_label_round_trips_and_ignores_ascii_case",
+    "standard::tests::families_and_minimum_versions_match_expectations",
+    "finding::tests::severity_ordering_and_labels_are_stable",
+    "finding::tests::findings_sort_by_severity_then_code_then_message_then_location",
+    "finding::tests::filtering_by_severity_keeps_warnings_and_errors_in_order",
+    "finding::tests::finding_display_includes_location_when_present",
+    "profile::tests::static_profile_check_sorted_is_canonical",
+    "profile::tests::static_profile_check_filtered_applies_severity_threshold",
+    "profile::tests::report_sorts_findings_and_decides_conformance",
+    "profile::tests::header_profile_reports_empty_input_and_bad_header",
+    "profile::tests::header_profile_warns_on_malformed_or_old_version",
+    "profile::tests::header_profile_accepts_conforming_header",
+    "profile::tests::preflight_report_find_order_is_independent_of_discovery_order",
+]
 title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 
 [[feature]]
@@ -1606,12 +1656,12 @@ status = "planned"
 tests = []
 title = "Incremental update and digital preservation"
 
-# --- M1 verified engineering slices -----------------------------------------
-
 [[feature]]
-id = "STD-011"
+docs = "docs/evidence/core/T-0008.md"
 domain = "Standards"
-title = "Classic xref table and startxref parser"
+evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
+id = "STD-011"
+notes = "Classic xref subsections, trailer, /Root, startxref, and /Prev chains with cycle detection. Xref streams remain in-progress under STD-002."
 priority = "P0"
 status = "verified"
 tests = [
@@ -1621,14 +1671,14 @@ tests = [
     "pdfxi_core::tests::rejects_bad_startxref",
     "pdfxi_core::tests::rejects_malformed_xref_entry",
 ]
-docs = "docs/evidence/core/T-0008.md"
-evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
-notes = "Classic xref subsections, trailer, /Root, startxref, and /Prev chains with cycle detection. Xref streams remain in-progress under STD-002."
+title = "Classic xref table and startxref parser"
 
 [[feature]]
-id = "STD-012"
+docs = "docs/evidence/core/T-0008.md"
 domain = "Standards"
-title = "Page tree traversal with inherited attributes"
+evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
+id = "STD-012"
+notes = "Recursive /Pages walk, /Count, inherited MediaBox/Resources, page order, and cycle guards."
 priority = "P0"
 status = "verified"
 tests = [
@@ -1636,14 +1686,14 @@ tests = [
     "pdfxi_core::tests::rejects_missing_root_and_pages",
     "pdfxi_core::tests::rejects_invalid_media_box_and_page_tree_cycle",
 ]
-docs = "docs/evidence/core/T-0008.md"
-evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
-notes = "Recursive /Pages walk, /Count, inherited MediaBox/Resources, page order, and cycle guards."
+title = "Page tree traversal with inherited attributes"
 
 [[feature]]
-id = "AUTO-009"
+docs = "docs/evidence/core/T-0010.md"
 domain = "Automation"
-title = "CLI info command with stable JSON output"
+evidence = "cargo test -p pdfxi-cli: 9 passed; docs/evidence/core/T-0010.md"
+id = "AUTO-009"
+notes = "pdfxi info and pdfxi info --json report file, version, bytes, and real page count."
 priority = "P1"
 status = "verified"
 tests = [
@@ -1652,14 +1702,14 @@ tests = [
     "cli::missing_file_reports_error",
     "cli::non_pdf_reports_error",
 ]
-docs = "docs/evidence/core/T-0010.md"
-evidence = "cargo test -p pdfxi-cli: 9 passed; docs/evidence/core/T-0010.md"
-notes = "pdfxi info and pdfxi info --json report file, version, bytes, and real page count."
+title = "CLI info command with stable JSON output"
 
 [[feature]]
-id = "AUTO-010"
+docs = "docs/evidence/core/T-0010.md"
 domain = "Automation"
-title = "CLI text extraction for uncompressed content streams"
+evidence = "cargo test -p pdfxi-core -p pdfxi-cli: 24 + 9 passed; docs/evidence/core/T-0010.md"
+id = "AUTO-010"
+notes = "Bounds-checked Tj, TJ, single-quote, and double-quote extraction; compressed streams return a clear error."
 priority = "P1"
 status = "verified"
 tests = [
@@ -1668,6 +1718,4 @@ tests = [
     "cli::text_extracts_each_page_of_multipage_fixture",
     "cli::text_filtered_stream_fails",
 ]
-docs = "docs/evidence/core/T-0010.md"
-evidence = "cargo test -p pdfxi-core -p pdfxi-cli: 24 + 9 passed; docs/evidence/core/T-0010.md"
-notes = "Bounds-checked Tj, TJ, single-quote, and double-quote extraction; compressed streams return a clear error."
+title = "CLI text extraction for uncompressed content streams"
