@@ -26,6 +26,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod bench;
 pub mod fixtures;
 pub mod golden;
 pub mod hash;
@@ -39,14 +40,18 @@ const DEFAULT_HEIGHT: f64 = 792.0;
 const DEFAULT_TEXT: &str = "Hello, PDFXI!";
 
 /// Description of a single generated page.
-struct PageSpec {
+///
+/// Crate-visible so the large benchmark fixture reuses the exact same
+/// byte-accurate PDF assembly as the small committed-fixture builders.
+pub(crate) struct PageSpec {
     text: String,
     width: f64,
     height: f64,
 }
 
 impl PageSpec {
-    fn new(text: &str, width: f64, height: f64) -> Self {
+    /// Create a page description from its drawn text and media box.
+    pub(crate) fn new(text: &str, width: f64, height: f64) -> Self {
         Self {
             text: text.to_string(),
             width,
@@ -83,7 +88,10 @@ fn escape_text(text: &str) -> String {
 }
 
 /// Assemble a complete PDF document from a list of page descriptions.
-fn build_pdf(pages: &[PageSpec]) -> Vec<u8> {
+///
+/// Crate-visible so the large benchmark fixture uses the same byte-accurate
+/// xref offsets and stream `/Length` values as the committed fixtures.
+pub(crate) fn build_pdf(pages: &[PageSpec]) -> Vec<u8> {
     let count = pages.len();
     let font_id = 3 + 2 * count;
 

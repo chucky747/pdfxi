@@ -1,14 +1,14 @@
 {
     "acceptance":  "cargo run -p pdfxi-testkit --example bench_open --release",
     "id":  "T-0030",
-    "evidence":  "",
+    "evidence":  "docs/evidence/qa/T-0030.md",
     "owns":  [
                  "crates/pdfxi-testkit/**",
                  "crates/pdfxi-core/examples/**",
                  "fixtures/**",
                  "orchestration/feature-updates/T-0030.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0024"
                    ],
