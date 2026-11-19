@@ -30,37 +30,54 @@ tests = [
 title = "Open and print PDF documents"
 
 [[feature]]
-docs = "crates/pdfxi-render/src/pdfium_backend.rs"
+docs = "crates/pdfxi-app/src/canvas.rs"
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-render --features pdfium (CARGO_TARGET_DIR=target/lanes/render): renders_minimal_pdf_page_zero_at_scale_one ok - non-zero dimensions, RGBA length == width*height*4, non-uniform raster, complete progress; 4/4 integration tests passed, EXIT=0."
+evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 34 passed, 0 failed. cargo test -p pdfxi-app --features ui: 48 passed, 0 failed. cargo check -p pdfxi-app --features ui: EXIT 0. cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: clean. cargo fmt -p pdfxi-app -- --check: clean. cargo doc -p pdfxi-app --no-deps: EXIT 0."
 id = "VIEW-002"
 notes = """
-The new backend rasterizes a real page at an explicit scale and exposes the
-page count through the frozen Renderer contract, which is the native foundation
-for zoom/layout work. It does not yet implement fit/custom zoom modes, rotation,
-or continuous/two-page layout; those remain in pdfxi-app's data model and
-future canvas work, so VIEW-002 stays in-progress.
+Added a dependency-free CanvasLayout that arranges pages deterministically for
+SinglePage, Continuous, TwoPage and TwoPageContinuous modes. Two-page modes pair
+pages (0,1), (2,3), ...; continuous modes use a small inter-row gap while paged
+modes insert a viewport-height break between screens. CanvasHit and page_at give
+deterministic half-open hit testing (Page/Gap/Outside); page_point maps a canvas
+point into page-local, top-left-origin, y-down PDF-point coordinates with
+clamping. Scroll offsets are clamped to content bounds. The egui placeholder
+canvas now draws one outlined rectangle per page and reports the page under the
+cursor. Rows stay in-progress because real raster integration and a thumbnail
+pane are not part of this task.
 """
 priority = "P0"
 status = "in-progress"
 tests = [
-    "tests/pdfium_backend.rs::renders_minimal_pdf_page_zero_at_scale_one",
-    "tests/pdfium_backend.rs::invalid_inputs_are_rejected_without_panicking",
+    "canvas::tests::layout_ordering_for_all_four_modes",
+    "canvas::tests::two_page_spread_pairing_into_rows",
+    "canvas::tests::single_page_modes_use_a_page_break_between_rows",
+    "canvas::tests::page_hit_testing_at_edges_is_deterministic",
+    "canvas::tests::point_to_page_coordinate_mapping",
+    "canvas::tests::degenerate_inputs_do_not_panic_or_produce_nan",
+    "ui::tests::layout_for_state_tracks_active_tab",
+    "ui::tests::canvas_info_line_reports_page_and_selection",
 ]
 title = "Single page continuous and two-page layouts"
 
 [[feature]]
-docs = "crates/pdfxi-render/src/lib.rs"
+docs = "crates/pdfxi-app/src/canvas.rs"
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-render -p pdfxi-text (T-0009)"
+evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 34 passed, 0 failed (zoom_scaling_multiplies_page_extent, fit_modes_resolve_against_the_widest_row, scroll_clamping_is_bounded_and_finite all ok). cargo check -p pdfxi-app --features ui: EXIT 0."
 id = "VIEW-003"
-notes = "Scale is an explicit render_page input (1.0 = 72 DPI); Progress and CancellationToken provide the feedback and stop semantics zoom/pan require. Fit modes and loupe remain app-lane work."
+notes = """
+CanvasLayout resolves Zoom::FitWidth/FitPage against the widest page row and
+clamps the resulting scale through the existing Zoom policy; Custom zoom scales
+page rectangles linearly (1.0 -> 612pt, 2.0 -> 1224pt). max_scroll/clamp_scroll
+provide bounded panning, including sanitizing non-finite offsets. Loupe and
+ gesture panning are still future work, so the row remains in-progress.
+"""
 priority = "P0"
 status = "in-progress"
 tests = [
-    "pdfxi-render::tests::invalid_scale_is_rejected",
-    "pdfxi-render::tests::progress_fraction_handles_unknown_and_complete_work",
-    "pdfxi-render::tests::cancellation_stops_render_before_pixels_are_built",
+    "canvas::tests::zoom_scaling_multiplies_page_extent",
+    "canvas::tests::fit_modes_resolve_against_the_widest_row",
+    "canvas::tests::scroll_clamping_is_bounded_and_finite",
 ]
 title = "Zoom pan loupe and fit modes"
 

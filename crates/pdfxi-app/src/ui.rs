@@ -6,18 +6,31 @@
 //! document mutations go through [`AppState`] methods, so the state logic stays
 //! independent of the window and can be unit tested without one.
 //!
-//! The canvas is intentionally a placeholder for this task: it reports the
-//! active document's page count but does not render PDF pages yet.
+//! The canvas draws page rectangles laid out by [`crate::canvas::CanvasLayout`],
+//! reports the page under the cursor, and shows copied text from a
+//! [`crate::selection::SelectionModel`] in the status line. Real rasterization
+//! stays optional: without a renderer, the rectangles and selection overlay are
+//! the placeholder. All layout/selection logic lives in window-free modules so
+//! it can be tested without this GUI layer.
 
 use egui::Key;
 
-use crate::{AppState, DEFAULT_ZOOM, TabId, Toolset, ViewMode, Zoom, app_name};
+use crate::{
+    AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasSize, DEFAULT_ZOOM, OwnedSpan,
+    OwnedTextPage, PageSize, SelectionModel, TabId, Toolset, ViewMode, Zoom, app_name,
+};
 
 /// Amount by which each zoom-in / zoom-out step changes a custom zoom scale.
 const ZOOM_STEP: f32 = 0.25;
 
 /// Placeholder page count assigned to a demo tab (no real document is loaded).
 pub const DEMO_PAGE_COUNT: usize = 3;
+
+/// Width of a demo page in PDF points (US Letter).
+const DEMO_PAGE_WIDTH_PT: f32 = 612.0;
+
+/// Height of a demo page in PDF points (US Letter).
+const DEMO_PAGE_HEIGHT_PT: f32 = 792.0;
 
 /// Format a one-line status string describing the active document.
 ///
@@ -50,6 +63,70 @@ pub fn canvas_placeholder(state: &AppState) -> String {
             tab.page_count(),
         ),
         None => "Open a document to begin".to_string(),
+    }
+}
+
+/// Build deterministic US-Letter page sizes for a demo document of `count` pages.
+pub fn demo_page_sizes(count: usize) -> Vec<PageSize> {
+    (0..count)
+        .map(|_| PageSize::new(DEMO_PAGE_WIDTH_PT, DEMO_PAGE_HEIGHT_PT))
+        .collect()
+}
+
+/// Build placeholder text pages so selection can be demonstrated without a
+/// renderer. Each page carries one short line of text near the top-left.
+pub fn demo_text_pages(count: usize) -> Vec<OwnedTextPage> {
+    (0..count)
+        .map(|page| {
+            let text = format!("Page {} demo text", page + 1);
+            let width = 7.0 * text.chars().count() as f32;
+            OwnedTextPage::new(page, vec![OwnedSpan::new(text, 72.0, 72.0, width, 14.0)])
+        })
+        .collect()
+}
+
+/// Lay out the active tab's demo pages for a viewport, or `None` with no tab.
+///
+/// This is the only bridge between [`AppState`] and [`CanvasLayout`]; it is pure
+/// and window-free so the geometry can be asserted in unit tests.
+pub fn layout_for_state(state: &AppState, viewport: CanvasSize) -> Option<CanvasLayout> {
+    let tab = state.active_tab()?;
+    Some(CanvasLayout::standard(
+        tab.view_mode(),
+        tab.zoom(),
+        viewport,
+        &demo_page_sizes(tab.page_count()),
+    ))
+}
+
+/// Convert a screen-space pointer position into unscrolled canvas coordinates.
+///
+/// `origin` is the canvas widget's top-left in screen space and `(scroll_x,
+/// scroll_y)` is the current scroll offset. This is a pure helper used by the
+/// pointer handlers and asserted in unit tests.
+pub fn screen_to_canvas(
+    pos: egui::Pos2,
+    origin: egui::Pos2,
+    scroll_x: f32,
+    scroll_y: f32,
+) -> CanvasPoint {
+    CanvasPoint::new(pos.x - origin.x + scroll_x, pos.y - origin.y + scroll_y)
+}
+
+/// Compose the one-line canvas info shown in the status area.
+///
+/// Reports the page under the cursor and, when a selection exists, appends the
+/// copy text. Pure and window-free.
+pub fn canvas_info_line(hit: CanvasHit, selection_text: &str) -> String {
+    let page_part = match hit {
+        CanvasHit::Page(index) => format!("Page {}", index + 1),
+        CanvasHit::Gap => "Between pages".to_string(),
+        CanvasHit::Outside => "Outside pages".to_string(),
+    };
+    if selection_text.is_empty() {
+        page_part
+    } else {
+        format!("{page_part} | Selected: {selection_text}")
     }
 }
 
@@ -87,6 +164,10 @@ pub fn run() {
 pub struct PdfxiApp {
     state: AppState,
     status: String,
+    scroll_x: f32,
+    scroll_y: f32,
+    selection: SelectionModel,
+    demo_text: Vec<OwnedTextPage>,
 }
 
 impl PdfxiApp {
@@ -112,6 +193,10 @@ impl PdfxiApp {
         if let Some(tab) = self.state.tab_mut(id) {
             tab.set_page_count(DEMO_PAGE_COUNT);
         }
+        self.demo_text = demo_text_pages(DEMO_PAGE_COUNT);
+        self.selection.clear();
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
         self.status = format!("Opened demo tab {id}");
         id
     }
@@ -165,6 +250,17 @@ impl PdfxiApp {
     pub fn select_tool(&mut self, tool: Toolset) {
         self.state.select_tool(tool);
         self.status = format!("Tool: {}", tool.label());
+    }
+
+    /// Clear the current text selection (bound to Escape).
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
+        self.status = "Selection cleared".to_string();
+    }
+
+    /// Copy text of the current selection, using the placeholder text pages.
+    pub fn selected_text(&self) -> String {
+        self.selection.selected_text(&self.demo_text)
     }
 
     /// Change the active tab's view mode.
@@ -292,16 +388,80 @@ impl PdfxiApp {
             .stroke(ui.visuals().widgets.inactive.fg_stroke)
             .inner_margin(egui::Margin::same(8))
             .show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(48.0);
-                    ui.label(egui::RichText::new(canvas_placeholder(&self.state)).weak());
+                let viewport = CanvasSize::new(ui.available_width(), ui.available_height());
+                let Some(layout) = layout_for_state(&self.state, viewport) else {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(48.0);
+                        ui.label(egui::RichText::new(canvas_placeholder(&self.state)).weak());
+                    });
+                    return;
+                };
+
+                let origin = ui.min_rect().left_top();
+                let text_tool = self.state.active_tool() == Toolset::TextSelection;
+                let (scroll_delta, hover, pressed, dragging) = ui.input(|input| {
+                    let pointer = &input.pointer;
+                    let pressed = pointer.primary_pressed();
+                    (
+                        input.smooth_scroll_delta,
+                        pointer.hover_pos(),
+                        pressed,
+                        pointer.primary_down() && !pressed,
+                    )
                 });
+
+                // Scroll, clamped to the laid-out content (never blocks on I/O).
+                let scrolled = layout.clamp_scroll(
+                    self.scroll_x + scroll_delta.x,
+                    self.scroll_y + scroll_delta.y,
+                );
+                self.scroll_x = scrolled.x;
+                self.scroll_y = scrolled.y;
+
+                // Text drag: anchor on press, advance the head while dragging.
+                if text_tool && let Some(pos) = hover {
+                    let point = screen_to_canvas(pos, origin, self.scroll_x, self.scroll_y);
+                    if pressed {
+                        self.selection.begin_at(point, &layout, &self.demo_text);
+                    } else if dragging {
+                        self.selection.update_to(point, &layout, &self.demo_text);
+                    }
+                }
+
+                // Report the page under the cursor in canvas coordinates.
+                let hit = hover.map_or(CanvasHit::Outside, |pos| {
+                    layout.page_at(screen_to_canvas(pos, origin, self.scroll_x, self.scroll_y))
+                });
+
+                // Draw one outlined placeholder rectangle per laid-out page.
+                // Real rasterization is optional and intentionally absent here.
+                let painter = ui.painter();
+                let stroke = ui.visuals().widgets.inactive.fg_stroke;
+                for page in layout.pages() {
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            origin.x + page.rect.x - self.scroll_x,
+                            origin.y + page.rect.y - self.scroll_y,
+                        ),
+                        egui::vec2(page.rect.width, page.rect.height),
+                    );
+                    painter.rect(
+                        rect,
+                        0.0,
+                        egui::Color32::TRANSPARENT,
+                        stroke,
+                        egui::StrokeKind::Outside,
+                    );
+                }
+
+                let copy_text = self.selection.selected_text(&self.demo_text);
+                ui.label(canvas_info_line(hit, &copy_text));
             });
     }
 
     /// Apply keyboard shortcuts for the main commands (all with a Ctrl chord).
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let (open, close, zoom_in, zoom_out, rotate_cw, rotate_ccw) = ctx.input(|input| {
+        let (open, close, zoom_in, zoom_out, rotate_cw, rotate_ccw, escape) = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl;
             let shift = input.modifiers.shift;
             (
@@ -311,6 +471,7 @@ impl PdfxiApp {
                 ctrl && input.key_pressed(Key::Minus),
                 ctrl && !shift && input.key_pressed(Key::R),
                 ctrl && shift && input.key_pressed(Key::R),
+                input.key_pressed(Key::Escape),
             )
         });
 
@@ -331,6 +492,9 @@ impl PdfxiApp {
         }
         if rotate_ccw {
             self.rotate_counterclockwise();
+        }
+        if escape {
+            self.clear_selection();
         }
     }
 }
@@ -477,5 +641,68 @@ mod tests {
         app.select_tool(Toolset::Highlight);
         assert_eq!(app.state().active_tool(), Toolset::Highlight);
         assert!(app.status().contains("Highlight"));
+    }
+
+    #[test]
+    fn demo_geometry_helpers_are_deterministic() {
+        let sizes = demo_page_sizes(3);
+        assert_eq!(sizes.len(), 3);
+        assert!(sizes.iter().all(
+            |size| size.width_pt == DEMO_PAGE_WIDTH_PT && size.height_pt == DEMO_PAGE_HEIGHT_PT
+        ));
+
+        let pages = demo_text_pages(3);
+        assert_eq!(pages.len(), 3);
+        assert_eq!(pages[0].page_number(), 0);
+        assert_eq!(pages[2].page_number(), 2);
+        assert!(!pages[0].spans().is_empty());
+        assert_eq!(pages[0], demo_text_pages(3)[0], "no time or randomness");
+    }
+
+    #[test]
+    fn layout_for_state_tracks_active_tab() {
+        let mut state = AppState::new();
+        assert!(layout_for_state(&state, CanvasSize::new(800.0, 600.0)).is_none());
+
+        let id = state.open_tab("demo");
+        if let Some(tab) = state.tab_mut(id) {
+            tab.set_page_count(4);
+            tab.set_view_mode(ViewMode::TwoPageContinuous);
+            tab.set_zoom(Zoom::custom(2.0));
+        }
+        let layout = layout_for_state(&state, CanvasSize::new(800.0, 600.0))
+            .expect("active tab produces a layout");
+        assert_eq!(layout.page_count(), 4);
+        assert_eq!(layout.mode(), ViewMode::TwoPageContinuous);
+        assert!((layout.scale() - 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn screen_to_canvas_accounts_for_origin_and_scroll() {
+        let origin = egui::pos2(100.0, 50.0);
+        let point = screen_to_canvas(egui::pos2(150.0, 70.0), origin, 20.0, 10.0);
+        assert_eq!(point, CanvasPoint::new(70.0, 30.0));
+    }
+
+    #[test]
+    fn canvas_info_line_reports_page_and_selection() {
+        assert_eq!(canvas_info_line(CanvasHit::Page(0), ""), "Page 1");
+        assert_eq!(canvas_info_line(CanvasHit::Gap, ""), "Between pages");
+        assert_eq!(canvas_info_line(CanvasHit::Outside, ""), "Outside pages");
+        assert_eq!(
+            canvas_info_line(CanvasHit::Page(2), "Hello"),
+            "Page 3 | Selected: Hello"
+        );
+    }
+
+    #[test]
+    fn clearing_selection_via_keyboard_path_updates_state() {
+        let mut app = PdfxiApp::new();
+        app.open_demo_tab();
+        // With no drag, copy text is empty; the clear command is still safe.
+        assert_eq!(app.selected_text(), "");
+        app.clear_selection();
+        assert_eq!(app.status(), "Selection cleared");
+        assert_eq!(app.selected_text(), "");
     }
 }
