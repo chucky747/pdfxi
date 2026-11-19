@@ -1770,3 +1770,26 @@ priority = "P0"
 status = "planned"
 tests = []
 title = "Open PDF and render pages in the viewer"
+
+[[feature]]
+docs = "crates/pdfxi-text/src/lib.rs"
+domain = "View & Navigate"
+evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 21 passed; 0 failed. clippy/fmt/doc clean. docs/evidence/render/T-0026.md"
+id = "VIEW-017"
+notes = "Multi-page SearchIndex (ordered by page then character offset, case-insensitive, whole-word, documented leftmost-first overlap policy), TextSelection with two-way normalization and cross-page copy, plain-text span offsets, and shared boundary rules. The UI find bar and match highlighting are not wired yet, so the row is in-progress."
+priority = "P1"
+status = "in-progress"
+tests = [
+    "tests::index_orders_results_by_page_then_offset",
+    "tests::index_is_case_insensitive_by_default_and_can_be_exact",
+    "tests::index_honors_whole_word_option",
+    "tests::index_returns_empty_for_no_match_and_empty_query",
+    "tests::index_resolves_overlapping_matches_leftmost_first",
+    "tests::index_uses_character_offsets_for_multibyte_text",
+    "tests::index_is_deterministic_when_reused",
+    "tests::plain_text_exposes_span_character_offsets",
+    "tests::copy_range_uses_newline_and_space_rules",
+    "tests::selection_normalizes_in_both_directions",
+    "tests::selection_copies_text_across_pages",
+]
+title = "Find text in a document and select copy text"
