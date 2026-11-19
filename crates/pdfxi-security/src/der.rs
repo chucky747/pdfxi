@@ -12,7 +12,11 @@
 //! - length and integer encodings must be minimal;
 //! - every read is bounds-checked and returns a structured
 //!   [`SecurityError`] rather than panicking;
-//! - trailing bytes are detected by [`DerReader::expect_end`].
+//! - trailing bytes are detected by [`DerReader::expect_end`];
+//! - `GeneralizedTime` accepts a one-to-nine-digit fractional-seconds suffix
+//!   (`.sss...Z`, as used by RFC 3161 `genTime`); `UTCTime` and malformed
+//!   fractions are rejected. Fractions are validated but not retained because
+//!   the decoded time is whole Unix seconds.
 //!
 //! Values are never logged. Errors report only tags, lengths, and OIDs.
 //!
@@ -354,14 +358,45 @@ fn decode_time_content(tag: Tag, content: &[u8]) -> Result<u64> {
             found: tag.byte(),
         });
     };
-    if content.len() != offset + 11 || content[offset + 10] != b'Z' {
+    // Remaining layout: `MMDDHHMMSS` followed by `Z`, or, for GeneralizedTime
+    // only, `.sss...Z` (RFC 3161 `genTime` permits fractional seconds).
+    let clock = content
+        .get(offset..offset + 10)
+        .ok_or(SecurityError::DerTruncated)?;
+    if clock.iter().any(|byte| !byte.is_ascii_digit()) {
         return Err(SecurityError::DerInvalid);
     }
-    let month = parse_two(&content[offset..offset + 2]).ok_or(SecurityError::DerInvalid)?;
-    let day = parse_two(&content[offset + 2..offset + 4]).ok_or(SecurityError::DerInvalid)?;
-    let hour = parse_two(&content[offset + 4..offset + 6]).ok_or(SecurityError::DerInvalid)?;
-    let minute = parse_two(&content[offset + 6..offset + 8]).ok_or(SecurityError::DerInvalid)?;
-    let second = parse_two(&content[offset + 8..offset + 10]).ok_or(SecurityError::DerInvalid)?;
+    let tail = content
+        .get(offset + 10..)
+        .ok_or(SecurityError::DerTruncated)?;
+    if tail.first() == Some(&b'.') {
+        if tag != Tag::GENERALIZED_TIME {
+            return Err(SecurityError::DerInvalid);
+        }
+        let zone_index = tail
+            .iter()
+            .position(|byte| *byte == b'Z')
+            .ok_or(SecurityError::DerInvalid)?;
+        if zone_index != tail.len() - 1 {
+            return Err(SecurityError::DerInvalid);
+        }
+        let fraction = &tail[1..zone_index];
+        if fraction.is_empty()
+            || fraction.len() > 9
+            || fraction.iter().any(|byte| !byte.is_ascii_digit())
+        {
+            return Err(SecurityError::DerInvalid);
+        }
+        // Fraction digits are validated but intentionally discarded: the public
+        // time type is whole Unix seconds and carries no sub-second precision.
+    } else if !(tail.len() == 1 && tail[0] == b'Z') {
+        return Err(SecurityError::DerInvalid);
+    }
+    let month = parse_two(&clock[0..2]).ok_or(SecurityError::DerInvalid)?;
+    let day = parse_two(&clock[2..4]).ok_or(SecurityError::DerInvalid)?;
+    let hour = parse_two(&clock[4..6]).ok_or(SecurityError::DerInvalid)?;
+    let minute = parse_two(&clock[6..8]).ok_or(SecurityError::DerInvalid)?;
+    let second = parse_two(&clock[8..10]).ok_or(SecurityError::DerInvalid)?;
     if month == 0
         || day == 0
         || day > days_in_month(year, month)
@@ -511,6 +546,11 @@ impl<'a> Tlv<'a> {
     }
 
     /// Decode a `UTCTime` or `GeneralizedTime` into Unix seconds.
+    ///
+    /// `GeneralizedTime` may carry a fractional-seconds suffix (`.sss...Z`);
+    /// its digits are validated and then discarded because the result is whole
+    /// seconds. `UTCTime` has no fractional form and malformed suffixes are
+    /// rejected with [`SecurityError::DerInvalid`].
     pub fn as_time(&self) -> Result<u64> {
         decode_time_content(self.tag, self.content)
     }
@@ -844,5 +884,55 @@ mod tests {
             DerReader::new(&oversized).read_tlv().map(|_| ()),
             Err(SecurityError::DerLengthOverflow)
         );
+    }
+
+    #[test]
+    fn generalized_time_accepts_fractional_seconds() {
+        let plain = encode_tlv(Tag::GENERALIZED_TIME, b"20261119000000Z");
+        let plain_seconds = DerReader::new(&plain)
+            .read_tlv()
+            .expect("plain generalized time")
+            .as_time()
+            .expect("valid plain time");
+        let fractions: [&[u8]; 4] = [b".5Z", b".123Z", b".123456789Z", b".000Z"];
+        for fraction in fractions {
+            let mut content = b"20261119000000".to_vec();
+            content.extend_from_slice(fraction);
+            let encoded = encode_tlv(Tag::GENERALIZED_TIME, &content);
+            let seconds = DerReader::new(&encoded)
+                .read_tlv()
+                .expect("fractional generalized time")
+                .as_time()
+                .expect("valid fractional time");
+            assert_eq!(
+                seconds, plain_seconds,
+                "fractional seconds must not change whole-second time"
+            );
+        }
+    }
+
+    #[test]
+    fn time_rejects_malformed_fractional_seconds() {
+        let invalid: [(Tag, &[u8]); 8] = [
+            (Tag::GENERALIZED_TIME, b"20261119000000.Z"),
+            (Tag::GENERALIZED_TIME, b"20261119000000.abcZ"),
+            (Tag::GENERALIZED_TIME, b"20261119000000.1234567890Z"),
+            (Tag::GENERALIZED_TIME, b"20261119000000.12.3Z"),
+            (Tag::GENERALIZED_TIME, b"20261119000000.123"),
+            (Tag::GENERALIZED_TIME, b"20261119000000.123Zx"),
+            (Tag::GENERALIZED_TIME, b"20261119000000.123+0200"),
+            (Tag::UTC_TIME, b"261119000000.123Z"),
+        ];
+        for (tag, content) in invalid {
+            let encoded = encode_tlv(tag, content);
+            assert_eq!(
+                DerReader::new(&encoded)
+                    .read_tlv()
+                    .expect("time tlv")
+                    .as_time(),
+                Err(SecurityError::DerInvalid),
+                "malformed time content must be rejected: {content:?}"
+            );
+        }
     }
 }

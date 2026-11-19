@@ -1,0 +1,14 @@
+{
+  "id": "T-0086",
+  "lane": "core",
+  "title": "Write fully linearized PDFs",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0072", "T-0029"],
+  "owns": [
+    "crates/pdfxi-core/**",
+    "orchestration/feature-updates/T-0086.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core",
+  "evidence": ""
+}

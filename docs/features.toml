@@ -1361,28 +1361,27 @@ title = "Distribute and collect forms locally"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/acroform.rs",
-    "crates/pdfxi-forms/src/acroform/tests.rs",
+    "crates/pdfxi-forms/src/signature.rs",
+    "crates/pdfxi-forms/src/lib.rs",
+    "docs/evidence/forms/T-0087.md",
 ]
 domain = "Forms"
-evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 66 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
-cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps: EXIT=0.
-"""
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 161 passed, 0 failed; 13 new signature::tests::* covering field creation, lock/certification flags, reason/location/contact, state transitions, invalid-transition rejection, decline/cancel, deterministic reports, byte-range planning, placeholder sizing, signed-appearance presence and typed errors. Full output in docs/evidence/forms/T-0087.md."
 id = "FORMS-010"
-notes = """
-Signature fields are now recognised while loading: a terminal field with /FT
-/Sig becomes FieldType::Signature and its /V name is loaded as a FieldValue::
-Text signing label. Document-level /DA and /Q defaults from the /AcroForm
-dictionary are inherited by signature fields as well. Actual signature
-creation, cryptographic validation and workflow UI remain owned by the security
-lane and are deferred, so the row stays in-progress.
-"""
+notes = "Adds signature field creation (/FT /Sig with /V placeholder, /Ff flags, /Lock, DocMDP certification, reason/location/contact, signature-line appearance), a deterministic local workflow state machine (unsigned/pending/signed/valid/invalid/expired with decline/cancel and caller-supplied timestamps), and a SignatureSlot byte-range planning boundary for a future signer. No crypto is implemented and no signature is forged. Cryptographic signing/validation and the workflow UI remain owned by the security/app lanes, so the row stays in-progress."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "acroform::tests::handles_signature_and_pushbutton_fields",
-    "acroform::tests::resolves_reference_chains_and_root_defaults",
+    "signature::tests::signature_field_creation_emits_sig_and_v_placeholder",
+    "signature::tests::lock_and_certification_flags_are_emitted",
+    "signature::tests::reason_location_and_contact_are_emitted",
+    "signature::tests::workflow_transitions_follow_unsigned_pending_signed_valid",
+    "signature::tests::invalid_transition_is_rejected",
+    "signature::tests::decline_and_cancel_transitions",
+    "signature::tests::deterministic_report",
+    "signature::tests::byte_range_slot_planning",
+    "signature::tests::placeholder_content_sizing",
+    "signature::tests::signed_appearance_presence",
 ]
 title = "Electronic signature fields and workflows"
 
@@ -1574,11 +1573,12 @@ docs = [
     "crates/pdfxi-security/src/cms.rs",
     "crates/pdfxi-security/src/signature.rs",
     "crates/pdfxi-security/src/timestamp.rs",
+    "crates/pdfxi-security/src/der.rs",
     "crates/pdfxi-security/src/error.rs",
     "docs/evidence/security/T-0077.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 149 passed, 0 failed, including 15 timestamp::tests cases covering valid token, wrong imprint, bad CMS signature, tampered TSTInfo digest, untrusted TSA, certificate-invalid-at-genTime, nonce mismatch, future/skew, malformed DER, missing fields and status mapping. fmt/clippy(-D warnings)/rustdoc(-D warnings) clean for pdfxi-security. docs/evidence/security/T-0077.md"
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 153 passed, 0 failed, including 17 timestamp::tests cases (valid token, wrong imprint, bad CMS signature, tampered TSTInfo digest, untrusted TSA, missing timeStamping EKU on a trusted TSA, EKU override, certificate-invalid-at-genTime, nonce mismatch, future/skew, malformed DER, missing fields, status mapping) and 2 der time tests (fractional seconds accepted, malformed forms rejected). fmt/clippy(-D warnings)/rustdoc(-D warnings) clean for pdfxi-security. docs/evidence/security/T-0077.md"
 id = "SEC-006"
 notes = """
 Signature validation for the CMS subset remains as before (digest recomputation,
@@ -1587,7 +1587,20 @@ tampering/truncation/algorithm errors). T-0077 adds RFC 3161 trusted timestamp
 validation: TSTInfo parsing, CMS token signature and TSTInfo digest verification,
 messageImprint matching, caller-clocked chain trust at genTime, replay/skew and
 nonce policy, and a conservative TimestampStatus -> SignatureStatus mapping.
-Revocation/CRL checking, trust-manager UI and applying these checks inside a
+
+Disclosed behavior from the security review:
+- TSA EKU: RFC 3161 section 2.3 id-kp-timeStamping is enforced by default via
+  TimestampPolicy::required_tsa_eku. A chain-trusted TSA certificate without
+  this purpose yields TimestampEkuMissing (mapped to SignatureStatus::Unknown),
+  never Valid. Callers may explicitly set another purpose or None to disable;
+  the override is documented and tested.
+- GeneralizedTime: RFC 3161 genTime accepts fractional seconds (.sss...Z,
+  1-9 digits). The DER decoder validates the fraction but discards it because
+  the public time type is whole Unix seconds; sub-second precision is not
+  represented in TstInfo::gen_time and is not used by skew or nonce checks.
+  UTCTime and malformed fractional forms are rejected.
+
+Revocation/CRL checks, a trust-manager UI, and applying these checks inside a
 concrete PDF signature workflow remain planned (SEC-007), so the row stays
 in-progress rather than verified.
 """
@@ -1604,12 +1617,15 @@ tests = [
     "timestamp::tests::wrong_message_imprint_is_distinguished",
     "timestamp::tests::bad_cms_signature_is_distinguished",
     "timestamp::tests::untrusted_tsa_is_distinguished",
+    "timestamp::tests::trusted_tsa_without_timestamping_eku_is_rejected",
     "timestamp::tests::timestamp_outside_certificate_validity_is_distinguished",
     "timestamp::tests::nonce_mismatch_is_distinguished",
     "timestamp::tests::future_timestamp_beyond_skew_is_rejected",
     "timestamp::tests::malformed_der_produces_typed_error",
     "timestamp::tests::missing_fields_produce_typed_error",
     "timestamp::tests::status_mapping_keeps_valid_conservative",
+    "der::tests::generalized_time_accepts_fractional_seconds",
+    "der::tests::time_rejects_malformed_fractional_seconds",
 ]
 title = "Timestamp and signature validation"
 

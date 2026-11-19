@@ -18,7 +18,8 @@
 //! [`SignatureStatus::Valid`] — means precisely that every check this crate can
 //! perform succeeded: cryptographic integrity of the CMS token, a matching
 //! message imprint, a genTime that is not implausibly in the future, a TSA
-//! chain valid at `genTime`, and a matching nonce when one was supplied. It does
+//! chain valid at `genTime`, a TSA certificate bearing the RFC 3161
+//! `id-kp-timeStamping` EKU, and a matching nonce when one was supplied. It does
 //! **not** assert identity policy, revocation/CRL status, or any legal notion of
 //! non-repudiation; those remain higher-layer responsibilities (see SEC-007).
 //!
@@ -27,6 +28,26 @@
 //! supplied "now" clock are rejected, and the TSA certificate is validated at
 //! `genTime` rather than at "now" so an expired-today TSA can still validate a
 //! historically issued token.
+//!
+//! # TSA extended key usage
+//!
+//! RFC 3161 section 2.3 requires a TSA certificate to carry the
+//! `id-kp-timeStamping` extended key usage. [`TimestampPolicy::required_tsa_eku`]
+//! enforces this by default (unlike a generic [`ValidationPolicy`], whose EKU is
+//! unconstrained by default). A chain-trusted certificate that lacks the purpose
+//! yields [`TimestampStatus::TimestampEkuMissing`], never `Valid`. Callers with
+//! non-standard TSA certificates can set that field to another purpose or to
+//! `None` to disable the check; doing so is an explicit trust decision.
+//!
+//! # GeneralizedTime limits
+//!
+//! `genTime` must be a DER `GeneralizedTime`. The shared DER time decoder accepts
+//! canonical `YYYYMMDDHHMMSSZ` and an optional fractional-seconds suffix
+//! (`.sss...Z`, one to nine digits, as used by RFC 3161). The fraction is
+//! validated but discarded because the public time type is whole Unix seconds;
+//! sub-second precision is therefore not represented in [`TstInfo::gen_time`]
+//! and is not used by the skew or nonce checks. `UTCTime` and malformed
+//! fractional forms are rejected.
 //!
 //! [`verify_chain`]: crate::x509::verify_chain
 
@@ -39,6 +60,7 @@ use crate::der::{
 use crate::error::{Result, SecurityError};
 use crate::signature::{DigestAlgorithm, SignatureCoverage, SignatureInfo, SignatureStatus};
 use crate::x509::certificate::Certificate;
+use crate::x509::extension::EkuPurpose;
 use crate::x509::verify::{TrustStore, ValidationPolicy, verify_chain};
 use crate::x509::{CertificateVerifier, Clock, FixedClock, parse_algorithm_identifier};
 
@@ -474,7 +496,11 @@ pub struct TimestampTokenParams<'a> {
     pub policy: Vec<u32>,
     /// TSA-assigned serial number.
     pub serial_number: u64,
-    /// `genTime` as Unix seconds.
+    /// `genTime` as whole Unix seconds.
+    ///
+    /// A DER `GeneralizedTime` fractional-seconds suffix is accepted and
+    /// validated by the parser but discarded here, since this representation
+    /// carries no sub-second precision.
     pub gen_time: u64,
     /// Optional accuracy of `genTime`.
     pub accuracy: Option<Accuracy>,
@@ -744,6 +770,8 @@ pub enum TimestampStatus {
     ImprintMismatch,
     /// The TSA certificate chain did not reach a trusted anchor.
     UntrustedTsa,
+    /// The TSA chain does not permit the RFC 3161 timeStamping EKU.
+    TimestampEkuMissing,
     /// The TSA certificate was not valid at `genTime`.
     CertificateNotValidAtGenTime,
     /// `genTime` lay beyond the allowed future skew from the supplied clock.
@@ -760,6 +788,7 @@ impl TimestampStatus {
             Self::CryptographicFailure => "cryptographic-failure",
             Self::ImprintMismatch => "imprint-mismatch",
             Self::UntrustedTsa => "untrusted-tsa",
+            Self::TimestampEkuMissing => "timestamp-eku-missing",
             Self::CertificateNotValidAtGenTime => "certificate-not-valid-at-gen-time",
             Self::FutureTime => "future-time",
             Self::NonceMismatch => "nonce-mismatch",
@@ -788,6 +817,16 @@ pub struct TimestampPolicy {
     pub max_future_skew_seconds: u64,
     /// When `Some`, the token's nonce must equal this value.
     pub expected_nonce: Option<u64>,
+    /// Extended key usage the TSA certificate must carry.
+    ///
+    /// Defaults to [`EkuPurpose::TimeStamping`], as required by RFC 3161
+    /// section 2.3: a chain-trusted certificate that lacks this purpose is not a
+    /// valid TSA. Setting this to `None` disables the requirement, and setting it
+    /// to another purpose replaces it; both are explicit, documented overrides
+    /// for callers with non-standard TSA certificates. This value takes
+    /// precedence over [`ValidationPolicy::required_eku`] for timestamp
+    /// validation.
+    pub required_tsa_eku: Option<EkuPurpose>,
 }
 
 impl Default for TimestampPolicy {
@@ -795,6 +834,7 @@ impl Default for TimestampPolicy {
         Self {
             max_future_skew_seconds: 300,
             expected_nonce: None,
+            required_tsa_eku: Some(EkuPurpose::TimeStamping),
         }
     }
 }
@@ -856,16 +896,18 @@ impl TimestampValidation {
     ///
     /// [`SignatureStatus::Valid`] is returned only for [`TimestampStatus::Valid`]:
     /// no partially verified token is ever promoted to `Valid`. Specifically,
-    /// integrity failures map to `Tampered`, an untrusted TSA to `Unknown`, a
-    /// certificate invalid at `genTime` to `Expired`, and replay/nonce failures
-    /// to `Invalid`.
+    /// integrity failures map to `Tampered`, an untrusted TSA or a missing
+    /// timeStamping EKU to `Unknown`, a certificate invalid at `genTime` to
+    /// `Expired`, and replay/nonce failures to `Invalid`.
     pub const fn to_signature_status(&self) -> SignatureStatus {
         match self.status {
             TimestampStatus::Valid => SignatureStatus::Valid,
             TimestampStatus::CryptographicFailure | TimestampStatus::ImprintMismatch => {
                 SignatureStatus::Tampered
             }
-            TimestampStatus::UntrustedTsa => SignatureStatus::Unknown,
+            TimestampStatus::UntrustedTsa | TimestampStatus::TimestampEkuMissing => {
+                SignatureStatus::Unknown
+            }
             TimestampStatus::CertificateNotValidAtGenTime => SignatureStatus::Expired,
             TimestampStatus::FutureTime | TimestampStatus::NonceMismatch => {
                 SignatureStatus::Invalid
@@ -906,9 +948,9 @@ fn report(parsed: ParsedToken, status: TimestampStatus) -> TimestampValidation {
 /// [`TimestampValidation::status`] so that each dimension can be distinguished.
 ///
 /// Checks run in a fixed order: CMS integrity first, then the message imprint,
-/// then the future-skew/replay guard, then the TSA chain at `genTime`, and
-/// finally the optional nonce. The first failing dimension determines the
-/// status.
+/// then the future-skew/replay guard, then the TSA chain at `genTime` (including
+/// the RFC 3161 timeStamping EKU requirement), and finally the optional nonce.
+/// The first failing dimension determines the status.
 pub fn validate_timestamp_token(
     token_der: &[u8],
     context: &TimestampValidationContext<'_>,
@@ -934,13 +976,32 @@ pub fn validate_timestamp_token(
     }
 
     let tsa_certificate = Certificate::parse(&parsed.tsa_certificate_der)?;
+
+    // RFC 3161 section 2.3 requires the TSA certificate to carry the
+    // id-kp-timeStamping EKU. `verify_chain` deliberately treats an absent EKU
+    // as unconstrained (RFC 5280), so check the TSA leaf explicitly; otherwise a
+    // merely chain-trusted certificate without the purpose would pass.
+    if let Some(required) = &context.policy.required_tsa_eku {
+        let permits = tsa_certificate
+            .extended_key_usage()
+            .is_some_and(|eku| eku.allows(required));
+        if !permits {
+            return Ok(report(parsed, TimestampStatus::TimestampEkuMissing));
+        }
+    }
+
+    // Apply the same purpose requirement to issuing CAs, without mutating the
+    // caller's policy. The timestamp-specific EKU takes precedence over the
+    // generic chain policy's EKU for timestamp validation.
+    let mut chain_policy = context.chain_policy.clone();
+    chain_policy.required_eku = context.policy.required_tsa_eku.clone();
     let gen_time_clock = FixedClock::new(parsed.info.gen_time);
     match verify_chain(
         &tsa_certificate,
         context.intermediates,
         context.trust_store,
         context.chain_verifier,
-        context.chain_policy,
+        &chain_policy,
         &gen_time_clock,
     ) {
         Ok(_) => {}
@@ -949,6 +1010,9 @@ pub fn validate_timestamp_token(
                 parsed,
                 TimestampStatus::CertificateNotValidAtGenTime,
             ));
+        }
+        Err(SecurityError::CertificateEkuMissing) => {
+            return Ok(report(parsed, TimestampStatus::TimestampEkuMissing));
         }
         Err(_) => return Ok(report(parsed, TimestampStatus::UntrustedTsa)),
     }
@@ -974,6 +1038,7 @@ mod tests {
 
     const OID_CN: [u32; 4] = [2, 5, 4, 3];
     const OID_TIME_STAMPING: [u32; 9] = [1, 3, 6, 1, 5, 5, 7, 3, 8];
+    const OID_SERVER_AUTH: [u32; 9] = [1, 3, 6, 1, 5, 5, 7, 3, 1];
     const NOW: u64 = 1_650_000_000;
 
     struct DigestVerifier;
@@ -1077,13 +1142,11 @@ mod tests {
         encode_tlv(Tag::BIT_STRING, &content)
     }
 
-    fn eku() -> Vec<u8> {
+    fn eku(oid: &[u32]) -> Vec<u8> {
         extension(
             &[2, 5, 29, 37],
             false,
-            &encode_octet_string(&encode_sequence(
-                &encode_oid(&OID_TIME_STAMPING).expect("eku"),
-            )),
+            &encode_octet_string(&encode_sequence(&encode_oid(oid).expect("eku"))),
         )
     }
 
@@ -1093,6 +1156,7 @@ mod tests {
         serial: u64,
         window: (u64, u64),
         extensions: Vec<Vec<u8>>,
+        eku_ext: Vec<u8>,
     }
 
     impl CertSpec {
@@ -1105,8 +1169,8 @@ mod tests {
                 extensions: vec![
                     basic_constraints(false),
                     key_usage(KeyUsage::DIGITAL_SIGNATURE.bits()),
-                    eku(),
                 ],
+                eku_ext: eku(&OID_TIME_STAMPING),
             }
         }
 
@@ -1120,11 +1184,17 @@ mod tests {
                     basic_constraints(true),
                     key_usage(KeyUsage::KEY_CERT_SIGN.bits() | KeyUsage::CRL_SIGN.bits()),
                 ],
+                eku_ext: Vec::new(),
             }
         }
 
         fn window(mut self, start: u64, end: u64) -> Self {
             self.window = (start, end);
+            self
+        }
+
+        fn with_eku(mut self, oid: &[u32]) -> Self {
+            self.eku_ext = eku(oid);
             self
         }
 
@@ -1144,6 +1214,9 @@ mod tests {
             let mut exts = Vec::new();
             for encoded in &self.extensions {
                 exts.extend_from_slice(encoded);
+            }
+            if !self.eku_ext.is_empty() {
+                exts.extend_from_slice(&self.eku_ext);
             }
             out.extend_from_slice(
                 &encode_context(3, true, &encode_sequence(&exts)).expect("ext ctx"),
@@ -1246,6 +1319,11 @@ mod tests {
             self.policy.max_future_skew_seconds = skew;
             self
         }
+
+        fn without_eku_requirement(mut self) -> Self {
+            self.policy.required_tsa_eku = None;
+            self
+        }
     }
 
     fn context_for<'a>(data: &'a [u8], provider: &'a dyn SignatureProvider) -> ContextRefs<'a> {
@@ -1333,6 +1411,31 @@ mod tests {
             .expect("structurally valid token");
         assert_eq!(report.status(), TimestampStatus::UntrustedTsa);
         assert_eq!(report.to_signature_status(), SignatureStatus::Unknown);
+    }
+
+    #[test]
+    fn trusted_tsa_without_timestamping_eku_is_rejected() {
+        // Chain-trusted and time-valid, but the leaf carries only serverAuth:
+        // RFC 3161 section 2.3 requires id-kp-timeStamping.
+        let cert_der = CertSpec::leaf(7).with_eku(&OID_SERVER_AUTH).build();
+        let provider = provider(cert_der);
+        let token = build_timestamp_token(&params(NOW, None), &provider).expect("token");
+        let refs = context_for(b"document-bytes-to-stamp", &provider);
+        let report =
+            validate_timestamp_token(&token, &refs.context()).expect("structurally valid token");
+        assert_eq!(report.status(), TimestampStatus::TimestampEkuMissing);
+        assert_eq!(report.to_signature_status(), SignatureStatus::Unknown);
+    }
+
+    #[test]
+    fn eku_requirement_can_be_explicitly_overridden() {
+        let cert_der = CertSpec::leaf(7).with_eku(&OID_SERVER_AUTH).build();
+        let provider = provider(cert_der);
+        let token = build_timestamp_token(&params(NOW, None), &provider).expect("token");
+        let refs = context_for(b"document-bytes-to-stamp", &provider).without_eku_requirement();
+        let report =
+            validate_timestamp_token(&token, &refs.context()).expect("structurally valid token");
+        assert_eq!(report.status(), TimestampStatus::Valid);
     }
 
     #[test]
@@ -1501,6 +1604,7 @@ mod tests {
             TimestampStatus::CryptographicFailure,
             TimestampStatus::ImprintMismatch,
             TimestampStatus::UntrustedTsa,
+            TimestampStatus::TimestampEkuMissing,
             TimestampStatus::CertificateNotValidAtGenTime,
             TimestampStatus::FutureTime,
             TimestampStatus::NonceMismatch,
