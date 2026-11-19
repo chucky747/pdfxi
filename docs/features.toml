@@ -473,14 +473,19 @@ tests = [
 title = "Create PDF from plain text and Markdown"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-convert/src/create/html.rs, docs/evidence/convert/T-0084.md"
 domain = "Create"
-evidence = ""
+evidence = "docs/evidence/convert/T-0084.md"
 id = "CREATE-005"
-notes = ""
+notes = "Local, bounded HTML/CSS subset; no network fetch, no script execution."
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "create::html::tests::parses_headings_paragraphs_and_inline_styles",
+    "create::html::tests::tables_render_cells_in_row_major_order",
+    "create::html::tests::rejects_script_and_event_handlers",
+    "create::html::tests::output_is_deterministic",
+]
 title = "Create PDF from HTML"
 
 [[feature]]
@@ -857,28 +862,17 @@ tests = []
 title = "Bookmarks links and attachments editing"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-edit/src/flatten.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "crates/pdfxi-edit/src/redaction.rs",
-    "docs/evidence/author/T-0085.md",
-]
+docs = "crates/pdfxi-edit/src/flatten.rs, docs/evidence/author/T-0085.md"
 domain = "Edit"
-evidence = "T-0085 (author): cargo test -p pdfxi-edit 155 passed / 0 failed incl. 17 new flatten::tests + 1 redaction::tests; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0085.md."
+evidence = "docs/evidence/author/T-0085.md"
 id = "EDIT-012"
-notes = "Headless flatten backend added in pdfxi-edit: appearance placement (BBox/Matrix/Rect/Rotate), /Annots removal, AcroForm gated on a flattened widget, page subset/keep-links/keep-widgets/dry-run options, typed report, copy-on-write/deterministic/cancellable. No UI/CLI or concrete object-writer integration yet, so the row stays in-progress."
+notes = "Headless flatten backend; /Rotate applied by the viewer only, AcroForm kept when untouched widgets remain."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "flatten::tests::text_annotation_flatten_appends_placement_and_removes_entry",
-    "flatten::tests::multiple_annotations_are_placed_in_array_order",
-    "flatten::tests::missing_appearance_is_skipped_and_entry_preserved",
-    "flatten::tests::rotation_and_matrix_are_folded_into_placement",
-    "flatten::tests::link_preservation_option_controls_retention",
-    "flatten::tests::widget_is_flattened_and_removed_from_annots",
-    "flatten::tests::acroform_removal_is_gated_on_a_flattened_widget",
-    "flatten::tests::dry_run_reports_without_changing_bytes",
-    "flatten::tests::unchanged_pages_are_byte_stable",
+    "flatten::tests::page_rotate_does_not_change_placement_and_appearance_maps_into_rect",
+    "flatten::tests::acroform_is_kept_when_an_untargeted_page_still_has_a_widget",
     "flatten::tests::output_is_deterministic_across_runs",
 ]
 title = "Flatten annotations and form fields"

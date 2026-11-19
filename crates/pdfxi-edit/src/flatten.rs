@@ -30,12 +30,15 @@
 //! ```
 //!
 //! The matrix maps the appearance's `/BBox` (transformed by the appearance
-//! `/Matrix` and the annotation `/Matrix`) into the annotation `/Rect`, then
-//! rotates the result about the page-box centre by the page `/Rotate` value.
-//! See the `placement_matrix` helper for the exact order of operations. The form
-//! XObject name is installed in the page's `/Resources /XObject` dictionary and
-//! points back at the appearance key, so a downstream writer can materialize
-//! the referenced stream.
+//! `/Matrix` and the annotation `/Matrix`) into the annotation `/Rect`. All of
+//! these values are in default user space and a viewer applies the page
+//! `/Rotate` to the complete page, so page rotation is deliberately *not*
+//! baked into the emitted matrix. See the `placement_matrix` helper for the
+//! exact order of operations. The form XObject name is installed in the page's
+//! `/Resources /XObject` dictionary and points back at the appearance key;
+//! [`FlattenReport::unresolved_appearances`] lists every emitted `Do` together
+//! with its appearance key and exact stream bytes so a downstream writer can
+//! materialize the referenced stream.
 //!
 //! # Contract
 //!
@@ -121,7 +124,12 @@ impl Appearance {
     }
 }
 
-/// The visible page box and rotation used when placing an appearance.
+/// A page's visible box and `/Rotate` metadata.
+///
+/// Appearance placement does not use these values: rectangles, appearance
+/// boxes, and content are all in default user space and the viewer rotates the
+/// whole page. `rotation_degrees` is still validated so malformed input is
+/// reported rather than silently ignored.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PageBox {
     /// The crop box (or media box) rectangle, in default user space.
@@ -209,12 +217,13 @@ pub struct FlattenInput {
     pub pages: BTreeMap<u32, Vec<u8>>,
     /// Page dictionaries keyed by 1-based page number; `/Annots` is read here.
     pub dictionaries: BTreeMap<u32, Dict>,
-    /// Page boxes keyed by 1-based page number; missing boxes default to a
-    /// US-Letter rectangle with zero rotation.
+    /// Page boxes keyed by 1-based page number; a missing box means zero
+    /// rotation. Boxes are validated but do not affect placement geometry.
     pub boxes: BTreeMap<u32, PageBox>,
     /// Normal appearances keyed by the name used in an annotation's `/AP /N`.
     pub appearances: BTreeMap<String, Appearance>,
-    /// The document `/AcroForm` dictionary, removed when a widget is flattened.
+    /// The document `/AcroForm` dictionary, retained unless every widget in the
+    /// document was flattened or removed.
     pub acroform: Option<Dict>,
 }
 
@@ -228,8 +237,8 @@ pub struct FlattenOptions {
     /// Preserve widget annotations whose normal appearance is missing.
     ///
     /// When `false` (the default) such widgets are removed and reported, but
-    /// the AcroForm is still only removed when at least one widget was actually
-    /// flattened.
+    /// the AcroForm is still retained whenever any widget remains in the
+    /// document (including widgets on pages outside [`Self::pages`]).
     pub keep_widgets_without_appearance: bool,
     /// Build the full report without modifying content or dictionaries.
     pub dry_run: bool,
@@ -307,16 +316,46 @@ pub enum FlattenEvent {
     AcroFormRemoved,
 }
 
+/// A form XObject resource emitted by flattening whose stream bytes the caller
+/// must still materialize.
+///
+/// The emitted `Do` names a resource installed under the page's
+/// `/Resources /XObject`. This record links that name back to the appearance
+/// bytes supplied in [`FlattenInput::appearances`], so a downstream writer can
+/// write the referenced stream without re-deriving it from the source PDF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppearanceResource {
+    /// 1-based page whose content references the XObject.
+    pub page: u32,
+    /// Resource name used by the emitted `Do` (for example `XiFm0`).
+    pub resource_name: String,
+    /// Key into [`FlattenInput::appearances`] for this appearance.
+    pub appearance_key: String,
+    /// Exact content-stream bytes the XObject must contain.
+    pub content: Vec<u8>,
+}
+
 /// Typed report of everything flattening did (or would do in a dry run).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FlattenReport {
     events: Vec<FlattenEvent>,
+    unresolved_appearances: Vec<AppearanceResource>,
 }
 
 impl FlattenReport {
     /// Recorded events in application order.
     pub fn events(&self) -> &[FlattenEvent] {
         &self.events
+    }
+
+    /// Appearance XObjects emitted into content, with the bytes a downstream
+    /// writer must install for each referenced `Do`.
+    ///
+    /// One entry is produced per flattened annotation or widget, in application
+    /// order. The list is populated even in a dry run, where it describes the
+    /// resources that would be emitted.
+    pub fn unresolved_appearances(&self) -> &[AppearanceResource] {
+        &self.unresolved_appearances
     }
 
     /// Number of annotations and widgets actually placed into content.
@@ -453,7 +492,11 @@ pub fn flatten(
 
     let mut pages = BTreeMap::new();
     let mut events = Vec::new();
-    let mut total_widget_flattened = 0usize;
+    let mut unresolved_appearances = Vec::new();
+    // Widgets are counted across *all* pages, including pages outside the
+    // selected subset, so AcroForm is only dropped when no widget survives.
+    let mut total_widgets = 0usize;
+    let mut remaining_widgets = 0usize;
 
     for (&page, content) in &input.pages {
         if cancel() {
@@ -461,7 +504,11 @@ pub fn flatten(
         }
         let targeted = options.pages.is_empty() || options.pages.contains(&page);
         let original_dict = input.dictionaries.get(&page).cloned().unwrap_or_default();
+        let page_widgets = widget_count_in_dict(&original_dict);
+        total_widgets += page_widgets;
         if !targeted {
+            // This page is untouched, so all of its widgets survive.
+            remaining_widgets += page_widgets;
             pages.insert(
                 page,
                 FlattenedPage {
@@ -472,15 +519,19 @@ pub fn flatten(
             continue;
         }
 
-        let page_box = input.boxes.get(&page);
-        let rotation = page_box.map_or(0, |box_| box_.rotation_degrees);
+        // Page /Rotate is validated for diagnostics only. It is not applied to
+        // the placement: Rect, BBox, and content are all in default user space
+        // and the viewer rotates the whole page.
+        let rotation = input
+            .boxes
+            .get(&page)
+            .map_or(0, |box_| box_.rotation_degrees);
         if !matches!(rotation, 0 | 90 | 180 | 270) {
             return Err(FlattenError::InvalidRotation {
                 page,
                 degrees: rotation,
             });
         }
-        let box_rect = page_box.map_or_else(default_box_rect, |box_| box_.rect);
 
         let mut new_content = content.clone();
         let mut dict = original_dict;
@@ -527,8 +578,7 @@ pub fn flatten(
             match (appearance, rect) {
                 (Some(appearance), Some(rect)) => {
                     let annot_matrix = matrix_from_value(entry.get("Matrix"));
-                    let placement =
-                        placement_matrix(rect, annot_matrix, appearance, box_rect, rotation);
+                    let placement = placement_matrix(rect, annot_matrix, appearance);
                     let resource_name = format!("XiFm{flattened_here}");
                     if !options.dry_run {
                         new_content.extend_from_slice(
@@ -546,9 +596,14 @@ pub fn flatten(
                     } else {
                         None
                     };
-                    if is_widget {
-                        total_widget_flattened += 1;
-                    }
+                    // `Do` references a resource, not the appearance bytes.
+                    // Record the key and bytes so a writer can resolve it.
+                    unresolved_appearances.push(AppearanceResource {
+                        page,
+                        resource_name: resource_name.clone(),
+                        appearance_key: appearance_key.clone().unwrap_or_default(),
+                        content: appearance.content.clone(),
+                    });
                     events.push(FlattenEvent::Flattened {
                         page,
                         subtype: subtype.clone(),
@@ -581,6 +636,11 @@ pub fn flatten(
             }
         }
 
+        // A widget that was skipped (kept) stays in `retained`; flattened and
+        // removed widgets do not. Untargeted pages were counted above, so this
+        // gives a document-wide surviving-widget count.
+        remaining_widgets += count_widgets(&retained);
+
         if !options.dry_run {
             if retained.is_empty() {
                 dict.remove("Annots");
@@ -598,7 +658,11 @@ pub fn flatten(
         );
     }
 
-    let acroform = if !options.dry_run && total_widget_flattened > 0 {
+    let acroform = if !options.dry_run
+        && input.acroform.is_some()
+        && total_widgets > 0
+        && remaining_widgets == 0
+    {
         events.push(FlattenEvent::AcroFormRemoved);
         None
     } else {
@@ -608,7 +672,10 @@ pub fn flatten(
     Ok(FlattenedDocument {
         pages,
         acroform,
-        report: FlattenReport { events },
+        report: FlattenReport {
+            events,
+            unresolved_appearances,
+        },
     })
 }
 
@@ -616,16 +683,11 @@ pub fn flatten(
 ///
 /// The order is: appearance `/Matrix` first, then the annotation `/Matrix`,
 /// then an align matrix mapping the transformed `/BBox` into the annotation
-/// `/Rect`, and finally a rotation about the centre of the page box by the
-/// page's `/Rotate` value. The resulting matrix is applied to appearance source
-/// coordinates by the emitted `Do` operator.
-fn placement_matrix(
-    rect: Rect,
-    annot_matrix: Matrix,
-    appearance: &Appearance,
-    box_rect: Rect,
-    rotation: u16,
-) -> Matrix {
+/// `/Rect`. The page `/Rotate` is deliberately absent: annotation rectangles,
+/// appearance boxes, and content streams are all in default user space, and a
+/// viewer rotates the whole page when displaying it. The resulting matrix is
+/// applied to appearance source coordinates by the emitted `Do` operator.
+fn placement_matrix(rect: Rect, annot_matrix: Matrix, appearance: &Appearance) -> Matrix {
     let source_to_annot = annot_matrix.mul(appearance.matrix);
     let corners = [
         source_to_annot.transform_point(appearance.bbox.x0() as f64, appearance.bbox.y0() as f64),
@@ -668,24 +730,7 @@ fn placement_matrix(
         rect.x0() as f64 - bx0 * scale_x,
         rect.y0() as f64 - by0 * scale_y,
     );
-    rotation_about_center(box_rect, rotation)
-        .mul(align)
-        .mul(source_to_annot)
-}
-
-/// Rotation by a right angle about the centre of `box`.
-fn rotation_about_center(box_: Rect, degrees: u16) -> Matrix {
-    let cx = f64::from(box_.x0() + box_.x1()) / 2.0;
-    let cy = f64::from(box_.y0() + box_.y1()) / 2.0;
-    let (cos, sin) = match degrees {
-        90 => (0.0, 1.0),
-        180 => (-1.0, 0.0),
-        270 => (0.0, -1.0),
-        _ => (1.0, 0.0),
-    };
-    let e = cx - (cos * cx - sin * cy);
-    let f = cy - (sin * cx + cos * cy);
-    Matrix::new(cos, sin, -sin, cos, e, f)
+    align.mul(source_to_annot)
 }
 
 /// The balancing `q … cm … Do … Q` placement string.
@@ -693,9 +738,25 @@ fn placement_bytes(matrix: &Matrix, resource_name: &str) -> String {
     format!("\nq\n{} cm\n/{} Do\nQ\n", matrix.to_pdf(), resource_name)
 }
 
-/// A sensible default page box when a page supplies none.
-fn default_box_rect() -> Rect {
-    Rect::saturating(0.0, 0.0, 612.0, 792.0)
+/// Count widget annotations in an array of `/Annots` values.
+fn count_widgets(annots: &[Value]) -> usize {
+    annots
+        .iter()
+        .filter(|value| {
+            value
+                .as_dict()
+                .and_then(|dict| dict.get("Subtype"))
+                .and_then(Value::as_name)
+                == Some("Widget")
+        })
+        .count()
+}
+
+/// Count widget annotations held in a page dictionary's `/Annots` array.
+fn widget_count_in_dict(dict: &Dict) -> usize {
+    dict.get("Annots")
+        .and_then(Value::as_array)
+        .map_or(0, count_widgets)
 }
 
 /// Parse a four-number rectangle, returning `None` for missing/invalid data.
@@ -839,6 +900,20 @@ mod tests {
         );
     }
 
+    /// Read the six operands of the first `cm` in a placement stream.
+    fn cm_coefficients(content: &str) -> [f64; 6] {
+        let line = content
+            .lines()
+            .find(|line| line.trim_end().ends_with(" cm"))
+            .expect("content has a cm operator");
+        let operands = line.trim().trim_end_matches(" cm");
+        let mut values = [0.0f64; 6];
+        for (slot, token) in values.iter_mut().zip(operands.split_whitespace()) {
+            *slot = token.parse::<f64>().expect("numeric cm operand");
+        }
+        values
+    }
+
     #[test]
     fn text_annotation_flatten_appends_placement_and_removes_entry() {
         let rect = rect(10.0, 20.0, 110.0, 70.0);
@@ -943,6 +1018,9 @@ mod tests {
         )));
     }
 
+    // Name retained because docs/features.toml (EDIT-012) tracks this test.
+    // The assertion verifies the corrected contract: page /Rotate is *not*
+    // folded into the placement, only BBox/Matrix/Rect are.
     #[test]
     fn rotation_and_matrix_are_folded_into_placement() {
         let annot_rect = rect(0.0, 0.0, 100.0, 100.0);
@@ -951,24 +1029,57 @@ mod tests {
         input
             .boxes
             .insert(1, PageBox::new(box_rect, 90).expect("valid page box"));
-        // Appearance bbox matches the annotation rect and matrices are identity,
-        // so the placement reduces to a 90-degree rotation about (306, 396).
+        // Appearance bbox matches the annotation rect and both matrices are
+        // identity, so the placement is the identity transform. The 90-degree
+        // page rotation is applied by the viewer, not by this `cm`.
         add_appearance(&mut input, "ap", annot_rect, Matrix::IDENTITY);
         let result = flatten(&input, &FlattenOptions::default(), &no_cancel).expect("flatten");
         let content = String::from_utf8(result.page_content(1).unwrap().to_vec()).unwrap();
-        assert!(
-            content.contains("0 1 -1 0 702 90 cm"),
-            "content was: {content}"
+        assert!(content.contains("1 0 0 1 0 0 cm"), "content was: {content}");
+    }
+
+    #[test]
+    fn page_rotate_does_not_change_placement_and_appearance_maps_into_rect() {
+        let annot_rect = rect(100.0, 200.0, 300.0, 320.0);
+        let bbox = rect(0.0, 0.0, 50.0, 30.0);
+        let box_rect = rect(0.0, 0.0, 612.0, 792.0);
+
+        let placement_for = |rotation: u16| {
+            let mut input = page_input(b"", vec![annotate("Text", annot_rect, Some("ap"))]);
+            input
+                .boxes
+                .insert(1, PageBox::new(box_rect, rotation).expect("valid page box"));
+            add_appearance(&mut input, "ap", bbox, Matrix::IDENTITY);
+            let result = flatten(&input, &FlattenOptions::default(), &no_cancel).expect("flatten");
+            String::from_utf8(result.page_content(1).unwrap().to_vec()).unwrap()
+        };
+
+        let rotated = placement_for(90);
+        let unrotated = placement_for(0);
+        assert_eq!(
+            rotated, unrotated,
+            "/Rotate must not change the emitted placement matrix"
         );
 
-        let placement = placement_matrix(
-            annot_rect,
-            Matrix::IDENTITY,
-            input.appearances.get("ap").unwrap(),
-            box_rect,
-            90,
-        );
-        assert_eq!(placement.coefficients(), [0.0, 1.0, -1.0, 0.0, 702.0, 90.0]);
+        let [a, b, c, d, e, f] = cm_coefficients(&rotated);
+        let placement = Matrix::new(a, b, c, d, e, f);
+        const EPS: f64 = 1e-6;
+        for (x, y) in [
+            (bbox.x0() as f64, bbox.y0() as f64),
+            (bbox.x1() as f64, bbox.y0() as f64),
+            (bbox.x0() as f64, bbox.y1() as f64),
+            (bbox.x1() as f64, bbox.y1() as f64),
+        ] {
+            let (px, py) = placement.transform_point(x, y);
+            assert!(
+                px >= f64::from(annot_rect.x0()) - EPS && px <= f64::from(annot_rect.x1()) + EPS,
+                "x {px} outside /Rect"
+            );
+            assert!(
+                py >= f64::from(annot_rect.y0()) - EPS && py <= f64::from(annot_rect.y1()) + EPS,
+                "y {py} outside /Rect"
+            );
+        }
     }
 
     #[test]
@@ -1034,6 +1145,63 @@ mod tests {
             flatten(&with_widget, &FlattenOptions::default(), &no_cancel).expect("flatten");
         assert!(removed.acroform().is_none());
         assert!(removed.report().acroform_removed());
+    }
+
+    #[test]
+    fn acroform_is_kept_when_an_untargeted_page_still_has_a_widget() {
+        let rect = rect(0.0, 0.0, 10.0, 10.0);
+        let mut acroform = Dict::new();
+        acroform.insert("Fields".to_owned(), Value::Array(Vec::new()));
+
+        // Page 1 is targeted and its widget is flattened.
+        let mut input = page_input(
+            b"",
+            vec![Value::Dictionary(
+                Widget::new("page1", rect, "w1").to_dict(),
+            )],
+        );
+        add_appearance(&mut input, "w1", rect, Matrix::IDENTITY);
+
+        // Page 2 is not targeted, so its widget must survive and keep AcroForm.
+        let mut page_two = Dict::new();
+        page_two.insert(
+            "Annots".to_owned(),
+            Value::Array(vec![Value::Dictionary(
+                Widget::new("page2", rect, "w2").to_dict(),
+            )]),
+        );
+        input.pages.insert(2, b"page two".to_vec());
+        input.dictionaries.insert(2, page_two.clone());
+        input.acroform = Some(acroform);
+
+        let options = FlattenOptions {
+            pages: BTreeSet::from([1]),
+            ..FlattenOptions::default()
+        };
+        let result = flatten(&input, &options, &no_cancel).expect("flatten");
+
+        assert_eq!(result.report().flattened_count(), 1);
+        assert!(
+            result.acroform().is_some(),
+            "untargeted page still has a widget"
+        );
+        assert!(!result.report().acroform_removed());
+        assert_eq!(result.page_dictionary(2).expect("page 2"), &page_two);
+    }
+
+    #[test]
+    fn report_lists_unresolved_appearance_resources_with_bytes() {
+        let rect = rect(0.0, 0.0, 10.0, 10.0);
+        let mut input = page_input(b"", vec![annotate("Text", rect, Some("ap"))]);
+        add_appearance(&mut input, "ap", rect, Matrix::IDENTITY);
+
+        let result = flatten(&input, &FlattenOptions::default(), &no_cancel).expect("flatten");
+        let resources = result.report().unresolved_appearances();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].page, 1);
+        assert_eq!(resources[0].resource_name, "XiFm0");
+        assert_eq!(resources[0].appearance_key, "ap");
+        assert_eq!(resources[0].content, input.appearances["ap"].content);
     }
 
     #[test]
@@ -1179,9 +1347,8 @@ mod tests {
     #[test]
     fn appearance_matrix_scales_bbox_into_rect() {
         let annot_rect = rect(0.0, 0.0, 200.0, 100.0);
-        let box_rect = rect(0.0, 0.0, 200.0, 100.0);
         let appearance = Appearance::new(Vec::new(), Matrix::IDENTITY, rect(0.0, 0.0, 100.0, 50.0));
-        let placement = placement_matrix(annot_rect, Matrix::IDENTITY, &appearance, box_rect, 0);
+        let placement = placement_matrix(annot_rect, Matrix::IDENTITY, &appearance);
         assert_eq!(placement.coefficients(), [2.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
     }
 

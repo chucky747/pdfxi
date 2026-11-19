@@ -66,6 +66,15 @@
 
 use std::path::Path;
 
+// The HTML importer is a child module so it can reuse this module's
+// deterministic writer, font metrics, and pagination engine directly. Its
+// public surface is re-exported here and again from the crate root.
+mod html;
+pub use html::{
+    HTML_MAX_INPUT_BYTES, HtmlOptions, create_from_html, create_from_html_with_options,
+    create_pdf_from_html_file, create_pdf_from_html_file_with_options,
+};
+
 /// Default image resolution, in dots per inch, when a file carries no density
 /// metadata.
 pub const DEFAULT_DPI: f64 = 72.0;
@@ -114,6 +123,31 @@ pub enum CreateError {
         /// A human-readable description of the missing feature.
         message: String,
     },
+    /// The HTML contained an active-content construct (a `<script>` element,
+    /// an event-handler attribute, or a `javascript:` URL) that is rejected
+    /// before any layout work is done.
+    #[error("HTML active content is not allowed: {0}")]
+    HtmlScriptRejected(String),
+    /// The HTML referenced a remote resource (an `http(s):`, protocol-relative,
+    /// `data:`, or `file:` URL). The HTML path never performs network or
+    /// out-of-tree file access.
+    #[error("HTML remote resource is not allowed: {0}")]
+    HtmlRemoteResource(String),
+    /// A local image path escaped the configured base directory.
+    #[error("HTML path traversal is not allowed: {0}")]
+    HtmlPathTraversal(String),
+    /// The HTML input exceeded a documented bounded-size limit.
+    #[error("HTML input too large: {bytes} bytes (limit {limit})")]
+    HtmlTooLarge {
+        /// Number of bytes or nodes that exceeded the limit.
+        bytes: usize,
+        /// The limit that was exceeded.
+        limit: usize,
+    },
+    /// A structural bound (node count, nesting depth, attribute count, or CSS
+    /// declaration count) was exceeded while parsing untrusted HTML.
+    #[error("HTML structure limit exceeded: {0}")]
+    HtmlStructure(String),
     /// Reading an input file failed.
     #[error("I/O error while creating PDF: {0}")]
     Io(#[from] std::io::Error),
@@ -554,11 +588,18 @@ const HELVETICA_WIDTHS: [u16; 95] = [
 const COURIER_WIDTH: u16 = 600;
 
 /// The PDF resource family used for a line.
+///
+/// `Italic` and `BoldItalic` are only produced by the HTML importer, which
+/// declares the extra base-14 font resources on its own pages. The text and
+/// Markdown paths keep the original three-resource font table, so their output
+/// bytes are unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FontKind {
     Regular,
     Bold,
     Mono,
+    Italic,
+    BoldItalic,
 }
 
 impl FontKind {
@@ -568,7 +609,14 @@ impl FontKind {
             Self::Regular => "F1",
             Self::Bold => "F2",
             Self::Mono => "F3",
+            Self::Italic => "F4",
+            Self::BoldItalic => "F5",
         }
+    }
+
+    /// Return `true` when this family uses the fixed-pitch Courier metrics.
+    const fn is_mono(self) -> bool {
+        matches!(self, Self::Mono)
     }
 }
 
@@ -637,6 +685,55 @@ fn pdf_escape(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Horizontal placement of a line inside the content area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TextAlign {
+    /// Flush with the left edge of the content area.
+    #[default]
+    Left,
+    /// Centred inside the content area.
+    Center,
+    /// Flush with the right edge of the content area.
+    Right,
+}
+
+/// A rectangular border drawn around a line box. The `sides` field is a bit
+/// mask of the associated `TOP`, `RIGHT`, `BOTTOM`, and `LEFT` constants.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LineBorder {
+    width: f64,
+    color: [f64; 3],
+    sides: u8,
+}
+
+impl LineBorder {
+    /// Draw the top edge.
+    const TOP: u8 = 1;
+    /// Draw the right edge.
+    const RIGHT: u8 = 2;
+    /// Draw the bottom edge.
+    const BOTTOM: u8 = 4;
+    /// Draw the left edge.
+    const LEFT: u8 = 8;
+    /// Draw all four edges.
+    const BOX: u8 = Self::TOP | Self::RIGHT | Self::BOTTOM | Self::LEFT;
+}
+
+/// One styled fragment inside an HTML line.
+///
+/// `start` and `len` index the parent line's encoded `bytes`; `x` is the
+/// horizontal advance in points from the start of that line. Text and Markdown
+/// lines never carry spans, so their rendering is unchanged.
+#[derive(Debug, Clone)]
+struct Span {
+    start: usize,
+    len: usize,
+    x: f64,
+    font: FontKind,
+    color: Option<[f64; 3]>,
+    underline: bool,
+}
+
 /// A single styled input line, already encoded to literal-string bytes.
 #[derive(Debug, Clone)]
 struct StyledLine {
@@ -645,6 +742,11 @@ struct StyledLine {
     size: f64,
     indent: f64,
     wrap: bool,
+    color: Option<[f64; 3]>,
+    align: TextAlign,
+    border: Option<LineBorder>,
+    space_after: f64,
+    spans: Vec<Span>,
 }
 
 impl StyledLine {
@@ -655,6 +757,11 @@ impl StyledLine {
             size,
             indent: 0.0,
             wrap: true,
+            color: None,
+            align: TextAlign::Left,
+            border: None,
+            space_after: 0.0,
+            spans: Vec::new(),
         }
     }
 }
@@ -667,6 +774,49 @@ struct PlacedLine {
     size: f64,
     x: f64,
     y: f64,
+    color: Option<[f64; 3]>,
+    border: Option<LineBorder>,
+    spans: Vec<Span>,
+}
+
+/// A block-level item in document order.
+#[derive(Debug, Clone)]
+enum FlowItem {
+    /// A line of text that may be word-wrapped.
+    Text(StyledLine),
+    /// A locally resolved raster image with a measured display box.
+    Image(ImagePlacement),
+}
+
+/// Geometry of an image placed in the flow.
+#[derive(Debug, Clone)]
+struct ImagePlacement {
+    image_id: usize,
+    width: f64,
+    height: f64,
+    indent: f64,
+    align: TextAlign,
+    space_after: f64,
+}
+
+/// A fully positioned item belonging to one page.
+#[derive(Debug, Clone)]
+enum PlacedItem {
+    /// A positioned text line.
+    Text(PlacedLine),
+    /// A positioned image with an index into the page's XObject table.
+    Image {
+        /// Index into the image sources collected for this page.
+        image_id: usize,
+        /// Left edge of the image box.
+        x: f64,
+        /// Bottom edge of the image box.
+        y: f64,
+        /// Width of the image box in points.
+        width: f64,
+        /// Height of the image box in points.
+        height: f64,
+    },
 }
 
 /// Greedy word wrap over encoded bytes, breaking words longer than `max_width`.
@@ -728,50 +878,128 @@ fn wrap_bytes(bytes: &[u8], max_width: f64, size: f64, mono: bool) -> Vec<Vec<u8
     lines
 }
 
-/// Lay styled lines out into pages of positioned lines.
-fn layout_lines(lines: &[StyledLine], options: &CreateOptions) -> Vec<Vec<PlacedLine>> {
+/// Resolve left/center/right placement inside an available width.
+fn aligned_x(align: TextAlign, left: f64, available: f64, width: f64) -> f64 {
+    match align {
+        TextAlign::Left => left,
+        TextAlign::Center => left + (available - width).max(0.0) / 2.0,
+        TextAlign::Right => left + (available - width).max(0.0),
+    }
+}
+
+/// Lay text and image items out into pages.
+///
+/// This is the single pagination routine shared by the text, Markdown, and
+/// HTML creation paths. Text items are word-wrapped with [`wrap_bytes`]; image
+/// items are already measured by the HTML importer. Both consume the same
+/// vertical cursor, so a page can mix the two without changing layout rules.
+fn layout_items(items: &[FlowItem], options: &CreateOptions) -> Vec<Vec<PlacedItem>> {
     let content_width = options.page_size.width - options.margins.left - options.margins.right;
-    let mut pages: Vec<Vec<PlacedLine>> = Vec::new();
-    let mut current: Vec<PlacedLine> = Vec::new();
-    let mut y = options.page_size.height - options.margins.top;
+    let top = options.page_size.height - options.margins.top;
+    let mut pages: Vec<Vec<PlacedItem>> = Vec::new();
+    let mut current: Vec<PlacedItem> = Vec::new();
+    let mut y = top;
 
-    for line in lines {
-        let available = (content_width - line.indent).max(1.0);
-        let visual_lines = if line.wrap && !line.bytes.is_empty() {
-            wrap_bytes(
-                &line.bytes,
-                available,
-                line.size,
-                line.font == FontKind::Mono,
-            )
-        } else if line.bytes.is_empty() {
-            vec![Vec::new()]
-        } else {
-            vec![line.bytes.clone()]
-        };
+    for item in items {
+        match item {
+            FlowItem::Text(line) => {
+                let available = (content_width - line.indent).max(1.0);
+                let visual_lines = if line.wrap && !line.bytes.is_empty() {
+                    wrap_bytes(&line.bytes, available, line.size, line.font.is_mono())
+                } else if line.bytes.is_empty() {
+                    vec![Vec::new()]
+                } else {
+                    vec![line.bytes.clone()]
+                };
+                let wrapped = visual_lines.len() > 1;
+                let line_count = visual_lines.len();
 
-        for segment in visual_lines {
-            let line_height = line.size * options.line_height_factor;
-            if y - line_height < options.margins.bottom && !current.is_empty() {
-                pages.push(std::mem::take(&mut current));
-                y = options.page_size.height - options.margins.top;
+                for (index, segment) in visual_lines.into_iter().enumerate() {
+                    let line_height = line.size * options.line_height_factor;
+                    if y - line_height < options.margins.bottom && !current.is_empty() {
+                        pages.push(std::mem::take(&mut current));
+                        y = top;
+                    }
+                    // `y` is the top of the line box; the baseline sits one
+                    // font size below it. Clamp so it never enters the margin.
+                    let baseline = (y - line.size).max(options.margins.bottom);
+                    let width = text_width(&segment, line.size, line.font.is_mono());
+                    let x = aligned_x(
+                        line.align,
+                        options.margins.left + line.indent,
+                        available,
+                        width,
+                    );
+                    // Span byte offsets only survive when the engine did not
+                    // rewrap the line (the HTML builder normally emits lines
+                    // that are already wrapped at run boundaries).
+                    let spans = if wrapped {
+                        Vec::new()
+                    } else {
+                        line.spans.clone()
+                    };
+                    current.push(PlacedItem::Text(PlacedLine {
+                        bytes: segment,
+                        font: line.font,
+                        size: line.size,
+                        x,
+                        y: baseline,
+                        color: line.color,
+                        border: if index == 0 { line.border } else { None },
+                        spans,
+                    }));
+                    y -= line_height;
+                    if index + 1 == line_count {
+                        y -= line.space_after;
+                    }
+                }
             }
-            // `y` is the top of the line box; the baseline sits one font size
-            // below it. Clamp so the baseline never falls below the margin.
-            let baseline = (y - line.size).max(options.margins.bottom);
-            current.push(PlacedLine {
-                bytes: segment,
-                font: line.font,
-                size: line.size,
-                x: options.margins.left + line.indent,
-                y: baseline,
-            });
-            y -= line_height;
+            FlowItem::Image(image) => {
+                let block_height = image.height + image.space_after;
+                if y - block_height < options.margins.bottom && !current.is_empty() {
+                    pages.push(std::mem::take(&mut current));
+                    y = top;
+                }
+                let available = (content_width - image.indent).max(1.0);
+                let x = aligned_x(
+                    image.align,
+                    options.margins.left + image.indent,
+                    available,
+                    image.width,
+                );
+                current.push(PlacedItem::Image {
+                    image_id: image.image_id,
+                    x,
+                    y: (y - image.height).max(options.margins.bottom),
+                    width: image.width,
+                    height: image.height,
+                });
+                y -= block_height;
+            }
         }
     }
 
     pages.push(current);
     pages
+}
+
+/// Lay styled lines out into pages of positioned lines.
+///
+/// Text and Markdown documents contain no images, so this adapter drops the
+/// image variant and keeps their original output byte-for-byte identical.
+fn layout_lines(lines: &[StyledLine], options: &CreateOptions) -> Vec<Vec<PlacedLine>> {
+    let items: Vec<FlowItem> = lines.iter().cloned().map(FlowItem::Text).collect();
+    layout_items(&items, options)
+        .into_iter()
+        .map(|page| {
+            page.into_iter()
+                .filter_map(|item| match item {
+                    PlacedItem::Text(line) => Some(line),
+                    PlacedItem::Image { .. } => None,
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Render positioned lines as a PDF content stream.
@@ -864,11 +1092,10 @@ fn parse_markdown(markdown: &str, options: &CreateOptions) -> Vec<StyledLine> {
             if in_code {
                 for code_line in &code_lines {
                     out.push(StyledLine {
-                        bytes: encode_text(code_line),
                         font: FontKind::Mono,
-                        size: code_size,
                         indent: 18.0,
                         wrap: false,
+                        ..StyledLine::regular(encode_text(code_line), code_size)
                     });
                 }
                 code_lines.clear();
@@ -891,23 +1118,18 @@ fn parse_markdown(markdown: &str, options: &CreateOptions) -> Vec<StyledLine> {
         }
         if let Some((level, heading)) = split_heading(trimmed) {
             flush_paragraph(&mut out, &mut paragraph, options.font_size);
+            let heading_size = options.font_size * heading_scale(level);
             out.push(StyledLine {
-                bytes: encode_text(heading),
                 font: FontKind::Bold,
-                size: options.font_size * heading_scale(level),
-                indent: 0.0,
-                wrap: true,
+                ..StyledLine::regular(encode_text(heading), heading_size)
             });
             continue;
         }
         if let Some(item) = bullet_content(trimmed) {
             flush_paragraph(&mut out, &mut paragraph, options.font_size);
             out.push(StyledLine {
-                bytes: encode_text(&format!("- {item}")),
-                font: FontKind::Regular,
-                size: options.font_size,
                 indent: 18.0,
-                wrap: true,
+                ..StyledLine::regular(encode_text(&format!("- {item}")), options.font_size)
             });
             continue;
         }
@@ -918,11 +1140,10 @@ fn parse_markdown(markdown: &str, options: &CreateOptions) -> Vec<StyledLine> {
     if in_code {
         for code_line in &code_lines {
             out.push(StyledLine {
-                bytes: encode_text(code_line),
                 font: FontKind::Mono,
-                size: code_size,
                 indent: 18.0,
                 wrap: false,
+                ..StyledLine::regular(encode_text(code_line), code_size)
             });
         }
     }
@@ -1098,6 +1319,7 @@ fn build_text_pdf(lines: &[StyledLine], options: &CreateOptions) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// The embedded representation of an image, independent of its source format.
+#[derive(Clone)]
 struct ImageSource {
     width: u32,
     height: u32,

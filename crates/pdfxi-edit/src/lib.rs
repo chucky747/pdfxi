@@ -17,8 +17,9 @@
 //! affected operators (not merely covering them), stripping annotations and
 //! metadata, and verifying removal with a typed report. [`flatten()`] replaces
 //! annotations and form widgets with permanent content-stream placements,
-//! removing them from `/Annots` (and the AcroForm when widgets are flattened)
-//! with a typed report and a dry-run mode.
+//! removing them from `/Annots` (and the AcroForm only when every widget is
+//! gone) with a typed report that also exposes the appearance bytes emitted as
+//! `Do` references, plus a dry-run mode.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
 //! source document bytes in place.
@@ -40,8 +41,8 @@ pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
 };
 pub use flatten::{
-    Appearance, FlattenError, FlattenEvent, FlattenInput, FlattenOptions, FlattenReport,
-    FlattenedDocument, FlattenedPage, PageBox, SkipReason, Widget, flatten,
+    Appearance, AppearanceResource, FlattenError, FlattenEvent, FlattenInput, FlattenOptions,
+    FlattenReport, FlattenedDocument, FlattenedPage, PageBox, SkipReason, Widget, flatten,
 };
 pub use geometry::{GeometryError, PageGeometry, PageIndex, Point, Rect};
 pub use header_footer::{

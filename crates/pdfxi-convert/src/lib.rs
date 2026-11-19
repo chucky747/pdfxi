@@ -48,6 +48,11 @@
 //!   streams without a decoder dependency. This is the only module that adds a
 //!   runtime dependency (`thiserror`, already in the workspace and lockfile);
 //!   `pdfxi-core` is used only as a dev-dependency for round-trip tests.
+//! - [`create_from_html`], [`create_from_html_with_options`], [`HtmlOptions`],
+//!   and [`create_pdf_from_html_file`] add a bounded, dependency-free HTML
+//!   importer: a documented element/CSS subset, typed rejection of active
+//!   content, remote URLs, path traversal and oversized input, local PNG/JPEG
+//!   embedding, and deterministic pagination through the [`create`] engine.
 //!
 //! The text/JSON modules are always compiled and add no dependencies, so a
 //! `--no-default-features` build stays dependency-free.
@@ -96,9 +101,10 @@ mod text_converter;
 
 pub use converter::{Converter, MockConverter};
 pub use create::{
-    CreateError, CreateImageFormat, CreateOptions, DEFAULT_DPI, Margins, PageSize,
-    create_from_image, create_from_markdown, create_from_text, create_pdf_from_file,
-    create_pdf_from_path,
+    CreateError, CreateImageFormat, CreateOptions, DEFAULT_DPI, HTML_MAX_INPUT_BYTES, HtmlOptions,
+    Margins, PageSize, create_from_html, create_from_html_with_options, create_from_image,
+    create_from_markdown, create_from_text, create_pdf_from_file, create_pdf_from_html_file,
+    create_pdf_from_html_file_with_options, create_pdf_from_path,
 };
 pub use error::ConversionError;
 pub use export::ExportKind;
