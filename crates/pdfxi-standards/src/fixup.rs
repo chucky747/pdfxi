@@ -35,7 +35,13 @@ pub enum Fixup {
     /// Only offered for profiles that use output intents. The placeholder has
     /// no ICC stream, so a real `/DestOutputProfile` must still be supplied.
     SetOutputIntent {
-        /// The `/S` subtype name, for example `GTS_PDFA1`.
+        /// The `/S` subtype name, for example `GTS_PDFA1` (PDF/A) or
+        /// `GTS_PDFX` (PDF/X).
+        ///
+        /// This must match the target profile's required subtype (see
+        /// [`required_output_subtype`]); otherwise [`apply_fixups`] returns
+        /// [`FixupError::WrongOutputIntentSubtype`]. Case and a leading slash
+        /// are ignored.
         subtype: String,
     },
     /// Remove a prohibited catalog or document-level entry by name.
@@ -127,6 +133,19 @@ pub enum FixupError {
     /// The target profile does not use output intents, so a placeholder is not
     /// a meaningful fix.
     OutputIntentNotAllowed(Standard),
+    /// The supplied `/S` subtype is not the one the target profile requires.
+    ///
+    /// For example a PDF/A profile requires `GTS_PDFA1` and a PDF/X profile
+    /// requires `GTS_PDFX`; a placeholder with any other subtype would not
+    /// satisfy the profile's output-intent check.
+    WrongOutputIntentSubtype {
+        /// The standard the fixup targeted.
+        standard: Standard,
+        /// The subtype the standard requires.
+        expected: &'static str,
+        /// The subtype that was supplied by the caller.
+        actual: String,
+    },
     /// The named entry is not prohibited by the target profile; removing it
     /// would change document semantics without a conformance benefit.
     EntryNotProhibited(String),
@@ -152,6 +171,14 @@ impl fmt::Display for FixupError {
             Self::OutputIntentNotAllowed(standard) => write!(
                 f,
                 "{standard} does not use output intents; a placeholder is not applicable"
+            ),
+            Self::WrongOutputIntentSubtype {
+                standard,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "output-intent subtype {actual} is not valid for {standard}; expected {expected}"
             ),
             Self::EntryNotProhibited(entry) => {
                 write!(f, "entry {entry} is not prohibited by the target profile")
@@ -275,14 +302,13 @@ pub fn required_output_subtype(standard: Standard) -> Option<&'static str> {
 }
 
 /// Returns the catalog entries `standard` explicitly prohibits.
+///
+/// This delegates to the same declarative rule constants the preflight profiles
+/// use, so the fixup and checker views of prohibited entries are guaranteed to
+/// agree for every standard.
 #[must_use]
 pub fn prohibited_entries(standard: Standard) -> &'static [&'static str] {
-    match standard {
-        Standard::PdfA1b | Standard::PdfA2b => &["/EmbeddedFiles", "/JavaScript", "/AA"],
-        Standard::PdfA3b => &["/JavaScript", "/AA"],
-        Standard::PdfX1a | Standard::PdfX4 => &["/EmbeddedFiles", "/JavaScript", "/AA"],
-        Standard::PdfE1 | Standard::PdfUa1 => &[],
-    }
+    crate::document_profile::forbidden_catalog_entries_for(standard)
 }
 
 /// Parses the bundled minimum-version constant into a comparable version.
@@ -321,6 +347,22 @@ pub fn apply_fixups(
             Fixup::SetOutputIntent { subtype } => {
                 if !profile_uses_output_intents(standard) {
                     return Err(FixupError::OutputIntentNotAllowed(standard));
+                }
+                // A placeholder with the wrong /S subtype would not satisfy the
+                // profile's output-intent check, so reject it with a typed error
+                // rather than silently producing a non-conforming snapshot.
+                // Comparison ignores ASCII case and an optional leading slash,
+                // matching `OutputIntent::is_subtype`.
+                let Some(expected) = required_output_subtype(standard) else {
+                    return Err(FixupError::OutputIntentNotAllowed(standard));
+                };
+                let supplied = subtype.strip_prefix('/').unwrap_or(subtype);
+                if !supplied.eq_ignore_ascii_case(expected) {
+                    return Err(FixupError::WrongOutputIntentSubtype {
+                        standard,
+                        expected,
+                        actual: subtype.clone(),
+                    });
                 }
                 if corrected.output_intent_of(subtype.as_str()).is_some() {
                     return Err(FixupError::NoApplicableTarget(fixup.clone()));
@@ -413,7 +455,10 @@ pub fn suggested_fixups(standard: Standard, report: &PreflightReport) -> Vec<Fix
 mod tests {
     use super::*;
     use crate::input::{CatalogInfo, FontInfo, FontType};
-    use crate::{PdfA2bProfile, PreflightFinding, PreflightProfile, Severity};
+    use crate::{
+        PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfX1aProfile,
+        PdfX4Profile, PreflightFinding, PreflightProfile, Severity,
+    };
 
     fn input_with_problems(standard: Standard) -> PreflightInput {
         let version = if standard == Standard::PdfA2b {
@@ -579,6 +624,90 @@ mod tests {
     }
 
     #[test]
+    fn set_output_intent_validates_subtype_against_profile() {
+        let policy = FixupPolicy::for_output_intent();
+
+        // PDF/A requires GTS_PDFA1; the PDF/X subtype is the wrong standard.
+        assert_eq!(
+            apply_fixups(
+                Standard::PdfA1b,
+                &input_with_problems(Standard::PdfA1b),
+                &policy,
+                &[Fixup::SetOutputIntent {
+                    subtype: "GTS_PDFX".to_owned(),
+                }]
+            ),
+            Err(FixupError::WrongOutputIntentSubtype {
+                standard: Standard::PdfA1b,
+                expected: "GTS_PDFA1",
+                actual: "GTS_PDFX".to_owned(),
+            })
+        );
+        // An arbitrary subtype is rejected too.
+        assert_eq!(
+            apply_fixups(
+                Standard::PdfA2b,
+                &input_with_problems(Standard::PdfA2b),
+                &policy,
+                &[Fixup::SetOutputIntent {
+                    subtype: "BOGUS".to_owned(),
+                }]
+            ),
+            Err(FixupError::WrongOutputIntentSubtype {
+                standard: Standard::PdfA2b,
+                expected: "GTS_PDFA1",
+                actual: "BOGUS".to_owned(),
+            })
+        );
+        // PDF/X requires GTS_PDFX; the PDF/A subtype is the wrong standard.
+        assert_eq!(
+            apply_fixups(
+                Standard::PdfX1a,
+                &input_with_problems(Standard::PdfX1a),
+                &policy,
+                &[Fixup::SetOutputIntent {
+                    subtype: "GTS_PDFA1".to_owned(),
+                }]
+            ),
+            Err(FixupError::WrongOutputIntentSubtype {
+                standard: Standard::PdfX1a,
+                expected: "GTS_PDFX",
+                actual: "GTS_PDFA1".to_owned(),
+            })
+        );
+
+        // The correct subtype is accepted, using the same case- and
+        // slash-insensitive matching as `OutputIntent::is_subtype`.
+        for (standard, correct) in [
+            (Standard::PdfA1b, "GTS_PDFA1"),
+            (Standard::PdfA3b, "GTS_PDFA1"),
+            (Standard::PdfX1a, "GTS_PDFX"),
+            (Standard::PdfX4, "GTS_PDFX"),
+        ] {
+            for supplied in [
+                correct.to_owned(),
+                format!("/{}", correct.to_ascii_lowercase()),
+            ] {
+                let outcome = apply_fixups(
+                    standard,
+                    &input_with_problems(standard),
+                    &policy,
+                    &[Fixup::SetOutputIntent {
+                        subtype: supplied.clone(),
+                    }],
+                )
+                .unwrap_or_else(|err| panic!("test: {standard} must accept {supplied}: {err}"));
+                let intent = outcome
+                    .input
+                    .output_intent_of(correct)
+                    .expect("test: conforming placeholder is present");
+                assert!(!intent.has_dest_output_profile);
+                assert_eq!(outcome.report.applied_count(), 1);
+            }
+        }
+    }
+
+    #[test]
     fn normalize_version_fixup_enforces_minimum_and_policy() {
         let input = input_with_problems(Standard::PdfA2b); // header 1.4
         let raise = Fixup::NormalizeVersion {
@@ -716,6 +845,13 @@ mod tests {
         assert!(not_enabled.to_string().contains("not enabled"));
         let not_allowed = FixupError::OutputIntentNotAllowed(Standard::PdfE1);
         assert!(not_allowed.to_string().contains("PDF/E-1"));
+        let wrong_subtype = FixupError::WrongOutputIntentSubtype {
+            standard: Standard::PdfA1b,
+            expected: "GTS_PDFA1",
+            actual: "GTS_PDFX".to_owned(),
+        };
+        assert!(wrong_subtype.to_string().contains("expected GTS_PDFA1"));
+        assert!(wrong_subtype.to_string().contains("GTS_PDFX"));
         let below = FixupError::VersionBelowMinimum {
             version: PdfVersion::new(1, 0),
             minimum: PdfVersion::new(1, 7),
@@ -725,7 +861,8 @@ mod tests {
             "version 1.0 is below the profile minimum 1.7"
         );
         assert_ne!(not_enabled, not_allowed);
-        assert_ne!(not_allowed, below);
+        assert_ne!(not_allowed, wrong_subtype);
+        assert_ne!(wrong_subtype, below);
         // std::error::Error is implemented for callers using `?` at boundaries.
         let _: &dyn std::error::Error = &below;
     }
@@ -748,6 +885,58 @@ mod tests {
         assert!(!profile_uses_output_intents(Standard::PdfUa1));
         assert_eq!(required_output_subtype(Standard::PdfX1a), Some("GTS_PDFX"));
         assert_eq!(required_output_subtype(Standard::PdfE1), None);
+    }
+
+    /// Runs `standard`'s real preflight check against a single catalog entry.
+    fn profile_flags_entry(standard: Standard, entry: &str) -> bool {
+        let input = PreflightInput {
+            version: PdfVersion::new(1, 7),
+            catalog: CatalogInfo {
+                forbidden_entries: vec![entry.to_owned()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let findings = match standard {
+            Standard::PdfA1b => PdfA1bProfile::new().check(&input),
+            Standard::PdfA2b => PdfA2bProfile::new().check(&input),
+            Standard::PdfA3b => PdfA3bProfile::new().check(&input),
+            Standard::PdfX1a => PdfX1aProfile::new().check(&input),
+            Standard::PdfX4 => PdfX4Profile::new().check(&input),
+            Standard::PdfE1 => PdfE1Profile::new().check(&input),
+            Standard::PdfUa1 => PdfUa1Profile::new().check(&input),
+        };
+        findings
+            .iter()
+            .any(|finding| finding.code().ends_with(".FORBIDDEN_ENTRY"))
+    }
+
+    #[test]
+    fn prohibited_entries_agree_with_profile_checks_for_every_standard() {
+        // The public helper must be the same source of truth as the rules the
+        // preflight profiles run, for every standard.
+        for standard in Standard::all() {
+            assert_eq!(
+                prohibited_entries(*standard),
+                crate::document_profile::forbidden_catalog_entries_for(*standard),
+                "public helper and profile rules disagree for {standard}"
+            );
+        }
+
+        // Behavioural cross-check: an entry is listed by `prohibited_entries`
+        // exactly when that standard's profile reports it as forbidden.
+        let candidates = ["/EmbeddedFiles", "/JavaScript", "/AA", "/MediaBox"];
+        for standard in Standard::all() {
+            let listed = prohibited_entries(*standard);
+            for entry in candidates {
+                let flagged = profile_flags_entry(*standard, entry);
+                let is_listed = listed.iter().any(|name| name.eq_ignore_ascii_case(entry));
+                assert_eq!(
+                    flagged, is_listed,
+                    "{standard} disagrees about whether {entry} is prohibited"
+                );
+            }
+        }
     }
 
     #[test]

@@ -168,6 +168,25 @@ const PDFUA1_RULES: Rules = Rules {
     forbidden_catalog_entries: &[],
 };
 
+/// Returns the catalog entries the profile for `standard` forbids.
+///
+/// The per-standard [`Rules`] constants above are the single source of truth
+/// for prohibited entries. This accessor lets the public
+/// [`crate::prohibited_entries`] fixup helper delegate to those same rules so
+/// preflight checks and fixups can never disagree about what is prohibited.
+#[must_use]
+pub(crate) fn forbidden_catalog_entries_for(standard: Standard) -> &'static [&'static str] {
+    match standard {
+        Standard::PdfA1b => PDFA1B_RULES.forbidden_catalog_entries,
+        Standard::PdfA2b => PDFA2B_RULES.forbidden_catalog_entries,
+        Standard::PdfA3b => PDFA3B_RULES.forbidden_catalog_entries,
+        Standard::PdfX1a => PDFX1A_RULES.forbidden_catalog_entries,
+        Standard::PdfX4 => PDFX4_RULES.forbidden_catalog_entries,
+        Standard::PdfE1 => PDFE1_RULES.forbidden_catalog_entries,
+        Standard::PdfUa1 => PDFUA1_RULES.forbidden_catalog_entries,
+    }
+}
+
 /// Appends a finding with a stable `PREFIX.CHECK` code.
 fn push(
     out: &mut Vec<PreflightFinding>,
