@@ -1,4 +1,4 @@
-﻿---
+---
 description: "AcroForm and FDF lane"
 mode: subagent
 model: opencode-go/hy4-flash-free
@@ -6,11 +6,17 @@ steps: 80
 permissions:
   - action: edit
     resource: "*"
-    effect: deny  - action: edit
+    effect: deny
+  - action: edit
     resource: "crates/pdfxi-forms/**"
-    effect: allow  - action: edit
+    effect: allow
+  - action: edit
     resource: "docs/evidence/forms/**"
-    effect: allow  - action: shell
+    effect: allow
+  - action: edit
+    resource: "orchestration/feature-updates/**"
+    effect: allow
+  - action: shell
     resource: "*"
     effect: allow
   - action: websearch
@@ -18,7 +24,8 @@ permissions:
     effect: allow
   - action: subagent
     resource: "*"
-    effect: allow  - action: shell
+    effect: allow
+  - action: shell
     resource: "git checkout *"
     effect: deny
   - action: shell

@@ -4,7 +4,8 @@
     "evidence":  "",
     "owns":  [
                  "crates/pdfxi-render/**",
-                 "crates/pdfxi-text/**"
+                 "crates/pdfxi-text/**",
+                 "orchestration/feature-updates/T-0009.toml"
              ],
     "status":  "queued",
     "depends_on":  [

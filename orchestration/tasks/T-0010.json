@@ -3,7 +3,8 @@
     "id":  "T-0010",
     "evidence":  "",
     "owns":  [
-                 "crates/pdfxi-cli/**"
+                 "crates/pdfxi-cli/**",
+                 "orchestration/feature-updates/T-0010.toml"
              ],
     "status":  "queued",
     "depends_on":  [

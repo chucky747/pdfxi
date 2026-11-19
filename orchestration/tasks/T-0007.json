@@ -4,7 +4,8 @@
     "evidence":  "",
     "owns":  [
                  "crates/pdfxi-testkit/**",
-                 "fixtures/**"
+                 "fixtures/**",
+                 "orchestration/feature-updates/T-0007.toml"
              ],
     "status":  "queued",
     "depends_on":  [

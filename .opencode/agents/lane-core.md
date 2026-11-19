@@ -6,13 +6,20 @@ steps: 80
 permissions:
   - action: edit
     resource: "*"
-    effect: deny  - action: edit
+    effect: deny
+  - action: edit
     resource: "crates/pdfxi-core/**"
-    effect: allow  - action: edit
+    effect: allow
+  - action: edit
     resource: "crates/pdfxi-cli/**"
-    effect: allow  - action: edit
+    effect: allow
+  - action: edit
     resource: "docs/evidence/core/**"
-    effect: allow  - action: shell
+    effect: allow
+  - action: edit
+    resource: "orchestration/feature-updates/**"
+    effect: allow
+  - action: shell
     resource: "*"
     effect: allow
   - action: websearch
@@ -20,7 +27,8 @@ permissions:
     effect: allow
   - action: subagent
     resource: "*"
-    effect: allow  - action: shell
+    effect: allow
+  - action: shell
     resource: "git checkout *"
     effect: deny
   - action: shell

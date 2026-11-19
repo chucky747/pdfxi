@@ -3,7 +3,8 @@
     "id":  "T-0008",
     "evidence":  "",
     "owns":  [
-                 "crates/pdfxi-core/**"
+                 "crates/pdfxi-core/**",
+                 "orchestration/feature-updates/T-0008.toml"
              ],
     "status":  "queued",
     "depends_on":  [
