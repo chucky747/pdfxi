@@ -845,14 +845,30 @@ tests = []
 title = "Bookmarks links and attachments editing"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/flatten.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-edit/src/redaction.rs",
+    "docs/evidence/author/T-0085.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "T-0085 (author): cargo test -p pdfxi-edit 155 passed / 0 failed incl. 17 new flatten::tests + 1 redaction::tests; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0085.md."
 id = "EDIT-012"
-notes = ""
+notes = "Headless flatten backend added in pdfxi-edit: appearance placement (BBox/Matrix/Rect/Rotate), /Annots removal, AcroForm gated on a flattened widget, page subset/keep-links/keep-widgets/dry-run options, typed report, copy-on-write/deterministic/cancellable. No UI/CLI or concrete object-writer integration yet, so the row stays in-progress."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "flatten::tests::text_annotation_flatten_appends_placement_and_removes_entry",
+    "flatten::tests::multiple_annotations_are_placed_in_array_order",
+    "flatten::tests::missing_appearance_is_skipped_and_entry_preserved",
+    "flatten::tests::rotation_and_matrix_are_folded_into_placement",
+    "flatten::tests::link_preservation_option_controls_retention",
+    "flatten::tests::widget_is_flattened_and_removed_from_annots",
+    "flatten::tests::acroform_removal_is_gated_on_a_flattened_widget",
+    "flatten::tests::dry_run_reports_without_changing_bytes",
+    "flatten::tests::unchanged_pages_are_byte_stable",
+    "flatten::tests::output_is_deterministic_across_runs",
+]
 title = "Flatten annotations and form fields"
 
 [[feature]]
@@ -1366,14 +1382,15 @@ docs = [
     "docs/evidence/forms/T-0087.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 161 passed, 0 failed; 13 new signature::tests::* covering field creation, lock/certification flags, reason/location/contact, state transitions, invalid-transition rejection, decline/cancel, deterministic reports, byte-range planning, placeholder sizing, signed-appearance presence and typed errors. Full output in docs/evidence/forms/T-0087.md."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 162 passed, 0 failed; 14 new signature::tests::* including cert_permission_maps_to_exact_iso_values (ISO 32000-1 Table 254 /P = 1/2/3), field creation, lock/certification flags, reason/location/contact, state transitions, invalid-transition rejection, decline/cancel, deterministic reports, byte-range planning, placeholder sizing, signed-appearance presence and typed errors. Full output in docs/evidence/forms/T-0087.md."
 id = "FORMS-010"
-notes = "Adds signature field creation (/FT /Sig with /V placeholder, /Ff flags, /Lock, DocMDP certification, reason/location/contact, signature-line appearance), a deterministic local workflow state machine (unsigned/pending/signed/valid/invalid/expired with decline/cancel and caller-supplied timestamps), and a SignatureSlot byte-range planning boundary for a future signer. No crypto is implemented and no signature is forged. Cryptographic signing/validation and the workflow UI remain owned by the security/app lanes, so the row stays in-progress."
+notes = "Adds signature field creation (/FT /Sig with /V placeholder, /Ff flags, /Lock, DocMDP certification with ISO 32000-1 Table 254 /P values 1/2/3, reason/location/contact, signature-line appearance), a deterministic local workflow state machine (unsigned/pending/signed/valid/invalid/expired with decline/cancel and caller-supplied timestamps), and a SignatureSlot byte-range planning boundary for a future signer. No crypto is implemented and no signature is forged. Cryptographic signing/validation and the workflow UI remain owned by the security/app lanes, so the row stays in-progress."
 priority = "P2"
 status = "in-progress"
 tests = [
     "signature::tests::signature_field_creation_emits_sig_and_v_placeholder",
     "signature::tests::lock_and_certification_flags_are_emitted",
+    "signature::tests::cert_permission_maps_to_exact_iso_values",
     "signature::tests::reason_location_and_contact_are_emitted",
     "signature::tests::workflow_transitions_follow_unsigned_pending_signed_valid",
     "signature::tests::invalid_transition_is_rejected",
@@ -1382,6 +1399,10 @@ tests = [
     "signature::tests::byte_range_slot_planning",
     "signature::tests::placeholder_content_sizing",
     "signature::tests::signed_appearance_presence",
+    "signature::tests::invalid_placeholder_sizes_are_rejected",
+    "signature::tests::workflow_expiry_transition",
+    "signature::tests::invalid_field_geometry_is_a_typed_error",
+    "signature::tests::empty_timestamps_and_participants_are_rejected",
 ]
 title = "Electronic signature fields and workflows"
 

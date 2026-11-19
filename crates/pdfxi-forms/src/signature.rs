@@ -127,28 +127,27 @@ impl LockAction {
 
 /// The certification permission level, emitted as the DocMDP `/P` value.
 ///
-/// The values follow the Acrobat convention where `/P` is an enumerated
-/// permission level rather than a free-form bit field.
+/// Per ISO 32000-1 Table 254, the DocMDP transform parameter `/P` is an
+/// enumerated value with exactly three legal values, not a free-form bit
+/// field: `1` (no changes permitted), `2` (form fill-in and signing) and `3`
+/// (form fill-in, signing and annotation changes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertPermission {
-    /// No changes to the document are permitted (`/P 0`).
+    /// No changes to the document are permitted (`/P 1`).
     NoChanges,
-    /// Annotations, form fill-in and signing are permitted (`/P 1`).
-    Annotations,
     /// Form fill-in and signing are permitted (`/P 2`).
     FormAndSigning,
-    /// Only signing is permitted (`/P 3`).
-    SigningOnly,
+    /// Form fill-in, signing and annotation changes are permitted (`/P 3`).
+    AnnotationsAndSigning,
 }
 
 impl CertPermission {
-    /// Returns the integer `/P` value for this permission level.
+    /// Returns the exact integer `/P` value defined by ISO 32000-1 Table 254.
     pub const fn bits(self) -> u32 {
         match self {
-            Self::NoChanges => 0,
-            Self::Annotations => 1,
+            Self::NoChanges => 1,
             Self::FormAndSigning => 2,
-            Self::SigningOnly => 3,
+            Self::AnnotationsAndSigning => 3,
         }
     }
 }
@@ -1563,6 +1562,30 @@ mod tests {
         );
         let params = transform.get("TransformParams").unwrap().as_dict().unwrap();
         assert_eq!(params.get("P"), Some(&PdfValue::Number(2.0)));
+    }
+
+    #[test]
+    fn cert_permission_maps_to_exact_iso_values() {
+        // ISO 32000-1 Table 254: /P is exactly 1, 2 or 3.
+        assert_eq!(CertPermission::NoChanges.bits(), 1);
+        assert_eq!(CertPermission::FormAndSigning.bits(), 2);
+        assert_eq!(CertPermission::AnnotationsAndSigning.bits(), 3);
+
+        // The emitted /TransformParams /P uses those exact integers.
+        for permission in [
+            CertPermission::NoChanges,
+            CertPermission::FormAndSigning,
+            CertPermission::AnnotationsAndSigning,
+        ] {
+            let reference = Certification::new(permission).reference_array();
+            let reference = reference.as_array().unwrap();
+            let transform = reference[0].as_dict().unwrap();
+            let params = transform.get("TransformParams").unwrap().as_dict().unwrap();
+            assert_eq!(
+                params.get("P"),
+                Some(&PdfValue::Number(f64::from(permission.bits())))
+            );
+        }
     }
 
     #[test]
