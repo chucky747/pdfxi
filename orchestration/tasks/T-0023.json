@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-core",
+    "id":  "T-0023",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-core/**",
+                 "orchestration/feature-updates/T-0023.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0008",
+                       "T-0010"
+                   ],
+    "title":  "Implement FlateDecode stream filters",
+    "priority":  "P0",
+    "lane":  "core"
+}

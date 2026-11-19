@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo test -p pdfxi-testkit",
+    "id":  "T-0024",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-testkit/**",
+                 "fixtures/**",
+                 "corpus/**",
+                 "orchestration/feature-updates/T-0024.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0016"
+                   ],
+    "title":  "Expand fixture corpus to fifty and add perf harness",
+    "priority":  "P0",
+    "lane":  "qa"
+}

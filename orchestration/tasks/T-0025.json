@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-cli --features pdfium",
+    "id":  "T-0025",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-cli/**",
+                 "orchestration/feature-updates/T-0025.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0010",
+                       "T-0021"
+                   ],
+    "title":  "Add CLI render command over Renderer",
+    "priority":  "P0",
+    "lane":  "core"
+}
