@@ -148,25 +148,25 @@ title = "Split and tile document windows"
 docs = [
     "crates/pdfxi-app/src/thumbs.rs",
     "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/lib.rs",
 ]
 domain = "View & Navigate"
 evidence = '''
-CARGO_TARGET_DIR=D:\Documents\opencode-work\target\lanes\render; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll.
-cargo test -p pdfxi-render: 19 unit tests passed, 0 failed, EXIT=0 (5 pre-existing + 14 new thumbnail unit tests; doc-tests 0).
-cargo test -p pdfxi-render --features pdfium: 19 unit + 4 pdfium_backend integration + 2 thumbnail_pdfium integration passed, 0 failed, EXIT=0. Both new PDFium tests ran and passed: thumbnail_of_minimal_pdf_is_nonzero_sized_and_non_uniform, cached_pdfium_thumbnail_matches_a_fresh_generation.
-cargo fmt -p pdfxi-render -- --check: EXIT=0.
-cargo clippy -p pdfxi-render --all-targets -- -D warnings: EXIT=0. cargo clippy -p pdfxi-render --all-targets --features pdfium -- -D warnings: EXIT=0.
-RUSTDOCFLAGS="-D warnings" cargo doc -p pdfxi-render --no-deps: EXIT=0 (default and --features pdfium).
+CARGO_TARGET_DIR=target/lanes/app; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll.
+cargo test -p pdfxi-app 2>&1: 69 unit tests passed, 0 failed, EXIT=0 (doc-tests 0 passed).
+cargo test -p pdfxi-app --features ui 2>&1: 95 unit tests passed, 0 failed, EXIT=0 (bin 0, doc-tests 0).
+cargo test -p pdfxi-app --features ui,pdfium 2>&1: 97 unit tests passed, 0 failed, EXIT=0 (bin 0, doc-tests 0).
+cargo fmt -p pdfxi-app -- --check: EXIT=0.
+cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: EXIT=0 (no warnings).
+All three test configurations compiled with zero warnings; default and ui-only builds do not link PDFium.
 '''
 id = "VIEW-007"
 notes = """
-Added `pdfxi_render::thumbnail`, a dependency-free page-thumbnail engine on top of the existing `Renderer` contract. Public API: `ThumbnailSpec { max_width, max_height, scale }` with `new`/`with_scale`/`validate`; `contain_dimensions` and `contains_dimensions` for a documented aspect-preserving contain fit (integer-rounded, clamped to 1x1, never larger than the box); pure-Rust `resize_rgba` nearest-neighbor resizer using widened `u64` arithmetic, a `min(src-1, ...)` clamp for the last column/row, and checked buffer/overflow validation; `Thumbnail { page, width, height, pixels }` with read-only accessors; `ThumbnailError` with typed variants and a transparent `Render(RenderError)` wrapper; stateless `ThumbnailGenerator::generate`; and `ThumbnailCache` with (page, spec) keys, documented least-recently-used eviction, optional entry limit (0 disables retention), `get`/`contains`/`hits`/`len`/`is_empty`/`clear`.
+Added `pdfxi-app::thumbs`, a dependency-light (no egui) navigation-pane model. `ThumbnailPaneState` owns per-page `ThumbnailMeta` (page, row, Idle/Queued/Ready status), a scroll offset, visible-row math, active and selected pages, a bounded prefetch request queue, and pdfxi-render's LRU `ThumbnailCache`. `visible_range_for` computes the half-open visible row range from scroll, row height, viewport height, and page count with boundary/degenerate handling; `page_at_row`/`row_for_page` are inverse identity maps with bounds checks for the single-column list; `page_at_offset` maps a pane offset to a page. `prefetch_range` widens the visible range by a documented per-side row margin; `enqueue_visible` fills a capacity-bounded FIFO queue, skipping cached and already-queued pages (dedupe) and dropping the oldest request when full; `generate_pending` drives `ThumbnailCache::generate` through the `Renderer` trait with cancellation and progress forwarding. `generate_page`/`cached_thumbnail` provide the immediate/cached fetch paths, and `clear_cache`/`reset` drop document-scoped state. All public items have rustdoc; no non-test unwrap/expect/panic.
 
-Generation is a documented two-phase cover-and-downscale strategy: render at scale 1.0 to measure the page, compute the cover factor that makes the raster at least as large as the box in both axes, multiply by the spec's oversample scale, render again, then nearest-neighbor downscale to the contained fit. This guarantees downsampling instead of upscaling. For a given renderer/page/spec the output is byte-for-byte deterministic. Cancellation is checked before, between, and inside both render phases; progress from both phases is mapped onto a two-unit range. All renderer errors (cancellation, out-of-range pages, invalid scale) propagate through `ThumbnailError::Render`. `#![forbid(unsafe_code)]` remains and no non-test code uses unwrap/expect/panic.
+`ui.rs` adds an egui `SidePanel::left` with a scrollable list of one tile per page. With `pdfium`, visible thumbnails are enqueued and generated at most four per frame through the shared cache and uploaded into reusable `egui::TextureHandle`s; without it the tiles are drawn as placeholders. Clicking a tile calls `PdfxiApp::select_thumbnail_page`, which marks the page active, updates the tab's current page, highlights the tile, and requests a canvas scroll to that page (applied via `scroll_offset_for_page`). Canvas scrolling calls `sync_active_page_from_canvas`, which uses the pure `active_page_from_canvas_scroll` helper so the active tile follows the viewport; an unchanged frame is a no-op that leaves manual pane scrolling alone. The pane viewport height is reported from the side panel each frame, and ScrollArea's actual offset feeds the next frame's visible range. `default = []` and `ui` still build without PDFium.
 
-Tests use a scale-aware counting mock renderer: wide/tall/square aspect fit, exact RGBA length, nearest-neighbor corner/replication sampling, buffer-mismatch and zero-dimension rejection, zero-size spec rejection without rendering, invalid-scale rejection, out-of-range and cancellation propagation (before and between phases), cache hit avoids re-rendering, deterministic equality, LRU eviction order, `clear`, zero-limit behaviour, and progress reporting. Optional `#[cfg(feature = "pdfium")]` integration tests generate a thumbnail of fixtures/minimal.pdf and assert non-zero dimensions, exact RGBA length, a non-uniform image, and that a cached generation matches a fresh one.
-
-Collateral (rustdoc hygiene only): replaced two pre-existing broken/redundant intra-doc links in lib.rs and pdfium_backend.rs so `RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-render --no-deps` passes both with and without the `pdfium` feature. VIEW-007 remains in-progress because the navigation-pane UI (dock widget, scroll list, selection wiring) belongs to the app lane; the thumbnail engine it consumes is now delivered here.
+Window-free tests cover short/long visible ranges, boundary page/row mapping and empty documents, page-at-offset clamping, prefetch expansion and clamping, request dedupe/capacity/metadata, active-page tracking and click selection, reset/clear semantics, generation through a counting mock renderer (two render phases per miss), repeated-query cache reuse, cancellation, and the pure canvas-scroll-to-active helper.
 """
 priority = "P0"
 status = "verified"
@@ -191,6 +191,10 @@ tests = [
     "ui::tests::active_page_from_canvas_scroll_picks_the_page_at_the_centre",
     "ui::tests::thumbnail_click_marks_page_active_and_requests_canvas_scroll",
     "ui::tests::active_page_follows_canvas_scrolling",
+    "ui::tests::thumbnail_click_marks_active_and_requests_canvas_scroll",
+    "ui::tests::thumbnail_active_page_follows_canvas_scroll",
+    "ui::tests::thumbnail_pane_model_exposes_visible_range_without_a_window",
+    "ui::tests::active_page_from_canvas_scroll_helper_is_deterministic",
 ]
 title = "Page thumbnails and navigation pane"
 
