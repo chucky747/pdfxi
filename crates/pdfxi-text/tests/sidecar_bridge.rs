@@ -67,12 +67,35 @@ fn round_trip_request_and_response_through_bridge() {
 
 #[test]
 fn spawn_failure_is_typed() {
-    let config = SidecarConfig::new("__pdfxi_no_such_sidecar__", ["eng"]).expect("valid config");
+    // An existing regular file that is not an executable: config validation
+    // passes, but CreateProcess/exec rejects it, producing a typed SpawnFailed.
+    let not_executable = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let config = SidecarConfig::new(&not_executable, ["eng"]).expect("valid config");
     let result = recognize(config);
     assert!(
-        matches!(result, Err(SidecarError::SpawnFailed { ref path, .. }) if path.contains("__pdfxi_no_such_sidecar__")),
+        matches!(result, Err(SidecarError::SpawnFailed { ref path, .. }) if path.ends_with("lib.rs")),
         "unexpected result: {result:?}"
     );
+}
+
+#[test]
+fn config_rejects_bare_relative_nonexistent_and_traversal_paths() {
+    let bare = SidecarConfig::new("tesseract", ["eng"]);
+    assert!(matches!(bare, Err(SidecarError::InvalidConfig(_))));
+    let relative = SidecarConfig::new(".\\tesseract.exe", ["eng"]);
+    assert!(matches!(relative, Err(SidecarError::InvalidConfig(_))));
+    let missing = env::temp_dir().join(format!("pdfxi-missing-{}", std::process::id()));
+    let missing = SidecarConfig::new(missing, ["eng"]);
+    assert!(matches!(missing, Err(SidecarError::InvalidConfig(_))));
+    let traversal = fake_exe()
+        .parent()
+        .expect("parent")
+        .join("..")
+        .join(fake_exe().file_name().expect("file name"));
+    let traversal = SidecarConfig::new(traversal, ["eng"]);
+    assert!(matches!(traversal, Err(SidecarError::InvalidConfig(_))));
+    // The real helper binary is accepted.
+    assert!(SidecarConfig::new(fake_exe(), ["eng"]).is_ok());
 }
 
 #[test]
@@ -135,6 +158,59 @@ fn timeout_kills_child_and_returns_promptly() {
     assert!(
         elapsed < Duration::from_secs(3),
         "supervisor must kill the hung child promptly, took {elapsed:?}"
+    );
+}
+
+#[test]
+fn child_that_never_drains_stdin_still_times_out() {
+    let config = config_with_mode("no_read_hang")
+        .with_timeout(Duration::from_millis(300))
+        .expect("timeout");
+    let engine = SidecarOcrEngine::new(config).expect("engine");
+    // 256x256 grayscale -> 131072 hex characters, comfortably larger than the
+    // OS pipe buffer, so the stdin write really blocks while the child sleeps
+    // without ever reading it. The supervisor must still fire the deadline.
+    let large = OcrImage::new(
+        256,
+        256,
+        300.0,
+        OcrPixelFormat::Grayscale,
+        vec![0u8; 256 * 256],
+    )
+    .expect("large image");
+    let start = Instant::now();
+    let result = engine.recognize_page(
+        large,
+        &OcrOptions::new(vec!["eng".to_string()]),
+        0,
+        &CancellationToken::new(),
+    );
+    let elapsed = start.elapsed();
+    assert!(
+        matches!(result, Err(SidecarError::Timeout { .. })),
+        "unexpected result: {result:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "blocked stdin write must not deadlock the caller, took {elapsed:?}"
+    );
+}
+
+#[test]
+fn early_nonzero_exit_with_partial_response_is_typed() {
+    let start = Instant::now();
+    let result = recognize(config_with_mode("early_exit_partial"));
+    let elapsed = start.elapsed();
+    match result {
+        Err(SidecarError::NonZeroExit { code, stderr }) => {
+            assert_eq!(code, 3);
+            assert!(stderr.contains("partial response then early exit"));
+        }
+        other => panic!("expected NonZeroExit, got {other:?}"),
+    }
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the child must be reaped promptly after an early exit, took {elapsed:?}"
     );
 }
 

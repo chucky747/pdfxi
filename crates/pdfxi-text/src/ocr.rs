@@ -1132,6 +1132,17 @@ mod json {
             Ok(Value::Number(number))
         }
 
+        /// Parse exactly four hexadecimal digits following a `\u` escape.
+        fn parse_hex4(&mut self) -> Result<u32, String> {
+            let mut code = 0u32;
+            for _ in 0..4 {
+                let hex = self.bump().ok_or("short unicode escape")?;
+                let digit = hex.to_digit(16).ok_or("invalid unicode escape")?;
+                code = (code << 4) | digit;
+            }
+            Ok(code)
+        }
+
         fn parse_string(&mut self) -> Result<String, String> {
             self.expect('"')?;
             let mut out = String::new();
@@ -1151,15 +1162,33 @@ mod json {
                             'r' => out.push('\r'),
                             't' => out.push('\t'),
                             'u' => {
-                                let mut code = 0u32;
-                                for _ in 0..4 {
-                                    let hex = self.bump().ok_or("short unicode escape")?;
-                                    let digit = hex.to_digit(16).ok_or("invalid unicode escape")?;
-                                    code = (code << 4) | digit;
+                                let first = self.parse_hex4()?;
+                                if (0xD800..=0xDBFF).contains(&first) {
+                                    // A high surrogate must be immediately followed by a
+                                    // `\uXXXX` low surrogate; combine the pair into one
+                                    // Unicode scalar value as JSON requires.
+                                    if self.bump() != Some('\\') || self.bump() != Some('u') {
+                                        return Err(
+                                            "high surrogate must be followed by a \\u escape"
+                                                .to_string(),
+                                        );
+                                    }
+                                    let second = self.parse_hex4()?;
+                                    if !(0xDC00..=0xDFFF).contains(&second) {
+                                        return Err("invalid low surrogate in \\u pair".to_string());
+                                    }
+                                    let scalar =
+                                        0x1_0000 + ((first - 0xD800) << 10) + (second - 0xDC00);
+                                    let ch = char::from_u32(scalar)
+                                        .ok_or("surrogate pair is not a scalar value")?;
+                                    out.push(ch);
+                                } else if (0xDC00..=0xDFFF).contains(&first) {
+                                    return Err("lone low surrogate \\u escape".to_string());
+                                } else {
+                                    let ch = char::from_u32(first)
+                                        .ok_or("unicode escape is not a scalar value")?;
+                                    out.push(ch);
                                 }
-                                let ch = char::from_u32(code)
-                                    .ok_or("unicode escape is not a scalar value")?;
-                                out.push(ch);
                             }
                             other => return Err(format!("invalid escape '\\{other}'")),
                         }
@@ -2003,6 +2032,62 @@ mod tests {
         assert_eq!(page.page(), 3);
         assert_eq!(page.detected_language(), "eng");
         assert_eq!(page.span_count(), 2);
+    }
+
+    #[test]
+    fn sidecar_json_accepts_surrogate_pairs_and_rejects_lone_surrogates() {
+        let response = SidecarResponse::new(
+            "eng",
+            vec![SidecarSpan {
+                text: "emoji \u{1F600} end".to_string(),
+                x: 0.0,
+                y: 0.0,
+                width: 4.0,
+                height: 4.0,
+                confidence: 90.0,
+                language: "eng".to_string(),
+            }],
+        )
+        .expect("valid response");
+
+        // The canonical serializer emits the scalar directly as UTF-8; it must
+        // round-trip through the strict codec unchanged.
+        let canonical = response.to_json().expect("serializes");
+        assert_eq!(
+            SidecarResponse::from_json(&canonical).expect("round-trips"),
+            response
+        );
+
+        // Standard JSON escaped surrogate pairs are accepted and decoded.
+        let escaped = canonical.replace('\u{1F600}', "\\uD83D\\uDE00");
+        assert!(escaped.contains("\\uD83D\\uDE00"));
+        assert_eq!(
+            SidecarResponse::from_json(&escaped).expect("surrogate pair decodes"),
+            response
+        );
+
+        // Lowercase hex digits in a pair are accepted too.
+        let lowercase = canonical.replace('\u{1F600}', "\\ud83d\\ude00");
+        assert_eq!(
+            SidecarResponse::from_json(&lowercase).expect("lowercase pair decodes"),
+            response
+        );
+
+        // Lone surrogates and malformed pairs are rejected.
+        for bad in [
+            "\\uD83D",               // lone high surrogate
+            "\\uDE00",               // lone low surrogate
+            "\\uD83D\\u0041",        // high surrogate followed by a non-surrogate
+            "\\uD83Dx",              // high surrogate not followed by an escape
+            "\\uD83D\\uDE0",         // truncated second escape
+            "\\uD800\\uDC00\\uD800", // valid pair plus a trailing lone surrogate
+        ] {
+            let input = canonical.replace('\u{1F600}', bad);
+            assert!(
+                SidecarResponse::from_json(&input).is_err(),
+                "should reject malformed surrogate sequence: {bad}"
+            );
+        }
     }
 
     #[test]

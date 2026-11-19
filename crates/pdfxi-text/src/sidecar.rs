@@ -6,7 +6,9 @@
 //!
 //! # Security model
 //!
-//! * The executable path is validated when the configuration is built and is
+//! * The executable path is validated when the configuration is built: it must
+//!   be absolute, name an existing regular file, contain no `..` components,
+//!   and not be a symlink. Bare names are never searched on `PATH`. It is then
 //!   passed to [`std::process::Command`] directly — there is **no shell**, so no
 //!   argument is ever interpreted as a command, glob, or redirection.
 //! * The argument vector is fixed by default ([`DEFAULT_ARGUMENTS`]) and a
@@ -25,8 +27,9 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -154,19 +157,88 @@ pub struct SidecarConfig {
     explicit_env: BTreeMap<String, String>,
 }
 
+fn reject_untrusted_path_shape(path: &Path, label: &str) -> Result<(), SidecarError> {
+    if path.as_os_str().is_empty() {
+        return Err(SidecarError::InvalidConfig(format!(
+            "{label} path must not be empty"
+        )));
+    }
+    let text = path
+        .as_os_str()
+        .to_str()
+        .ok_or_else(|| SidecarError::InvalidConfig(format!("{label} path must be valid UTF-8")))?;
+    if text.trim().is_empty() || text.contains('\0') {
+        return Err(SidecarError::InvalidConfig(format!(
+            "{label} path is blank or contains a NUL byte"
+        )));
+    }
+    // Bare names and relative paths are rejected rather than searched for on
+    // PATH: an ambient PATH entry could otherwise choose an attacker binary.
+    if !path.is_absolute() {
+        return Err(SidecarError::InvalidConfig(format!(
+            "{label} path must be absolute (bare names are not searched on PATH)"
+        )));
+    }
+    // Lexical `..` (and `.`) is rejected so a caller cannot escape a directory
+    // by construction. Canonicalization below catches the rest.
+    if path
+        .components()
+        .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err(SidecarError::InvalidConfig(format!(
+            "{label} path must not contain '..' or '.' components"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate the sidecar executable path.
+///
+/// The policy is deliberately strict: an **absolute** path to an **existing
+/// regular file** with **no `..` components** and **no symlink at the final
+/// component**. Canonicalization is used to confirm the path resolves to a real
+/// regular file and to reject any symlink escape at the leaf. Bare names are
+/// never resolved through the ambient `PATH`.
 fn validate_executable(path: &Path) -> Result<(), SidecarError> {
-    let raw = path.as_os_str();
-    if raw.is_empty() {
+    reject_untrusted_path_shape(path, "executable")?;
+    let leaf = fs::symlink_metadata(path).map_err(|error| {
+        SidecarError::InvalidConfig(format!(
+            "executable does not exist or is unreadable: {error}"
+        ))
+    })?;
+    if leaf.file_type().is_symlink() {
         return Err(SidecarError::InvalidConfig(
-            "executable path must not be empty".to_string(),
+            "symlink executable paths are not allowed (symlink escape)".to_string(),
         ));
     }
-    let text = raw.to_str().ok_or_else(|| {
-        SidecarError::InvalidConfig("executable path must be valid UTF-8".to_string())
-    })?;
-    if text.trim().is_empty() || text.contains('\0') {
+    if !leaf.is_file() {
         return Err(SidecarError::InvalidConfig(
-            "executable path is blank or contains a NUL byte".to_string(),
+            "executable path is not a regular file".to_string(),
+        ));
+    }
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        SidecarError::InvalidConfig(format!("executable cannot be canonicalized: {error}"))
+    })?;
+    if !fs::metadata(&canonical).is_ok_and(|meta| meta.is_file()) {
+        return Err(SidecarError::InvalidConfig(
+            "canonical executable path is not a regular file".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a fixed working-directory path. It must be absolute, contain no
+/// traversal components, and name an existing directory. Symlinked directories
+/// are permitted (unlike executable leaves) because a symlinked install prefix
+/// is common and holds no executable code.
+fn validate_directory(path: &Path) -> Result<(), SidecarError> {
+    reject_untrusted_path_shape(path, "working directory")?;
+    let meta = fs::metadata(path).map_err(|error| {
+        SidecarError::InvalidConfig(format!("working directory does not exist: {error}"))
+    })?;
+    if !meta.is_dir() {
+        return Err(SidecarError::InvalidConfig(
+            "working directory path is not a directory".to_string(),
         ));
     }
     Ok(())
@@ -307,7 +379,7 @@ impl SidecarConfig {
         policy: WorkingDirectoryPolicy,
     ) -> Result<Self, SidecarError> {
         if let WorkingDirectoryPolicy::Fixed(path) = &policy {
-            validate_executable(path)?;
+            validate_directory(path)?;
         }
         self.working_directory = policy;
         Ok(self)
@@ -353,7 +425,7 @@ impl SidecarConfig {
             ));
         }
         if let WorkingDirectoryPolicy::Fixed(path) = &self.working_directory {
-            validate_executable(path)?;
+            validate_directory(path)?;
         }
         for name in &self.env_allowlist {
             validate_env_name(name)?;
@@ -424,7 +496,11 @@ enum ExitReason {
     IoError(String),
 }
 
-/// Read at most `max` bytes from `reader`, signalling `abort` on overflow.
+/// Read at most `max` bytes from `reader`.
+///
+/// Any pipe failure — overflow or a read error — sets `abort` so the supervisor
+/// kills and reaps the child instead of leaving it running while this function
+/// returns an error.
 fn capture_bounded<R: Read>(
     mut reader: R,
     max: usize,
@@ -433,9 +509,13 @@ fn capture_bounded<R: Read>(
     let mut collected = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
-        let read = reader
-            .read(&mut chunk)
-            .map_err(|error| SidecarError::Io(format!("reading sidecar output: {error}")))?;
+        let read = match reader.read(&mut chunk) {
+            Ok(read) => read,
+            Err(error) => {
+                abort.store(true, Ordering::SeqCst);
+                return Err(SidecarError::Io(format!("reading sidecar output: {error}")));
+            }
+        };
         if read == 0 {
             break;
         }
@@ -477,17 +557,13 @@ fn spawn_and_collect(
         path: config.executable.to_string_lossy().into_owned(),
         source: error,
     })?;
+    let started = Instant::now();
 
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| SidecarError::Io("child stdin was not piped".to_string()))?;
-        stdin
-            .write_all(request_json.as_bytes())
-            .map_err(|error| SidecarError::Io(format!("writing sidecar request: {error}")))?;
-    }
-
+    // Take all pipes before moving `child` into the supervisor.
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| SidecarError::Io("child stdin was not piped".to_string()))?;
     let stdout = child
         .stdout
         .take()
@@ -511,11 +587,13 @@ fn spawn_and_collect(
         let _ = stderr_tx.send(capture_bounded(stderr, STDERR_CAP, &stderr_abort));
     });
 
+    // The supervisor starts before the stdin write. A child that never drains
+    // stdin can no longer deadlock the caller: the deadline and cancellation
+    // are already being enforced while the writer waits on the pipe.
     let timeout = config.timeout;
     let watch_cancellation = cancellation.clone();
     let watch_abort = Arc::clone(&abort);
     let supervisor = thread::spawn(move || {
-        let started = Instant::now();
         loop {
             if watch_cancellation.is_cancelled() {
                 let _ = child.kill();
@@ -532,6 +610,7 @@ fn spawn_and_collect(
                 let _ = child.wait();
                 return ExitReason::TimedOut;
             }
+            // A successful `try_wait` reaps the child, so no zombie is left behind.
             match child.try_wait() {
                 Ok(Some(status)) => return ExitReason::Exited(status),
                 Ok(None) => {}
@@ -541,28 +620,57 @@ fn spawn_and_collect(
         }
     });
 
-    let stdout_result = stdout_rx
-        .recv()
-        .map_err(|_| SidecarError::Io("stdout reader stopped unexpectedly".to_string()))??;
-    let stderr_result = stderr_rx
-        .recv()
-        .map_err(|_| SidecarError::Io("stderr reader stopped unexpectedly".to_string()))??;
+    // Bounded in a separate thread: if the child never reads stdin, this write
+    // blocks until the supervisor kills the child, then returns a broken pipe.
+    let writer_abort = Arc::clone(&abort);
+    let request_bytes = request_json.as_bytes().to_vec();
+    let writer = thread::spawn(move || {
+        if let Err(error) = stdin.write_all(&request_bytes) {
+            // A child is allowed to close stdin early after producing output;
+            // that BrokenPipe is diagnostic only. All other pipe failures abort
+            // so the supervisor kills the child before this call returns.
+            if error.kind() != std::io::ErrorKind::BrokenPipe {
+                writer_abort.store(true, Ordering::SeqCst);
+            }
+        }
+    });
+
+    let stdout_result = stdout_rx.recv().unwrap_or_else(|_| {
+        Err(SidecarError::Io(
+            "stdout reader stopped unexpectedly".to_string(),
+        ))
+    });
+    let stderr_result = stderr_rx.recv().unwrap_or_else(|_| {
+        Err(SidecarError::Io(
+            "stderr reader stopped unexpectedly".to_string(),
+        ))
+    });
+
+    // Always let the supervisor finish (killing/reaping on abort, timeout or
+    // cancellation) before returning, and never leave the writer detached.
     let reason = supervisor
         .join()
         .map_err(|_| SidecarError::Io("supervisor thread panicked".to_string()))?;
+    let _ = writer.join();
 
     match reason {
         ExitReason::Cancelled => Err(SidecarError::Cancelled),
         ExitReason::TimedOut => Err(SidecarError::Timeout { duration: timeout }),
-        ExitReason::Aborted => Err(SidecarError::OversizedOutput {
-            max: config.max_stdout_bytes,
-        }),
+        ExitReason::Aborted => match (stdout_result, stderr_result) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(_), Ok(_)) => Err(SidecarError::Io(
+                "sidecar aborted by a pipe I/O error".to_string(),
+            )),
+        },
         ExitReason::IoError(message) => Err(SidecarError::Io(message)),
         ExitReason::Exited(status) if !status.success() => Err(SidecarError::NonZeroExit {
             code: status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&stderr_result).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr_result.unwrap_or_default()).into_owned(),
         }),
-        ExitReason::Exited(_) => Ok((stdout_result, stderr_result)),
+        ExitReason::Exited(_) => match (stdout_result, stderr_result) {
+            (Ok(stdout), Ok(stderr)) => Ok((stdout, stderr)),
+            (Err(error), _) | (_, Err(error)) => Err(error),
+        },
     }
 }
 
@@ -703,11 +811,13 @@ mod tests {
     use super::*;
 
     fn base_config() -> SidecarConfig {
-        SidecarConfig::new("sidecar", ["eng"]).expect("valid base config")
+        let exe = env::current_exe().expect("current test executable");
+        SidecarConfig::new(exe, ["eng"]).expect("valid base config")
     }
 
     #[test]
     fn config_rejects_empty_paths_and_empty_language_sets() {
+        let exe = env::current_exe().expect("current test executable");
         assert!(matches!(
             SidecarConfig::new("", ["eng"]),
             Err(SidecarError::InvalidConfig(_))
@@ -717,13 +827,71 @@ mod tests {
             Err(SidecarError::InvalidConfig(_))
         ));
         assert!(matches!(
-            SidecarConfig::new("sidecar", Vec::<String>::new()),
+            SidecarConfig::new(&exe, Vec::<String>::new()),
             Err(SidecarError::InvalidConfig(_))
         ));
         assert!(matches!(
-            SidecarConfig::new("sidecar", ["bad tag"]),
+            SidecarConfig::new(&exe, ["bad tag"]),
             Err(SidecarError::InvalidConfig(_))
         ));
+    }
+
+    #[test]
+    fn executable_validation_requires_absolute_existing_regular_file() {
+        let exe = env::current_exe().expect("current test executable");
+        assert!(validate_executable(&exe).is_ok());
+
+        // Bare names and relative paths are never searched on PATH.
+        assert!(validate_executable(Path::new("sidecar")).is_err());
+        assert!(validate_executable(Path::new(".\\sidecar")).is_err());
+        // A non-existent absolute path is rejected at configuration time.
+        let missing = env::temp_dir().join(format!("pdfxi-missing-{}", std::process::id()));
+        assert!(validate_executable(&missing).is_err());
+        // A directory is not a regular file.
+        assert!(validate_executable(&env::temp_dir()).is_err());
+        // Lexical traversal is rejected even when the target exists.
+        let traversal = exe
+            .parent()
+            .expect("parent")
+            .join("..")
+            .join(exe.file_name().expect("file name"));
+        assert!(validate_executable(&traversal).is_err());
+    }
+
+    #[test]
+    fn executable_validation_rejects_symlinks_when_creation_is_permitted() {
+        let exe = env::current_exe().expect("current test executable");
+        let dir = env::temp_dir().join(format!("pdfxi-t0071-link-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let link = dir.join("sidecar-link");
+
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_file(&exe, &link).is_ok();
+        #[cfg(unix)]
+        let created = std::os::unix::fs::symlink(&exe, &link).is_ok();
+
+        if created {
+            let result = validate_executable(&link);
+            let _ = fs::remove_file(&link);
+            let _ = fs::remove_dir(&dir);
+            assert!(result.is_err(), "symlink executable must be rejected");
+        }
+        // On hosts where creating symlinks needs elevation, creation fails and
+        // there is nothing to assert; validate_executable still rejects them.
+    }
+
+    #[test]
+    fn working_directory_validation_requires_existing_directory() {
+        let dir = env::temp_dir();
+        let exe = env::current_exe().expect("current test executable");
+        assert!(validate_directory(&dir).is_ok());
+        assert!(
+            validate_directory(&exe).is_err(),
+            "a file is not a directory"
+        );
+        assert!(validate_directory(Path::new("relative/dir")).is_err());
+        assert!(validate_directory(&dir.join("..")).is_err());
+        assert!(validate_directory(&dir.join(format!("missing-{}", std::process::id()))).is_err());
     }
 
     #[test]

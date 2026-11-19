@@ -20,10 +20,16 @@
 //! The [`sidecar`] module supplies the first concrete [`ocr::OcrEngine`]: a
 //! bounded, cancellable out-of-process bridge that speaks the T-0057 JSON wire
 //! format without a shell or network access.
+//!
+//! The [`font`] module parses PDF `/Font` dictionaries into a dependency-free
+//! [`font::FontMetrics`] model: simple (Type1/TrueType) and CID (Type0) widths,
+//! vertical metrics, `/ToUnicode` and `/CIDToGIDMap` tables, and documented
+//! standard-14 fallbacks.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod font;
 pub mod ocr;
 pub mod sidecar;
 

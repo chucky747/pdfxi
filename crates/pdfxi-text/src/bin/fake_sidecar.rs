@@ -42,11 +42,16 @@ fn present(name: &str) -> String {
 }
 
 fn main() {
-    let mut input = String::new();
-    let _ = std::io::stdin().read_to_string(&mut input);
-
     let mode = env::var("PDFXI_FAKE_MODE").unwrap_or_else(|_| "echo".to_string());
     let args: Vec<String> = env::args().skip(1).collect();
+
+    // Two modes deliberately never drain stdin: they prove the bridge's
+    // supervisor can kill a child while a large stdin write is still blocked.
+    let skip_stdin = matches!(mode.as_str(), "no_read_hang" | "early_exit_partial");
+    let mut input = String::new();
+    if !skip_stdin {
+        let _ = std::io::stdin().read_to_string(&mut input);
+    }
 
     match mode.as_str() {
         "echo" => {
@@ -123,6 +128,20 @@ fn main() {
         "hang" => loop {
             thread::sleep(Duration::from_millis(100));
         },
+        "no_read_hang" => loop {
+            // Never reads stdin: a large request fills the pipe and blocks the
+            // bridge's stdin writer until the supervisor kills this process.
+            thread::sleep(Duration::from_millis(100));
+        },
+        "early_exit_partial" => {
+            // Writes a truncated response, closes stdout/stderr and exits
+            // non-zero without ever reading stdin.
+            let mut stdout = std::io::stdout();
+            let _ = stdout.write_all(b"{\"version\":1,\"detected_language\":");
+            let _ = stdout.flush();
+            eprintln!("partial response then early exit");
+            std::process::exit(3);
+        }
         other => {
             eprintln!("unknown fake sidecar mode: {other}");
             std::process::exit(2);
