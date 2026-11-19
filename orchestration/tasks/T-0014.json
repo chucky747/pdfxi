@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-forms",
+    "id":  "T-0014",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-forms/**",
+                 "orchestration/feature-updates/T-0014.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Create AcroForm field and form model",
+    "priority":  "P1",
+    "lane":  "forms"
+}

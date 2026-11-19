@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-edit -p pdfxi-accessibility",
+    "id":  "T-0013",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-edit/**",
+                 "crates/pdfxi-accessibility/**",
+                 "orchestration/feature-updates/T-0013.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Create annotation and page geometry model",
+    "priority":  "P1",
+    "lane":  "author"
+}

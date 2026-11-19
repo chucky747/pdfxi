@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-app",
+    "id":  "T-0011",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-app/**",
+                 "orchestration/feature-updates/T-0011.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Create app state and viewer shell model",
+    "priority":  "P1",
+    "lane":  "app"
+}
