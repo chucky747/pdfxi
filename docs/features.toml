@@ -133,27 +133,42 @@ tests = []
 title = "Rotate view and page display"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/ui.rs"
+docs = [
+    "crates/pdfxi-app/src/state.rs",
+    "crates/pdfxi-app/src/tabs.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/app/T-0069.md",
+]
 domain = "View & Navigate"
-evidence = "cargo check -p pdfxi-app --features ui (CARGO_TARGET_DIR=target/lanes/app): EXITCODE=0. cargo test -p pdfxi-app --features ui: 26 passed, 0 failed (includes 9 new ui::tests). cargo test -p pdfxi-app (default): 17 passed, 0 failed. cargo fmt/clippy on pdfxi-app: clean."
+evidence = "cargo test -p pdfxi-app --features ui: 113 passed, 0 failed including 18 new tab-workspace/UI tests. cargo test -p pdfxi-app: 79 passed. fmt/clippy/doc all EXITCODE=0. Full output in docs/evidence/app/T-0069.md."
 id = "VIEW-005"
 notes = """
-The eframe shell renders the AppState document tab strip with selectable labels;
-clicking a tab activates it through AppState::activate_tab, and the Close action
-and Ctrl+W remove the active tab with neighbor fallback. Demo tabs carry a
-placeholder page count. All tab/tool/view mutations are exposed as PdfxiApp
-methods that only touch the UI-agnostic AppState, so they are unit tested
-without a window. Real docking/split-panel window management is future work,
-hence in-progress.
+Full tabbed workflow is shipped and UI-wired: stable tab ids and insertion
+order, duplicate-path focus, per-tab page/zoom/layout/rotation/scroll state that
+restores on switch, typed errors, reorder, next/previous wraparound, close-others,
+and an unsaved-close policy hook consulted by every close path (including
+close-others, which reports closed and policy-kept ids). The egui strip has
+labelled selectable tabs, close buttons, an active highlight, Ctrl+Tab/
+Ctrl+Shift+Tab/Ctrl+W shortcuts, and a no-document placeholder. Real docking
+and loading distinct real PDF contents per tab remain future work, as does the
+pre-existing demo-page shell; neither is part of this row's tabbed-workflow
+acceptance.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "ui::tests::open_demo_tab_registers_tab_with_placeholder_page_count",
-    "ui::tests::activate_and_close_tab_switch_and_remove_documents",
-    "ui::tests::tool_selection_updates_shared_state",
-    "ui::tests::active_tab_status_without_document_has_fixed_message",
-    "state::tests::tab_open_close_and_activate_lifecycle",
+    "state::tests::open_document_focuses_existing_tab_for_the_same_path",
+    "state::tests::per_tab_view_state_is_restored_when_switching_tabs",
+    "state::tests::reorder_moves_tab_without_changing_the_active_id",
+    "state::tests::close_other_tabs_keeps_only_the_active_tab",
+    "state::tests::next_and_previous_wrap_around_the_tab_strip",
+    "state::tests::unsaved_close_policy_hook_can_veto_a_close",
+    "state::tests::tab_ids_are_stable_and_never_reused",
+    "ui::tests::tab_strip_snapshot_reflects_labels_order_and_active_highlight",
+    "ui::tests::keyboard_tab_helpers_wrap_and_close",
+    "ui::tests::per_tab_scroll_offset_is_saved_and_restored_on_switch",
+    "ui::tests::ui_close_policy_rejects_closing_dirty_tabs_until_allowed",
+    "ui::tests::close_others_policy_keeps_dirty_tabs",
 ]
 title = "Tabbed multi-document interface"
 
@@ -377,25 +392,51 @@ tests = []
 title = "Virtual PDF printer"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/create.rs",
+    "crates/pdfxi-convert/tests/create_pdf.rs",
+    "docs/evidence/convert/T-0058.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert: 89 unit + 5 integration passed; png_is_embedded_with_flate_and_predictor, jpeg_is_embedded_with_dctdecode, malformed_image_returns_typed_error, unsupported_png_alpha_is_rejected, png_image_stream_declares_exact_length, jpeg_image_stream_declares_exact_length, image_stream_length_prevents_endstream_truncation, and image_pdf_round_trips_with_media_box_and_dpi_scaling all pass. Full output in docs/evidence/convert/T-0058.md."
 id = "CREATE-003"
-notes = ""
+notes = "PNG and JPEG can now be turned into one-page PDFs at documented DPI/page-fit rules with typed errors and deterministic bytes. The row stays in-progress: only non-interlaced 8-bit grayscale/RGB PNG (no alpha/palette) and 8-bit JPEG with 1 or 3 components are supported; interlaced/alpha/palette PNG, CMYK JPEG, GIF/BMP/TIFF/WebP, multi-image batches, and a UI path are out of scope."
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "create::tests::png_is_embedded_with_flate_and_predictor",
+    "create::tests::jpeg_is_embedded_with_dctdecode",
+    "create::tests::malformed_image_returns_typed_error",
+    "create::tests::unsupported_png_alpha_is_rejected",
+    "image_pdf_round_trips_with_media_box_and_dpi_scaling",
+]
 title = "Create PDF from images"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/create.rs",
+    "crates/pdfxi-convert/tests/create_pdf.rs",
+    "docs/evidence/convert/T-0058.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert: 89 unit + 5 integration passed; empty text, long-text pagination, Markdown constructs, non-ASCII escaping, deterministic bytes, page count/size, margin validation, xref offsets and core round-trip tests all pass. Full output in docs/evidence/convert/T-0058.md."
 id = "CREATE-004"
-notes = ""
+notes = "Plain text and a documented Markdown subset (ATX headings, paragraphs, bullet lists, fenced code blocks) now produce paginated PDFs with margins, page size, Helvetica/Courier metrics and escaped WinAnsi text. The row stays in-progress because inline emphasis, links, images, blockquotes, tables, ordered lists and full CommonMark are not interpreted; their characters are emitted literally."
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "create::tests::empty_text_returns_typed_error",
+    "create::tests::whitespace_only_markdown_returns_typed_error",
+    "create::tests::long_text_paginates_across_pages",
+    "create::tests::markdown_constructs_render_expected_fonts_and_bullets",
+    "create::tests::non_ascii_text_is_embedded_as_octal_escapes",
+    "create::tests::deterministic_bytes_are_stable",
+    "create::tests::page_count_and_size_are_respected",
+    "create::tests::margin_validation_rejects_impossible_geometry",
+    "create::tests::pdf_writer_offsets_point_at_objects",
+    "text_pdf_round_trips_through_core_with_all_lines",
+    "markdown_pdf_round_trips_with_pagination",
+]
 title = "Create PDF from plain text and Markdown"
 
 [[feature]]
@@ -435,18 +476,25 @@ title = "Scan to PDF with TWAIN and WIA"
 docs = [
     "crates/pdfxi-text/src/ocr.rs",
     "crates/pdfxi-text/src/lib.rs",
+    "crates/pdfxi-text/src/sidecar.rs",
+    "crates/pdfxi-text/src/bin/fake_sidecar.rs",
+    "crates/pdfxi-text/tests/sidecar_bridge.rs",
+    "docs/evidence/render/T-0071.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 39 unit tests passed, 0 failed; TEST_EXIT=0; cargo fmt --check FMT_EXIT=0; cargo clippy --all-targets --all-features -- -D warnings CLIPPY_EXIT=0."
+evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 45 unit + 12 integration + 0 doc tests passed, 0 failed; TEST_EXIT=0. fmt/clippy/doc clean (FMT_EXIT=0, CLIPPY_EXIT=0, DOC_EXIT=0). Full output in docs/evidence/render/T-0071.md."
 id = "CREATE-008"
 notes = """
-T-0057 delivers the pdfxi-text OCR contract: OcrEngine trait, OcrImage/OcrPage
-data model, LanguageRouter with script-based `auto` detection and documented
-fallback reasons, the SidecarRequest/SidecarResponse JSON wire format (no serde,
-no process spawning), and a ConfidencePolicy with suspect-character reporting.
-The row stays in-progress because the external Tesseract process bridge and
-end-to-end scanned-page-to-searchable-PDF flow are future work owned by later
-tasks; only the boundary contract and its policy are verified here.
+T-0057 delivered the pure OCR contract (OcrEngine, OcrImage/OcrPage,
+LanguageRouter with script-based auto detection, the SidecarRequest/Response
+JSON codec, and the ConfidencePolicy suspect report). T-0071 adds the
+SidecarOcrEngine process bridge: validated configuration, no-shell spawn with a
+fixed literal argv, cleared environment with an explicit allowlist, bounded
+stdout, and a supervisor thread that kills the child on timeout, cancellation,
+or oversized output, with typed SidecarError variants mapped onto OcrError.
+The row remains in-progress because a real Tesseract binary and the end-to-end
+scanned-page-to-searchable-PDF flow are future work; only the bridge contract
+and its security/timeout behaviour are verified here.
 """
 priority = "P1"
 status = "in-progress"
@@ -462,6 +510,24 @@ tests = [
     "ocr::tests::suspect_report_flags_low_confidence_and_unusual_characters",
     "ocr::tests::ocr_page_sorts_spans_deterministically",
     "ocr::tests::ocr_operations_leave_cancellation_and_progress_untouched",
+    "sidecar::tests::config_rejects_empty_paths_and_empty_language_sets",
+    "sidecar::tests::config_builders_validate_limits_and_environment_names",
+    "sidecar::tests::arguments_are_validated_but_shell_looking_text_is_allowed",
+    "sidecar::tests::environment_filter_forwards_only_allowlisted_names",
+    "sidecar::tests::engine_rejects_unsupported_language_before_spawning",
+    "sidecar::tests::engine_exposes_documented_defaults",
+    "round_trip_request_and_response_through_bridge",
+    "spawn_failure_is_typed",
+    "non_zero_exit_is_typed_with_stderr",
+    "malformed_json_is_typed",
+    "version_mismatch_is_typed",
+    "oversized_stdout_is_typed_and_kills_child",
+    "timeout_kills_child_and_returns_promptly",
+    "cancellation_kills_child_and_returns_promptly",
+    "trait_recognize_maps_cancellation_to_contract_error",
+    "arguments_are_passed_verbatim_without_shell_interpretation",
+    "no_ambient_secret_environment_is_forwarded",
+    "fixed_working_directory_policy_is_applied",
 ]
 title = "OCR scanned pages to searchable PDF"
 
@@ -665,25 +731,65 @@ tests = [
 title = "Split and merge documents"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/header_footer.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+]
 domain = "Edit"
-evidence = ""
+evidence = "docs/evidence/author/T-0063.md"
 id = "EDIT-008"
-notes = ""
+notes = """
+Library-level typed model, token substitution, rotation/MediaBox-aware overlay
+generation, literal-string escaping, deterministic output, copy-on-write
+composition, and validated page numbering (offset, five formats, prefix/suffix)
+are implemented with 14 unit tests, including checked-index regressions.
+Status is in-progress: no UI or CLI exposure for headers, footers, or page
+numbering exists yet, so the user-visible parity bar is not met.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "token_substitution_renders_all_token_kinds",
+    "page_number_formats_and_start_offset",
+    "odd_even_and_first_page_suppression",
+    "all_six_slots_render_into_one_stream",
+    "escaped_literal_strings_are_valid_and_deterministic",
+    "rotation_transform_accounts_for_media_box_origin",
+    "overlay_bytes_are_deterministic",
+    "invalid_configuration_is_rejected",
+    "compose_content_preserves_original_bytes",
+    "suppressed_page_renders_empty_overlay",
+    "per_slot_style_produces_multiple_font_resources",
+    "page_index_out_of_range_is_rejected",
+    "number_for_rejects_unrepresentable_and_overflowing_indices",
+    "substitute_propagates_numbering_overflow",
+]
 title = "Headers footers and page numbering"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/watermark.rs",
+    "docs/evidence/author/T-0067.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 109 passed, 0 failed, including 11 new watermark::tests covering text geometry, page+mark rotation, tiling, ExtGState opacity, behind/front ordering, page range/suppression, determinism, resource preservation, invalid config, vector/image marks and diagonal tilt. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/author/T-0067.md."
 id = "EDIT-009"
-notes = ""
+notes = "Library/model layer only: typed Watermark with text/vector/image content, style (font/size/colour/opacity), rotation, position (center/tile/diagonal/absolute), scale, page range, front/behind placement and first-page/odd-even suppression. Deterministic additive content streams with MediaBox-origin and /Rotate-aware transforms, ExtGState alpha, copy-on-write composition and resource-dictionary merging that preserves unknown keys. No UI/CLI exposure yet, so status stays in-progress. See T-0067 notes."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "watermark::tests::text_watermark_geometry",
+    "watermark::tests::rotation_transform_composes_page_and_mark_rotation",
+    "watermark::tests::tiled_placement_emits_grid_of_marks",
+    "watermark::tests::opacity_extgstate_is_emitted_and_patched",
+    "watermark::tests::behind_vs_front_ordering_and_copy_on_write",
+    "watermark::tests::page_range_and_suppression",
+    "watermark::tests::deterministic_bytes",
+    "watermark::tests::resource_preservation_and_collision",
+    "watermark::tests::invalid_configuration_is_rejected",
+    "watermark::tests::vector_and_image_marks_and_missing_xobject",
+    "watermark::tests::diagonal_adds_implicit_tilt",
+]
 title = "Watermarks and backgrounds"
 
 [[feature]]
@@ -747,14 +853,45 @@ tests = [
 title = "Redaction marks and permanent removal"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/optimizer.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0068.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "cargo test -p pdfxi-core: 143 unit + 6 integration + 0 doc tests passed, 0 failed; 18 new optimizer tests. cargo fmt -p pdfxi-core --check, cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings, and RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps all clean (EXIT=0). Full output in docs/evidence/core/T-0068.md."
 id = "EDIT-014"
-notes = ""
+notes = """
+Headless document optimizer available as Document::optimize(&OptimizeOptions,
+&CancellationToken) -> Result<OptimizationResult>. Performs object-graph
+compaction (dedup, unreachable removal, reference-preserving renumbering),
+beneficial Flate stream compression with a strict no-growth policy, JPEG/image
+passthrough, opt-in metadata and optional-entry removal, a deterministic report,
+cancellation, and correct classic xref/startxref regeneration. Incremental-save
+inputs remain readable; semantics and unknown keys are preserved.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "optimizer::tests::removes_unreachable_objects",
+    "optimizer::tests::deduplicates_identical_objects",
+    "optimizer::tests::renumbers_sparse_objects_and_rewrites_references",
+    "optimizer::tests::writes_correct_xref_and_startxref",
+    "optimizer::tests::shrinks_compressible_streams",
+    "optimizer::tests::respects_no_growth_policy",
+    "optimizer::tests::passes_jpeg_streams_through",
+    "optimizer::tests::report_is_deterministic",
+    "optimizer::tests::preserves_document_semantics_and_unknown_keys",
+    "optimizer::tests::removes_metadata_when_requested",
+    "optimizer::tests::removes_optional_entries_when_requested",
+    "optimizer::tests::cancellation_is_honored",
+    "optimizer::tests::incremental_save_input_remains_readable",
+    "optimizer::tests::already_flate_stream_is_left_unchanged",
+    "optimizer::flate::tests::encodes_empty_and_short_inputs",
+    "optimizer::flate::tests::compresses_repetitive_data_below_original_size",
+    "optimizer::flate::tests::exercises_long_matches_and_large_distances",
+    "optimizer::flate::tests::incompressible_data_still_round_trips",
+]
 title = "Optimize and compress documents"
 
 [[feature]]
@@ -814,124 +951,105 @@ title = "Export PDF to HTML"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/text.rs",
-    "crates/pdfxi-convert/src/text_converter.rs",
+    "crates/pdfxi-convert/src/rtf.rs",
+    "crates/pdfxi-convert/src/export_options.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0066.md",
 ]
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 70/70 passed; text + text_converter module tests cover separators, trailing newlines, page ordering, headers, empty documents, encoding, and missing-page errors. cargo clippy -p pdfxi-convert --all-targets --all-features -- -D warnings: EXIT=0."
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 111 unit + 5 integration passed, 0 failed; 10 new rtf::tests cover tables, Unicode escapes, escaping, paragraph/page breaks, determinism, options, empty input and typed errors. fmt/clippy(--no-deps)/doc EXIT=0. See docs/evidence/convert/T-0066.md."
 id = "EXPORT-005"
-notes = "Deterministic plain-text export via TextExportPlan + export_text, wired to ExportKind::Text in the TextConverter adapter with UTF-8/UTF-16 encodings. RTF output named by EXPORT-005 is still not implemented, so the row stays in-progress."
+notes = 'RTF writer added alongside the existing deterministic plain-text export: fixed header/font/colour tables, \par paragraphs, \page separators, signed \uN? escapes, special-character escaping, page range, optional page headers and line endings. No UI/CLI ExportKind::Rtf dispatch yet, so the row stays in-progress.'
 priority = "P1"
 status = "in-progress"
 tests = [
-    "text::tests::export_text_uses_separator_and_adds_no_trailing_newline",
-    "text::tests::export_text_all_sorts_by_page_number_and_last_duplicate_wins",
-    "text::tests::export_text_explicit_page_order_and_range_are_honoured",
-    "text::tests::export_text_page_headers_use_one_based_numbers",
-    "text::tests::export_text_empty_document_and_missing_pages_yield_empty_string",
-    "text::tests::text_export_plan_validate_rejects_invalid_selections",
-    "text::tests::text_encoding_emits_utf8_and_bom_prefixed_utf16",
-    "text_converter::tests::text_converter_exports_text_bytes_with_plan_encoding",
-    "text_converter::tests::text_converter_errors_on_missing_page_text",
+    "rtf::tests::rtf_header_font_and_colour_tables_are_present_and_stable",
+    "rtf::tests::rtf_orders_pages_ascending_and_writes_page_breaks",
+    "rtf::tests::rtf_unicode_uses_signed_utf16_escapes",
+    "rtf::tests::rtf_escapes_special_characters_and_tabs",
+    "rtf::tests::rtf_paragraph_breaks_are_emitted_for_mixed_newlines",
+    "rtf::tests::rtf_page_headers_and_crlf_line_endings_are_honoured",
+    "rtf::tests::rtf_duplicate_pages_use_the_last_text",
+    "rtf::tests::rtf_page_selection_filters_pages",
+    "rtf::tests::rtf_empty_document_is_still_valid",
+    "rtf::tests::rtf_invalid_page_range_is_a_typed_error",
 ]
 title = "Export PDF to RTF and plain text"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/page_export.rs",
-    "crates/pdfxi-convert/src/image.rs",
-    "crates/pdfxi-convert/src/error.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "crates/pdfxi-convert/Cargo.toml",
+    "crates/pdfxi-render/src/export.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "crates/pdfxi-render/tests/export_pdfium.rs",
+    "docs/evidence/render/T-0065.md",
 ]
 domain = "Export"
-evidence = '''
-CARGO_TARGET_DIR=D:\Documents\opencode-work\target\lanes\convert;
-cargo test -p pdfxi-convert: 50 unit tests passed, 0 failed; 0 doctests run; EXIT=0.
-cargo test -p pdfxi-convert --features pdfium (PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 50 unit tests passed, 0 failed; 0 doctests run; EXIT=0.
-cargo fmt -p pdfxi-convert -- --check: EXIT=0.
-cargo clippy -p pdfxi-convert --all-targets --all-features -- -D warnings: EXIT=0.
-'''
+evidence = "cargo test -p pdfxi-render: 62 passed, 0 failed, EXIT=0. cargo test -p pdfxi-render --features pdfium: 75 passed, 0 failed, EXIT=0 (incl. 1 PDFium export smoke). cargo fmt -p pdfxi-render -- --check: EXIT=0. clippy (-D warnings) and rustdoc (-D warnings) EXIT=0. Full pasted output in docs/evidence/render/T-0065.md."
 id = "EXPORT-006"
 notes = """
-Added renderer-driven page-image export to pdfxi-convert. The core API stays
-renderer-agnostic: export_pages(&dyn Renderer, &ImageExportPlan,
-&CancellationToken) resolves a PageSelection (All, one-based Range, or an
-ordered one-based Pages list), validates the plan, and returns an ordered
-Vec<ExportedImage> carrying page, width, height, encoded bytes, and format.
-ImageExportPlan documents page selection, resolution (direct scale or DPI
-converted with scale = dpi / 72.0), PNG/PPM format, and output naming with a
-page-{page}/index pattern. Encoding uses the dependency-free pure-Rust encoders
-in crates/pdfxi-convert/src/image.rs: 8-bit RGBA PNG with signature, IHDR, one
-stored-deflate zlib IDAT (CRC-32 per chunk, Adler-32 trailer, 65,535-byte
-multi-block splitting) and binary P6 PPM; both reject mismatched buffers and
-overflowing dimensions. ConversionError gained Cancelled and Render variants so
-cooperative cancellation and backend failures are actionable. A default-off
-dependency-light build remains available with --no-default-features; the
-optional pdfium feature adds export_pdf_bytes/export_pdf_file convenience
-constructors without changing the core trait-based API. The CLI has an
-equivalent image encoder in crates/pdfxi-cli/src/image.rs; deduplicating them
-into a shared low-level crate is a documented follow-up and was out of scope.
-
-Status stays in-progress because EXPORT-006 also names JPEG and TIFF, which are
-not implemented; PNG and PPM are delivered and verified.
+Page-image export now supports PNG, baseline JPEG (documented Annex K
+quantization and Huffman tables, IJG quality scaling) and uncompressed
+multi-page TIFF, with validated DPI (1..=12000), scale/fit-to-box modes, RGB/
+RGBA/grayscale colour handling, an explicit alpha policy, JPEG quality, one-
+based page ranges, cancellation and progress. PNG and TIFF bytes are
+deterministic; DPI metadata is embedded via PNG pHYs, JPEG JFIF density and
+TIFF X/YResolution rationals. Implemented in pdfxi-render's new export module
+which reuses the print pipeline; no new dependencies, no unsafe, no library
+unwrap/expect/panic; zero dimensions return a typed error before chunking.
+JPEG tests verify markers/DQT/SOF0/JFIF density/byte stuffing but do not decode
+the entropy scan end-to-end. pdfxi-convert keeps its separate PNG/PPM path;
+merging them is a documented follow-up.
 """
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
-    "image::tests::crc32_matches_standard_vector",
-    "image::tests::adler32_matches_standard_vector",
-    "image::tests::png_has_signature_and_ordered_chunks",
-    "image::tests::ihdr_declares_8bit_rgba_without_interlace",
-    "image::tests::idat_is_a_valid_stored_zlib_stream",
-    "image::tests::idat_ends_with_empty_iend_and_length_is_consistent",
-    "image::tests::large_raster_is_split_across_multiple_stored_blocks",
-    "image::tests::png_rejects_mismatched_pixel_buffer",
-    "image::tests::png_rejects_overflowing_dimensions",
-    "image::tests::ppm_has_p6_header_and_dropped_alpha",
-    "image::tests::ppm_rejects_mismatched_pixel_buffer",
-    "image::tests::empty_rasters_still_encode_valid_files",
-    "image::tests::image_format_classifies_extensions_and_labels_stably",
-    "image::tests::encode_dispatch_matches_each_format",
-    "page_export::tests::plan_builder_getters_round_trip",
-    "page_export::tests::output_name_substitutes_page_and_index_placeholders",
-    "page_export::tests::multi_page_export_preserves_selection_order",
-    "page_export::tests::one_based_range_and_format_selection_are_honoured",
-    "page_export::tests::empty_page_selection_is_rejected",
-    "page_export::tests::out_of_range_and_empty_pattern_are_rejected",
-    "page_export::tests::invalid_scale_and_dpi_are_rejected_before_work",
-    "page_export::tests::dpi_is_converted_to_a_renderer_scale",
-    "page_export::tests::cancellation_before_work_prevents_all_renders",
-    "page_export::tests::cancellation_between_pages_stops_after_the_first_page",
-    "page_export::tests::mismatched_renderer_buffer_is_rejected",
-    "page_export::tests::render_error_maps_cancellation_and_backend_failures",
-    "error::tests::cancelled_error_is_actionable_and_not_unsupported",
-    "error::tests::render_error_carries_the_page_and_is_actionable",
+    "export::tests::alpha_flatten_composites_onto_the_background",
+    "export::tests::tiff_multipage_offsets_and_resolution_tags_are_consistent",
+    "export::tests::grayscale_rgb_rgba_produce_expected_channels_and_luma",
+    "export::tests::empty_data_with_nonzero_dimensions_is_rejected",
+    "export::tests::tiff_rgba_declares_extra_samples",
+    "export::tests::jpeg_rgba_with_flatten_is_rejected_in_validate",
+    "export::tests::mismatched_raster_buffer_is_rejected",
+    "export::tests::png_has_signature_ordered_chunks_and_pixel_round_trip",
+    "export::tests::jpeg_bit_writer_stuffs_0xff_bytes",
+    "export::tests::zero_dimension_page_from_renderer_is_typed_error",
+    "export::tests::zero_dimensions_are_rejected_before_chunking",
+    "export::tests::jpeg_header_quality_and_markers_are_valid",
+    "export::tests::jpeg_quality_is_validated",
+    "export::tests::fit_within_produces_a_bounded_raster",
+    "export::tests::cancellation_stops_export_before_and_between_pages",
+    "export::tests::dpi_scales_raster_dimensions_and_png_ihdr",
+    "export::tests::png_and_tiff_bytes_are_deterministic",
+    "export::tests::page_range_expands_to_sorted_zero_based_pages",
+    "export::tests::export_batches_tiff_pages_and_emits_one_file_per_png_page",
+    "export::tests::invalid_dpi_fit_and_alpha_policy_are_rejected",
+    "export_minimal_pdf_to_png_jpeg_and_tiff",
 ]
 title = "Export pages to JPEG PNG and TIFF"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/json.rs",
-    "crates/pdfxi-convert/src/text_converter.rs",
-    "crates/pdfxi-convert/src/export.rs",
+    "crates/pdfxi-convert/src/tagged_text.rs",
+    "crates/pdfxi-convert/src/export_options.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0066.md",
 ]
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 70/70 passed; json module tests cover escaping, deterministic key order, schema version, spans with boxes, and empty documents. New ExportKind::Json classified from *.json. cargo doc -p pdfxi-convert --no-deps with RUSTDOCFLAGS=-D warnings: EXIT=0."
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 111 unit + 5 integration passed, 0 failed; 9 new tagged_text::tests cover tree round-trip, heading/list/table/figure markers, alt-text toggle, heading-level limit, page filter, line endings, empty trees and typed errors. fmt/clippy(--no-deps)/doc EXIT=0. See docs/evidence/convert/T-0066.md."
 id = "EXPORT-007"
-notes = "Structured JSON export via the versioned DocumentJson model and hand-written serializer (metadata, per-page text, positioned spans with boxes), dispatched through ExportKind::Json by TextConverter. Tagged-PDF/accessibility content named by EXPORT-007 remains with the accessibility lane, so the row stays in-progress."
+notes = "Tagged-text export now consumes pdfxi-accessibility's A11yTree and emits a stable @role structured outline plus a [role] plain-text variant with headings, paragraphs, lists, tables, figures and optional alt text. Producing tagged-PDF structure itself remains with the accessibility lane, so the row stays in-progress."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "json::tests::json_escapes_quotes_backslashes_and_control_characters",
-    "json::tests::json_preserves_non_ascii_as_utf8",
-    "json::tests::json_key_order_and_layout_are_deterministic",
-    "json::tests::json_schema_version_is_stable_and_serialized_first",
-    "json::tests::json_serializes_spans_with_boxes_and_sorts_pages",
-    "json::tests::json_serializes_empty_document_and_non_finite_coordinates",
-    "text_converter::tests::text_converter_exports_schema_versioned_json_bytes",
-    "export::tests::export_kind_from_extension_is_case_insensitive_and_optional_dot",
-    "export::tests::export_kind_all_has_no_unknown_and_no_duplicates",
+    "tagged_text::tests::tagged_tree_round_trip_is_stable_and_indented",
+    "tagged_text::tests::tagged_headings_lists_tables_and_figures_get_semantic_markers",
+    "tagged_text::tests::tagged_alt_text_toggle_removes_suffixes",
+    "tagged_text::tests::tagged_heading_level_limit_demotes_deep_headings",
+    "tagged_text::tests::tagged_page_selection_filters_nodes",
+    "tagged_text::tests::tagged_line_ending_option_is_honoured",
+    "tagged_text::tests::tagged_empty_tree_produces_empty_strings",
+    "tagged_text::tests::tagged_invalid_options_are_typed_errors",
+    "tagged_text::tests::tagged_options_getters_round_trip",
 ]
 title = "Export accessible text and tagged content"
 
@@ -1075,55 +1193,61 @@ title = "Automatically recognize static form fields"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/lib.rs",
+    "crates/pdfxi-forms/src/xfdf.rs",
     "crates/pdfxi-forms/src/fdf.rs",
+    "docs/evidence/forms/T-0060.md",
 ]
 domain = "Forms"
-evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
-cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
-"""
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 122 passed, 0 failed; 19 xfdf tests including per-type round trips, off-like option names, escaping, malformed XML, foreign prefixes, unknown namespace/field, and FormFill integration. Full output in docs/evidence/forms/T-0060.md."
 id = "FORMS-006"
-notes = """
-Added FDF 1.7 export/import. export_fdf writes a canonical %FDF-1.7 object with /Fields sorted by name, skipping NO_EXPORT fields: literal strings escape ( ) and newlines, control bytes use short escapes, and non-ASCII UTF-8 bytes use three-digit octal escapes for byte-exact round-trips. Booleans map to /On and /Off, multi-select choices to arrays of literal strings, numbers to bare PDF numbers, and non-finite numbers are rejected with FdfError::NonFiniteNumber. import_fdf is a bounds-checked byte parser (header/version, indirect objects, trailer, trailer references, nested arrays/dictionaries, literal strings with nesting and octal escapes) that returns structured FdfError variants with byte offsets for malformed input. FdfDocument fields feed directly into FormFill::fill_from_fdf. export_xfdf emits a small schema-compatible XML subset (escaped names/values, one <value> per choice) but XFDF import is deliberately out of scope for this task; the row therefore stays in-progress.
-"""
+notes = "FDF export/import was already complete. This task adds XFDF import: a bounded, dependency-free XML reader plus type-aware value mapping against a Form, with schema-compatible export from the existing export_xfdf. Text, checkbox, radio, choice, number and signature values round-trip; malformed XML, wrong namespace, unknown entity, unknown field, missing name and over-full scalar fields yield typed XfdfError variants. Scope: XFDF is a model-level subset (no <annots> or rich-text markup) and requires a Form for type mapping; see T-0060 notes."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "fdf::tests::fdf_round_trip_preserves_every_value_kind",
-    "fdf::tests::fdf_escapes_parentheses_backslash_and_newlines",
-    "fdf::tests::fdf_escapes_non_ascii_bytes_as_octal",
-    "fdf::tests::fdf_multiline_text_round_trips_exactly",
-    "fdf::tests::fdf_multi_choice_round_trips_as_a_string_array",
-    "fdf::tests::fdf_applies_to_a_form_fill_session",
-    "fdf::tests::fdf_skips_no_export_fields",
-    "fdf::tests::export_rejects_non_finite_numbers",
-    "fdf::tests::fdf_rejects_missing_header",
-    "fdf::tests::fdf_rejects_unsupported_version",
-    "fdf::tests::fdf_rejects_missing_fields_array",
-    "fdf::tests::fdf_rejects_unterminated_string",
-    "fdf::tests::fdf_rejects_invalid_utf8_escape",
-    "fdf::tests::fdf_rejects_octal_escape_above_255",
-    "fdf::tests::fdf_rejects_trailing_data_after_eof",
-    "fdf::tests::fdf_rejects_field_without_a_name",
-    "fdf::tests::fdf_export_is_canonical_and_handles_an_empty_form",
-    "fdf::tests::xfdf_export_escapes_xml_and_lists_choice_values",
+    "xfdf::tests::xfdf_round_trip_text_and_signature",
+    "xfdf::tests::xfdf_round_trip_checkbox_and_radio",
+    "xfdf::tests::xfdf_round_trip_choice_multi_select",
+    "xfdf::tests::xfdf_round_trip_preserves_numbers_via_form_type",
+    "xfdf::tests::xfdf_escapes_and_decodes_xml_special_characters",
+    "xfdf::tests::xfdf_decodes_numeric_character_references",
+    "xfdf::tests::xfdf_accepts_default_and_prefixed_namespaces",
+    "xfdf::tests::xfdf_rejects_malformed_xml",
+    "xfdf::tests::xfdf_rejects_unknown_entity_and_namespace",
+    "xfdf::tests::xfdf_rejects_unknown_field",
+    "xfdf::tests::xfdf_supports_hierarchical_field_names",
+    "xfdf::tests::xfdf_imported_document_applies_to_a_fill_session",
+    "xfdf::tests::xfdf_preserves_off_like_option_names",
+    "xfdf::tests::xfdf_ignores_radio_value_outside_declared_choices",
+    "xfdf::tests::xfdf_rejects_foreign_prefixed_elements_and_attributes",
 ]
 title = "Import and export FDF and XFDF"
 
 [[feature]]
-docs = ["crates/pdfxi-forms/src/appearance.rs"]
+docs = [
+    "crates/pdfxi-forms/src/flatten.rs",
+    "crates/pdfxi-forms/src/appearance.rs",
+    "docs/evidence/forms/T-0060.md",
+]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 passed as part of 85/85 total."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 122 passed, 0 failed; 18 flatten tests covering text/checkbox/choice content presence, widget removal, non-widget annotation preservation, deterministic bytes, and unchanged-document no-op. Full output in docs/evidence/forms/T-0060.md."
 id = "FORMS-007"
-notes = "Self-contained appearance streams with widget-local BBox and named on/off states are the prerequisite for flattening; the flatten operation itself is not implemented here."
+notes = "Implements flatten_page/flatten_document over a documented adapter model: a stored-or-generated appearance is placed on the page with a q … cm … Q translation, appended to page content, widget annotations are removed, and non-widget annotations plus original content are preserved byte-for-byte. AppearancePolicy documents the PreferStored/Generate/StoredOnly sources and the generated fallback; stateful appearances resolve /AS then the value-derived state. The AcroForm dictionary is removed only when at least one widget was actually flattened; a document with no widgets is a no-op. Scope: arbitrary /Matrix and /Rotation placement needs a host adapter; see T-0060 notes."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "appearance::tests::checkbox_on_off_state_names",
-    "appearance::tests::radio_group_states",
-    "appearance::tests::bbox_uses_widget_local_coordinates",
-    "appearance::tests::build_appearance_is_deterministic",
+    "flatten::tests::flatten_text_appearance_is_present_and_positioned",
+    "flatten::tests::flatten_checkbox_active_state_changes_the_output",
+    "flatten::tests::flatten_stored_checkbox_uses_the_active_state",
+    "flatten::tests::flatten_choice_lists_the_selected_values",
+    "flatten::tests::flatten_removes_widget_annotations",
+    "flatten::tests::flatten_preserves_non_widget_annotations_verbatim",
+    "flatten::tests::flatten_is_deterministic",
+    "flatten::tests::flatten_unchanged_document_is_a_noop",
+    "flatten::tests::flatten_prefers_stored_and_falls_back_when_absent",
+    "flatten::tests::flatten_stored_only_policy_errors_without_an_appearance",
+    "flatten::tests::flatten_rejects_unknown_fields",
+    "flatten::tests::flatten_document_counts_widgets_and_removes_the_acroform",
+    "flatten::tests::flatten_keeps_acroform_when_no_widgets_were_flattened",
 ]
 title = "Flatten forms and preserve appearance"
 
@@ -1211,17 +1335,30 @@ docs = [
     "crates/pdfxi-security/src/crypto/rc4.rs",
     "crates/pdfxi-security/src/crypto/md5.rs",
     "crates/pdfxi-security/src/crypto/sha.rs",
+    "crates/pdfxi-security/src/standard_handler.rs",
+    "docs/evidence/security/T-0061.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 42 passed, including FIPS 197 and NIST SP 800-38A vectors. docs/evidence/security/T-0036.md"
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 104 passed, 0 failed, 0 ignored. cargo fmt/clippy (all-targets, -D warnings)/rustdoc (-D warnings) all clean. docs/evidence/security/T-0036.md and docs/evidence/security/T-0061.md"
 id = "SEC-002"
 notes = """
 Dependency-free FIPS 197 AES-128/192/256 with CBC and PKCS#7, RC4 40/128, RFC
-1321 MD5, and FIPS 180-4 SHA-256/384/512, all checked against published
-known-answer vectors and NIST SP 800-38A. No unsafe code and no secrets logged.
+1321 MD5, and FIPS 180-4 SHA-256/384/512 are checked against published
+known-answer vectors and NIST SP 800-38A. The PDF standard security handler now
+covers revisions 2-6, including complete AES-256 (AESV3) revision 5 and 6
+object encryption/decryption with caller-supplied per-stream IVs, the hardened
+Algorithm 2.B hash, consistent /O /U /OE /UE /Perms values, and EncryptMetadata
+handling. Thirteen AES-256-focused regression tests were added by T-0061
+(93 -> 106 total), including an independent .NET AES-256-CBC fixed vector, an
+independent ISO 32000-2 revision 6 known-answer vector for /U /O /OE /UE
+/Perms and Algorithm 2.B (provenance recorded in the evidence), negative tests
+for wrong passwords, tampered /Perms, and malformed keys, and manual Debug
+redaction of dictionary byte fields.
+No unsafe code and no secrets logged. Reviewer sign-off and integrator snapshot
+are external orchestration steps.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "crypto::aes::tests::aes_key_expansion_matches_fips_197_appendix_b",
     "crypto::aes::tests::aes_matches_fips_197_appendix_c_block_vectors",
@@ -1229,6 +1366,19 @@ tests = [
     "crypto::aes::tests::aes_cbc_rejects_tampered_padding_and_bad_iv",
     "crypto::rc4::tests::rc4_matches_published_test_vectors",
     "crypto::rc4::tests::rc4_is_involutive_for_40_and_128_bit_keys",
+    "standard_handler::tests::revision_5_aes256_object_round_trip_for_user_and_owner",
+    "standard_handler::tests::revision_6_aes256_object_round_trip_for_user_and_owner",
+    "standard_handler::tests::revision_5_and_6_reject_wrong_passwords",
+    "standard_handler::tests::aes256_object_key_is_file_key_and_isolation_comes_from_iv",
+    "standard_handler::tests::tampered_perms_block_is_rejected_for_revisions_5_and_6",
+    "standard_handler::tests::aes256_object_pkcs7_padding_round_trip_for_many_lengths",
+    "standard_handler::tests::aes256_encrypt_with_distinct_ivs_produces_unique_ciphertexts",
+    "standard_handler::tests::encrypt_metadata_false_is_recorded_and_verified_in_perms",
+    "standard_handler::tests::revision_5_fixed_vector_decrypt_matches_dotnet_oracle",
+    "standard_handler::tests::malformed_key_lengths_are_rejected",
+    "standard_handler::tests::encrypt_metadata_false_changes_revision_4_file_key",
+    "standard_handler::tests::revision_6_independent_known_answer_vector_authenticates",
+    "standard_handler::tests::debug_redacts_dictionary_byte_fields",
 ]
 title = "RC4 and AES encryption handlers"
 
@@ -1666,14 +1816,46 @@ tests = []
 title = "Trapping presets and transparency flattening"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/boxes.rs",
+    "crates/pdfxi-core/src/printer_marks.rs",
+]
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-core: 125 unit + 6 integration passed, 0 failed. fmt, clippy -D warnings, and RUSTDOCFLAGS=-D warnings cargo doc all clean. See docs/evidence/core/T-0059.md."
 id = "PRINT-007"
-notes = ""
+notes = """
+Core support is implemented: typed MediaBox/CropBox/BleedBox/TrimBox/ArtBox
+model with validation, ISO fallbacks, inheritance and copy-on-write read/write
+that preserves unknown page keys; plus a deterministic printer-mark content
+stream (crop marks, registration marks, CMYK colour bar, page information) with
+an overlay box and Form XObject.
+
+Row remains in-progress because the whole user-visible feature is not complete:
+no UI/CLI surface exposes box editing or mark placement, no print-dialog or
+imposition integration consumes the overlay stream, mark styles/inks are not
+user-configurable beyond PrinterMarkOptions, mdBook documentation for print
+production is not written, and an independent reviewer/security sign-off has
+not been recorded. Remaining work belongs to other lanes or later tasks.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "boxes::tests::defaults_fall_back_to_media_box",
+    "boxes::tests::containment_validation_rejects_out_of_order_boxes",
+    "boxes::tests::read_write_round_trip_preserves_boxes",
+    "boxes::tests::writing_boxes_preserves_unknown_dictionary_keys",
+    "boxes::tests::unchanged_page_object_bytes_are_stable_after_saving",
+    "boxes::tests::inherited_media_box_is_used_when_page_has_none",
+    "printer_marks::tests::crop_mark_geometry_matches_trim_corners",
+    "printer_marks::tests::registration_mark_geometry_uses_media_corners",
+    "printer_marks::tests::stream_bytes_are_deterministic",
+    "printer_marks::tests::crop_marks_lie_outside_trim_but_inside_bleed",
+    "printer_marks::tests::invalid_options_and_boxes_are_rejected",
+    "printer_marks::tests::page_info_label_escapes_literal_string_specials",
+    "printer_marks::tests::marks_stay_on_sheet_at_the_documented_minimum_margin",
+    "printer_marks::tests::tight_trim_margins_are_rejected_with_a_typed_error",
+    "printer_marks::tests::sub_precision_options_are_rejected",
+]
 title = "Page boxes bleed crop and printer marks"
 
 [[feature]]
@@ -1846,14 +2028,34 @@ tests = [
 title = "Droplets and watched folders"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-automation/src/js/mod.rs",
+    "crates/pdfxi-automation/src/js/interpreter.rs",
+    "crates/pdfxi-automation/src/js/host.rs",
+    "docs/evidence/automation/T-0062.md",
+]
 domain = "Automation"
-evidence = ""
+evidence = "cargo test -p pdfxi-automation: 73 passed, 0 failed (29 new js::tests). fmt/clippy (-D warnings)/rustdoc (-D warnings) all EXIT=0. Full pasted output in docs/evidence/automation/T-0062.md"
 id = "AUTO-004"
-notes = ""
+notes = """
+T-0062 delivered the sandboxed JS engine (lexer, parser, budgeted interpreter,
+typed position-aware errors, cycle-safe/incrementally budgeted string conversion,
+host-object boundary, no ambient access, 29 tests). The row remains in-progress
+because no audited document operations are exposed through HostObject yet and
+there is no UI/action entry point to run scripts; those are separate future
+tasks. No real PDF mutation is performed by this work.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "js::tests::self_referential_arrays_are_rejected_by_string_conversion_paths",
+    "js::tests::deeply_nested_values_are_rejected_without_stack_overflow",
+    "js::tests::string_conversion_charges_cpu_steps",
+    "js::tests::join_and_concat_enforce_string_size_incrementally",
+    "js::tests::string_indexes_are_char_offsets_and_substring_swaps_reversed_args",
+    "js::tests::object_index_operations_use_the_active_limits",
+    "js::tests::compound_assignment_evaluates_index_and_object_expressions_once",
+]
 title = "Sandboxed Acrobat-compatible JavaScript subset"
 
 [[feature]]
@@ -2166,54 +2368,31 @@ title = "Cross-reference tables and streams"
 
 [[feature]]
 docs = [
-    "docs/FEATURES.md",
-    "crates/pdfxi-core/src/parser.rs",
-    "crates/pdfxi-core/src/xref_tests.rs",
+    "crates/pdfxi-core/src/objstm.rs",
+    "crates/pdfxi-core/src/linearization.rs",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 75 passed, 0 failed (see test names above). cargo clippy -p pdfxi-core --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-core --check: clean."
+evidence = "cargo test -p pdfxi-core: 158 unit + 6 integration passed; 15 new tests. fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0072.md."
 id = "STD-003"
-notes = """
-Implemented PDF 1.5+ cross-reference streams and object streams in pdfxi-core.
-The parser now dispatches at startxref between classic tables and /Type /XRef
-streams, decodes the stream with the existing bounded Flate pipeline (honoring
-/DecodeParms), parses /W (widths capped at 8 bytes), /Index (or /Size),
-/Root, /Prev and /Type, and reads the three big-endian entry fields including
-type-2 (compressed) entries. /Prev chains may mix classic tables and streams;
-entries merge newest-wins and revisiting an offset is rejected as XrefCycle.
-/ObjStm streams are expanded on demand: /N, /First and the header pairs are
-bounds-checked, the object number at the indexed slot is validated against the
-type-2 entry, and the body is parsed lazily with a nesting-depth guard. The page
-tree, page_text and save/save_incremental behavior for classic documents is
-unchanged; saving an xref-stream input is now explicitly declined with
-Error::UnsupportedState so compressed objects are never silently dropped.
-
-SECURITY FIX (reviewer blocker on merged T-0023): PNG predictor reconstruction
-in filter.rs now rejects row_length > decoded data length before allocating
-`previous_row`, so a tiny valid zlib stream with a hostile /DecodeParms
-(/Predictor 15 /Columns 4294967295) returns a structured MalformedDeflate error
-instead of attempting a multi-gigabyte allocation. Regression test:
-filter::tests::hostile_columns_is_rejected_before_allocating_predictor_row.
-The /Columns -> row_length computation uses checked multiplication and the
-decoded length is already bounded by DEFAULT_DECODE_CAP.
-
-STD-003 also names linearization, which is outside T-0031's scope and remains
-unimplemented; the row stays in-progress. No /XRefStm hybrid-reference support
-was added (not requested by this task).
-"""
+notes = "Object-stream/xref-stream writing and linearization hint parsing are implemented; full linearized file writing remains, so in-progress."
 priority = "P1"
 status = "in-progress"
 tests = [
-    "xref_tests::xref_stream_parses_page_tree_content_and_decode_parms",
-    "xref_tests::object_stream_resolves_page_and_content_via_type_two_entries",
-    "xref_tests::absurd_object_stream_count_is_rejected",
-    "xref_tests::mixed_classic_and_stream_prev_chain_is_newest_wins",
-    "xref_tests::truncated_xref_stream_is_a_structured_error",
-    "xref_tests::hostile_xref_field_width_is_rejected",
-    "xref_tests::wrong_width_array_length_is_rejected",
-    "xref_tests::cyclic_prev_offset_is_detected",
-    "filter::tests::hostile_columns_is_rejected_before_allocating_predictor_row",
-    "tests::save_rejects_xref_stream_with_structured_error",
+    "objstm::tests::packing_excludes_streams_catalog_and_page_tree",
+    "objstm::tests::object_stream_header_first_and_offsets_are_correct",
+    "objstm::tests::xref_stream_has_w_index_size_and_type_two_entries",
+    "objstm::tests::compressed_xref_stream_decodes_and_reparses",
+    "objstm::tests::round_trip_through_existing_parser_resolves_compressed_objects",
+    "objstm::tests::multiple_object_streams_are_chained_with_extends",
+    "objstm::tests::incremental_save_has_prev_and_only_new_entries",
+    "objstm::tests::nonzero_generation_is_preserved_in_type_one_entry",
+    "objstm::tests::invalid_options_and_duplicate_ids_are_rejected",
+    "objstm::tests::document_save_with_object_streams_round_trips",
+    "objstm::tests::stored_zlib_payload_round_trips_through_inflater",
+    "linearization::tests::parses_valid_linearization_hint",
+    "linearization::tests::parses_shared_hint_stream_range",
+    "linearization::tests::rejects_malformed_linearization_hint",
+    "linearization::tests::non_linearized_document_returns_none",
 ]
 title = "Object streams and linearization"
 
@@ -2244,14 +2423,34 @@ tests = [
 title = "Transparency and blend modes"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-accessibility/src/structure.rs",
+    "crates/pdfxi-accessibility/src/lib.rs",
+    "docs/evidence/author/T-0075.md",
+]
 domain = "Standards"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): 44 accessibility passed (15 new structure tests) + 111 edit passed, 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0075.md."
 id = "STD-006"
-notes = ""
+notes = "Library-level tagged structure writer + round-trip reader delivered with 15 tests. STD-006 stays in-progress: editor UI exposure and PDF-UA validation remain future work."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "structure::tests::role_pdf_names_are_distinct_and_reversible",
+    "structure::tests::role_mapping_uses_standard_pdf_names",
+    "structure::tests::struct_tree_root_has_kids_parent_tree_and_role_map",
+    "structure::tests::parent_tree_matches_struct_parents_keys",
+    "structure::tests::mcids_are_unique_and_in_traversal_order",
+    "structure::tests::alt_text_is_written_for_figures",
+    "structure::tests::pages_carry_struct_parents_and_mcid_overlay",
+    "structure::tests::round_trip_reconstructs_original_tree",
+    "structure::tests::empty_tree_produces_minimal_structure_document",
+    "structure::tests::nested_lists_and_tables_serialize_with_correct_hierarchy",
+    "structure::tests::unknown_roles_are_declared_in_role_map",
+    "structure::tests::existing_content_bytes_are_preserved_by_overlay_composition",
+    "structure::tests::lang_and_viewer_preferences_are_written_to_catalog",
+    "structure::tests::invalid_options_and_out_of_range_pages_are_typed_errors",
+    "structure::tests::serialization_is_deterministic_and_names_are_escaped",
+]
 title = "Tagged PDF and structure tree"
 
 [[feature]]

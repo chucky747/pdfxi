@@ -15,12 +15,17 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod boxes;
 pub mod content;
 pub mod filter;
+pub mod linearization;
 pub mod metadata;
 pub mod object;
+pub mod objstm;
+pub mod optimizer;
 pub mod page;
 pub mod pages;
+pub mod printer_marks;
 
 mod lexer;
 mod parser;
@@ -29,21 +34,31 @@ mod writer;
 #[cfg(test)]
 mod xref_tests;
 
+pub use boxes::{BoxKind, PageBoxes};
 pub use content::extract_text;
 pub use filter::{
     DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
 };
+pub use linearization::{HintStreamRange, Linearization, parse_linearization};
 pub use metadata::{
     DocumentInfo, PdfDate, XmpMetadata, decode_text_string, encode_text_string, parse_pdf_date,
     parse_xmp,
 };
-pub use object::{Object, ObjectId};
+pub use object::{Dictionary, Object, ObjectId};
+pub use objstm::{
+    ObjectStreamOptions, ObjectStreamPlan, ObjectStreamReport, PackedObjectRef, PackingExclusion,
+    is_packing_eligible, packing_exclusion_reason, write_object_stream_document,
+    write_object_stream_increment,
+};
+pub use optimizer::{CancellationToken, OptimizationReport, OptimizationResult, OptimizeOptions};
 pub use page::{Page, Rectangle};
 pub use pages::{PageOperation, PagePlan, RotationTarget};
+pub use printer_marks::{
+    MarkCircle, MarkGeometry, MarkSegment, PrinterMarkOptions, PrinterMarks, generate_printer_marks,
+};
 
 use std::collections::BTreeMap;
 
-use object::Dictionary;
 use parser::Structure;
 
 /// Errors returned by the core crate.
@@ -78,6 +93,9 @@ pub enum Error {
     /// An object stream (`/Type /ObjStm`) was structurally malformed.
     #[error("malformed object stream: {0}")]
     MalformedObjectStream(String),
+    /// The linearization hint dictionary was present but invalid.
+    #[error("malformed linearization hint: {0}")]
+    MalformedLinearization(String),
     /// The chain of `/Prev` xref sections contains a cycle.
     #[error("xref /Prev cycle detected at byte offset {0}")]
     XrefCycle(usize),
@@ -110,6 +128,49 @@ pub enum Error {
     /// A `/MediaBox` entry was present but invalid.
     #[error("invalid /MediaBox on page object {0}")]
     InvalidMediaBox(u32),
+    /// A page box array was missing, too short, or held a non-numeric value.
+    #[error("invalid /{name} array on page object {page}")]
+    InvalidBoxArray {
+        /// The object number of the page whose box was rejected.
+        page: u32,
+        /// The dictionary key of the rejected box, without its slash.
+        name: &'static str,
+    },
+    /// A page box had a coordinate that was not a finite number.
+    #[error("page box /{name} has a non-finite coordinate")]
+    NonFiniteBoxCoordinate {
+        /// The dictionary key of the rejected box, without its slash.
+        name: &'static str,
+    },
+    /// A page box had zero or negative width or height.
+    #[error("page box /{name} is degenerate")]
+    DegenerateBox {
+        /// The dictionary key of the rejected box, without its slash.
+        name: &'static str,
+    },
+    /// A page box lay outside the box that must contain it.
+    #[error("page box /{inner} is not contained within /{outer}")]
+    BoxNotContained {
+        /// The dictionary key of the box that was outside.
+        inner: &'static str,
+        /// The dictionary key of the box that should contain it.
+        outer: &'static str,
+    },
+    /// A printer-mark option was non-finite or outside its allowed range.
+    #[error("invalid printer-mark option: {0}")]
+    InvalidPrinterMarkOptions(&'static str),
+    /// Printer marks cannot fit between the TrimBox and the MediaBox.
+    #[error(
+        "printer marks exceed the sheet: {what} requires {required} pt of trim margin but only {available} pt is available"
+    )]
+    PrinterMarksOutOfSheet {
+        /// The mark whose placement does not fit (for example `page information`).
+        what: &'static str,
+        /// Minimum trim margin required, in default user space units.
+        required: f64,
+        /// Trim margin actually available, in default user space units.
+        available: f64,
+    },
     /// The requested page index does not exist.
     #[error("page index {0} is out of range")]
     PageNotFound(usize),
@@ -198,6 +259,12 @@ pub enum Error {
     /// A document metadata entry did not have the expected object type.
     #[error("invalid document metadata: {0}")]
     InvalidMetadata(String),
+    /// A long-running operation was cancelled by the caller.
+    #[error("operation cancelled")]
+    Cancelled,
+    /// The document optimizer could not produce a valid result.
+    #[error("optimization failed: {0}")]
+    OptimizationFailed(String),
 }
 
 /// Result type used by the core crate.
@@ -331,6 +398,77 @@ impl Document {
     pub fn root(&self) -> Result<ObjectId> {
         let structure = self.structure.as_ref().map_err(Clone::clone)?;
         Ok(structure.root_id)
+    }
+
+    /// Load and return the indirect object identified by `id`.
+    ///
+    /// Both cross-reference forms are supported: objects stored in an
+    /// `/ObjStm` are expanded through the same reader used for the page tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stored structural error, [`Error::ObjectNotFound`] or
+    /// [`Error::MalformedObjectStream`] when the object cannot be resolved.
+    pub fn object(&self, id: ObjectId) -> Result<Object> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        parser::load_object(&self.bytes, &structure.xref, id)
+    }
+
+    /// Return the validated linearization hint, if this file carries one.
+    ///
+    /// `Ok(None)` means the first few objects contain no `/Linearized`
+    /// dictionary; a present but malformed dictionary is reported as
+    /// [`Error::MalformedLinearization`]. This reads the hint only — it does
+    /// not verify or produce a linearized file layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MalformedLinearization`] for an invalid hint.
+    pub fn linearization(&self) -> Result<Option<Linearization>> {
+        linearization::parse_linearization(&self.bytes)
+    }
+
+    /// Save this document with object streams and an xref stream.
+    ///
+    /// Eligible objects are packed into `/ObjStm` streams, streams and the
+    /// catalog/page tree remain standalone with type-1 xref entries, and a
+    /// single `/Type /XRef` stream replaces the classic xref table and trailer.
+    /// Staged changes from [`Document::set_object`] replace the corresponding
+    /// source objects. Unlike [`Document::save`], this path can read a source
+    /// that already uses xref streams because compressed objects are resolved
+    /// through the parser. Encrypted documents are declined.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stored structural error, [`Error::UnsupportedState`] for
+    /// encrypted input, or a serialization error for malformed object data.
+    pub fn save_with_object_streams(&self, options: &ObjectStreamOptions) -> Result<Vec<u8>> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        if structure.xref.trailer().contains_key("Encrypt") {
+            return Err(Error::UnsupportedState(
+                "encrypted documents cannot be saved",
+            ));
+        }
+        let mut objects = Vec::new();
+        for number in structure.xref.all_object_numbers() {
+            if number == 0 {
+                continue;
+            }
+            let generation = parser::object_generation(&self.bytes, &structure.xref, number)?;
+            let id = ObjectId::new(number, generation);
+            let object = match self.changes.get(&id) {
+                Some(changed) => changed.clone(),
+                None => parser::load_object(&self.bytes, &structure.xref, id)?,
+            };
+            objects.push((id, object));
+        }
+        for (id, object) in &self.changes {
+            if !objects.iter().any(|(existing, _)| existing == id) {
+                objects.push((*id, object.clone()));
+            }
+        }
+        objects.sort_by_key(|(id, _)| id.number);
+        objstm::write_object_stream_document(&objects, structure.root_id, options)
     }
 
     /// Return the trailer `/Size` value when present and non-negative.
@@ -514,6 +652,35 @@ impl Document {
     /// writer.
     pub fn apply_page_plan(&self, plan: &PagePlan) -> Result<Vec<u8>> {
         pages::apply(self, plan)
+    }
+
+    /// Optimize this document into a smaller, semantically equivalent PDF.
+    ///
+    /// The optimizer compacts the object graph (deduplicating identical
+    /// objects, dropping unreachable ones and renumbering survivors), compresses
+    /// unfiltered streams with Flate when strictly beneficial, passes encoded
+    /// images through untouched, and regenerates a correct classic xref table
+    /// and `startxref`. Metadata and optional entries are removed only when the
+    /// corresponding [`OptimizeOptions`] flags are enabled. The returned
+    /// [`OptimizationReport`] is deterministic and records every transformation
+    /// and skipped item. Progress can be cancelled through `cancel`.
+    ///
+    /// The source document is never mutated, and unknown dictionary keys are
+    /// preserved. Incremental-save inputs (classic tables with `/Prev` chains)
+    /// are fully supported; the result is always a single-revision standalone
+    /// file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedState`] for encrypted or xref-stream inputs,
+    /// [`Error::Cancelled`] when `cancel` is signalled, and structural or
+    /// serialization errors for malformed documents.
+    pub fn optimize(
+        &self,
+        options: &OptimizeOptions,
+        cancel: &CancellationToken,
+    ) -> Result<OptimizationResult> {
+        optimizer::optimize(self, options, cancel)
     }
 
     /// Return the parsed structure only when the document can be saved.

@@ -104,9 +104,54 @@ impl XrefTable {
         entries
     }
 
+    /// Return every object number known to the merged table, sorted ascending.
+    ///
+    /// The result includes free and compressed objects; callers decide which
+    /// entries to load. Object number zero is present when the source declared
+    /// a free-list head.
+    pub(crate) fn all_object_numbers(&self) -> Vec<u32> {
+        let mut numbers: Vec<u32> = self.entries.keys().copied().collect();
+        numbers.sort_unstable();
+        numbers
+    }
+
     /// Return a clone of the merged trailer dictionary (newest keys win).
     pub(crate) fn trailer(&self) -> Dictionary {
         self.trailer.clone()
+    }
+}
+
+/// Read the generation number of object `number` from its indirect-object
+/// header, returning zero for compressed/free objects and unknown numbers.
+pub(crate) fn object_generation(data: &[u8], xref: &XrefTable, number: u32) -> Result<u16> {
+    match xref.entries.get(&number) {
+        Some(XrefEntry::InUse { offset }) => {
+            let mut lexer = Lexer::new(data, *offset)?;
+            lexer.skip_ws();
+            let header_number = lexer.read_regular().ok_or_else(|| Error::MalformedObject {
+                number,
+                reason: "missing object number in header".to_owned(),
+            })?;
+            if parse_decimal(header_number, "object header number")?
+                != usize::try_from(number).unwrap_or(usize::MAX)
+            {
+                return Err(Error::MalformedObject {
+                    number,
+                    reason: "object header number does not match xref".to_owned(),
+                });
+            }
+            lexer.skip_ws();
+            let generation = lexer.read_regular().ok_or_else(|| Error::MalformedObject {
+                number,
+                reason: "missing generation number in header".to_owned(),
+            })?;
+            let value = parse_decimal(generation, "object header generation")?;
+            u16::try_from(value).map_err(|_| Error::MalformedObject {
+                number,
+                reason: "generation exceeds 65535".to_owned(),
+            })
+        }
+        Some(XrefEntry::Compressed { .. }) | Some(XrefEntry::Free) | None => Ok(0),
     }
 }
 

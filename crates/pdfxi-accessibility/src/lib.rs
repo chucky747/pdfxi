@@ -5,8 +5,9 @@
 //! [`reading_order`] module provides a validated tag tree with acyclic
 //! presentation order; [`tree`] adds geometry, text, and alternative text to a
 //! validated [`A11yTree`]; [`builder`] derives such a tree from ordered page
-//! text blocks; and [`export`] serializes it to plain text with a stable
-//! summary.
+//! text blocks; [`export`] serializes it to plain text with a stable
+//! summary; and [`structure`] writes a validated tree into tagged-PDF
+//! structure objects and reads it back for verification.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -14,6 +15,7 @@
 pub mod builder;
 pub mod export;
 pub mod reading_order;
+pub mod structure;
 pub mod tree;
 
 pub use builder::{
@@ -22,6 +24,11 @@ pub use builder::{
 };
 pub use export::{AltTextCoverage, RoleCount, TreeSummary, summarize, to_plain_text};
 pub use reading_order::{ReadingOrder, ReadingOrderError, ReadingOrderNode};
+pub use structure::{
+    ObjRef, PageTagInfo, PdfDict, PdfValue, StructDocument, StructError, StructOptions,
+    ViewerPreferences, compose_page_content, read_structure_tree, role_map, role_pdf_name,
+    write_structure_tree,
+};
 pub use tree::{A11yNode, A11yTree, BBox, NodeId, TreeError};
 
 use core::fmt;

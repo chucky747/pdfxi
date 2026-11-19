@@ -3,12 +3,12 @@
   "lane": "app",
   "title": "Add tabbed multi-document interface",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0022", "T-0028"],
   "owns": [
     "crates/pdfxi-app/**",
     "orchestration/feature-updates/T-0069.toml"
   ],
   "acceptance": "cargo test -p pdfxi-app --features ui",
-  "evidence": ""
+  "evidence": "docs/evidence/app/T-0069.md"
 }

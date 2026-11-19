@@ -1,0 +1,15 @@
+{
+  "id": "T-0075",
+  "lane": "author",
+  "title": "Write tagged PDF structure trees",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0013", "T-0055"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "crates/pdfxi-accessibility/**",
+    "orchestration/feature-updates/T-0075.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit -p pdfxi-accessibility",
+  "evidence": "docs/evidence/author/T-0075.md"
+}

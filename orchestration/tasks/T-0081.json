@@ -1,0 +1,15 @@
+{
+  "id": "T-0081",
+  "lane": "qa",
+  "title": "Add fuzz targets for parsers filters forms and crypto",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0039", "T-0024"],
+  "owns": [
+    "fuzz/**",
+    "crates/pdfxi-testkit/**",
+    "orchestration/feature-updates/T-0081.toml"
+  ],
+  "acceptance": "cargo xtask verify --no-docs",
+  "evidence": ""
+}

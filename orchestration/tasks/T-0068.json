@@ -3,12 +3,12 @@
   "lane": "core",
   "title": "Optimize and compress documents",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0029", "T-0023"],
   "owns": [
     "crates/pdfxi-core/**",
     "orchestration/feature-updates/T-0068.toml"
   ],
   "acceptance": "cargo test -p pdfxi-core",
-  "evidence": ""
+  "evidence": "docs/evidence/core/T-0068.md"
 }

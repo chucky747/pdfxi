@@ -3,12 +3,12 @@
   "lane": "convert",
   "title": "Create PDFs from plain text, Markdown, and images",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0019", "T-0023"],
   "owns": [
     "crates/pdfxi-convert/**",
     "orchestration/feature-updates/T-0058.toml"
   ],
   "acceptance": "cargo test -p pdfxi-convert",
-  "evidence": ""
+  "evidence": "docs/evidence/convert/T-0058.md"
 }

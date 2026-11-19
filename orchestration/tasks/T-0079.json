@@ -1,0 +1,14 @@
+{
+  "id": "T-0079",
+  "lane": "convert",
+  "title": "Add preflight profiles and automated fixups",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0037"],
+  "owns": [
+    "crates/pdfxi-standards/**",
+    "orchestration/feature-updates/T-0079.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-standards",
+  "evidence": ""
+}

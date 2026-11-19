@@ -1,0 +1,14 @@
+{
+  "id": "T-0071",
+  "lane": "render",
+  "title": "Add Tesseract sidecar process bridge",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0057"],
+  "owns": [
+    "crates/pdfxi-text/**",
+    "orchestration/feature-updates/T-0071.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-text",
+  "evidence": "docs/evidence/render/T-0071.md"
+}

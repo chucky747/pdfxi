@@ -3,12 +3,12 @@
   "lane": "render",
   "title": "Add page image export formats and DPI controls",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0045", "T-0049"],
   "owns": [
     "crates/pdfxi-render/**",
     "orchestration/feature-updates/T-0065.toml"
   ],
   "acceptance": "cargo test -p pdfxi-render --features pdfium",
-  "evidence": ""
+  "evidence": "docs/evidence/render/T-0065.md"
 }

@@ -1,0 +1,77 @@
+# Feature update fragment for T-0064 (qa lane).
+# Merged by the integrator into docs/features.toml. This task adds test
+# infrastructure only (M2 authoring corpus, manifest, golden helpers) and
+# claims no user-visible feature-matrix row.
+
+task = "T-0064"
+lane = "qa"
+status = "verified"
+evidence = "cargo test -p pdfxi-testkit (CARGO_TARGET_DIR=target/lanes/qa): 60 unit + 11 authoring integration + 8 committed-fixture integration + 0 doc tests passed; 0 failed; ~4.2 s wall clock including compile (<90 s budget). cargo fmt -p pdfxi-testkit -- --check: clean. cargo clippy -p pdfxi-testkit --all-targets --all-features -- -D warnings: clean. cargo doc -p pdfxi-testkit --no-deps with RUSTDOCFLAGS=-D warnings: clean. Full pasted output in docs/evidence/qa/T-0064.md."
+docs = [
+    "crates/pdfxi-testkit/Cargo.toml",
+    "crates/pdfxi-testkit/src/lib.rs",
+    "crates/pdfxi-testkit/src/authoring.rs",
+    "crates/pdfxi-testkit/src/golden.rs",
+    "crates/pdfxi-testkit/examples/generate_authoring_fixtures.rs",
+    "crates/pdfxi-testkit/tests/authoring_corpus.rs",
+    "fixtures/authoring-manifest.toml",
+    "fixtures/README.md",
+]
+
+tests = [
+    "authoring::tests::md5_matches_known_vectors",
+    "authoring::tests::rc4_matches_known_vector",
+    "authoring::tests::corpus_has_expected_count_and_unique_names",
+    "authoring::tests::builders_are_byte_stable_and_structurally_valid",
+    "authoring::tests::manifest_round_trips_through_parser",
+    "authoring::tests::documented_password_is_accepted_and_wrong_one_rejected",
+    "golden::tests::content_snapshot_ignores_only_trailing_whitespace",
+    "golden::tests::page_tree_snapshot_records_boxes_and_rotation",
+    "golden::tests::page_tree_snapshot_ignores_only_documented_volatile_fields",
+    "golden::tests::page_tree_snapshot_reports_missing_pages",
+    "authoring_manifest_is_integral",
+    "authoring_checksums_are_stable",
+    "every_authoring_fixture_parses_through_pdfxi_core",
+    "page_box_fixture_exposes_all_five_boxes",
+    "rotation_fixture_carries_expected_rotations",
+    "annotation_fixture_has_all_four_subtypes",
+    "form_fixture_has_text_checkbox_and_choice_fields",
+    "encrypted_fixture_handles_documented_password",
+    "page_label_fixture_has_a_number_tree",
+    "generators_reproduce_committed_authoring_bytes",
+    "golden_snapshots_are_stable_and_content_normalized",
+]
+
+notes = """
+Added six deterministic, byte-stable M2 authoring fixtures under
+fixtures/authoring/ plus fixtures/authoring-manifest.toml. The manifest records
+each file's name, primary feature, searchable tags, page count, exact byte size,
+and SHA-256. The generate_authoring_fixtures example is the single source of
+truth: it writes the files and computes sizes/digests from the emitted bytes, so
+the manifest cannot drift. Regeneration is byte-identical (tested).
+
+Coverage: five page boxes with distinct values; /Rotate 90/180/270; a
+/PageLabels number tree; /Text, /Highlight, /Link and /Widget annotation
+dictionaries; an /AcroForm with /Tx, /Btn and /Ch fields; and a standard
+security handler R2 encrypted sample. The encrypted fixture uses only the
+documented public test password (user 'pdfxi-test', owner 'pdfxi-owner'); its
+/O and /U entries are derived deterministically with a self-contained MD5 + RC4
+implementation (no new dependency, no secret committed). The integration test
+recomputes /U and proves the documented password is accepted while a wrong one
+is rejected.
+
+Golden helpers ContentSnapshot and PageTreeSnapshot normalize only documented
+volatile fields: trailing content-stream whitespace and the /CreationDate,
+/ModDate, /ID and /Producer dictionary keys. A test proves volatile additions
+leave the page-tree fingerprint unchanged while a real box edit changes it.
+
+pdfxi-core is a test-only (dev) dependency of pdfxi-testkit so every fixture is
+parsed through the real Document parser. Cargo permits this because pdfxi-core
+already dev-depends on pdfxi-testkit and both edges are dev-only; normal builds
+are cycle-free (verified with cargo check -p pdfxi-testkit --tests).
+
+No unsafe, no unwrap/expect/panic in non-test code, no new external dependency,
+and docs/features.toml was not edited. Workspace-wide fmt/clippy currently fail
+only on in-progress files in the automation and render lanes (outside this
+claim); the qa crate itself is clean on fmt, clippy, tests, and docs.
+"""

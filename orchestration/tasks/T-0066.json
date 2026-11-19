@@ -3,12 +3,12 @@
   "lane": "convert",
   "title": "Export RTF and accessible tagged text",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0056", "T-0055"],
   "owns": [
     "crates/pdfxi-convert/**",
     "orchestration/feature-updates/T-0066.toml"
   ],
   "acceptance": "cargo test -p pdfxi-convert",
-  "evidence": ""
+  "evidence": "docs/evidence/convert/T-0066.md"
 }
