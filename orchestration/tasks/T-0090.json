@@ -3,12 +3,12 @@
   "lane": "forms",
   "title": "Add form field actions and tab order",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0043", "T-0080"],
   "owns": [
     "crates/pdfxi-forms/**",
     "orchestration/feature-updates/T-0090.toml"
   ],
   "acceptance": "cargo test -p pdfxi-forms",
-  "evidence": ""
+  "evidence": "docs/evidence/forms/T-0090.md"
 }

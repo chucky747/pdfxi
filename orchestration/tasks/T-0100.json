@@ -1,0 +1,15 @@
+{
+  "id": "T-0100",
+  "lane": "forms",
+  "title": "Recognize static form fields",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0080"],
+  "owns": [
+    "crates/pdfxi-forms/**",
+    "docs/evidence/forms/T-0100.md",
+    "orchestration/feature-updates/T-0100.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-forms",
+  "evidence": ""
+}

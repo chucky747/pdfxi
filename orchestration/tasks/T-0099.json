@@ -1,0 +1,15 @@
+{
+  "id": "T-0099",
+  "lane": "automation",
+  "title": "Local JSON automation API",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0094"],
+  "owns": [
+    "crates/pdfxi-automation/**",
+    "docs/evidence/automation/T-0099.md",
+    "orchestration/feature-updates/T-0099.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-automation",
+  "evidence": ""
+}

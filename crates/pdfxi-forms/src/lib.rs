@@ -40,6 +40,13 @@
 //!   deterministic local signing state machine with stable status reports; and
 //!   a byte-range planning boundary for a future security-layer signer. No
 //!   cryptography is implemented here.
+//! - [`TabPolicy`] / [`TabOrder`] / [`TabNavigator`] — the AcroForm `/Tabs`
+//!   order (`/R`, `/C`, `/S`, `/A`), deterministic widget ordering by page, and
+//!   next/previous traversal with a configurable hidden/read-only skip policy.
+//! - [`ActionTrigger`] / [`SafeAction`] / [`ActionPlan`] — parsing of field
+//!   `/AA` (K/F/V/C) and `/A` actions into a typed safe whitelist, with
+//!   dangerous actions (JavaScript, URI, Launch, Import/Export) rejected and
+//!   reported; no script is ever executed.
 //!
 //! Field names are fully qualified (for example `order.address.city`). Callers
 //! that build fields directly supply the dotted path; [`load_acroform`] builds
@@ -69,6 +76,7 @@
 #![forbid(unsafe_code)]
 
 mod acroform;
+mod actions;
 mod appearance;
 mod build;
 mod calculation;
@@ -79,12 +87,17 @@ mod flatten;
 mod form;
 mod rules;
 mod signature;
+mod taborder;
 mod validation;
 mod xfdf;
 
 pub use acroform::{
     AcroFormLoad, FormSource, LoadError, LoadedFieldInfo, LoadedForm, ObjectRef, PdfValue,
     load_acroform,
+};
+pub use actions::{
+    ActionCollector, ActionError, ActionPlan, ActionReport, ActionSite, ActionTrigger,
+    FieldActions, PlannedAction, SafeAction, UnsupportedAction, parse_action, parse_field_actions,
 };
 pub use appearance::{
     AVERAGE_WIDTH, Alignment, AppearanceDictionary, AppearanceError, AppearanceStream, BorderStyle,
@@ -117,6 +130,9 @@ pub use signature::{
     SignatureDictionary, SignatureError, SignatureField, SignatureLock, SignatureSlot,
     SignatureStatus, SignatureWorkflow, SubFilter, Transition, TransitionKind, WorkflowError,
     WorkflowReport,
+};
+pub use taborder::{
+    NavPolicy, TabNavigator, TabOrder, TabPolicy, TabWidget, parse_tabs, tabs_from_acroform,
 };
 pub use validation::{Validation, ValidationError, ValidationSummary};
 pub use xfdf::{XFDF_NAMESPACE, XfdfDocument, XfdfError, XfdfField, import_xfdf, parse_xfdf};

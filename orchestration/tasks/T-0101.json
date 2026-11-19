@@ -1,0 +1,15 @@
+{
+  "id": "T-0101",
+  "lane": "app",
+  "title": "Home recents favorites and cross-file search",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0011"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0101.md",
+    "orchestration/feature-updates/T-0101.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}

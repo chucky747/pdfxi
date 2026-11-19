@@ -1,0 +1,16 @@
+{
+  "id": "T-0091",
+  "lane": "security",
+  "title": "Fix T-0078 scrubbing findings and harden XMP identifiers",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0078"],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/security/T-0078.md",
+    "docs/book/src/security.md",
+    "orchestration/feature-updates/T-0091.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security",
+  "evidence": ""
+}

@@ -4,7 +4,7 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 26 verified, 45 in-progress, 69 planned.
+Current status: 30 verified, 46 in-progress, 64 planned.
 
 ## Detailed feature pages
 

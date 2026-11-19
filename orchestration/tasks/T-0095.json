@@ -1,0 +1,15 @@
+{
+  "id": "T-0095",
+  "lane": "render",
+  "title": "ICC color management and output intents",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0028"],
+  "owns": [
+    "crates/pdfxi-render/**",
+    "docs/evidence/render/T-0095.md",
+    "orchestration/feature-updates/T-0095.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-render",
+  "evidence": ""
+}

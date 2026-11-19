@@ -1,0 +1,16 @@
+{
+  "id": "T-0096",
+  "lane": "author",
+  "title": "Tag tree and reading order editor model",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0046", "T-0088"],
+  "owns": [
+    "crates/pdfxi-accessibility/**",
+    "crates/pdfxi-edit/**",
+    "docs/evidence/author/T-0096.md",
+    "orchestration/feature-updates/T-0096.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-accessibility -p pdfxi-edit",
+  "evidence": ""
+}

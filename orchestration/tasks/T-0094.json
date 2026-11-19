@@ -1,0 +1,15 @@
+{
+  "id": "T-0094",
+  "lane": "automation",
+  "title": "Sandboxed Acrobat-compatible JavaScript subset",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0011"],
+  "owns": [
+    "crates/pdfxi-automation/**",
+    "docs/evidence/automation/T-0094.md",
+    "orchestration/feature-updates/T-0094.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-automation",
+  "evidence": ""
+}

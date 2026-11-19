@@ -1,0 +1,15 @@
+{
+  "id": "T-0098",
+  "lane": "app",
+  "title": "Split and tile document windows",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0083"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0098.md",
+    "orchestration/feature-updates/T-0098.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}

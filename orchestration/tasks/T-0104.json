@@ -1,0 +1,15 @@
+{
+  "id": "T-0104",
+  "lane": "author",
+  "title": "Review markup shapes and comment workflows",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0076"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/author/T-0104.md",
+    "orchestration/feature-updates/T-0104.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "evidence": ""
+}

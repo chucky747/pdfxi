@@ -13,7 +13,8 @@ command.
 | Plain text and a documented Markdown subset | `CREATE-004` | in-progress | `pdfxi-convert::create` |
 | PNG and JPEG images | `CREATE-003` | in-progress | `pdfxi-convert::create` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` |
-| HTML, Office, scan, portfolios | `CREATE-005`–`CREATE-010` | planned | — |
+| Local HTML and a CSS subset | `CREATE-005` | verified | `pdfxi-convert::create::html` |
+| Office, scan, portfolios | `CREATE-006`–`CREATE-010` | planned | — |
 
 Text creation renders ATX headings, paragraphs, bullet lists, and fenced code
 blocks with Helvetica/Courier metrics and paginates across pages. Inline
