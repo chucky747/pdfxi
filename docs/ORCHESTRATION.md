@@ -59,6 +59,13 @@ Feature status changes are written as fragments to
 `orchestration/feature-updates/<task-id>.toml` and merged by the integrator.
 Lanes never edit `docs/features.toml` directly.
 
+Fragments are transient. `cargo xtask features apply --task <id> --clean` merges
+the row updates into `docs/features.toml` and deletes the consumed fragment.
+The durable record after merging is the matrix row plus the task evidence file
+in `docs/evidence/<lane>/<task>.md`; the absence of a fragment therefore means
+"already merged", not "never written". Integrators must merge before deleting
+and must never delete an unmerged fragment.
+
 ## Claims
 
 ```text
