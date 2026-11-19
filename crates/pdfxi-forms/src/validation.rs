@@ -49,6 +49,36 @@ pub enum ValidationError {
         /// The category actually found.
         found: String,
     },
+    /// A text value exceeded its configured maximum length.
+    MaxLengthExceeded {
+        /// Fully qualified name of the offending field.
+        field: String,
+        /// The maximum number of characters allowed.
+        max: usize,
+        /// The number of characters found.
+        actual: usize,
+    },
+    /// A value did not satisfy a configured [`crate::rules::Format`].
+    InvalidFormat {
+        /// Fully qualified name of the offending field.
+        field: String,
+        /// Human-readable name of the expected format.
+        format: String,
+        /// Human-readable description of the failure.
+        detail: String,
+    },
+    /// A [`crate::rules::ValidationHook`] rejected the field's value.
+    CustomRejected {
+        /// Fully qualified name of the offending field.
+        field: String,
+        /// The reason supplied by the hook.
+        reason: String,
+    },
+    /// A rule was registered for a field that does not exist in the form.
+    UnknownField {
+        /// Fully qualified name that was not found.
+        field: String,
+    },
 }
 
 impl ValidationError {
@@ -58,7 +88,26 @@ impl ValidationError {
             Self::MissingRequired { field }
             | Self::InvalidChoice { field, .. }
             | Self::InvalidText { field, .. }
-            | Self::InvalidValueType { field, .. } => field,
+            | Self::InvalidValueType { field, .. }
+            | Self::MaxLengthExceeded { field, .. }
+            | Self::InvalidFormat { field, .. }
+            | Self::CustomRejected { field, .. }
+            | Self::UnknownField { field } => field,
+        }
+    }
+
+    /// Returns a stable rank for this variant, used to order errors that share
+    /// a field name. The ordering is independent of platform collation.
+    pub(crate) fn sort_rank(&self) -> u8 {
+        match self {
+            Self::UnknownField { .. } => 0,
+            Self::MissingRequired { .. } => 1,
+            Self::MaxLengthExceeded { .. } => 2,
+            Self::InvalidValueType { .. } => 3,
+            Self::InvalidChoice { .. } => 4,
+            Self::InvalidFormat { .. } => 5,
+            Self::InvalidText { .. } => 6,
+            Self::CustomRejected { .. } => 7,
         }
     }
 }
@@ -84,6 +133,21 @@ impl fmt::Display for ValidationError {
                 f,
                 "field '{field}' holds a {found} value; expected one of {expected}"
             ),
+            Self::MaxLengthExceeded { field, max, actual } => write!(
+                f,
+                "field '{field}' has {actual} characters, exceeding the maximum {max}"
+            ),
+            Self::InvalidFormat {
+                field,
+                format,
+                detail,
+            } => write!(f, "field '{field}' failed {format} validation: {detail}"),
+            Self::CustomRejected { field, reason } => {
+                write!(f, "field '{field}' was rejected: {reason}")
+            }
+            Self::UnknownField { field } => {
+                write!(f, "rule targets unknown field '{field}'")
+            }
         }
     }
 }
@@ -130,6 +194,81 @@ impl Validation {
 impl fmt::Display for Validation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "validation with {} error(s)", self.errors.len())
+    }
+}
+
+/// A deterministic summary of a rule-based validation pass.
+///
+/// Errors are sorted by fully qualified field name and then by a stable
+/// variant rank, so two runs over equivalent forms produce byte-identical
+/// reports regardless of iteration or registration order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ValidationSummary {
+    total_fields: usize,
+    errors: Vec<ValidationError>,
+}
+
+impl ValidationSummary {
+    /// Builds a summary, sorting the errors into deterministic order.
+    pub fn new(total_fields: usize, mut errors: Vec<ValidationError>) -> Self {
+        errors.sort_by(|a, b| {
+            a.field()
+                .cmp(b.field())
+                .then_with(|| a.sort_rank().cmp(&b.sort_rank()))
+        });
+        Self {
+            total_fields,
+            errors,
+        }
+    }
+
+    /// Returns `true` when the form had no validation errors.
+    pub fn is_valid(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    /// Returns the number of validation errors.
+    pub fn error_count(&self) -> usize {
+        self.errors.len()
+    }
+
+    /// Returns the number of fields that were checked.
+    pub fn total_fields(&self) -> usize {
+        self.total_fields
+    }
+
+    /// Returns the errors in deterministic order.
+    pub fn errors(&self) -> &[ValidationError] {
+        &self.errors
+    }
+
+    /// Returns the distinct names of the invalid fields, in ascending order.
+    pub fn invalid_field_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.errors.iter().map(ValidationError::field).collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    /// Returns a stable one-line description of the result.
+    pub fn summary_line(&self) -> String {
+        format!(
+            "{} error(s) across {} of {} field(s)",
+            self.errors.len(),
+            self.invalid_field_names().len(),
+            self.total_fields
+        )
+    }
+
+    /// Converts this summary into the simpler [`Validation`] representation.
+    pub fn into_validation(self) -> Validation {
+        Validation::new(self.errors)
+    }
+}
+
+impl fmt::Display for ValidationSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.summary_line())
     }
 }
 

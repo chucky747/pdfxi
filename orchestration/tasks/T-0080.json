@@ -3,12 +3,12 @@
   "lane": "forms",
   "title": "Create fields and validate form input",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0043", "T-0054"],
   "owns": [
     "crates/pdfxi-forms/**",
     "orchestration/feature-updates/T-0080.toml"
   ],
   "acceptance": "cargo test -p pdfxi-forms",
-  "evidence": ""
+  "evidence": "docs/evidence/forms/T-0080.md"
 }

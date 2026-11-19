@@ -25,7 +25,11 @@
 
 use crate::field::FieldValue;
 use crate::form::{Form, FormError};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+
+/// Maximum number of steps accepted by [`CalculationPlan::apply`].
+pub const MAX_PLAN_STEPS: usize = 4096;
 
 /// The arithmetic operation performed by a [`Calculation`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,6 +40,10 @@ pub enum CalculationOp {
     Product,
     /// Add all source values and divide by the source count.
     Average,
+    /// Return the smallest source value.
+    Min,
+    /// Return the largest source value.
+    Max,
 }
 
 impl CalculationOp {
@@ -45,6 +53,8 @@ impl CalculationOp {
             Self::Sum => "sum",
             Self::Product => "product",
             Self::Average => "average",
+            Self::Min => "min",
+            Self::Max => "max",
         }
     }
 }
@@ -75,6 +85,14 @@ pub enum CalculationError {
     InvalidDecimals(u8),
     /// Writing the result into the target field was rejected by the form.
     SetFailed(FormError),
+    /// Two calculations in a plan target the same field.
+    DuplicateTarget(String),
+    /// A calculation cycle was detected; the vector names the cycle in order.
+    Cycle(Vec<String>),
+    /// An arithmetic expression divided by zero.
+    DivisionByZero,
+    /// A plan contained more steps than the supported maximum.
+    TooManySteps(usize),
 }
 
 impl fmt::Display for CalculationError {
@@ -93,6 +111,15 @@ impl fmt::Display for CalculationError {
                 )
             }
             Self::SetFailed(error) => write!(f, "calculation could not write its result: {error}"),
+            Self::DuplicateTarget(name) => {
+                write!(f, "two calculations target the same field '{name}'")
+            }
+            Self::Cycle(path) => write!(f, "calculation cycle: {}", path.join(" -> ")),
+            Self::DivisionByZero => write!(f, "arithmetic expression divided by zero"),
+            Self::TooManySteps(count) => write!(
+                f,
+                "calculation plan has {count} steps (maximum {MAX_PLAN_STEPS})"
+            ),
         }
     }
 }
@@ -190,6 +217,8 @@ impl Calculation {
             CalculationOp::Sum => numbers.iter().sum(),
             CalculationOp::Product => numbers.iter().product(),
             CalculationOp::Average => numbers.iter().sum::<f64>() / numbers.len() as f64,
+            CalculationOp::Min => numbers.iter().copied().fold(f64::INFINITY, f64::min),
+            CalculationOp::Max => numbers.iter().copied().fold(f64::NEG_INFINITY, f64::max),
         };
         if !result.is_finite() {
             return Err(CalculationError::NonFiniteResult);
@@ -282,6 +311,424 @@ pub fn run_calculations(
         results.push(CalculationResult::new(calculation.target(), value.clone()));
     }
     Ok(CalculationReport::new(results))
+}
+
+/// A bounded arithmetic expression over named numeric fields and constants.
+///
+/// This is a *simplified arithmetic* interpreter: no scripts, function calls,
+/// loops or string coercion are supported. The only operations are addition,
+/// subtraction, multiplication, division and negation, combined with field
+/// references ([`Arithmetic::Field`]) and finite constants
+/// ([`Arithmetic::Const`]). Evaluation is side-effect free and deterministic.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Arithmetic {
+    /// A reference to a field's numeric value.
+    Field(String),
+    /// A finite numeric constant.
+    Const(f64),
+    /// Sum of two sub-expressions.
+    Add(Box<Arithmetic>, Box<Arithmetic>),
+    /// Difference of two sub-expressions.
+    Sub(Box<Arithmetic>, Box<Arithmetic>),
+    /// Product of two sub-expressions.
+    Mul(Box<Arithmetic>, Box<Arithmetic>),
+    /// Quotient of two sub-expressions.
+    Div(Box<Arithmetic>, Box<Arithmetic>),
+    /// Arithmetic negation of a sub-expression.
+    Neg(Box<Arithmetic>),
+}
+
+impl Arithmetic {
+    /// Creates a reference to the named field.
+    pub fn field(name: impl Into<String>) -> Self {
+        Self::Field(name.into())
+    }
+
+    /// Creates a finite constant.
+    pub const fn constant(value: f64) -> Self {
+        Self::Const(value)
+    }
+
+    /// Creates an addition expression.
+    pub fn add_expr(left: Self, right: Self) -> Self {
+        Self::Add(Box::new(left), Box::new(right))
+    }
+
+    /// Creates a subtraction expression.
+    pub fn sub_expr(left: Self, right: Self) -> Self {
+        Self::Sub(Box::new(left), Box::new(right))
+    }
+
+    /// Creates a multiplication expression.
+    pub fn mul_expr(left: Self, right: Self) -> Self {
+        Self::Mul(Box::new(left), Box::new(right))
+    }
+
+    /// Creates a division expression.
+    pub fn div_expr(left: Self, right: Self) -> Self {
+        Self::Div(Box::new(left), Box::new(right))
+    }
+
+    /// Creates a negation expression.
+    pub fn neg_expr(value: Self) -> Self {
+        Self::Neg(Box::new(value))
+    }
+
+    /// Collects the distinct field names referenced by this expression, sorted
+    /// by name.
+    pub fn references(&self) -> Vec<String> {
+        let mut names = BTreeSet::new();
+        self.collect_references(&mut names);
+        names.into_iter().collect()
+    }
+
+    fn collect_references(&self, out: &mut BTreeSet<String>) {
+        match self {
+            Self::Field(name) => {
+                out.insert(name.clone());
+            }
+            Self::Const(_) => {}
+            Self::Add(left, right)
+            | Self::Sub(left, right)
+            | Self::Mul(left, right)
+            | Self::Div(left, right) => {
+                left.collect_references(out);
+                right.collect_references(out);
+            }
+            Self::Neg(value) => value.collect_references(out),
+        }
+    }
+
+    /// Evaluates the expression against `form` without mutating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CalculationError::FieldNotFound`] or
+    /// [`CalculationError::NonNumeric`] for bad references,
+    /// [`CalculationError::DivisionByZero`] for a zero divisor, and
+    /// [`CalculationError::NonFiniteResult`] for a non-finite intermediate or
+    /// final value.
+    pub fn evaluate(&self, form: &Form, decimals: u8) -> Result<FieldValue, CalculationError> {
+        if decimals > 12 {
+            return Err(CalculationError::InvalidDecimals(decimals));
+        }
+        let result = self.eval_number(form)?;
+        if !result.is_finite() {
+            return Err(CalculationError::NonFiniteResult);
+        }
+        Ok(FieldValue::number(round_to(result, decimals)))
+    }
+
+    fn eval_number(&self, form: &Form) -> Result<f64, CalculationError> {
+        match self {
+            Self::Field(name) => {
+                let value = form
+                    .value(name)
+                    .map_err(|_| CalculationError::FieldNotFound(name.clone()))?;
+                let number = value
+                    .as_number()
+                    .ok_or_else(|| CalculationError::NonNumeric {
+                        field: name.clone(),
+                        found: format!("{value:?}"),
+                    })?;
+                if !number.is_finite() {
+                    return Err(CalculationError::NonNumeric {
+                        field: name.clone(),
+                        found: format!("{number:?}"),
+                    });
+                }
+                Ok(number)
+            }
+            Self::Const(value) => {
+                if value.is_finite() {
+                    Ok(*value)
+                } else {
+                    Err(CalculationError::NonFiniteResult)
+                }
+            }
+            Self::Add(left, right) => Ok(left.eval_number(form)? + right.eval_number(form)?),
+            Self::Sub(left, right) => Ok(left.eval_number(form)? - right.eval_number(form)?),
+            Self::Mul(left, right) => Ok(left.eval_number(form)? * right.eval_number(form)?),
+            Self::Div(left, right) => {
+                let numerator = left.eval_number(form)?;
+                let denominator = right.eval_number(form)?;
+                if denominator == 0.0 {
+                    return Err(CalculationError::DivisionByZero);
+                }
+                Ok(numerator / denominator)
+            }
+            Self::Neg(value) => Ok(-value.eval_number(form)?),
+        }
+    }
+}
+
+/// An arithmetic expression assigned to a target field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArithmeticCalculation {
+    target: String,
+    expression: Arithmetic,
+    decimals: u8,
+}
+
+impl ArithmeticCalculation {
+    /// Creates a calculation writing `expression` into `target`.
+    pub fn new(target: impl Into<String>, expression: Arithmetic) -> Self {
+        Self {
+            target: target.into(),
+            expression,
+            decimals: Calculation::DEFAULT_DECIMALS,
+        }
+    }
+
+    /// Overrides the number of decimal places (maximum 12).
+    #[must_use]
+    pub const fn with_decimals(mut self, decimals: u8) -> Self {
+        self.decimals = decimals;
+        self
+    }
+
+    /// Returns the target field's fully qualified name.
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+
+    /// Returns the arithmetic expression.
+    pub fn expression(&self) -> &Arithmetic {
+        &self.expression
+    }
+
+    /// Returns the configured number of decimal places.
+    pub const fn decimals(&self) -> u8 {
+        self.decimals
+    }
+
+    /// Evaluates the expression without mutating the form.
+    pub fn evaluate(&self, form: &Form) -> Result<FieldValue, CalculationError> {
+        self.expression.evaluate(form, self.decimals)
+    }
+
+    /// Evaluates the expression and writes the result into the target field.
+    pub fn apply(&self, form: &mut Form) -> Result<(), CalculationError> {
+        let value = self.evaluate(form)?;
+        form.set_value(&self.target, value)
+            .map_err(CalculationError::SetFailed)
+    }
+}
+
+/// One step of a [`CalculationPlan`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum CalculationStep {
+    /// A named sum/product/average/min/max calculation.
+    Standard(Calculation),
+    /// A simplified arithmetic expression calculation.
+    Arithmetic(ArithmeticCalculation),
+}
+
+impl CalculationStep {
+    /// Returns the target field name of this step.
+    pub fn target(&self) -> &str {
+        match self {
+            Self::Standard(calculation) => calculation.target(),
+            Self::Arithmetic(calculation) => calculation.target(),
+        }
+    }
+
+    /// Returns the distinct field names this step reads, sorted by name.
+    pub fn dependencies(&self) -> Vec<String> {
+        match self {
+            Self::Standard(calculation) => {
+                let names: BTreeSet<String> = calculation.sources().iter().cloned().collect();
+                names.into_iter().collect()
+            }
+            Self::Arithmetic(calculation) => calculation.expression().references(),
+        }
+    }
+
+    /// Applies this step to `form`.
+    pub fn apply(&self, form: &mut Form) -> Result<(), CalculationError> {
+        match self {
+            Self::Standard(calculation) => calculation.apply(form),
+            Self::Arithmetic(calculation) => calculation.apply(form),
+        }
+    }
+}
+
+/// A set of calculations evaluated in dependency order.
+///
+/// The plan builds a graph whose nodes are calculation targets. If step A
+/// reads a field written by step B, B is evaluated before A. Independent steps
+/// are ordered by target name, and the final report follows that evaluation
+/// order, so supplying the same steps in a different order yields identical
+/// results. Cycles (including a step reading its own target) are reported as
+/// [`CalculationError::Cycle`] before any step is applied.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CalculationPlan {
+    steps: Vec<CalculationStep>,
+}
+
+impl CalculationPlan {
+    /// Creates a plan from the given steps.
+    pub fn new(steps: Vec<CalculationStep>) -> Self {
+        Self { steps }
+    }
+
+    /// Appends a step to the plan.
+    #[must_use]
+    pub fn with_step(mut self, step: CalculationStep) -> Self {
+        self.steps.push(step);
+        self
+    }
+
+    /// Returns the steps in their original (unoptimised) order.
+    pub fn steps(&self) -> &[CalculationStep] {
+        &self.steps
+    }
+
+    /// Returns `true` when the plan has no steps.
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    /// Returns the number of steps.
+    pub fn len(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Returns the step indices in the order they will be evaluated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CalculationError::TooManySteps`] for oversized plans,
+    /// [`CalculationError::DuplicateTarget`] for repeated target names, or
+    /// [`CalculationError::Cycle`] when the dependency graph has a cycle.
+    pub fn evaluation_order(&self) -> Result<Vec<usize>, CalculationError> {
+        if self.steps.len() > MAX_PLAN_STEPS {
+            return Err(CalculationError::TooManySteps(self.steps.len()));
+        }
+        let mut targets: BTreeMap<&str, usize> = BTreeMap::new();
+        for (index, step) in self.steps.iter().enumerate() {
+            if targets.insert(step.target(), index).is_some() {
+                return Err(CalculationError::DuplicateTarget(step.target().to_owned()));
+            }
+        }
+        let count = self.steps.len();
+        let mut depends_on: Vec<Vec<usize>> = vec![Vec::new(); count];
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); count];
+        let mut indegree = vec![0usize; count];
+        for (index, step) in self.steps.iter().enumerate() {
+            for name in step.dependencies() {
+                if let Some(&source) = targets.get(name.as_str()) {
+                    if source == index {
+                        return Err(CalculationError::Cycle(vec![step.target().to_owned()]));
+                    }
+                    if !depends_on[index].contains(&source) {
+                        depends_on[index].push(source);
+                        dependents[source].push(index);
+                        indegree[index] += 1;
+                    }
+                }
+            }
+        }
+
+        // Ready nodes are keyed by target name so independent steps are
+        // processed in a deterministic, insertion-order-independent sequence.
+        let mut ready: BTreeMap<String, usize> = BTreeMap::new();
+        for (index, step) in self.steps.iter().enumerate() {
+            if indegree[index] == 0 {
+                ready.insert(step.target().to_owned(), index);
+            }
+        }
+        let mut order = Vec::with_capacity(count);
+        while let Some((_, index)) = ready.pop_first() {
+            order.push(index);
+            for &dependent in &dependents[index] {
+                indegree[dependent] -= 1;
+                if indegree[dependent] == 0 {
+                    ready.insert(self.steps[dependent].target().to_owned(), dependent);
+                }
+            }
+        }
+        if order.len() != count {
+            let remaining: Vec<usize> = (0..count).filter(|&index| indegree[index] > 0).collect();
+            return Err(CalculationError::Cycle(find_cycle(
+                &depends_on,
+                &self.steps,
+                &remaining,
+            )));
+        }
+        Ok(order)
+    }
+
+    /// Applies every step in dependency order and returns a deterministic
+    /// [`CalculationReport`].
+    ///
+    /// No step runs if the plan is invalid (oversized, duplicated targets or
+    /// cyclic). A runtime error in an individual step stops the batch; steps
+    /// applied before it remain in the form.
+    pub fn apply(&self, form: &mut Form) -> Result<CalculationReport, CalculationError> {
+        let order = self.evaluation_order()?;
+        let mut results = Vec::with_capacity(order.len());
+        for index in order {
+            let step = &self.steps[index];
+            step.apply(form)?;
+            let value = form
+                .value(step.target())
+                .map_err(CalculationError::SetFailed)?;
+            results.push(CalculationResult::new(step.target(), value.clone()));
+        }
+        Ok(CalculationReport::new(results))
+    }
+}
+
+/// Finds a deterministic cycle path among the unprocessed graph nodes.
+fn find_cycle(
+    depends_on: &[Vec<usize>],
+    steps: &[CalculationStep],
+    remaining: &[usize],
+) -> Vec<String> {
+    let mut state = vec![0u8; steps.len()];
+    let mut path: Vec<usize> = Vec::new();
+    for &start in remaining {
+        if let Some(cycle) = find_cycle_from(start, depends_on, steps, &mut state, &mut path) {
+            return cycle;
+        }
+    }
+    match remaining.first() {
+        Some(&index) => vec![steps[index].target().to_owned()],
+        None => Vec::new(),
+    }
+}
+
+fn find_cycle_from(
+    node: usize,
+    depends_on: &[Vec<usize>],
+    steps: &[CalculationStep],
+    state: &mut [u8],
+    path: &mut Vec<usize>,
+) -> Option<Vec<String>> {
+    if state[node] == 1
+        && let Some(start) = path.iter().position(|&index| index == node)
+    {
+        return Some(
+            path[start..]
+                .iter()
+                .map(|&index| steps[index].target().to_owned())
+                .collect(),
+        );
+    }
+    if state[node] != 0 {
+        return None;
+    }
+    state[node] = 1;
+    path.push(node);
+    for &dependency in &depends_on[node] {
+        if let Some(cycle) = find_cycle_from(dependency, depends_on, steps, state, path) {
+            return Some(cycle);
+        }
+    }
+    path.pop();
+    state[node] = 2;
+    None
 }
 
 /// Rounds `value` to `decimals` places, ties away from zero.
@@ -409,5 +856,108 @@ mod tests {
         let calculation = Calculation::new("result", CalculationOp::Sum, ["a", "b"]);
         let _ = calculation.evaluate(&form).unwrap();
         assert_eq!(form, before);
+    }
+
+    #[test]
+    fn min_and_max_are_deterministic() {
+        let form = numeric_form();
+        let min = Calculation::new("result", CalculationOp::Min, ["a", "b", "c"]);
+        let max = Calculation::new("result", CalculationOp::Max, ["a", "b", "c"]);
+
+        assert_eq!(min.evaluate(&form), Ok(FieldValue::number(-2.0)));
+        assert_eq!(max.evaluate(&form), Ok(FieldValue::number(20.25)));
+    }
+
+    #[test]
+    fn arithmetic_expression_evaluates_and_rounds() {
+        let form = numeric_form();
+        // (a + b) / c - 2 * 3, with a=10.5, b=20.25, c=-2 -> -21.375
+        let expression = Arithmetic::sub_expr(
+            Arithmetic::div_expr(
+                Arithmetic::add_expr(Arithmetic::field("a"), Arithmetic::field("b")),
+                Arithmetic::field("c"),
+            ),
+            Arithmetic::mul_expr(Arithmetic::constant(2.0), Arithmetic::constant(3.0)),
+        );
+        let calculation = ArithmeticCalculation::new("result", expression);
+
+        assert_eq!(calculation.evaluate(&form), Ok(FieldValue::number(-21.375)));
+        assert_eq!(calculation.expression().references(), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn arithmetic_reports_division_by_zero_and_unknown_fields() {
+        let form = numeric_form();
+        let div_zero = Arithmetic::div_expr(Arithmetic::field("a"), Arithmetic::constant(0.0));
+        assert_eq!(
+            ArithmeticCalculation::new("result", div_zero).evaluate(&form),
+            Err(CalculationError::DivisionByZero)
+        );
+        let unknown = Arithmetic::neg_expr(Arithmetic::field("absent"));
+        assert_eq!(
+            ArithmeticCalculation::new("result", unknown).evaluate(&form),
+            Err(CalculationError::FieldNotFound("absent".to_owned()))
+        );
+    }
+
+    #[test]
+    fn plan_is_order_independent_and_respects_dependencies() {
+        let make_plan = |steps: Vec<CalculationStep>| CalculationPlan::new(steps);
+        let first =
+            CalculationStep::Standard(Calculation::new("result", CalculationOp::Sum, ["a", "c"]));
+        let second = CalculationStep::Standard(Calculation::new(
+            "b",
+            CalculationOp::Product,
+            ["result", "c"],
+        ));
+
+        let forward = make_plan(vec![first.clone(), second.clone()]);
+        let reverse = make_plan(vec![second, first]);
+        let mut form_a = numeric_form();
+        let mut form_b = form_a.clone();
+        let report_a = forward.apply(&mut form_a).unwrap();
+        let report_b = reverse.apply(&mut form_b).unwrap();
+
+        assert_eq!(form_a, form_b);
+        assert_eq!(report_a, report_b);
+        assert_eq!(report_a.len(), 2);
+        assert_eq!(report_a.results()[0].target(), "result");
+        assert_eq!(report_a.results()[1].target(), "b");
+        assert_eq!(form_a.value("result"), Ok(&FieldValue::number(8.5)));
+        assert_eq!(form_a.value("b"), Ok(&FieldValue::number(-17.0)));
+    }
+
+    #[test]
+    fn plan_detects_dependency_cycles_before_applying() {
+        let plan = CalculationPlan::new(vec![
+            CalculationStep::Standard(Calculation::new("a", CalculationOp::Sum, ["b"])),
+            CalculationStep::Standard(Calculation::new("b", CalculationOp::Sum, ["a"])),
+        ]);
+        let mut form = numeric_form();
+        let before = form.clone();
+        let error = plan.apply(&mut form).unwrap_err();
+
+        assert_eq!(form, before, "a cyclic plan must not mutate the form");
+        assert!(matches!(error, CalculationError::Cycle(path) if path == ["a", "b"]));
+    }
+
+    #[test]
+    fn plan_rejects_self_references_and_duplicate_targets() {
+        let self_ref = CalculationPlan::new(vec![CalculationStep::Arithmetic(
+            ArithmeticCalculation::new("a", Arithmetic::field("a")),
+        )]);
+        assert_eq!(
+            self_ref.evaluation_order(),
+            Err(CalculationError::Cycle(vec!["a".to_owned()]))
+        );
+
+        let duplicate = CalculationPlan::new(vec![
+            CalculationStep::Standard(Calculation::new("x", CalculationOp::Sum, ["a"])),
+            CalculationStep::Standard(Calculation::new("x", CalculationOp::Sum, ["b"])),
+        ]);
+        assert_eq!(
+            duplicate.evaluation_order(),
+            Err(CalculationError::DuplicateTarget("x".to_owned()))
+        );
     }
 }

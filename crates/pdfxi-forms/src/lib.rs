@@ -12,8 +12,17 @@
 //!   invalid-value-type, and invalid-text problems.
 //! - [`FormFill`] / [`FillReport`] — a filling session that records net field
 //!   changes in deterministic, name-sorted order.
-//! - [`Calculation`] / [`CalculationOp`] — sum, product, and average of named
-//!   numeric fields with deterministic rounding.
+//! - [`FieldSpec`] / [`acroform_dictionary`] — typed creation of text,
+//!   checkbox, radio, choice, pushbutton and signature fields, with widget
+//!   rectangles, page association and valid AcroForm/widget dictionaries.
+//! - [`Validator`] / [`Rule`] / [`Format`] / [`Pattern`] — configurable
+//!   validation (required, max length, numeric/currency/date, pattern, choice
+//!   membership and custom [`ValidationHook`]s) with a deterministic
+//!   [`ValidationSummary`].
+//! - [`Calculation`] / [`CalculationOp`] — sum, product, average, min and max
+//!   of named numeric fields with deterministic rounding.
+//! - [`Arithmetic`] / [`CalculationPlan`] — bounded simplified arithmetic and
+//!   order-independent dependency evaluation with cycle detection.
 //! - [`export_fdf`] / [`import_fdf`] — round-trippable FDF 1.7 field data, plus
 //!   a small [`export_xfdf`] XML subset.
 //! - [`parse_xfdf`] / [`import_xfdf`] — a bounded XML reader for XFDF field data
@@ -55,12 +64,14 @@
 
 mod acroform;
 mod appearance;
+mod build;
 mod calculation;
 mod fdf;
 mod field;
 mod fill;
 mod flatten;
 mod form;
+mod rules;
 mod validation;
 mod xfdf;
 
@@ -75,8 +86,10 @@ pub use appearance::{
     WIDE_WIDTH, WidgetAppearance, WidgetRect, build_appearance, button_state_names,
     check_mark_content, escape_literal_string, format_number, layout_text,
 };
+pub use build::{CreationError, FieldSpec, MAX_OPTIONS, acroform_dictionary};
 pub use calculation::{
-    Calculation, CalculationError, CalculationOp, CalculationReport, CalculationResult,
+    Arithmetic, ArithmeticCalculation, Calculation, CalculationError, CalculationOp,
+    CalculationPlan, CalculationReport, CalculationResult, CalculationStep, MAX_PLAN_STEPS,
     run_calculations,
 };
 pub use fdf::{FdfDocument, FdfError, FdfField, export_fdf, export_xfdf, import_fdf};
@@ -87,7 +100,11 @@ pub use flatten::{
     PageAnnotation, StoredAppearance, flatten_document, flatten_page,
 };
 pub use form::{Form, FormError};
-pub use validation::{Validation, ValidationError};
+pub use rules::{
+    CurrencyFormat, DateLayout, Format, MAX_PATTERN_LEN, MAX_PATTERN_TEXT_LEN, Pattern,
+    PatternError, Rule, ValidationHook, Validator,
+};
+pub use validation::{Validation, ValidationError, ValidationSummary};
 pub use xfdf::{XFDF_NAMESPACE, XfdfDocument, XfdfError, XfdfField, import_xfdf, parse_xfdf};
 
 /// Return the implementation name for diagnostics.
