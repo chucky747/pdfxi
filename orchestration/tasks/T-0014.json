@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-forms",
     "id":  "T-0014",
-    "evidence":  "",
+    "evidence":  "docs/evidence/forms/T-0014.md",
     "owns":  [
                  "crates/pdfxi-forms/**",
                  "orchestration/feature-updates/T-0014.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0002"
                    ],

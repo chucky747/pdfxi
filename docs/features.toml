@@ -600,25 +600,39 @@ tests = []
 title = "Export to PostScript"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-forms/src/lib.rs"
 domain = "Forms"
-evidence = ""
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out. cargo fmt -p pdfxi-forms -- --check: clean. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: clean. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): success."
 id = "FORMS-001"
-notes = ""
+notes = "Delivers the field/form model needed to fill existing AcroForm fields: FieldType, FieldFlags, FieldValue, Field, and Form with exact fully-qualified-name lookup, duplicate-name rejection, default-value handling, required/read-only flags, set_value/reset/reset_field, and stable insertion-order enumeration. Validation reports missing-required, invalid-choice, and invalid-text errors. Loading fields from PDF /AcroForm dictionaries and writing them back, plus appearance generation, remain for later forms tasks, so the row is in-progress."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi_forms::form::tests::field_lookup_by_fully_qualified_name",
+    "pdfxi_forms::form::tests::duplicate_field_names_are_rejected",
+    "pdfxi_forms::form::tests::from_fields_detects_duplicates",
+    "pdfxi_forms::form::tests::required_field_missing_fails_validation",
+    "pdfxi_forms::form::tests::set_value_refuses_read_only_and_unknown_fields",
+    "pdfxi_forms::form::tests::reset_restores_default_values",
+]
 title = "Fill existing AcroForm fields"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-forms/src/lib.rs"
 domain = "Forms"
-evidence = ""
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: clean. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): success."
 id = "FORMS-002"
-notes = ""
+notes = "FieldType distinguishes text, checkbox, radio, choice, button, signature, and unknown fields; FieldFlags is a dependency-free u32 bit set (required, read-only, no-export, plus common text/choice bits that preserve unknown bits); FieldValue covers Empty/Text/Bool/Choice; TextConstraint enforces min/max length and allow-lists. Choice and radio fields validate selected values against an export-value list. This is the model layer only; creating widget annotations and appearances in a PDF is deferred, keeping the row in-progress."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi_forms::form::tests::fully_valid_form_passes_validation",
+    "pdfxi_forms::form::tests::choice_field_rejects_value_outside_choices",
+    "pdfxi_forms::form::tests::text_field_enforces_constraints",
+    "pdfxi_forms::form::tests::fields_are_enumerated_in_stable_insertion_order",
+    "pdfxi_forms::form::tests::read_only_fields_are_skipped_by_bulk_reset",
+    "pdfxi_forms::field::tests::with_default_initializes_current_value",
+]
 title = "Create text checkbox radio choice and button fields"
 
 [[feature]]
