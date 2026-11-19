@@ -1,0 +1,14 @@
+{
+  "id": "T-0067",
+  "lane": "author",
+  "title": "Add watermarks and page backgrounds",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0034", "T-0044"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "orchestration/feature-updates/T-0067.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "evidence": ""
+}

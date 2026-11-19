@@ -14,13 +14,16 @@
 //!   one operation, threads the produced [`Artifact`] between steps, honours
 //!   cancellation, and records stable [`StepResult`]s. [`BatchQueue::run_with`]
 //!   drives it through the object-safe [`JobExecutor`] bridge.
+//! - [`ActionLibrary`] — a multi-action container that parses several named
+//!   actions from one tab-delimited text file, the format consumed by the CLI's
+//!   `action list`, `action show`, `action run`, and `droplet` commands.
 //! - [`AutomationError`] — actionable, self-describing errors for every
 //!   rejection path.
 //!
 //! All behavior is deterministic and allocates only as needed. The crate has no
 //! external dependencies, forbids `unsafe`, and keeps panics out of non-test
-//! code. Future milestones will add droplets, watched folders, the JavaScript
-//! sandbox, and the plugin host on top of these contracts.
+//! code. Future milestones will add watched folders, the JavaScript sandbox,
+//! and the plugin host on top of these contracts.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -29,6 +32,7 @@ mod action;
 mod batch;
 mod document;
 mod error;
+mod library;
 
 pub use action::{Action, ActionStep, StepKind};
 pub use batch::{
@@ -40,6 +44,7 @@ pub use document::{
     OperationError, OperationOutcome, RealExecutor, StepResult,
 };
 pub use error::AutomationError;
+pub use library::ActionLibrary;
 
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {

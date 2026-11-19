@@ -2453,6 +2453,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pdfxi-automation",
  "pdfxi-core",
  "pdfxi-render",
  "pdfxi-testkit",
@@ -2465,7 +2466,9 @@ dependencies = [
 name = "pdfxi-convert"
 version = "0.1.0"
 dependencies = [
+ "pdfxi-core",
  "pdfxi-render",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2483,6 +2486,9 @@ version = "0.1.0"
 [[package]]
 name = "pdfxi-forms"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "pdfxi-render"

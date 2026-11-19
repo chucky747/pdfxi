@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-accessibility",
     "id":  "T-0055",
-    "evidence":  "",
+    "evidence":  "docs/evidence/app/T-0055.md",
     "owns":  [
                  "crates/pdfxi-accessibility/**",
                  "orchestration/feature-updates/T-0055.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0013"
                    ],

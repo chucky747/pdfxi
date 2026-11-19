@@ -51,6 +51,12 @@ pub enum AutomationError {
         /// A human-readable explanation of the parse problem.
         reason: String,
     },
+    /// Two actions in one action file shared a name. Rename one of them so the
+    /// name can be used to select a single action unambiguously.
+    DuplicateActionName {
+        /// The duplicated action name.
+        name: String,
+    },
     /// A queue operation targeted a job id that is not in the queue.
     JobNotFound {
         /// The unknown job id.
@@ -108,6 +114,10 @@ impl fmt::Display for AutomationError {
                     write!(f, "invalid serialized action at line {line}: {reason}")
                 }
             }
+            Self::DuplicateActionName { name } => write!(
+                f,
+                "action file contains two actions named '{name}'; rename one so it can be selected by name"
+            ),
             Self::JobNotFound { id } => {
                 write!(f, "no job with id '{id}' exists in this queue")
             }

@@ -1,0 +1,14 @@
+{
+  "id": "T-0061",
+  "lane": "security",
+  "title": "Complete AES-256 revision 5 and 6 encryption handlers",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0018", "T-0036"],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "orchestration/feature-updates/T-0061.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security",
+  "evidence": ""
+}

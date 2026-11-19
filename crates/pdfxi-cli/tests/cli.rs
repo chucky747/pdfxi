@@ -635,3 +635,586 @@ fn search_unsupported_filter_reports_clear_error() {
         "error should name the failing page: {message}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// action / droplet
+// ---------------------------------------------------------------------------
+
+/// A temporary action file written from the tab-delimited text format.
+struct TempActionFile {
+    path: PathBuf,
+    display: String,
+}
+
+impl TempActionFile {
+    /// Writes `text` to a unique temporary `.act` file.
+    fn new(text: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let name = format!("pdfxi-cli-action-{}-{nanos}-{id}.act", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        fs::write(&path, text).expect("write temporary action file");
+        let display = path.to_string_lossy().into_owned();
+        Self { path, display }
+    }
+
+    /// Return the path as a command-line argument.
+    fn arg(&self) -> &str {
+        &self.display
+    }
+}
+
+impl Drop for TempActionFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// A three-step action (import, watermark, export) in the stable text format.
+fn staging_action(name: &str, description: &str) -> String {
+    format!(
+        "ACTION\t{name}\t{description}\n\
+         STEP\tload\timport\n\
+         STEP\tstamp\twatermark\n\
+         PARAM\ttext\tDRAFT\n\
+         STEP\tsave\texport\n\
+         PARAM\ttarget\tout.pdf\n"
+    )
+}
+
+/// A unique path that is guaranteed not to exist.
+fn missing_path() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir()
+        .join(format!(
+            "pdfxi-cli-action-missing-{}-{nanos}-{id}.pdf",
+            std::process::id()
+        ))
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn action_list_parses_multiple_actions_in_file_order() {
+    let file = TempActionFile::new(&format!(
+        "{}\n{}",
+        staging_action("first", "Description one"),
+        staging_action("second", "Description two")
+    ));
+    let output = run(&["action", "list", file.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        output_lines(&output),
+        vec![
+            "first\t3\tDescription one".to_owned(),
+            "second\t3\tDescription two".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn action_list_rejects_malformed_file() {
+    let file = TempActionFile::new("GARBAGE\n");
+    let output = run(&["action", "list", file.arg()]);
+    assert!(!output.status.success(), "malformed action file must fail");
+    assert!(
+        stderr(&output).contains("invalid action file"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "no action lines should be printed"
+    );
+}
+
+#[test]
+fn action_show_prints_steps_and_parameters() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let output = run(&["action", "show", file.arg(), "nightly"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        output_lines(&output),
+        vec![
+            "name: nightly",
+            "description: Stage every night",
+            "steps: 3",
+            "1 load import",
+            "2 stamp watermark",
+            "    params: text=DRAFT",
+            "3 save export",
+            "    params: target=out.pdf",
+        ]
+    );
+}
+
+#[test]
+fn action_show_missing_name_errors() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let output = run(&["action", "show", file.arg(), "missing"]);
+    assert!(!output.status.success(), "unknown action must fail");
+    let message = stderr(&output);
+    assert!(
+        message.contains("no action named 'missing'"),
+        "stderr: {message}"
+    );
+    assert!(
+        message.contains("nightly"),
+        "available names should be listed: {message}"
+    );
+}
+
+#[test]
+fn action_run_orders_files_deterministically() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let a = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let b = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let c = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+
+    let first = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        a.arg(),
+        b.arg(),
+        c.arg(),
+    ]);
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    assert_eq!(
+        output_lines(&first),
+        vec![
+            format!("job-0\t{}\tsucceeded\tsucceeded steps=3", a.arg()),
+            format!("job-1\t{}\tsucceeded\tsucceeded steps=3", b.arg()),
+            format!("job-2\t{}\tsucceeded\tsucceeded steps=3", c.arg()),
+        ]
+    );
+
+    let second = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        a.arg(),
+        b.arg(),
+        c.arg(),
+    ]);
+    assert_eq!(
+        stdout(&first),
+        stdout(&second),
+        "run output must be deterministic"
+    );
+}
+
+#[test]
+fn action_run_isolates_one_failing_file() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let good_a = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let empty = TempPdf::new(b"");
+    let good_b = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+
+    let output = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        good_a.arg(),
+        empty.arg(),
+        good_b.arg(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "a failing job must set a non-zero exit"
+    );
+    assert_eq!(
+        output_lines(&output),
+        vec![
+            format!("job-0\t{}\tsucceeded\tsucceeded steps=3", good_a.arg()),
+            format!("job-1\t{}\tfailed\tfailed steps=0 at=load", empty.arg()),
+            format!("job-2\t{}\tsucceeded\tsucceeded steps=3", good_b.arg()),
+        ]
+    );
+    assert!(
+        stderr(&output).contains("1 of 3 job(s) failed"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn action_run_validates_before_any_job_runs() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let good = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let output = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        good.arg(),
+        &missing_path(),
+    ]);
+    assert!(!output.status.success(), "a missing input must fail");
+    assert!(
+        stderr(&output).contains("does not exist") && stderr(&output).contains("no jobs were run"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "validation must happen before any job is run: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn action_run_missing_action_name_errors_before_any_job_runs() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let good = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let output = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "missing",
+        "--input",
+        good.arg(),
+    ]);
+    assert!(!output.status.success(), "an unknown action must fail");
+    assert!(
+        stderr(&output).contains("no action named 'missing'"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty(), "no job lines should be printed");
+}
+
+#[test]
+fn action_run_json_has_stable_shape() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let output = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        pdf.arg(),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let map = value.as_object().expect("JSON object");
+    assert_eq!(map.len(), 2, "unexpected extra fields: {map:?}");
+    assert_eq!(value["action"].as_str(), Some("nightly"));
+    let jobs = value["jobs"].as_array().expect("jobs array");
+    assert_eq!(jobs.len(), 1);
+
+    let job = jobs[0].as_object().expect("job object");
+    for key in ["id", "input", "state", "outcome"] {
+        assert!(job.contains_key(key), "missing job field {key}");
+    }
+    assert_eq!(job.len(), 4, "unexpected extra job fields: {job:?}");
+    assert_eq!(job["id"].as_str(), Some("job-0"));
+    assert_eq!(job["input"].as_str(), Some(pdf.arg()));
+    assert_eq!(job["state"].as_str(), Some("succeeded"));
+
+    let outcome = job["outcome"].as_object().expect("outcome object");
+    for key in [
+        "state",
+        "completed_steps",
+        "failed_step",
+        "message",
+        "summary",
+        "steps",
+    ] {
+        assert!(outcome.contains_key(key), "missing outcome field {key}");
+    }
+    assert_eq!(
+        outcome.len(),
+        6,
+        "unexpected extra outcome fields: {outcome:?}"
+    );
+    assert_eq!(outcome["state"].as_str(), Some("succeeded"));
+    assert_eq!(outcome["summary"].as_str(), Some("succeeded steps=3"));
+    assert!(outcome["failed_step"].is_null());
+    assert!(outcome["message"].is_null());
+    let completed = outcome["completed_steps"]
+        .as_array()
+        .expect("completed_steps array");
+    assert_eq!(completed.len(), 3);
+    assert_eq!(completed[0].as_str(), Some("load"));
+
+    let steps = outcome["steps"].as_array().expect("steps array");
+    assert_eq!(steps.len(), 3);
+    let first = steps[0].as_object().expect("step object");
+    for key in ["step_id", "kind", "message", "artifact_kind", "artifact"] {
+        assert!(first.contains_key(key), "missing step field {key}");
+    }
+    assert_eq!(first.len(), 5, "unexpected extra step fields: {first:?}");
+    assert_eq!(first["step_id"].as_str(), Some("load"));
+    assert_eq!(first["kind"].as_str(), Some("import"));
+    assert_eq!(first["artifact_kind"].as_str(), Some("bytes"));
+    assert_eq!(
+        first["artifact"].as_str(),
+        Some(format!("bytes({})", pdfxi_testkit::minimal_pdf().len()).as_str())
+    );
+    assert_eq!(steps[2]["kind"].as_str(), Some("export"));
+    assert_eq!(steps[2]["artifact_kind"].as_str(), Some("path"));
+    assert_eq!(steps[2]["artifact"].as_str(), Some("out.pdf"));
+}
+
+#[test]
+fn action_run_output_dir_resolves_export_target_without_writing() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let dir = std::env::temp_dir().join(format!("pdfxi-cli-action-outdir-{}", std::process::id()));
+    let dir_text = dir.to_string_lossy().into_owned();
+    let output = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        pdf.arg(),
+        "--output-dir",
+        &dir_text,
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let steps = value["jobs"][0]["outcome"]["steps"]
+        .as_array()
+        .expect("steps array");
+    let expected = dir.join("out.pdf").to_string_lossy().into_owned();
+    assert_eq!(steps[2]["artifact"].as_str(), Some(expected.as_str()));
+    assert!(
+        !dir.join("out.pdf").exists(),
+        "the echo executor must not write files"
+    );
+}
+
+#[test]
+fn droplet_matches_action_run_with_defaults() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let a = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let b = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+
+    let action_text_output = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        a.arg(),
+        b.arg(),
+    ]);
+    assert!(
+        action_text_output.status.success(),
+        "stderr: {}",
+        stderr(&action_text_output)
+    );
+    let droplet_text_output = run(&["droplet", file.arg(), "nightly", a.arg(), b.arg()]);
+    assert!(
+        droplet_text_output.status.success(),
+        "stderr: {}",
+        stderr(&droplet_text_output)
+    );
+    assert_eq!(stdout(&action_text_output), stdout(&droplet_text_output));
+
+    let action_json_output = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        a.arg(),
+        b.arg(),
+        "--json",
+    ]);
+    let droplet_json_output = run(&["droplet", file.arg(), "nightly", a.arg(), b.arg(), "--json"]);
+    assert!(
+        action_json_output.status.success(),
+        "stderr: {}",
+        stderr(&action_json_output)
+    );
+    assert!(
+        droplet_json_output.status.success(),
+        "stderr: {}",
+        stderr(&droplet_json_output)
+    );
+    let action_value: Value =
+        serde_json::from_str(&stdout(&action_json_output)).expect("valid JSON");
+    let droplet_value: Value =
+        serde_json::from_str(&stdout(&droplet_json_output)).expect("valid JSON");
+    assert_eq!(action_value, droplet_value);
+}
+
+#[test]
+fn droplet_isolates_a_failing_file_and_exits_nonzero() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
+    let good = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let empty = TempPdf::new(b"");
+    let output = run(&["droplet", file.arg(), "nightly", good.arg(), empty.arg()]);
+    assert!(
+        !output.status.success(),
+        "a failing droplet job must exit non-zero"
+    );
+    assert_eq!(
+        output_lines(&output),
+        vec![
+            format!("job-0\t{}\tsucceeded\tsucceeded steps=3", good.arg()),
+            format!("job-1\t{}\tfailed\tfailed steps=0 at=load", empty.arg()),
+        ]
+    );
+}
+
+/// A temporary output directory that removes itself (and its contents) on drop.
+struct TempActionDir {
+    path: PathBuf,
+}
+
+impl TempActionDir {
+    /// Creates a uniquely named, empty temporary directory.
+    fn new(tag: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "pdfxi-cli-{tag}-{}-{nanos}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("create temporary action output dir");
+        Self { path }
+    }
+}
+
+impl Drop for TempActionDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+/// An import-then-export action with a caller-supplied export target.
+fn export_action(target: &str) -> String {
+    // The action text format escapes backslashes, so double them for paths.
+    let escaped = target.replace('\\', "\\\\");
+    format!(
+        "ACTION\texport-case\tStage one file\n\
+         STEP\tload\timport\n\
+         STEP\tsave\texport\n\
+         PARAM\ttarget\t{escaped}\n"
+    )
+}
+
+#[test]
+fn action_run_rejects_escaping_export_targets() {
+    let out_dir = TempActionDir::new("outdir");
+    let out_arg = out_dir.path.to_string_lossy().into_owned();
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    // 1. A parent-directory target must be rejected before a path is recorded.
+    let escape_name = format!("pdfxi-cli-escape-{nanos}.pdf");
+    let outside = std::env::temp_dir().join(&escape_name);
+    assert!(!outside.exists(), "escape sentinel must start absent");
+    let escape_file = TempActionFile::new(&export_action(&format!("../{escape_name}")));
+    let output = run(&[
+        "action",
+        "run",
+        escape_file.arg(),
+        "export-case",
+        "--input",
+        pdf.arg(),
+        "--output-dir",
+        &out_arg,
+        "--json",
+    ]);
+    assert!(!output.status.success(), "traversal target must fail");
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["jobs"][0]["state"].as_str(), Some("failed"));
+    assert_eq!(
+        value["jobs"][0]["outcome"]["failed_step"].as_str(),
+        Some("save")
+    );
+    let message = value["jobs"][0]["outcome"]["message"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        message.contains("forbidden path component"),
+        "message: {message}"
+    );
+    assert!(
+        !outside.exists(),
+        "no file may be written outside the output dir"
+    );
+
+    // 2. An absolute Windows path must also be rejected.
+    let absolute = std::env::temp_dir().join(format!("pdfxi-cli-abs-{nanos}.pdf"));
+    assert!(!absolute.exists(), "absolute sentinel must start absent");
+    let absolute_file = TempActionFile::new(&export_action(&absolute.to_string_lossy()));
+    let output = run(&[
+        "action",
+        "run",
+        absolute_file.arg(),
+        "export-case",
+        "--input",
+        pdf.arg(),
+        "--output-dir",
+        &out_arg,
+        "--json",
+    ]);
+    assert!(!output.status.success(), "absolute target must fail");
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let message = value["jobs"][0]["outcome"]["message"]
+        .as_str()
+        .unwrap_or("");
+    assert!(message.contains("relative path"), "message: {message}");
+    assert!(
+        !absolute.exists(),
+        "no file may be written at the absolute target"
+    );
+
+    // 3. A normal relative name stays under the output dir and writes nothing.
+    let ok_file = TempActionFile::new(&export_action("ok.pdf"));
+    let output = run(&[
+        "action",
+        "run",
+        ok_file.arg(),
+        "export-case",
+        "--input",
+        pdf.arg(),
+        "--output-dir",
+        &out_arg,
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let steps = value["jobs"][0]["outcome"]["steps"]
+        .as_array()
+        .expect("steps array");
+    let expected = out_dir.path.join("ok.pdf").to_string_lossy().into_owned();
+    assert_eq!(steps[1]["artifact"].as_str(), Some(expected.as_str()));
+    assert!(
+        !out_dir.path.join("ok.pdf").exists(),
+        "the echo executor must not write files"
+    );
+}

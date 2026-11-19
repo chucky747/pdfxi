@@ -11,6 +11,9 @@ permissions:
     resource: "crates/pdfxi-automation/**"
     effect: allow
   - action: edit
+    resource: "crates/pdfxi-cli/**"
+    effect: allow
+  - action: edit
     resource: "docs/evidence/automation/**"
     effect: allow
   - action: edit

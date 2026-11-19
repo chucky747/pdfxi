@@ -1,0 +1,14 @@
+{
+  "id": "T-0063",
+  "lane": "author",
+  "title": "Add headers footers and page numbering",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0013", "T-0034"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "orchestration/feature-updates/T-0063.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "evidence": ""
+}

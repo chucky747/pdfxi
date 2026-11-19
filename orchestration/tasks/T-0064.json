@@ -1,0 +1,15 @@
+{
+  "id": "T-0064",
+  "lane": "qa",
+  "title": "Add M2 authoring fixture corpus and golden baselines",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0016", "T-0024"],
+  "owns": [
+    "crates/pdfxi-testkit/**",
+    "fixtures/**",
+    "orchestration/feature-updates/T-0064.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-testkit",
+  "evidence": ""
+}

@@ -14,6 +14,11 @@
 //! with zero-based character offsets. Offsets are Unicode scalar values (not
 //! bytes) into each page's concatenated text, the same offset space used by
 //! `pdfxi-text`.
+//!
+//! The `action` command group loads named actions from a tab-delimited action
+//! file and runs them through the `pdfxi-automation` `DocumentExecutor`. The
+//! companion `droplet` command is the same run with Explorer-friendly defaults;
+//! see the `action` module for the staging-only executor and drop-handler notes.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -22,6 +27,9 @@
 // the module keeps default builds free of unused-code warnings.
 #[cfg(feature = "pdfium")]
 mod image;
+
+// Action-file commands (`action` and `droplet`) built on pdfxi-automation.
+mod action;
 
 use std::path::{Path, PathBuf};
 
@@ -114,6 +122,77 @@ enum Command {
         #[arg(long, value_enum, default_value = "png")]
         format: OutputFormat,
     },
+    /// Manage named actions stored in a tab-delimited action file.
+    ///
+    /// An action file holds one or more action blocks separated by blank lines.
+    /// Each block uses the stable `ACTION` / `STEP` / `PARAM` text format defined
+    /// by `pdfxi-automation`. Names are unique within a file.
+    Action {
+        /// The action operation to perform.
+        #[command(subcommand)]
+        command: ActionCommand,
+    },
+    /// Droplet-style entry point: run a named action over one or more inputs.
+    ///
+    /// This is exactly equivalent to
+    /// `pdfxi action run <ACTION_FILE> <NAME> --input <INPUT>...` with the
+    /// default text output and no output-directory override. It accepts any
+    /// number of dropped paths, so an Explorer "drop onto" verb can pass `%1`
+    /// (or `%*` for several files) directly to the executable. `--json` selects
+    /// the same stable JSON shape as `action run --json`. See the `action`
+    /// module documentation for a registration example.
+    Droplet {
+        /// Path to the action file holding the named action.
+        action_file: PathBuf,
+        /// Name of the action to run.
+        name: String,
+        /// One or more input paths to stage through the action.
+        #[arg(required = true, num_args = 1..)]
+        inputs: Vec<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi action` command group.
+#[derive(Debug, Subcommand)]
+enum ActionCommand {
+    /// List every action in a file, in file order.
+    List {
+        /// Path to the action file.
+        file: PathBuf,
+    },
+    /// Show the steps and parameters of one named action.
+    Show {
+        /// Path to the action file.
+        file: PathBuf,
+        /// Name of the action to display.
+        name: String,
+    },
+    /// Run a named action over one or more input files.
+    ///
+    /// Every input is validated before any job is run. Jobs execute in the
+    /// order inputs are given; one failing input never stops its siblings.
+    /// The command exits non-zero if any job failed. Use `--json` for a stable
+    /// machine-readable result containing the job state, each per-file outcome,
+    /// and the per-step results recorded by the executor.
+    Run {
+        /// Path to the action file.
+        file: PathBuf,
+        /// Name of the action to run.
+        name: String,
+        /// One or more input paths, in execution order.
+        #[arg(long, required = true, num_args = 1.., value_name = "PATH")]
+        input: Vec<PathBuf>,
+        /// Directory used to resolve relative export targets. No file is
+        /// written: the resolved path is only recorded in the outcome.
+        #[arg(long, value_name = "DIR")]
+        output_dir: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Image encoding selected by `pdfxi render --format`.
@@ -191,6 +270,23 @@ fn main() -> anyhow::Result<()> {
             out,
             format,
         } => render(&file, page, scale, &out, format),
+        Command::Action { command } => match command {
+            ActionCommand::List { file } => action::list_actions(&file),
+            ActionCommand::Show { file, name } => action::show_action(&file, &name),
+            ActionCommand::Run {
+                file,
+                name,
+                input,
+                output_dir,
+                json,
+            } => action::run_action(&file, &name, &input, output_dir.as_deref(), json),
+        },
+        Command::Droplet {
+            action_file,
+            name,
+            inputs,
+            json,
+        } => action::run_action(&action_file, &name, &inputs, None, json),
     }
 }
 

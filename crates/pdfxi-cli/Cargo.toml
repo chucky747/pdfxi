@@ -16,6 +16,9 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 pdfxi-core = { path = "../pdfxi-core" }
+# Action-file parsing and the document executor used by `action` and `droplet`.
+# A workspace crate, so no external dependency is introduced.
+pdfxi-automation = { path = "../pdfxi-automation" }
 pdfxi-text = { path = "../pdfxi-text" }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.

@@ -11,6 +11,9 @@ permissions:
     resource: "crates/pdfxi-app/**"
     effect: allow
   - action: edit
+    resource: "crates/pdfxi-accessibility/**"
+    effect: allow
+  - action: edit
     resource: "docs/evidence/app/**"
     effect: allow
   - action: edit

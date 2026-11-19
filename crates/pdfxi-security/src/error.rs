@@ -35,6 +35,36 @@ pub enum SecurityError {
     SignatureExpired,
     /// A signing certificate was revoked by its issuer.
     CertificateRevoked,
+    /// A CMS/DER input ended before a complete encoded value was available.
+    DerTruncated,
+    /// A DER input violated a canonical encoding rule (for example an indefinite
+    /// length, a non-minimal integer, or an out-of-range date).
+    DerInvalid,
+    /// A declared DER length could not be represented or exceeded the input.
+    DerLengthOverflow,
+    /// A DER value had a different tag than the parser expected.
+    ///
+    /// Both identifier octets are reported, never the value's contents.
+    DerUnexpectedTag {
+        /// Identifier octet the parser expected.
+        expected: u8,
+        /// Identifier octet that was actually present.
+        found: u8,
+    },
+    /// Bytes remained after a complete top-level DER value was parsed.
+    DerTrailingBytes,
+    /// The CMS digest algorithm is not supported for signing or verification.
+    UnsupportedDigestAlgorithm(String),
+    /// The CMS signature algorithm is not supported for verification.
+    UnsupportedSignatureAlgorithm(String),
+    /// A required signed attribute was absent from a `SignedData` signer info.
+    MissingSignedAttribute(&'static str),
+    /// The signer identifier did not match the supplied signing provider.
+    SignerMismatch,
+    /// The embedded certificate did not match the supplied signing provider.
+    CertificateMismatch,
+    /// A `SignedData` did not contain the expected signer certificate.
+    CertificateMissing,
     /// A protector or test double was misconfigured.
     Configuration(String),
     /// A page number was zero; PDF page numbers are 1-based.
@@ -91,6 +121,30 @@ impl fmt::Display for SecurityError {
             Self::TamperedContent => write!(f, "signed content was tampered with"),
             Self::SignatureExpired => write!(f, "signature or certificate has expired"),
             Self::CertificateRevoked => write!(f, "signing certificate was revoked"),
+            Self::DerTruncated => write!(f, "DER input was truncated"),
+            Self::DerInvalid => write!(f, "DER input was not canonically encoded"),
+            Self::DerLengthOverflow => write!(f, "DER length exceeded representable bounds"),
+            Self::DerUnexpectedTag { expected, found } => {
+                write!(
+                    f,
+                    "unexpected DER tag: expected {expected:#04x}, found {found:#04x}"
+                )
+            }
+            Self::DerTrailingBytes => write!(f, "DER input had trailing bytes"),
+            Self::UnsupportedDigestAlgorithm(algorithm) => {
+                write!(f, "unsupported digest algorithm: {algorithm}")
+            }
+            Self::UnsupportedSignatureAlgorithm(algorithm) => {
+                write!(f, "unsupported signature algorithm: {algorithm}")
+            }
+            Self::MissingSignedAttribute(name) => {
+                write!(f, "missing required signed attribute: {name}")
+            }
+            Self::SignerMismatch => write!(f, "signer identifier did not match the provider"),
+            Self::CertificateMismatch => {
+                write!(f, "embedded certificate did not match the provider")
+            }
+            Self::CertificateMissing => write!(f, "signed data contained no signer certificate"),
             Self::Configuration(message) => write!(f, "security configuration error: {message}"),
             Self::InvalidPageNumber => write!(f, "page number must be at least 1"),
             Self::EmptyRedactionRegion => {

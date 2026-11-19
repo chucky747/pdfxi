@@ -25,16 +25,21 @@
 //! - [`Sanitizer`] / [`SanitizationReport`] — category-based sanitization plans
 //!   with deterministic actions and removal verification against a supplied
 //!   inventory.
+//! - [`der`] — a strict, dependency-free ASN.1 DER encoder/decoder subset.
+//! - [`cms`] — CMS/PKCS#7 `SignedData` creation and validation behind the
+//!   [`SignatureProvider`] trait, with a deterministic in-memory test provider.
 //!
-//! All operations are deterministic and allocate only as needed. CMS/PKCS#7
-//! verification and timestamps will be layered onto these contracts in later
-//! milestones without changing the public surface. No operation logs secrets
-//! or document contents.
+//! All operations are deterministic and allocate only as needed. RFC 3161
+//! timestamps and trust/revocation management are layered on in later milestones
+//! without changing the public surface. No operation logs secrets or document
+//! contents.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod cms;
 pub mod crypto;
+pub mod der;
 mod encryption;
 mod error;
 mod permissions;
@@ -44,6 +49,10 @@ mod sanitization;
 mod signature;
 pub mod standard_handler;
 
+pub use cms::{
+    InMemorySignatureProvider, SignatureProvider, SignedDataParams, SignerIdentifier,
+    build_signed_data, digest, modpow_u128, verify_signed_data, verify_signed_data_detached,
+};
 pub use encryption::EncryptionMethod;
 pub use error::{Result, SecurityError};
 pub use permissions::{PasswordRole, Permission, Permissions};

@@ -2,15 +2,27 @@
 //!
 //! This crate owns the accessibility-side document model. It is
 //! renderer-agnostic and depends only on the standard library. The
-//! [`reading_order`] module provides a validated tree of tagged nodes and an
-//! acyclic depth-first presentation order suitable for assistive technology.
+//! [`reading_order`] module provides a validated tag tree with acyclic
+//! presentation order; [`tree`] adds geometry, text, and alternative text to a
+//! validated [`A11yTree`]; [`builder`] derives such a tree from ordered page
+//! text blocks; and [`export`] serializes it to plain text with a stable
+//! summary.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod builder;
+pub mod export;
 pub mod reading_order;
+pub mod tree;
 
+pub use builder::{
+    HEADING1_RATIO, HEADING2_RATIO, HEADING3_RATIO, PARAGRAPH_GAP_MULTIPLIER, ReadingOrderBuilder,
+    TextBlock,
+};
+pub use export::{AltTextCoverage, RoleCount, TreeSummary, summarize, to_plain_text};
 pub use reading_order::{ReadingOrder, ReadingOrderError, ReadingOrderNode};
+pub use tree::{A11yNode, A11yTree, BBox, NodeId, TreeError};
 
 use core::fmt;
 
@@ -18,10 +30,12 @@ use core::fmt;
 ///
 /// The variants mirror the standard PDF structure-tag roles used to give
 /// assistive technology a meaningful outline of a document.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TagRole {
     /// Root of the tag tree.
     Document,
+    /// A single page of the document.
+    Page,
     /// A major division of the document.
     Part,
     /// A self-contained artistic composition.
@@ -89,6 +103,7 @@ impl TagRole {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Document => "document",
+            Self::Page => "page",
             Self::Part => "part",
             Self::Art => "art",
             Self::Sect => "sect",
@@ -143,5 +158,6 @@ mod tests {
         assert_eq!(TagRole::Document.as_str(), "document");
         assert_eq!(TagRole::Heading1.to_string(), "heading1");
         assert_eq!(TagRole::TableData.as_str(), "tabledata");
+        assert_eq!(TagRole::Page.as_str(), "page");
     }
 }

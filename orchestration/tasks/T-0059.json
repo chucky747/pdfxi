@@ -1,0 +1,14 @@
+{
+  "id": "T-0059",
+  "lane": "core",
+  "title": "Add page boxes crop bleed trim and printer marks",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0008", "T-0041"],
+  "owns": [
+    "crates/pdfxi-core/**",
+    "orchestration/feature-updates/T-0059.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core",
+  "evidence": ""
+}
