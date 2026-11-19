@@ -1690,6 +1690,20 @@ impl SidecarResponse {
     }
 }
 
+/// Parse a sidecar response JSON and return only its top-level `version`.
+///
+/// This uses the same strict JSON parser as [`SidecarResponse::from_json`], so a
+/// version can be reported as a distinct, typed mismatch before the rest of the
+/// payload is validated. A missing or wrongly typed `version` is reported as
+/// [`OcrError::SidecarJson`], which the process bridge classifies as a malformed
+/// response. The full document is still validated by [`SidecarResponse::from_json`]
+/// after this check.
+pub fn sidecar_response_version(input: &str) -> Result<u32, OcrError> {
+    let value = parse_json(input)?;
+    let object = as_object(&value, "response")?;
+    as_u32(get(object, "version")?, "version")
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

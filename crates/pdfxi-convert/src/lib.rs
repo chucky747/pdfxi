@@ -28,6 +28,16 @@
 //! - [`DocumentJson`], [`DocumentMetadata`], [`JsonPage`], and [`JsonSpan`]
 //!   model a versioned structured snapshot serialized by a hand-written,
 //!   dependency-free JSON writer with stable key order and correct escaping.
+//! - [`RtfPage`], [`RtfOptions`], [`export_rtf`], and [`export_rtf_string`]
+//!   write deterministic RTF with a fixed header/font/colour table, paragraph
+//!   breaks, page breaks, and signed `\uN?` escapes for non-ASCII text.
+//! - [`TaggedTextOptions`], [`TaggedExport`], [`export_tagged_text`],
+//!   [`export_structured_text`], and [`export_plain_text`] serialize a
+//!   `pdfxi_accessibility::A11yTree` into a nested `@role` outline and a flat
+//!   `[role]` plain-text variant, honouring page, alt-text, heading-level, and
+//!   line-ending options.
+//! - [`LineEnding`], [`ExportPageSelection`], and [`ExportOptionError`] are the shared,
+//!   typed option primitives used by both writers.
 //! - [`TextConverter`] is a [`Converter`] adapter that exports pre-extracted
 //!   page data as [`ExportKind::Text`] or [`ExportKind::Json`], keeping parsing
 //!   and rendering out of the export path.
@@ -72,12 +82,15 @@ mod converter;
 pub mod create;
 mod error;
 mod export;
+mod export_options;
 pub mod image;
 mod json;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
+mod rtf;
 mod source;
+mod tagged_text;
 mod text;
 mod text_converter;
 
@@ -89,6 +102,7 @@ pub use create::{
 };
 pub use error::ConversionError;
 pub use export::ExportKind;
+pub use export_options::{ExportOptionError, ExportPageSelection, LineEnding};
 pub use image::{ImageFormat, encode, encode_png, encode_ppm};
 pub use json::{DocumentJson, DocumentMetadata, JSON_SCHEMA_VERSION, JsonPage, JsonSpan};
 pub use options::ConversionOptions;
@@ -98,7 +112,11 @@ pub use page_export::{
 };
 #[cfg(feature = "pdfium")]
 pub use page_export::{export_pdf_bytes, export_pdf_file};
+pub use rtf::{RtfOptions, RtfPage, export_rtf, export_rtf_string};
 pub use source::SourceKind;
+pub use tagged_text::{
+    TaggedExport, TaggedTextOptions, export_plain_text, export_structured_text, export_tagged_text,
+};
 pub use text::{
     DEFAULT_PAGE_SEPARATOR, PAGE_HEADER_PATTERN, TextEncoding, TextExportPlan, TextPageSelection,
     export_text,

@@ -16,11 +16,16 @@
 //! backend: [`ocr::OcrEngine`], [`ocr::LanguageRouter`], the
 //! [`ocr::SidecarRequest`]/[`ocr::SidecarResponse`] JSON contract, and the
 //! [`ocr::ConfidencePolicy`] suspect report.
+//!
+//! The [`sidecar`] module supplies the first concrete [`ocr::OcrEngine`]: a
+//! bounded, cancellable out-of-process bridge that speaks the T-0057 JSON wire
+//! format without a shell or network access.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod ocr;
+pub mod sidecar;
 
 use std::collections::BTreeMap;
 use std::sync::{
