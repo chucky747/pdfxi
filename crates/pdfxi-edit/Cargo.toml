@@ -1,0 +1,12 @@
+[package]
+name = "pdfxi-edit"
+description = "Page operations, content editing, annotations, watermarks, Bates numbering, and redaction."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+

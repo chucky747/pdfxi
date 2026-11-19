@@ -1,0 +1,12 @@
+[package]
+name = "pdfxi-standards"
+description = "PDF/A, PDF/X, PDF/E, PDF/VT, preflight, color management, and optimization."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+

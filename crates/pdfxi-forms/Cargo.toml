@@ -1,0 +1,12 @@
+[package]
+name = "pdfxi-forms"
+description = "AcroForm/XFA model, fields, calculations, validation, FDF/XFDF, and flattening."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+

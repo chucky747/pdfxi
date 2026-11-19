@@ -1,0 +1,15 @@
+{
+    "acceptance":  "cargo xtask goal-verify --milestone M0",
+    "id":  "T-0004",
+    "evidence":  "docs/evidence/M0.md",
+    "owns":  [
+                 "docs/MEMORY.md"
+             ],
+    "status":  "verified",
+    "depends_on":  [
+                       "T-0001"
+                   ],
+    "title":  "Install global memory and OpenCode model caps",
+    "priority":  "P0",
+    "lane":  "memory-librarian"
+}

@@ -1,0 +1,23 @@
+{
+    "acceptance":  "cargo xtask goal-verify --milestone M0",
+    "id":  "T-0001",
+    "evidence":  "docs/evidence/M0.md",
+    "owns":  [
+                 "AGENTS.md",
+                 "RULES.md",
+                 "README.md",
+                 "LICENSE",
+                 "NOTICE",
+                 ".gitignore",
+                 ".gitattributes",
+                 "rust-toolchain.toml",
+                 "scripts/bootstrap.ps1"
+             ],
+    "status":  "verified",
+    "depends_on":  [
+
+                   ],
+    "title":  "Bootstrap repository and toolchain",
+    "priority":  "P0",
+    "lane":  "integrator"
+}

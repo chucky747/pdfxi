@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pdfxi.local/schema/task.schema.json",
+  "title": "PDFXI orchestration task",
+  "type": "object",
+  "required": ["id", "title", "lane", "status", "priority", "owns", "acceptance"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^T-[0-9]{4}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "lane": {
+      "type": "string",
+      "enum": ["orchestrator", "core", "render", "author", "forms", "security", "convert", "app", "automation", "qa", "docs", "integrator", "reviewer", "memory-librarian"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "claimed", "in-progress", "review", "verified", "blocked"]
+    },
+    "priority": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+    "owns": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "depends_on": { "type": "array", "items": { "type": "string" } },
+    "acceptance": { "type": "string", "minLength": 1 },
+    "evidence": { "type": "string" }
+  },
+  "additionalProperties": false
+}

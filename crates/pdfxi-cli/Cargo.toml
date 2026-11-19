@@ -1,0 +1,15 @@
+[package]
+name = "pdfxi-cli"
+description = "Headless command-line interface for PDFXI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+pdfxi-core = { path = "../pdfxi-core" }
+

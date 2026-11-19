@@ -1,0 +1,15 @@
+{
+    "acceptance":  "cargo run -p pdfxi-cli -- info fixtures/minimal.pdf",
+    "id":  "T-0010",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-cli/**"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0008"
+                   ],
+    "title":  "Implement CLI info and text smoke paths",
+    "priority":  "P1",
+    "lane":  "core"
+}

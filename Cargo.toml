@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pdfxi-core",
+    "crates/pdfxi-render",
+    "crates/pdfxi-text",
+    "crates/pdfxi-edit",
+    "crates/pdfxi-forms",
+    "crates/pdfxi-security",
+    "crates/pdfxi-convert",
+    "crates/pdfxi-standards",
+    "crates/pdfxi-automation",
+    "crates/pdfxi-accessibility",
+    "crates/pdfxi-cli",
+    "crates/pdfxi-app",
+    "crates/pdfxi-testkit",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+authors = ["PDFXI contributors"]
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+
+[profile.dev]
+debug = 1
+incremental = true
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.fast]
+inherits = "dev"
+debug = 0
+incremental = true
+
+[profile.full]
+inherits = "dev"
+debug = 1
+incremental = false
+

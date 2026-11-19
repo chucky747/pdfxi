@@ -1,0 +1,15 @@
+{
+    "acceptance":  "cargo xtask docs",
+    "id":  "T-0003",
+    "evidence":  "docs/evidence/M0.md",
+    "owns":  [
+                 "docs/**"
+             ],
+    "status":  "verified",
+    "depends_on":  [
+                       "T-0001"
+                   ],
+    "title":  "Write goal plan architecture and feature matrix",
+    "priority":  "P0",
+    "lane":  "docs"
+}

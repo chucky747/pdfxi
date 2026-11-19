@@ -1,0 +1,15 @@
+{
+    "acceptance":  "cargo test -p pdfxi-core",
+    "id":  "T-0008",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-core/**"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0006"
+                   ],
+    "title":  "Implement xref table parser and page tree",
+    "priority":  "P0",
+    "lane":  "core"
+}

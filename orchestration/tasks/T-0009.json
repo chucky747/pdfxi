@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-render -p pdfxi-text",
+    "id":  "T-0009",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-render/**",
+                 "crates/pdfxi-text/**"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Freeze renderer and text traits",
+    "priority":  "P0",
+    "lane":  "render"
+}

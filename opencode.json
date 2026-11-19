@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "default_agent": "orchestrator",
+  "instructions": ["RULES.md"],
+  "permissions": [
+    { "action": "websearch", "resource": "*", "effect": "allow" },
+    { "action": "read", "resource": "~/.config/opencode/memories/**", "effect": "allow" },
+    { "action": "edit", "resource": "~/.config/opencode/memories/**", "effect": "allow" },
+    { "action": "shell", "resource": "*", "effect": "allow" },
+    { "action": "shell", "resource": "git checkout *", "effect": "deny" },
+    { "action": "shell", "resource": "git switch *", "effect": "deny" },
+    { "action": "shell", "resource": "git worktree *", "effect": "deny" },
+    { "action": "shell", "resource": "git reset --hard *", "effect": "deny" },
+    { "action": "shell", "resource": "git clean *", "effect": "deny" },
+    { "action": "shell", "resource": "git stash *", "effect": "deny" },
+    { "action": "shell", "resource": "git clone *", "effect": "deny" }
+  ],
+  "compaction": {
+    "auto": true,
+    "background": true,
+    "keep": { "tokens": 30000 },
+    "buffer": "15%"
+  },
+  "tool_output": { "max_lines": 1200, "max_bytes": 49152 },
+  "watcher": {
+    "ignore": ["target/**", ".orchestration/**", "corpus/cache/**"]
+  },
+  "experimental": {
+    "todo": true,
+    "subagent_depth": 2,
+    "location_idle_timeout": "4 hours"
+  }
+}

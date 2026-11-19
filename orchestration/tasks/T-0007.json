@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-testkit",
+    "id":  "T-0007",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-testkit/**",
+                 "fixtures/**"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Expand deterministic fixture builder",
+    "priority":  "P0",
+    "lane":  "qa"
+}

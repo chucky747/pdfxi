@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test --workspace",
+    "id":  "T-0002",
+    "evidence":  "docs/evidence/M0.md",
+    "owns":  [
+                 "Cargo.toml",
+                 "crates/**",
+                 "xtask/**"
+             ],
+    "status":  "verified",
+    "depends_on":  [
+                       "T-0001"
+                   ],
+    "title":  "Create workspace skeleton and xtask",
+    "priority":  "P0",
+    "lane":  "core"
+}

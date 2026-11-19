@@ -1,0 +1,19 @@
+PDFXI
+=====
+
+PDFXI is an independent clean-room implementation. It is not affiliated with,
+endorsed by, or sponsored by Adobe Inc. "Adobe", "Acrobat", and related marks
+are trademarks of Adobe Inc. No Adobe source code, binaries, icons, help text,
+or other proprietary assets are included.
+
+Third-party components and their licenses are listed in `deny.toml` and in the
+generated `docs/THIRD_PARTY.md`. Notable runtime dependencies are expected to
+include:
+
+- PDFium (BSD-3-Clause) for rendering and text extraction.
+- lopdf (MIT) for PDF object manipulation.
+- egui/eframe (MIT OR Apache-2.0) for the desktop UI.
+- Tesseract (Apache-2.0) as an optional OCR sidecar.
+
+Optional external converters (LibreOffice, a headless browser, Ghostscript) are
+not bundled by default and remain the user's responsibility.

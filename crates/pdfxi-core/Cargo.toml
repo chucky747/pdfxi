@@ -1,0 +1,13 @@
+[package]
+name = "pdfxi-core"
+description = "PDF object model, parser, cross references, filters, document lifecycle, and incremental save."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+

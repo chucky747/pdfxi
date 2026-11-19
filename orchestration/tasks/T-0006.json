@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-core -p pdfxi-cli",
+    "id":  "T-0006",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-core/**",
+                 "crates/pdfxi-cli/**"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Harden core header and document slice",
+    "priority":  "P0",
+    "lane":  "core"
+}

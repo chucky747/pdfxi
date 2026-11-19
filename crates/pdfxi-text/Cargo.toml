@@ -1,0 +1,12 @@
+[package]
+name = "pdfxi-text"
+description = "Text extraction, layout reconstruction, search indexing, and OCR orchestration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+

@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo xtask board",
+    "id":  "T-0005",
+    "evidence":  "docs/evidence/M0.md",
+    "owns":  [
+                 "orchestration/**",
+                 "scripts/**",
+                 "opencode.json",
+                 ".opencode/**"
+             ],
+    "status":  "verified",
+    "depends_on":  [
+                       "T-0001"
+                   ],
+    "title":  "Create orchestration board claims and goal controller",
+    "priority":  "P0",
+    "lane":  "integrator"
+}

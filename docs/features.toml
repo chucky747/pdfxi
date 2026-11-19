@@ -1,0 +1,1468 @@
+# PDFXI feature parity matrix.
+# Status: planned | in-progress | verified | replaced | deferred.
+# A verified row requires tests, docs, and evidence.
+
+[[feature]]
+id = "VIEW-001"
+domain = "View & Navigate"
+title = "Open and print PDF documents"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-002"
+domain = "View & Navigate"
+title = "Single page continuous and two-page layouts"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-003"
+domain = "View & Navigate"
+title = "Zoom pan loupe and fit modes"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-004"
+domain = "View & Navigate"
+title = "Rotate view and page display"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-005"
+domain = "View & Navigate"
+title = "Tabbed multi-document interface"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-006"
+domain = "View & Navigate"
+title = "Split and tile document windows"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-007"
+domain = "View & Navigate"
+title = "Page thumbnails and navigation pane"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-008"
+domain = "View & Navigate"
+title = "Bookmarks destinations and article threads"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-009"
+domain = "View & Navigate"
+title = "Attachments and embedded files"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-010"
+domain = "View & Navigate"
+title = "Optional content layers"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-011"
+domain = "View & Navigate"
+title = "Links and named destinations"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-012"
+domain = "View & Navigate"
+title = "Full screen and presentation mode"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-013"
+domain = "View & Navigate"
+title = "Reflow and read aloud"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-014"
+domain = "View & Navigate"
+title = "PDF Portfolio browsing"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "VIEW-015"
+domain = "View & Navigate"
+title = "Side-by-side compare view"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-001"
+domain = "Create"
+title = "Create PDF from any printable application"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-002"
+domain = "Create"
+title = "Virtual PDF printer"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-003"
+domain = "Create"
+title = "Create PDF from images"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-004"
+domain = "Create"
+title = "Create PDF from plain text and Markdown"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-005"
+domain = "Create"
+title = "Create PDF from HTML"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-006"
+domain = "Create"
+title = "Create PDF from Microsoft Office via adapter"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-007"
+domain = "Create"
+title = "Scan to PDF with TWAIN and WIA"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-008"
+domain = "Create"
+title = "OCR scanned pages to searchable PDF"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-009"
+domain = "Create"
+title = "Combine multiple files into one PDF"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-010"
+domain = "Create"
+title = "Create and customize PDF Portfolios"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-011"
+domain = "Create"
+title = "Browser page capture extension"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-012"
+domain = "Create"
+title = "Email-to-PDF capture"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-013"
+domain = "Create"
+title = "PostScript and Distiller-compatible ingestion"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "CREATE-014"
+domain = "Create"
+title = "Watched-folder conversion"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-001"
+domain = "Edit"
+title = "Edit text with paragraph reflow"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-002"
+domain = "Edit"
+title = "Edit fonts size spacing and color"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-003"
+domain = "Edit"
+title = "Find and replace text across a document"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-004"
+domain = "Edit"
+title = "Add move resize and replace images"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-005"
+domain = "Edit"
+title = "Insert delete extract and replace pages"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-006"
+domain = "Edit"
+title = "Reorder rotate crop and resize pages"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-007"
+domain = "Edit"
+title = "Split and merge documents"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-008"
+domain = "Edit"
+title = "Headers footers and page numbering"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-009"
+domain = "Edit"
+title = "Watermarks and backgrounds"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-010"
+domain = "Edit"
+title = "Bates numbering"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-011"
+domain = "Edit"
+title = "Bookmarks links and attachments editing"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-012"
+domain = "Edit"
+title = "Flatten annotations and form fields"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-013"
+domain = "Edit"
+title = "Redaction marks and permanent removal"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-014"
+domain = "Edit"
+title = "Optimize and compress documents"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EDIT-015"
+domain = "Edit"
+title = "Repair malformed documents"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-001"
+domain = "Export"
+title = "Export PDF to editable Word"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-002"
+domain = "Export"
+title = "Export PDF to editable Excel"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-003"
+domain = "Export"
+title = "Export PDF to editable PowerPoint"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-004"
+domain = "Export"
+title = "Export PDF to HTML"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-005"
+domain = "Export"
+title = "Export PDF to RTF and plain text"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-006"
+domain = "Export"
+title = "Export pages to JPEG PNG and TIFF"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-007"
+domain = "Export"
+title = "Export accessible text and tagged content"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-008"
+domain = "Export"
+title = "Export to PDF/A PDF/X and PDF/E"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "EXPORT-009"
+domain = "Export"
+title = "Export to PostScript"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-001"
+domain = "Forms"
+title = "Fill existing AcroForm fields"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-002"
+domain = "Forms"
+title = "Create text checkbox radio choice and button fields"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-003"
+domain = "Forms"
+title = "Field properties calculations and validation"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-004"
+domain = "Forms"
+title = "Form field actions and tab order"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-005"
+domain = "Forms"
+title = "Automatically recognize static form fields"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-006"
+domain = "Forms"
+title = "Import and export FDF and XFDF"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-007"
+domain = "Forms"
+title = "Flatten forms and preserve appearance"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-008"
+domain = "Forms"
+title = "Reader-enable form filling and saving"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-009"
+domain = "Forms"
+title = "Distribute and collect forms locally"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "FORMS-010"
+domain = "Forms"
+title = "Electronic signature fields and workflows"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-001"
+domain = "Security"
+title = "Open password and permissions password"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-002"
+domain = "Security"
+title = "RC4 and AES encryption handlers"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-003"
+domain = "Security"
+title = "Certificate encryption"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-004"
+domain = "Security"
+title = "Digital IDs and certificate management"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-005"
+domain = "Security"
+title = "Sign and certify documents"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-006"
+domain = "Security"
+title = "Timestamp and signature validation"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-007"
+domain = "Security"
+title = "Trust manager and revocation checks"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-008"
+domain = "Security"
+title = "Sanitize document and remove hidden information"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-009"
+domain = "Security"
+title = "Metadata and XMP scrubbing"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-010"
+domain = "Security"
+title = "Security envelopes and attachment encryption"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "SEC-011"
+domain = "Security"
+title = "Policy-based protection replacement"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-001"
+domain = "Review"
+title = "Sticky note highlight underline strikeout and squiggly"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-002"
+domain = "Review"
+title = "Free text callout line arrow shape and cloud"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-003"
+domain = "Review"
+title = "Pencil stamp and file attachment annotations"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-004"
+domain = "Review"
+title = "Comment threads replies and status"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-005"
+domain = "Review"
+title = "Import export and print comments"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-006"
+domain = "Review"
+title = "Email and shared review workflows locally"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-007"
+domain = "Review"
+title = "Review tracker and participant status"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-008"
+domain = "Review"
+title = "Compare two PDFs and summarize changes"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "REVIEW-009"
+domain = "Review"
+title = "Measurement distance area and perimeter"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-001"
+domain = "Print Production"
+title = "Preflight profiles checks and fixups"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-002"
+domain = "Print Production"
+title = "PDF/A PDF/X PDF/E and PDF/VT validation"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-003"
+domain = "Print Production"
+title = "ICC color management and output intents"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-004"
+domain = "Print Production"
+title = "Output preview and separations"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-005"
+domain = "Print Production"
+title = "Ink manager and overprint preview"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-006"
+domain = "Print Production"
+title = "Trapping presets and transparency flattening"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-007"
+domain = "Print Production"
+title = "Page boxes bleed crop and printer marks"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PRINT-008"
+domain = "Print Production"
+title = "Droplets hot folders and batch preflight"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "ACCESS-001"
+domain = "Accessibility"
+title = "Tag tree and reading order editor"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "ACCESS-002"
+domain = "Accessibility"
+title = "Alt text and table editor"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "ACCESS-003"
+domain = "Accessibility"
+title = "Accessibility and PDF/UA checker"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "ACCESS-004"
+domain = "Accessibility"
+title = "Reflow high contrast and keyboard navigation"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "ACCESS-005"
+domain = "Accessibility"
+title = "Read aloud with system speech"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "ACCESS-006"
+domain = "Accessibility"
+title = "Screen reader and accesskit integration"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-001"
+domain = "Automation"
+title = "Action Wizard create edit import export"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-002"
+domain = "Automation"
+title = "Batch processing and command sequences"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-003"
+domain = "Automation"
+title = "Droplets and watched folders"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-004"
+domain = "Automation"
+title = "Sandboxed Acrobat-compatible JavaScript subset"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-005"
+domain = "Automation"
+title = "CLI for every scriptable operation"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-006"
+domain = "Automation"
+title = "Local JSON API for automation"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-007"
+domain = "Automation"
+title = "Custom toolsets and commands"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "AUTO-008"
+domain = "Automation"
+title = "WASM plugin host"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MANAGE-001"
+domain = "Document Management"
+title = "Document properties and XMP metadata"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MANAGE-002"
+domain = "Document Management"
+title = "Home recents favorites and collections"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MANAGE-003"
+domain = "Document Management"
+title = "Cross-file search and index"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MANAGE-004"
+domain = "Document Management"
+title = "PDF Portfolio management"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MANAGE-005"
+domain = "Document Management"
+title = "Version compare and history"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MANAGE-006"
+domain = "Document Management"
+title = "Network and SharePoint-style integration"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MEDIA-001"
+domain = "Multimedia and 3D"
+title = "Audio and video annotations"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MEDIA-002"
+domain = "Multimedia and 3D"
+title = "HTML5 media replacement for Flash"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MEDIA-003"
+domain = "Multimedia and 3D"
+title = "U3D and PRC 3D viewing"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MEDIA-004"
+domain = "Multimedia and 3D"
+title = "Geospatial PDF support"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "MEDIA-005"
+domain = "Multimedia and 3D"
+title = "Interactive actions and triggers"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PLAT-001"
+domain = "Platform"
+title = "Windows desktop application"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PLAT-002"
+domain = "Platform"
+title = "macOS and Linux desktop builds"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PLAT-003"
+domain = "Platform"
+title = "Microsoft Office integration"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PLAT-004"
+domain = "Platform"
+title = "Browser integration"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PLAT-005"
+domain = "Platform"
+title = "Shell integration and file associations"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PLAT-006"
+domain = "Platform"
+title = "Deployment preferences and customization"
+priority = "P3"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "PLAT-007"
+domain = "Platform"
+title = "Unicode CJK and right-to-left text"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-001"
+domain = "Standards"
+title = "PDF 1.0 through 2.0 compatibility"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-002"
+domain = "Standards"
+title = "Cross-reference tables and streams"
+priority = "P0"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-003"
+domain = "Standards"
+title = "Object streams and linearization"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-004"
+domain = "Standards"
+title = "Font embedding and CID fonts"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-005"
+domain = "Standards"
+title = "Transparency and blend modes"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-006"
+domain = "Standards"
+title = "Tagged PDF and structure tree"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-007"
+domain = "Standards"
+title = "PDF/A conformance"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-008"
+domain = "Standards"
+title = "PDF/X conformance"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-009"
+domain = "Standards"
+title = "PDF/UA conformance"
+priority = "P2"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+[[feature]]
+id = "STD-010"
+domain = "Standards"
+title = "Incremental update and digital preservation"
+priority = "P1"
+status = "planned"
+tests = []
+docs = "docs/FEATURES.md"
+evidence = ""
+notes = ""
+
+

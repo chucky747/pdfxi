@@ -1,0 +1,6 @@
+[toolchain]
+# Windows-first bootstrap uses the GNU toolchain because MSVC Build Tools
+# require an elevated install. CI adds an MSVC job; the code remains portable.
+channel = "stable-x86_64-pc-windows-gnu"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+profile = "minimal"
