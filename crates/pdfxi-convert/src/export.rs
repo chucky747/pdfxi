@@ -22,6 +22,11 @@ pub enum ExportKind {
     Pdf,
     /// Plain text (`*.txt`, `*.text`, `*.log`, `*.md`).
     Text,
+    /// Structured JavaScript Object Notation (`*.json`).
+    ///
+    /// Produced by the text converter as a deterministic, versioned document
+    /// snapshot; see [`crate::DocumentJson`].
+    Json,
     /// HyperText Markup Language (`*.html`, `*.htm`, `*.xhtml`).
     Html,
     /// Rich Text Format (`*.rtf`).
@@ -46,6 +51,7 @@ impl ExportKind {
     pub const ALL: &'static [Self] = &[
         Self::Pdf,
         Self::Text,
+        Self::Json,
         Self::Html,
         Self::Rtf,
         Self::Image,
@@ -74,6 +80,7 @@ impl ExportKind {
         match ext.as_str() {
             "pdf" => Self::Pdf,
             "txt" | "text" | "log" | "md" => Self::Text,
+            "json" => Self::Json,
             "html" | "htm" | "xhtml" => Self::Html,
             "rtf" => Self::Rtf,
             "png" | "jpg" | "jpeg" | "gif" | "bmp" | "tif" | "tiff" | "webp" => Self::Image,
@@ -114,6 +121,7 @@ impl ExportKind {
         match self {
             Self::Pdf => "pdf",
             Self::Text => "text",
+            Self::Json => "json",
             Self::Html => "html",
             Self::Rtf => "rtf",
             Self::Image => "image",
@@ -139,6 +147,8 @@ mod tests {
     fn export_kind_from_extension_is_case_insensitive_and_optional_dot() {
         assert_eq!(ExportKind::from_extension("PDF"), ExportKind::Pdf);
         assert_eq!(ExportKind::from_extension(".pdf"), ExportKind::Pdf);
+        assert_eq!(ExportKind::from_extension(".JSON"), ExportKind::Json);
+        assert_eq!(ExportKind::from_extension("json"), ExportKind::Json);
         assert_eq!(ExportKind::from_extension(".HTML"), ExportKind::Html);
         assert_eq!(ExportKind::from_extension("docx"), ExportKind::Word);
         assert_eq!(ExportKind::from_extension("csv"), ExportKind::Spreadsheet);
@@ -176,9 +186,10 @@ mod tests {
 
     #[test]
     fn export_kind_all_has_no_unknown_and_no_duplicates() {
-        assert_eq!(ExportKind::all().len(), 8);
+        assert_eq!(ExportKind::all().len(), 9);
         for target in ExportKind::all() {
             assert_ne!(*target, ExportKind::Unknown);
         }
+        assert!(ExportKind::all().contains(&ExportKind::Json));
     }
 }

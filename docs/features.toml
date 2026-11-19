@@ -790,14 +790,27 @@ tests = []
 title = "Export PDF to HTML"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/text.rs",
+    "crates/pdfxi-convert/src/text_converter.rs",
+]
 domain = "Export"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 70/70 passed; text + text_converter module tests cover separators, trailing newlines, page ordering, headers, empty documents, encoding, and missing-page errors. cargo clippy -p pdfxi-convert --all-targets --all-features -- -D warnings: EXIT=0."
 id = "EXPORT-005"
-notes = ""
+notes = "Deterministic plain-text export via TextExportPlan + export_text, wired to ExportKind::Text in the TextConverter adapter with UTF-8/UTF-16 encodings. RTF output named by EXPORT-005 is still not implemented, so the row stays in-progress."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "text::tests::export_text_uses_separator_and_adds_no_trailing_newline",
+    "text::tests::export_text_all_sorts_by_page_number_and_last_duplicate_wins",
+    "text::tests::export_text_explicit_page_order_and_range_are_honoured",
+    "text::tests::export_text_page_headers_use_one_based_numbers",
+    "text::tests::export_text_empty_document_and_missing_pages_yield_empty_string",
+    "text::tests::text_export_plan_validate_rejects_invalid_selections",
+    "text::tests::text_encoding_emits_utf8_and_bom_prefixed_utf16",
+    "text_converter::tests::text_converter_exports_text_bytes_with_plan_encoding",
+    "text_converter::tests::text_converter_errors_on_missing_page_text",
+]
 title = "Export PDF to RTF and plain text"
 
 [[feature]]
@@ -875,14 +888,28 @@ tests = [
 title = "Export pages to JPEG PNG and TIFF"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/json.rs",
+    "crates/pdfxi-convert/src/text_converter.rs",
+    "crates/pdfxi-convert/src/export.rs",
+]
 domain = "Export"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 70/70 passed; json module tests cover escaping, deterministic key order, schema version, spans with boxes, and empty documents. New ExportKind::Json classified from *.json. cargo doc -p pdfxi-convert --no-deps with RUSTDOCFLAGS=-D warnings: EXIT=0."
 id = "EXPORT-007"
-notes = ""
+notes = "Structured JSON export via the versioned DocumentJson model and hand-written serializer (metadata, per-page text, positioned spans with boxes), dispatched through ExportKind::Json by TextConverter. Tagged-PDF/accessibility content named by EXPORT-007 remains with the accessibility lane, so the row stays in-progress."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "json::tests::json_escapes_quotes_backslashes_and_control_characters",
+    "json::tests::json_preserves_non_ascii_as_utf8",
+    "json::tests::json_key_order_and_layout_are_deterministic",
+    "json::tests::json_schema_version_is_stable_and_serialized_first",
+    "json::tests::json_serializes_spans_with_boxes_and_sorts_pages",
+    "json::tests::json_serializes_empty_document_and_non_finite_coordinates",
+    "text_converter::tests::text_converter_exports_schema_versioned_json_bytes",
+    "export::tests::export_kind_from_extension_is_case_insensitive_and_optional_dot",
+    "export::tests::export_kind_all_has_no_unknown_and_no_duplicates",
+]
 title = "Export accessible text and tagged content"
 
 [[feature]]
