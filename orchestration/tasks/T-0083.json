@@ -1,0 +1,14 @@
+{
+  "id": "T-0083",
+  "lane": "app",
+  "title": "Add rotate view and page display controls",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0011", "T-0013", "T-0028"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "orchestration/feature-updates/T-0083.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}

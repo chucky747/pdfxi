@@ -12,10 +12,16 @@
 //! - Operands and operators are tokenized into operations that retain their
 //!   exact source bytes, so unaffected content is preserved verbatim.
 //! - Text is decoded from `Tj`, `TJ`, `'`, and `"` operators (literal strings,
-//!   hex strings, and `TJ` number adjustments). Text clipping render modes do
-//!   not hide text from removal: every text-showing operator is a candidate.
+//!   hex strings, and `TJ` number adjustments). `'` and `"` apply their implicit
+//!   line move before the rectangle test. Text clipping render modes do not
+//!   hide text from removal: every text-showing operator is a candidate.
+//! - Text extents respect the text matrix and the current transformation
+//!   matrix, so `Tm` rotation and `cm` scale/rotation are handled. Vertical
+//!   extent is the baseline only, since no font metrics are available here.
 //! - `Do` references to [`FormXObject`]s are recursed into with a bounded depth
-//!   and a cycle check; inline images (`BI … ID … EI`) are opaque and preserved.
+//!   and a cycle check. Inline images (`BI … ID … EI`) are preserved verbatim
+//!   unless their CTM-mapped unit square overlaps a redaction rectangle, in
+//!   which case the entire block is removed.
 //! - Page dictionaries are stripped of annotations and links whose rectangle
 //!   intersects a redaction rectangle or whose text/URI matches a pattern, and
 //!   of metadata references when text redaction is requested.
@@ -24,9 +30,10 @@
 //!
 //! After applying, the module re-extracts text from the produced streams using
 //! a simple content scan and records any [`Residual`] in a typed
-//! [`RedactionReport`]. Callers can supply their own extractor with
-//! [`AppliedRedaction::verify_with`]; [`RedactionReport::check`] enforces the
-//! strict policy.
+//! [`RedactionReport`]. Form streams referenced by a page are scanned too, so
+//! content left inside a form is detected. Callers can supply their own
+//! extractor with [`AppliedRedaction::verify_with`]; [`RedactionReport::check`]
+//! enforces the strict policy. Verification accepts a cancellation closure.
 //!
 //! # No hidden state
 //!
@@ -292,11 +299,13 @@ impl RedactionRect {
         x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
     }
 
-    /// Whether the horizontal span `[left, right]` at height `y` overlaps.
+    /// Whether the box `(left, bottom, right, top)` overlaps this rectangle.
     ///
-    /// Used to decide whether a text-showing operator falls in this rectangle.
-    pub const fn overlaps_text(&self, left: f64, right: f64, y: f64) -> bool {
-        self.x0 < right && left < self.x1 && y >= self.y0 && y <= self.y1
+    /// Edges that merely touch do not count as an overlap. Used for both text
+    /// bounding boxes and inline image bounds in page space.
+    pub const fn overlaps_box(&self, bounds: (f64, f64, f64, f64)) -> bool {
+        let (left, bottom, right, top) = bounds;
+        self.x0 < right && left < self.x1 && self.y0 < top && bottom < self.y1
     }
 }
 
@@ -384,7 +393,9 @@ impl TextPattern {
         if self.case_sensitive {
             text.contains(&self.needle)
         } else {
-            !find_occurrences(text, &self.needle, false).is_empty()
+            let never = || false;
+            find_occurrences(text, &self.needle, false, &never)
+                .is_ok_and(|offsets| !offsets.is_empty())
         }
     }
 }
@@ -628,6 +639,11 @@ pub enum RemovalKind {
         /// Top edge in page space.
         y1: f64,
     },
+    /// An inline image (`BI … ID … EI`) overlapped a rectangle and was removed.
+    InlineImageRemoved {
+        /// Number of bytes removed from the content stream.
+        byte_count: usize,
+    },
     /// An annotation or link was removed from the page dictionary.
     AnnotationRemoved {
         /// The annotation's `/Subtype`, or `Unknown` when absent.
@@ -740,10 +756,14 @@ impl RedactionReport {
 }
 
 /// Result of applying a redaction plan.
+///
+/// `form_pages` records which pages reference each form so verification can
+/// include form streams in the text it scans.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppliedRedaction {
     pages: BTreeMap<u32, AppliedPage>,
     forms: BTreeMap<String, FormXObject>,
+    form_pages: BTreeMap<String, Vec<u32>>,
     report: RedactionReport,
 }
 
@@ -784,24 +804,33 @@ impl AppliedRedaction {
 
     /// Re-verify with a caller-supplied extractor.
     ///
-    /// `extractor` is called once per redacted page and must return the text as
-    /// it would be seen by the user (for example from a full text extractor
-    /// that also follows form XObjects). Residuals in the report are replaced.
-    /// Call [`Self::check`] afterwards to enforce strict mode.
+    /// `extractor` is called once for each redacted page stream and once for
+    /// each form stream referenced by that page. Text from form streams is
+    /// appended to the referencing page's text so residuals inside forms are
+    /// detected too. Residuals in the report are replaced; call [`Self::check`]
+    /// afterwards to enforce strict mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RedactionError::Cancelled`] when `cancel` returns `true`.
     pub fn verify_with<F>(
         &mut self,
         plan: &RedactionPlan,
         extractor: F,
         strict: bool,
+        cancel: &impl Fn() -> bool,
     ) -> Result<&RedactionReport, RedactionError>
     where
         F: Fn(u32, &[u8]) -> String,
     {
-        let mut page_text = BTreeMap::new();
-        for (page, applied) in &self.pages {
-            page_text.insert(*page, extractor(*page, &applied.content));
-        }
-        let residuals = residuals_for_plan(plan, &page_text)?;
+        let page_text = collect_page_text(
+            &self.pages,
+            &self.forms,
+            &self.form_pages,
+            |page, content| Ok(extractor(page, content)),
+            cancel,
+        )?;
+        let residuals = residuals_for_plan(plan, &page_text, cancel)?;
         self.report.residuals = residuals;
         self.report.strict = strict;
         Ok(&self.report)
@@ -810,16 +839,26 @@ impl AppliedRedaction {
     /// Re-verify with the built-in simple content scan.
     ///
     /// Call [`Self::check`] afterwards to enforce strict mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RedactionError::Cancelled`] or [`RedactionError::MalformedContent`].
     pub fn verify_scan(
         &mut self,
         plan: &RedactionPlan,
         strict: bool,
+        cancel: &impl Fn() -> bool,
     ) -> Result<&RedactionReport, RedactionError> {
-        self.verify_with(
-            plan,
-            |_page, content| scan_text(content).unwrap_or_default(),
-            strict,
-        )
+        let page_text = collect_page_text(
+            &self.pages,
+            &self.forms,
+            &self.form_pages,
+            |_page, content| scan_text(content),
+            cancel,
+        )?;
+        self.report.residuals = residuals_for_plan(plan, &page_text, cancel)?;
+        self.report.strict = strict;
+        Ok(&self.report)
     }
 
     /// Consume the result and return its report.
@@ -847,6 +886,7 @@ pub fn apply(
     plan.validate(input)?;
     let mut removals = Vec::new();
     let mut redacted_forms = BTreeMap::new();
+    let mut form_pages: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
     let mut pages = BTreeMap::new();
 
     for (&page, content) in &input.pages {
@@ -867,6 +907,7 @@ pub fn apply(
             &mut removals,
             &mut redacted_forms,
             &mut visiting,
+            &mut form_pages,
         )?;
         let dictionary = input
             .dictionaries
@@ -882,20 +923,71 @@ pub fn apply(
         );
     }
 
-    let mut page_text = BTreeMap::new();
-    for (&page, applied) in &pages {
-        page_text.insert(page, scan_text(&applied.content)?);
-    }
-    let residuals = residuals_for_plan(plan, &page_text)?;
+    let form_pages: BTreeMap<String, Vec<u32>> = form_pages
+        .into_iter()
+        .map(|(name, pages)| (name, pages.into_iter().collect()))
+        .collect();
+    let page_text = collect_page_text(
+        &pages,
+        &redacted_forms,
+        &form_pages,
+        |_page, content| scan_text(content),
+        cancel,
+    )?;
+    let residuals = residuals_for_plan(plan, &page_text, cancel)?;
     Ok(AppliedRedaction {
         pages,
         forms: redacted_forms,
+        form_pages,
         report: RedactionReport {
             removals,
             residuals,
             strict: options.strict_verification,
         },
     })
+}
+
+/// Build the text used for verification: each page stream plus the streams of
+/// every form it references.
+///
+/// Form text is appended to the referencing page so a residual inside a form is
+/// reported against that page. `cancel` is checked for every stream.
+fn collect_page_text<F>(
+    pages: &BTreeMap<u32, AppliedPage>,
+    forms: &BTreeMap<String, FormXObject>,
+    form_pages: &BTreeMap<String, Vec<u32>>,
+    extract: F,
+    cancel: &impl Fn() -> bool,
+) -> Result<BTreeMap<u32, String>, RedactionError>
+where
+    F: Fn(u32, &[u8]) -> Result<String, RedactionError>,
+{
+    let mut page_text = BTreeMap::new();
+    for (&page, applied) in pages {
+        if cancel() {
+            return Err(RedactionError::Cancelled);
+        }
+        let mut text = extract(page, &applied.content)?;
+        for (name, referencing_pages) in form_pages {
+            if !referencing_pages.contains(&page) {
+                continue;
+            }
+            if cancel() {
+                return Err(RedactionError::Cancelled);
+            }
+            if let Some(form) = forms.get(name) {
+                let form_text = extract(page, &form.content)?;
+                if !form_text.is_empty() {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(&form_text);
+                }
+            }
+        }
+        page_text.insert(page, text);
+    }
+    Ok(page_text)
 }
 
 /// Apply a plan to a single page and enforce strict verification.
@@ -1204,6 +1296,9 @@ impl<'a> Parser<'a> {
                     TokenKind::Keyword(keyword) => items.push(Object::Other(keyword.into_bytes())),
                 },
             }
+            // Whitespace (and comments) may appear between the last element and
+            // the closing bracket; `next_token` only skips leading space.
+            let _gap = self.skip_space();
             if self.data.get(self.pos) == Some(&b']') {
                 self.pos += 1;
                 return Ok(Object::Array(items));
@@ -1401,6 +1496,7 @@ fn redact_stream(
     removals: &mut Vec<Removal>,
     redacted_forms: &mut BTreeMap<String, FormXObject>,
     visiting: &mut Vec<String>,
+    form_pages: &mut BTreeMap<String, BTreeSet<u32>>,
 ) -> Result<Vec<u8>, RedactionError> {
     let operations = parse_operations(content)?;
     let mut out = Vec::with_capacity(content.len());
@@ -1413,7 +1509,24 @@ fn redact_stream(
             return Err(RedactionError::Cancelled);
         }
         if op.inline_image {
-            out.extend_from_slice(&op.raw);
+            let bounds = inline_image_bounds(effective_ctm);
+            let covered = plan.regions().iter().any(|region| {
+                region.page().get() == page
+                    && region
+                        .as_rect()
+                        .is_some_and(|rect| rect.overlaps_box(bounds))
+            });
+            if covered {
+                removals.push(Removal {
+                    page,
+                    form: form.map(str::to_owned),
+                    kind: RemovalKind::InlineImageRemoved {
+                        byte_count: op.raw.len(),
+                    },
+                });
+            } else {
+                out.extend_from_slice(&op.raw);
+            }
             continue;
         }
 
@@ -1473,9 +1586,13 @@ fn redact_stream(
                 out.extend_from_slice(&op.raw);
             }
             "Tf" => {
-                let numbers = number_operands(&op.operands, 2);
-                if numbers.len() == 2 {
-                    state.font_size = numbers[1];
+                // The first operand is a font name, so read the size from the
+                // last operand rather than the leading run of numbers.
+                if let Some(size) = op.operands.last().and_then(|value| match value {
+                    Object::Number(number) => Some(*number),
+                    _ => None,
+                }) {
+                    state.font_size = size;
                 }
                 out.extend_from_slice(&op.raw);
             }
@@ -1484,14 +1601,15 @@ fn redact_stream(
                 out.extend_from_slice(&op.raw);
             }
             "Tj" | "TJ" | "'" | "\"" => {
-                let (text, advance) = decode_shown(&op.operator, &op.operands, state.font_size);
-                let page_point = effective_ctm.transform_point(state.matrix.e, state.matrix.f);
-                let right = page_point.0 + advance.abs();
-                let affected = pattern_matches(plan, page, &text)
-                    || rect_matches(plan, page, page_point.0, right, page_point.1);
+                // `'` and `"` perform an implicit T* before showing text; apply
+                // that move first so the overlap test uses the rendered line.
                 if op.operator == "'" || op.operator == "\"" {
                     state.matrix = Matrix::translate(0.0, -state.leading).mul(state.matrix);
                 }
+                let (text, advance) = decode_shown(&op.operator, &op.operands, state.font_size);
+                let bounds = text_page_bounds(effective_ctm, &state, advance);
+                let affected =
+                    pattern_matches(plan, page, &text) || rect_matches(plan, page, bounds);
                 if affected {
                     removals.push(Removal {
                         page,
@@ -1510,6 +1628,7 @@ fn redact_stream(
                 if let Some(name) = first_name(&op.operands)
                     && let Some(form_object) = forms.get(&name)
                 {
+                    form_pages.entry(name.clone()).or_default().insert(page);
                     if visiting.iter().any(|v| v == &name) {
                         return Err(RedactionError::FormCycle { name });
                     }
@@ -1535,6 +1654,7 @@ fn redact_stream(
                             removals,
                             redacted_forms,
                             visiting,
+                            form_pages,
                         )?;
                         visiting.pop();
                         redacted_forms
@@ -1576,6 +1696,45 @@ fn redact_stream(
     }
 
     Ok(out)
+}
+
+/// Page-space bounding box of an inline image.
+///
+/// PDF paints an inline image into the unit square mapped by the current
+/// transformation matrix, so all four corners are transformed and enclosed.
+fn inline_image_bounds(ctm: Matrix) -> (f64, f64, f64, f64) {
+    let corners = [
+        ctm.transform_point(0.0, 0.0),
+        ctm.transform_point(1.0, 0.0),
+        ctm.transform_point(0.0, 1.0),
+        ctm.transform_point(1.0, 1.0),
+    ];
+    let mut left = f64::INFINITY;
+    let mut right = f64::NEG_INFINITY;
+    let mut bottom = f64::INFINITY;
+    let mut top = f64::NEG_INFINITY;
+    for (x, y) in corners {
+        left = left.min(x);
+        right = right.max(x);
+        bottom = bottom.min(y);
+        top = top.max(y);
+    }
+    (left, bottom, right, top)
+}
+
+/// Page-space bounding box spanned by a text run and its horizontal advance.
+///
+/// The advance is in text space; applying the text matrix first makes the
+/// extent respect `Tm` rotation/scale, and the CTM then maps it into page space.
+fn text_page_bounds(ctm: Matrix, state: &TextState, advance: f64) -> (f64, f64, f64, f64) {
+    let start = (state.matrix.e, state.matrix.f);
+    let end = (
+        state.matrix.a * advance + start.0,
+        state.matrix.b * advance + start.1,
+    );
+    let a = ctm.transform_point(start.0, start.1);
+    let b = ctm.transform_point(end.0, end.1);
+    (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))
 }
 
 fn number_operands(operands: &[Object], max: usize) -> Vec<f64> {
@@ -1671,12 +1830,12 @@ fn pattern_matches(plan: &RedactionPlan, page: u32, text: &[u8]) -> bool {
     })
 }
 
-fn rect_matches(plan: &RedactionPlan, page: u32, left: f64, right: f64, y: f64) -> bool {
+fn rect_matches(plan: &RedactionPlan, page: u32, bounds: (f64, f64, f64, f64)) -> bool {
     plan.regions().iter().any(|region| {
         region.page().get() == page
             && region
                 .as_rect()
-                .is_some_and(|rect| rect.overlaps_text(left, right, y))
+                .is_some_and(|rect| rect.overlaps_box(bounds))
     })
 }
 
@@ -1794,9 +1953,13 @@ fn numeric_rect(array: Option<&[Value]>) -> Option<(f64, f64, f64, f64)> {
 fn residuals_for_plan(
     plan: &RedactionPlan,
     page_text: &BTreeMap<u32, String>,
+    cancel: &impl Fn() -> bool,
 ) -> Result<Vec<Residual>, RedactionError> {
     let mut residuals = Vec::new();
     for region in plan.regions() {
+        if cancel() {
+            return Err(RedactionError::Cancelled);
+        }
         let page = region.page().get();
         let Some(text) = page_text.get(&page) else {
             continue;
@@ -1807,7 +1970,7 @@ fn residuals_for_plan(
                     && !label.trim().is_empty()
                 {
                     let pattern = TextPattern::case_sensitive(label.clone())?;
-                    for offset in find_occurrences(text, pattern.literal(), true) {
+                    for offset in find_occurrences(text, pattern.literal(), true, cancel)? {
                         residuals.push(Residual {
                             page,
                             offset,
@@ -1817,7 +1980,8 @@ fn residuals_for_plan(
                 }
             }
             RedactionRegion::Text { pattern, .. } => {
-                for offset in find_occurrences(text, pattern.literal(), pattern.is_case_sensitive())
+                for offset in
+                    find_occurrences(text, pattern.literal(), pattern.is_case_sensitive(), cancel)?
                 {
                     residuals.push(Residual {
                         page,
@@ -1844,15 +2008,24 @@ fn residuals_for_plan(
 /// Case-insensitive matching lowers both sides char-by-char while retaining the
 /// original byte offset of each lowered character, so reported offsets stay
 /// valid even when Unicode case folding changes length.
-fn find_occurrences(haystack: &str, needle: &str, case_sensitive: bool) -> Vec<usize> {
+fn find_occurrences(
+    haystack: &str,
+    needle: &str,
+    case_sensitive: bool,
+    cancel: &impl Fn() -> bool,
+) -> Result<Vec<usize>, RedactionError> {
     if needle.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     if case_sensitive {
-        return haystack
-            .match_indices(needle)
-            .map(|(index, _)| index)
-            .collect();
+        let mut offsets = Vec::new();
+        for (index, _) in haystack.match_indices(needle) {
+            if cancel() {
+                return Err(RedactionError::Cancelled);
+            }
+            offsets.push(index);
+        }
+        return Ok(offsets);
     }
     let haystack_chars: Vec<(char, usize)> = haystack
         .char_indices()
@@ -1864,11 +2037,14 @@ fn find_occurrences(haystack: &str, needle: &str, case_sensitive: bool) -> Vec<u
         .collect();
     let needle_chars: Vec<char> = needle.chars().flat_map(char::to_lowercase).collect();
     if needle_chars.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut offsets = Vec::new();
     let mut cursor = 0;
     while cursor + needle_chars.len() <= haystack_chars.len() {
+        if cancel() {
+            return Err(RedactionError::Cancelled);
+        }
         let slice = &haystack_chars[cursor..cursor + needle_chars.len()];
         if slice
             .iter()
@@ -1881,7 +2057,7 @@ fn find_occurrences(haystack: &str, needle: &str, case_sensitive: bool) -> Vec<u
             cursor += 1;
         }
     }
-    offsets
+    Ok(offsets)
 }
 
 #[cfg(test)]
@@ -2227,6 +2403,7 @@ mod tests {
                 &plan,
                 |_page, _content| "still SECRET here".to_owned(),
                 true,
+                &|| false,
             )
             .expect("verification runs");
         assert!(!report.is_clean());
@@ -2339,5 +2516,275 @@ mod tests {
         };
         let applied = apply_single(&plan, content, &BTreeMap::new(), None, &options);
         assert_eq!(applied.report().removed_operator_count(), 1);
+    }
+
+    #[test]
+    fn quote_operator_is_removed_by_rectangle_at_its_rendered_line() {
+        // `'` applies T* before showing, so the text renders at y = 680 rather
+        // than the pre-move y = 700. The rectangle covers only the real line.
+        let content = b"BT /F1 12 Tf 20 TL 100 700 Td (SECRET) ' ET\n";
+        let plan = RedactionPlan::new([RedactionRegion::rect(
+            page(1),
+            rect(90.0, 670.0, 220.0, 690.0),
+        )]);
+        let options = RedactionOptions {
+            paint_boxes: false,
+            ..RedactionOptions::default()
+        };
+        let applied = apply_single(&plan, content, &BTreeMap::new(), None, &options);
+        assert_eq!(applied.report().removed_operator_count(), 1);
+        assert!(!content_str(&applied, 1).contains("SECRET"));
+        assert_eq!(
+            applied.report().removals()[0].kind,
+            RemovalKind::TextOperator {
+                operator: "'".to_owned(),
+                char_count: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn double_quote_operator_is_removed_by_rectangle_at_its_rendered_line() {
+        let content = b"BT /F1 12 Tf 20 TL 100 700 Td 0 0 (SECRET) \" ET\n";
+        let plan = RedactionPlan::new([RedactionRegion::rect(
+            page(1),
+            rect(90.0, 670.0, 220.0, 690.0),
+        )]);
+        let options = RedactionOptions {
+            paint_boxes: false,
+            ..RedactionOptions::default()
+        };
+        let applied = apply_single(&plan, content, &BTreeMap::new(), None, &options);
+        assert_eq!(applied.report().removed_operator_count(), 1);
+        assert!(!content_str(&applied, 1).contains("SECRET"));
+    }
+
+    #[test]
+    fn residual_inside_form_xobject_fails_strict_verification() {
+        let mut forms = BTreeMap::new();
+        forms.insert(
+            "Fm".to_owned(),
+            FormXObject::new(
+                b"BT /F1 12 Tf 100 100 Td (SECRET) Tj ET\n".to_vec(),
+                Matrix::IDENTITY,
+            ),
+        );
+        // The rectangle is far from the form's text, so nothing is removed;
+        // the label must still be found when form streams are scanned.
+        let plan = RedactionPlan::new([RedactionRegion::rect_with_text(
+            page(1),
+            rect(0.0, 0.0, 10.0, 10.0),
+            "SECRET",
+        )]);
+        let applied = apply_single(
+            &plan,
+            b"/Fm Do\n",
+            &forms,
+            None,
+            &RedactionOptions::default(),
+        );
+        assert!(applied.forms().contains_key("Fm"));
+        assert!(!applied.report().is_clean());
+        assert_eq!(applied.report().residuals()[0].page, 1);
+        assert_eq!(
+            applied.report().residuals()[0].source,
+            ResidualSource::RectangleLabel("SECRET".to_owned())
+        );
+        assert!(applied.check().is_err());
+
+        // A supplied extractor sees the same residual inside the form.
+        let mut borrowed = applied.clone();
+        let never = || false;
+        let report = borrowed
+            .verify_with(
+                &plan,
+                |_page, content| {
+                    if content.windows(6).any(|bytes| bytes == b"SECRET") {
+                        "SECRET".to_owned()
+                    } else {
+                        String::new()
+                    }
+                },
+                true,
+                &never,
+            )
+            .expect("verification runs");
+        assert!(!report.is_clean());
+        assert!(borrowed.check().is_err());
+    }
+
+    #[test]
+    fn inline_image_overlapping_rectangle_is_removed_and_boxed() {
+        let image = b"BI /W 2 /H 2 /CS /RGB /BPC 8 ID \x01\x02\x03\x04 EI\n";
+        let mut content = Vec::new();
+        content.extend_from_slice(b"q 1 0 0 1 50 50 cm\n");
+        content.extend_from_slice(image);
+        content.extend_from_slice(b"Q\n");
+        let plan =
+            RedactionPlan::new([RedactionRegion::rect(page(1), rect(40.0, 40.0, 60.0, 60.0))]);
+        let applied = apply_single(
+            &plan,
+            &content,
+            &BTreeMap::new(),
+            None,
+            &RedactionOptions::default(),
+        );
+        let output = content_str(&applied, 1);
+        assert!(
+            !output.contains("BI /W 2"),
+            "image block must be removed: {output}"
+        );
+        assert!(output.contains("0 0 0 rg"));
+        assert!(applied.report().removals().iter().any(|r| matches!(
+            r.kind,
+            RemovalKind::InlineImageRemoved { byte_count } if byte_count > 0
+        )));
+
+        // A non-overlapping rectangle leaves the image bytes untouched.
+        let far = RedactionPlan::new([RedactionRegion::rect(
+            page(1),
+            rect(200.0, 200.0, 210.0, 210.0),
+        )]);
+        let kept = apply_single(
+            &far,
+            &content,
+            &BTreeMap::new(),
+            None,
+            &RedactionOptions::default(),
+        );
+        assert!(content_str(&kept, 1).contains(String::from_utf8_lossy(image).as_ref()));
+    }
+
+    #[test]
+    fn whitespace_before_array_close_is_accepted() {
+        let content = b"BT /F1 12 Tf 10 10 Td [(a) -50 (b) ] TJ ET\n";
+        let pattern = TextPattern::case_sensitive("ab").expect("valid pattern");
+        let plan = RedactionPlan::new([RedactionRegion::text(page(1), pattern)]);
+        let applied = apply_single(
+            &plan,
+            content,
+            &BTreeMap::new(),
+            None,
+            &RedactionOptions::default(),
+        );
+        assert_eq!(applied.report().removed_operator_count(), 1);
+        assert!(!content_str(&applied, 1).contains("(a)"));
+    }
+
+    #[test]
+    fn ctm_scale_and_rotation_are_honored_for_rectangle_text() {
+        let options = RedactionOptions {
+            paint_boxes: false,
+            ..RedactionOptions::default()
+        };
+        let scaled = b"q 2 0 0 2 0 0 cm BT /F1 12 Tf 50 10 Td (SECRET) Tj ET Q\n";
+        // Text starts at page (100, 20), 6 glyphs * 12pt * 0.6 * 2 = 86.4 wide.
+        let scaled_plan = RedactionPlan::new([RedactionRegion::rect(
+            page(1),
+            rect(150.0, 10.0, 200.0, 30.0),
+        )]);
+        let applied = apply_single(&scaled_plan, scaled, &BTreeMap::new(), None, &options);
+        assert_eq!(applied.report().removed_operator_count(), 1);
+
+        // [0 1 -1 0 0 0] rotates the advance into +y; the run spans y 10..53.2.
+        let rotated = b"q 0 1 -1 0 0 0 cm BT /F1 12 Tf 10 5 Td (SECRET) Tj ET Q\n";
+        let rotated_plan =
+            RedactionPlan::new([RedactionRegion::rect(page(1), rect(-10.0, 30.0, 0.0, 60.0))]);
+        let applied = apply_single(&rotated_plan, rotated, &BTreeMap::new(), None, &options);
+        assert_eq!(applied.report().removed_operator_count(), 1);
+    }
+
+    #[test]
+    fn cancellation_is_checked_during_verification() {
+        let content = b"BT (SECRET) Tj ET\n";
+        let pattern = TextPattern::case_sensitive("SECRET").expect("valid pattern");
+        let plan = RedactionPlan::new([RedactionRegion::text(page(1), pattern)]);
+        let options = RedactionOptions::default();
+        let mut applied = apply_single(&plan, content, &BTreeMap::new(), None, &options);
+
+        let always = || true;
+        assert!(matches!(
+            applied.verify_scan(&plan, true, &always),
+            Err(RedactionError::Cancelled)
+        ));
+        assert!(matches!(
+            applied.verify_with(&plan, |_page, _content| String::new(), true, &always),
+            Err(RedactionError::Cancelled)
+        ));
+
+        // First check happens while collecting page text; the second while
+        // iterating regions, proving the residual loop is cancellable too.
+        let calls = std::cell::Cell::new(0);
+        let after_first = || {
+            calls.set(calls.get() + 1);
+            calls.get() >= 2
+        };
+        assert!(matches!(
+            applied.verify_scan(&plan, true, &after_first),
+            Err(RedactionError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn hostile_unterminated_strings_arrays_and_images_are_typed_errors() {
+        let never = || false;
+        let options = RedactionOptions::default();
+        let plan = RedactionPlan::empty();
+        let hostile: [&[u8]; 5] = [
+            b"BT (oops Tj ET\n",
+            b"BT <4142 Tj ET\n",
+            b"BT [(a) TJ\n",
+            b"BI /W 1 /H 1 /BPC 8 ID \x01\x02",
+            b"> BT ET\n",
+        ];
+        for content in hostile {
+            let mut input = RedactionInput::default();
+            input.pages.insert(1, content.to_vec());
+            assert!(
+                matches!(
+                    apply(&plan, &input, &options, &never),
+                    Err(RedactionError::MalformedContent { .. })
+                ),
+                "content {:?} must be rejected",
+                content
+            );
+        }
+        assert!(matches!(
+            scan_text(b"BT (oops"),
+            Err(RedactionError::MalformedContent { .. })
+        ));
+    }
+
+    #[test]
+    fn hostile_deep_arrays_and_non_finite_numbers_do_not_panic() {
+        let never = || false;
+        let options = RedactionOptions {
+            paint_boxes: false,
+            ..RedactionOptions::default()
+        };
+        let plan = RedactionPlan::empty();
+        let mut nested = Vec::new();
+        nested.extend(std::iter::repeat_n(b'[', 64));
+        nested.extend_from_slice(b"(x)");
+        nested.extend(std::iter::repeat_n(b']', 64));
+        let mut input = RedactionInput::default();
+        input.pages.insert(1, nested);
+        assert!(apply(&plan, &input, &options, &never).is_ok());
+
+        let mut input = RedactionInput::default();
+        input.pages.insert(1, b"BT 1e999 0 Td (x) Tj ET\n".to_vec());
+        assert!(apply(&plan, &input, &options, &never).is_ok());
+    }
+
+    #[test]
+    fn comments_and_name_escapes_are_preserved() {
+        let content = b"% leading comment\nBT /F#31 12 Tf (x) Tj ET % trailing\n";
+        let plan = RedactionPlan::empty();
+        let options = RedactionOptions::default();
+        let applied = apply_single(&plan, content, &BTreeMap::new(), None, &options);
+        let output = content_str(&applied, 1);
+        assert!(output.contains("% leading comment"));
+        assert!(output.contains("/F#31"));
+        assert!(output.contains("(x) Tj"));
     }
 }

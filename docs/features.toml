@@ -482,7 +482,7 @@ docs = [
     "docs/evidence/render/T-0071.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 45 unit + 12 integration + 0 doc tests passed, 0 failed; TEST_EXIT=0. fmt/clippy/doc clean (FMT_EXIT=0, CLIPPY_EXIT=0, DOC_EXIT=0). Full output in docs/evidence/render/T-0071.md."
+evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 68 unit + 15 integration + 0 doc tests passed, 0 failed; TEST_EXIT=0. fmt/clippy/doc clean (FMT_EXIT=0, CLIPPY_EXIT=0, DOC_EXIT=0). Full output in docs/evidence/render/T-0071.md."
 id = "CREATE-008"
 notes = """
 T-0057 delivered the pure OCR contract (OcrEngine, OcrImage/OcrPage,
@@ -490,9 +490,11 @@ LanguageRouter with script-based auto detection, the SidecarRequest/Response
 JSON codec, and the ConfidencePolicy suspect report). T-0071 adds the
 SidecarOcrEngine process bridge: validated configuration, no-shell spawn with a
 fixed literal argv, cleared environment with an explicit allowlist, bounded
-stdout, and a supervisor thread that kills the child on timeout, cancellation,
-or oversized output, with typed SidecarError variants mapped onto OcrError.
-The row remains in-progress because a real Tesseract binary and the end-to-end
+stdout, and a supervisor that kills/reaps the child on timeout, cancellation, or
+pipe I/O errors, with typed SidecarError variants mapped onto OcrError. Review
+fixes cover a non-draining-stdin deadlock, child reaping on early exit, strict
+executable-path validation, and JSON surrogate pairs. The row remains
+in-progress because a real Tesseract binary and the end-to-end
 scanned-page-to-searchable-PDF flow are future work; only the bridge contract
 and its security/timeout behaviour are verified here.
 """
@@ -505,6 +507,7 @@ tests = [
     "ocr::tests::sidecar_request_json_round_trip",
     "ocr::tests::sidecar_response_json_round_trip_and_conversion",
     "ocr::tests::sidecar_json_rejects_malformed_inputs",
+    "ocr::tests::sidecar_json_accepts_surrogate_pairs_and_rejects_lone_surrogates",
     "ocr::tests::ocr_image_rejects_out_of_range_dpi",
     "ocr::tests::confidence_policy_filters_low_confidence_spans",
     "ocr::tests::suspect_report_flags_low_confidence_and_unusual_characters",
@@ -516,6 +519,9 @@ tests = [
     "sidecar::tests::environment_filter_forwards_only_allowlisted_names",
     "sidecar::tests::engine_rejects_unsupported_language_before_spawning",
     "sidecar::tests::engine_exposes_documented_defaults",
+    "sidecar::tests::executable_validation_requires_absolute_existing_regular_file",
+    "sidecar::tests::executable_validation_rejects_symlinks_when_creation_is_permitted",
+    "sidecar::tests::working_directory_validation_requires_existing_directory",
     "round_trip_request_and_response_through_bridge",
     "spawn_failure_is_typed",
     "non_zero_exit_is_typed_with_stderr",
@@ -523,11 +529,14 @@ tests = [
     "version_mismatch_is_typed",
     "oversized_stdout_is_typed_and_kills_child",
     "timeout_kills_child_and_returns_promptly",
+    "child_that_never_drains_stdin_still_times_out",
+    "early_nonzero_exit_with_partial_response_is_typed",
     "cancellation_kills_child_and_returns_promptly",
     "trait_recognize_maps_cancellation_to_contract_error",
     "arguments_are_passed_verbatim_without_shell_interpretation",
     "no_ambient_secret_environment_is_forwarded",
     "fixed_working_directory_policy_is_applied",
+    "config_rejects_bare_relative_nonexistent_and_traversal_paths",
 ]
 title = "OCR scanned pages to searchable PDF"
 
@@ -829,11 +838,13 @@ title = "Flatten annotations and form fields"
 docs = [
     "crates/pdfxi-security/src/redaction.rs",
     "crates/pdfxi-security/src/error.rs",
+    "crates/pdfxi-edit/src/redaction.rs",
+    "docs/evidence/author/T-0076.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-security redaction::tests (CARGO_TARGET_DIR=target/lanes/security): 16 redaction tests passed as part of 72/72 total. cargo clippy -p pdfxi-security --all-targets --all-features -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-security --no-deps: clean."
+evidence = "T-0052 (security): 16 redaction tests + clippy/doc clean. T-0076 (author): cargo test -p pdfxi-edit 138 passed, 0 failed, including 27 new redaction::tests; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0076.md."
 id = "EDIT-013"
-notes = "Rectangle and literal-text redaction plans with finite/non-empty/page-bounds validation, canonical ordering, and strict/permissive post-redaction text verification with page + byte offset residuals. Actual content-stream rewriting and raster image removal remain with the edit/render lanes."
+notes = """Rectangle and text-pattern redaction plans with validation and strict/permissive verification were added in pdfxi-security (T-0052). T-0076 adds actual content-stream rewriting in pdfxi-edit: affected Tj/TJ/'/" operators are removed (not merely covered), opaque boxes painted, Form XObjects recursed with a depth/cycle limit, overlapping inline images removed, and matching annotations/links/metadata stripped. Verification scans page and referenced form streams with a simple scan or supplied extractor and reports typed residuals. Text content removal is proven; rasterised image removal needs the render lane and there is no UI/CLI exposure yet, so the row stays in-progress."""
 priority = "P1"
 status = "in-progress"
 tests = [
@@ -849,6 +860,33 @@ tests = [
     "redaction::tests::rectangle_removed_text_is_verified_and_label_source_is_reported",
     "redaction::tests::empty_plan_verifies_clean_in_both_modes",
     "redaction::tests::plan_is_deterministic_regardless_of_insertion_order",
+    "redaction::tests::rectangle_removes_tj_text",
+    "redaction::tests::pattern_removes_all_occurrences",
+    "redaction::tests::tj_arrays_are_redacted",
+    "redaction::tests::quote_operators_are_redacted",
+    "redaction::tests::quote_operator_is_removed_by_rectangle_at_its_rendered_line",
+    "redaction::tests::double_quote_operator_is_removed_by_rectangle_at_its_rendered_line",
+    "redaction::tests::form_xobject_recursion_redacts_nested_content",
+    "redaction::tests::form_depth_limit_and_cycles_are_typed_errors",
+    "redaction::tests::residual_inside_form_xobject_fails_strict_verification",
+    "redaction::tests::inline_image_is_untouched",
+    "redaction::tests::inline_image_overlapping_rectangle_is_removed_and_boxed",
+    "redaction::tests::non_target_text_is_preserved_byte_for_byte",
+    "redaction::tests::opaque_box_is_painted_for_rectangles",
+    "redaction::tests::annotations_links_and_metadata_are_stripped",
+    "redaction::tests::verification_fails_when_labeled_content_remains",
+    "redaction::tests::supplied_extractor_controls_verification",
+    "redaction::tests::output_is_deterministic_regardless_of_insertion_order",
+    "redaction::tests::cancellation_is_a_typed_error",
+    "redaction::tests::cancellation_is_checked_during_verification",
+    "redaction::tests::validation_rejects_bad_plans_and_geometry",
+    "redaction::tests::clipping_render_mode_does_not_hide_text",
+    "redaction::tests::matrix_updates_affect_rectangle_matching",
+    "redaction::tests::ctm_scale_and_rotation_are_honored_for_rectangle_text",
+    "redaction::tests::whitespace_before_array_close_is_accepted",
+    "redaction::tests::hostile_unterminated_strings_arrays_and_images_are_typed_errors",
+    "redaction::tests::hostile_deep_arrays_and_non_finite_numbers_do_not_panic",
+    "redaction::tests::comments_and_name_escapes_are_preserved",
 ]
 title = "Redaction marks and permanent removal"
 
@@ -895,14 +933,29 @@ tests = [
 title = "Optimize and compress documents"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/repair.rs",
+    "crates/pdfxi-core/src/parser.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0073.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "cargo test -p pdfxi-core: 176 unit + 6 integration passed, 0 failed (9 new repair tests). fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0073.md."
 id = "EDIT-015"
-notes = ""
+notes = "T-0073 adds `repair_document(&[u8]) -> Result<RepairedDocument, RepairError>`: scans indirect objects (skipping stream payloads) to rebuild a correct classic xref/trailer/startxref/%%EOF when startxref is missing or misplaced or xref offsets are wrong; corrects broken stream `/Length`; synthesizes missing `endobj`; handles truncated EOF; and keeps the newest revision of duplicate object numbers. Unknown content is preserved verbatim where intact. Every repair is reported as a deterministic typed `RepairWarning`, and the rebuilt bytes are structurally verified before success; unrecoverable input returns a typed error. Library path only with a documented finite damage set and no UI/CLI exposure, so the row stays in-progress."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "repair::tests::missing_startxref_is_rescanned",
+    "repair::tests::misplaced_startxref_is_reported",
+    "repair::tests::wrong_xref_offset_is_corrected",
+    "repair::tests::broken_stream_length_is_corrected",
+    "repair::tests::truncated_eof_is_reported_and_repaired",
+    "repair::tests::unrecoverable_input_is_a_typed_error",
+    "repair::tests::repair_report_warnings_are_ordered_and_deterministic",
+    "repair::tests::repaired_document_round_trips_with_original_content",
+    "repair::tests::duplicate_objects_keep_the_latest_revision",
+]
 title = "Repair malformed documents"
 
 [[feature]]
@@ -1121,51 +1174,60 @@ title = "Fill existing AcroForm fields"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-forms/src/build.rs",
     "crates/pdfxi-forms/src/appearance.rs",
-    "crates/pdfxi-forms/src/appearance/tests.rs",
+    "crates/pdfxi-forms/src/lib.rs",
+    "docs/evidence/forms/T-0080.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 passed as part of 85/85 total."
+evidence = "cargo test -p pdfxi-forms: 144 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
 id = "FORMS-002"
-notes = "Appearance generation for text, checkbox, radio, choice and pushbutton widgets is delivered via build_appearance with deterministic /AP state dictionaries. Widget annotation serialization is still deferred."
+notes = "Typed field creation for all six widget types with name, tooltip, values, flags, options, max length, alignment, border/colour, rectangle and page. Valid AcroForm dictionaries and widget annotations are emitted into the PdfValue model. Deterministic /AP generation already existed via build_appearance. Serialising the emitted dictionaries into a concrete PDF and a property-editing UI remain deferred."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "appearance::tests::text_operators_are_well_formed",
+    "build::tests::create_text_field_with_typed_properties",
+    "build::tests::create_checkbox_field",
+    "build::tests::create_radio_group_with_options_and_flag",
+    "build::tests::create_choice_combo_and_list",
+    "build::tests::create_push_button_and_signature",
+    "build::tests::widget_rect_and_page_association_are_emitted",
+    "build::tests::acroform_dictionary_lists_fields_in_order",
     "appearance::tests::checkbox_on_off_state_names",
     "appearance::tests::radio_group_states",
     "appearance::tests::choice_combo_renders_single_line",
     "appearance::tests::choice_list_renders_highlight_and_rows",
-    "appearance::tests::empty_value_produces_valid_appearance",
 ]
 title = "Create text checkbox radio choice and button fields"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/lib.rs",
-    "crates/pdfxi-forms/src/calculation.rs",
+    "crates/pdfxi-forms/src/build.rs",
+    "crates/pdfxi-forms/src/rules.rs",
     "crates/pdfxi-forms/src/validation.rs",
+    "crates/pdfxi-forms/src/calculation.rs",
+    "crates/pdfxi-forms/src/lib.rs",
+    "docs/evidence/forms/T-0080.md",
 ]
 domain = "Forms"
-evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
-cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
-"""
+evidence = "cargo test -p pdfxi-forms: 144 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
 id = "FORMS-003"
-notes = """
-Added a Calculation model for sum/product/average over named numeric fields. evaluate is side-effect free; apply writes the rounded result through Form::set_value (inheriting read-only and type checks); run_calculations applies an ordered batch and returns a CalculationReport. Rounding is deterministic (f64::round, ties away from zero, six decimals by default, at most 12). Non-numeric input is documented and rejected with CalculationError::NonNumeric (no implicit string coercion, no JavaScript); missing fields, empty operand sets, non-finite results, and invalid decimal counts have dedicated variants. Property editing UI and the Acrobat calculation-order semantics for cyclic dependencies are deferred, so the row remains in-progress.
-"""
+notes = "Added configurable validation (required, max length, numeric/currency/date formats, dependency-free pattern, choice membership, custom hook trait) with typed per-field errors and a name-sorted deterministic summary. Calculations now include Min/Max, bounded simplified arithmetic, and an order-independent dependency plan with cycle detection and deterministic results. No arbitrary scripts are run. Property-editing UI and Acrobat calculation-order semantics for cyclic dependencies remain deferred."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "calculation::tests::calculation_sum_is_deterministic",
-    "calculation::tests::calculation_product_is_deterministic",
-    "calculation::tests::calculation_average_is_deterministic",
-    "calculation::tests::calculation_rounding_is_half_away_from_zero",
-    "calculation::tests::calculation_fails_on_non_numeric_input",
-    "calculation::tests::calculation_fails_on_missing_or_empty_sources",
-    "calculation::tests::calculation_apply_writes_the_target_field",
-    "calculation::tests::run_calculations_applies_in_order_and_reports_results",
+    "rules::tests::validator_checks_required_max_length_and_choice_membership",
+    "rules::tests::required_rule_reports_empty_and_empty_choice_lists",
+    "rules::tests::format_rule_fails_on_numeric_and_date_inputs",
+    "rules::tests::numeric_currency_and_date_formats_are_checked",
+    "rules::tests::pattern_matches_literals_classes_and_quantifiers",
+    "rules::tests::custom_hook_can_reject_a_field",
+    "rules::tests::summary_is_deterministic_and_reports_unknown_fields",
+    "calculation::tests::min_and_max_are_deterministic",
+    "calculation::tests::arithmetic_expression_evaluates_and_rounds",
+    "calculation::tests::plan_is_order_independent_and_respects_dependencies",
+    "calculation::tests::plan_detects_dependency_cycles_before_applying",
+    "build::tests::create_text_field_with_typed_properties",
 ]
 title = "Field properties calculations and validation"
 
@@ -1394,14 +1456,64 @@ tests = []
 title = "Certificate encryption"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-security/src/x509/mod.rs",
+    "crates/pdfxi-security/src/x509/certificate.rs",
+    "crates/pdfxi-security/src/x509/name.rs",
+    "crates/pdfxi-security/src/x509/extension.rs",
+    "crates/pdfxi-security/src/x509/verify.rs",
+    "crates/pdfxi-security/src/x509/digital_id.rs",
+    "docs/evidence/security/T-0070.md",
+]
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 134 passed, 0 failed (28 new X.509 tests). fmt/clippy -D warnings/rustdoc -D warnings all clean. docs/evidence/security/T-0070.md"
 id = "SEC-004"
-notes = ""
+notes = """
+Library-level X.509 digital ID support is implemented and tested: strict DER
+certificate parsing, deterministic name display, the four common v3 extensions,
+caller-clocked validity, caller-trusted chain verification through a
+CertificateVerifier trait with no hidden keys, and a DigitalIdStore that keeps
+private keys behind an opaque KeyHandle and never logs secrets. Twenty-eight
+tests cover parsing, malformed DER, duplicate fields/extensions, time
+boundaries, trust decisions including decoy and cross-signed paths, key usage,
+EKU intersection, SAN/EKU, duplicate IDs, opaque handles, deterministic
+display, and negative signature cases. Remaining for full SEC-004 parity:
+PKCS#12/PFX import-export of certificate-and-key bundles and the desktop UI for
+selecting and managing digital IDs. Those are follow-on tasks; status is
+honestly in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "x509::tests::parse_certificate_extracts_all_fields",
+    "x509::tests::parse_certificate_rejects_truncated_and_trailing_der",
+    "x509::tests::parse_certificate_rejects_malformed_structure",
+    "x509::tests::name_display_is_deterministic_and_escaped",
+    "x509::tests::validity_boundaries_and_clock_are_inclusive",
+    "x509::tests::extensions_parse_all_known_forms_and_preserve_unknown",
+    "x509::tests::extension_parsing_rejects_malformed_payloads",
+    "x509::tests::verify_chain_accepts_direct_anchor",
+    "x509::tests::verify_chain_accepts_intermediate_from_untrusted_pool_and_store",
+    "x509::tests::verify_chain_rejects_unknown_issuer_and_exceeds_depth",
+    "x509::tests::verify_chain_rejects_bad_or_tampered_signatures",
+    "x509::tests::verify_chain_enforces_key_usage_and_ca_constraints",
+    "x509::tests::verify_chain_rejects_expired_and_not_yet_valid_certificates",
+    "x509::tests::verify_chain_enforces_required_eku",
+    "x509::tests::verify_chain_rejects_unknown_critical_extensions",
+    "x509::tests::parse_v1_certificate_has_no_extensions",
+    "x509::tests::digital_id_store_rejects_duplicates_and_looks_up",
+    "x509::tests::digital_id_import_round_trip_rejects_metadata_tampering",
+    "x509::tests::key_handle_is_opaque_and_secret_bytes_are_never_logged",
+    "x509::tests::signature_algorithm_maps_oids_and_digests",
+    "x509::tests::der_reader_still_guards_x509_shapes",
+    "x509::tests::verify_chain_skips_decoy_candidate_and_uses_valid_issuer",
+    "x509::tests::verify_chain_accepts_cross_signed_path",
+    "x509::tests::verify_chain_intersects_eku_constraints_from_cas",
+    "x509::tests::verify_chain_rejects_issuer_with_unsupported_signature_algorithm",
+    "x509::tests::parse_certificate_rejects_duplicate_optional_tbs_fields",
+    "x509::tests::parse_certificate_rejects_duplicate_extension_oids",
+    "x509::tests::name_display_hex_escapes_utf8_bytes",
+]
 title = "Digital IDs and certificate management"
 
 [[feature]]
@@ -2342,18 +2454,27 @@ tests = []
 title = "Unicode CJK and right-to-left text"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/lib.rs"
+docs = [
+    "crates/pdfxi-core/src/compatibility.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0073.md",
+]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out. cargo clippy -p pdfxi-core --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-core -- --check: clean."
+evidence = "cargo test -p pdfxi-core: 176 unit + 6 integration passed, 0 failed (9 new compatibility tests). fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0073.md."
 id = "STD-001"
-notes = "Header validation and version extraction are retained from T-0006 and now feed an eager structural parse. Classic-table PDFs from 1.0 through 1.4 parse (including /Prev chained sections for incremental updates); version-dependent features such as xref streams (1.5+) and 2.0 constructs are not yet implemented, so full 1.0-2.0 compatibility stays in-progress."
+notes = "T-0073 adds tolerant header/version handling for PDF 1.0-2.0: leading-garbage and whitespace-padded `%PDF-` headers, absent binary markers, version parsing with a conservative 1.4 default, catalog `/Version` overrides (structured and raw-scan), and a typed `CompatibilityReport` exposing the effective version, its source and ordered warnings. `Document::effective_version` and `Document::compatibility_report` expose it on an open document. Full version-dependent feature compatibility (all 1.5+ / 2.0 constructs) remains future work, so the row stays in-progress."
 priority = "P0"
 status = "in-progress"
 tests = [
-    "pdfxi_core::tests::accepts_pdf_header_and_reads_version",
-    "pdfxi_core::tests::rejects_non_pdf_input",
-    "pdfxi_core::tests::parses_one_page_pdf_from_testkit",
-    "pdfxi_core::tests::parses_multi_page_pdf_and_preserves_order",
+    "compatibility::tests::version_parse_accepts_valid_and_rejects_junk",
+    "compatibility::tests::version_support_range_is_exact",
+    "compatibility::tests::header_variants_are_tolerated",
+    "compatibility::tests::binary_marker_absence_and_padded_versions_are_fine",
+    "compatibility::tests::missing_header_reports_assumed_version",
+    "compatibility::tests::catalog_version_override_is_reported",
+    "compatibility::tests::catalog_version_override_works_on_broken_structure",
+    "compatibility::tests::unsupported_effective_version_is_flagged",
+    "compatibility::tests::warning_order_is_deterministic",
 ]
 title = "PDF 1.0 through 2.0 compatibility"
 
@@ -2389,7 +2510,7 @@ docs = [
     "crates/pdfxi-core/src/linearization.rs",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core: 158 unit + 6 integration passed; 15 new tests. fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0072.md."
+evidence = "cargo test -p pdfxi-core: 178 unit + 6 integration passed; 17 new tests including the 65,535-member index bound. fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0072.md."
 id = "STD-003"
 notes = "Object-stream/xref-stream writing and linearization hint parsing are implemented; full linearized file writing remains, so in-progress."
 priority = "P1"
@@ -2410,18 +2531,46 @@ tests = [
     "linearization::tests::parses_shared_hint_stream_range",
     "linearization::tests::rejects_malformed_linearization_hint",
     "linearization::tests::non_linearized_document_returns_none",
+    "objstm::tests::object_stream_member_limit_rejects_65536_before_xref_index_wraps",
+    "objstm::tests::object_stream_at_the_member_limit_keeps_indices_in_range",
 ]
 title = "Object streams and linearization"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-text/src/font/mod.rs",
+    "crates/pdfxi-text/src/font/cmap.rs",
+    "crates/pdfxi-text/src/font/standard14.rs",
+    "docs/evidence/render/T-0074.md",
+]
 domain = "Standards"
-evidence = ""
+evidence = "cargo test -p pdfxi-text: 69 unit + 15 integration passed, 0 failed (20 font tests incl. non-BMP surrogate pairs); fmt/clippy/doc EXIT=0. See docs/evidence/render/T-0074.md."
 id = "STD-004"
-notes = ""
+notes = "Font dictionary parsing and metrics model complete (Type1/TrueType/Type0, /W//DW, ToUnicode, CIDToGIDMap, standard-14 fallback). Remains in-progress: actual font embedding/subsetting into saved PDFs and wiring these metrics into the rendering backend."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "font::cmap::tests::cid_widths_parse_arrays_and_ranges",
+    "font::cmap::tests::cid_widths_reject_malformed_tables",
+    "font::cmap::tests::cid_to_gid_map_parses_stream_and_identity",
+    "font::standard14::tests::subset_prefix_is_ignored_for_standard14_lookup",
+    "font::standard14::tests::standard14_vertical_metrics_and_ascii_widths",
+    "font::standard14::tests::win_ansi_high_range_maps_special_and_undefined_codes",
+    "font::tests::simple_type1_widths_are_reported_in_text_space",
+    "font::tests::truetype_widths_are_indexed_from_first_char",
+    "font::tests::type0_w_array_supports_lists_and_ranges",
+    "font::tests::identity_h_cid_advances_respect_font_matrix",
+    "font::tests::tounicode_bfchar_and_bfrange_are_mapped",
+    "font::tests::missing_width_is_used_for_codes_outside_the_table",
+    "font::tests::embedded_font_flag_controls_standard14_fallback",
+    "font::tests::cid_to_gid_map_supports_identity_and_explicit_streams",
+    "font::tests::malformed_tables_are_rejected_without_panicking",
+    "font::tests::standard14_metrics_are_synthesized_for_non_embedded_base_fonts",
+    "font::tests::font_matrix_transforms_and_non_finite_matrices_are_rejected",
+    "font::tests::pdf_names_and_encodings_parse",
+    "font::tests::simple_encoding_fallback_recovers_unicode",
+    "font::cmap::tests::tounicode_non_bmp_surrogate_pairs_and_lone_surrogate_rejection",
+]
 title = "Font embedding and CID fonts"
 
 [[feature]]

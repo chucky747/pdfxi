@@ -3,12 +3,12 @@
   "lane": "render",
   "title": "Parse embedded fonts and CID metrics",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0009", "T-0042"],
   "owns": [
     "crates/pdfxi-text/**",
     "orchestration/feature-updates/T-0074.toml"
   ],
   "acceptance": "cargo test -p pdfxi-text",
-  "evidence": ""
+  "evidence": "docs/evidence/render/T-0074.md"
 }

@@ -3,12 +3,12 @@
   "lane": "core",
   "title": "Harden PDF version compatibility and repair paths",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0008", "T-0039"],
   "owns": [
     "crates/pdfxi-core/**",
     "orchestration/feature-updates/T-0073.toml"
   ],
   "acceptance": "cargo test -p pdfxi-core",
-  "evidence": ""
+  "evidence": "docs/evidence/core/T-0073.md"
 }
