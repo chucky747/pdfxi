@@ -1410,25 +1410,47 @@ tests = []
 title = "Pencil stamp and file attachment annotations"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/review/thread.rs",
+    "crates/pdfxi-edit/src/review/workflow.rs",
+    "crates/pdfxi-edit/src/review/mod.rs",
+]
 domain = "Review"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit review:: (CARGO_TARGET_DIR=target/lanes/author): 27 review tests pass as part of 86/86 total. cargo clippy -D warnings clean; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps clean."
 id = "REVIEW-004"
-notes = ""
+notes = "CommentThread with a root annotation, deterministically ordered replies (author, timestamp, body, status), and a five-status workflow with validated transitions, assignee, timestamps, and an append-only history log. Reply insertion/removal, duplicate ids, empty threads, and invalid transitions are covered by tests."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-edit::review::thread::tests::thread_assembly_orders_replies_by_timestamp_then_id",
+    "pdfxi-edit::review::thread::tests::duplicate_reply_ids_are_rejected",
+    "pdfxi-edit::review::thread::tests::reply_removal_returns_the_removed_reply_and_reports_missing_ids",
+    "pdfxi-edit::review::thread::tests::empty_thread_is_rejected_by_validate",
+    "pdfxi-edit::review::workflow::tests::status_names_round_trip_and_are_stable",
+    "pdfxi-edit::review::workflow::tests::state_transition_validates_records_history_and_updates_timestamp",
+    "pdfxi-edit::review::workflow::tests::invalid_transition_is_rejected_without_mutating_state",
+]
 title = "Comment threads replies and status"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/review/serialize.rs",
+    "crates/pdfxi-edit/src/review/error.rs",
+]
 domain = "Review"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit review::serialize::tests (CARGO_TARGET_DIR=target/lanes/author): 7 round-trip tests pass as part of 86/86 total. cargo fmt --check clean; cargo clippy -D warnings clean."
 id = "REVIEW-005"
-notes = ""
+notes = "Deterministic dictionary round-trip for review registries using a documented private XI_Thread... namespace. Unknown keys are preserved at registry, thread, reply, and history levels and never overwrite owned keys. Real PDF comment import/export and printing remain outside this crate."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-edit::review::serialize::tests::registry_round_trip_preserves_threads_replies_and_history",
+    "pdfxi-edit::review::serialize::tests::serialization_is_deterministic_and_uses_private_namespace",
+    "pdfxi-edit::review::serialize::tests::unknown_keys_are_preserved_at_every_level",
+    "pdfxi-edit::review::serialize::tests::unknown_keys_do_not_overwrite_owned_keys",
+    "pdfxi-edit::review::serialize::tests::duplicate_ids_and_unknown_statuses_are_rejected_on_parse",
+    "pdfxi-edit::review::serialize::tests::negative_and_missing_keys_are_reported",
+]
 title = "Import export and print comments"
 
 [[feature]]
@@ -1443,14 +1465,23 @@ tests = []
 title = "Email and shared review workflows locally"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/review/registry.rs",
+    "crates/pdfxi-edit/src/review/mod.rs",
+]
 domain = "Review"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit review::registry::tests (CARGO_TARGET_DIR=target/lanes/author): 7 registry tests pass as part of 86/86 total. cargo clippy -D warnings clean; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps clean."
 id = "REVIEW-007"
-notes = ""
+notes = "ReviewRegistry groups annotations into threads, tracks per-page and per-thread state, filters deterministically by status/author/page, and derives a stable per-status summary with all five statuses present. Shared/email collaboration and participant synchronization remain future work."
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-edit::review::registry::tests::from_annotations_groups_by_annotation_in_deterministic_order",
+    "pdfxi-edit::review::registry::tests::duplicate_and_empty_inputs_are_rejected",
+    "pdfxi-edit::review::registry::tests::filtering_by_status_author_and_page_is_deterministic",
+    "pdfxi-edit::review::registry::tests::summary_counts_are_stable_and_include_zero_entries",
+    "pdfxi-edit::review::registry::tests::state_transition_on_registry_updates_history",
+]
 title = "Review tracker and participant status"
 
 [[feature]]

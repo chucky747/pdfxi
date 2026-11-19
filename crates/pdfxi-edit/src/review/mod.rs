@@ -1,0 +1,34 @@
+//! Comment threads and review workflow states.
+//!
+//! This module extends `pdfxi-edit` with the authoring-side review model used
+//! by Acrobat-style comment workflows. It stays dependency-free and reuses the
+//! [`Dict`](crate::pdf::Dict)/[`Value`] intermediate from
+//! [`crate::pdf`] for serialization.
+//!
+//! - The `thread` module defines [`ThreadId`], [`ReplyId`], [`Reply`], and
+//!   [`CommentThread`], with replies kept in deterministic
+//!   `(timestamp, id)` order and threads keyed by their root annotation.
+//! - The `workflow` module defines the five review statuses, the closed
+//!   transition table, [`ReviewState`], and an append-only history log.
+//! - The `registry` module groups annotations into threads, tracks per-page
+//!   state, supports filtering, and derives stable per-status summaries.
+//! - The `serialize` module round-trips a whole registry through a dictionary
+//!   using the private `XI_Thread...` key namespace while preserving unknown
+//!   keys.
+//!
+//! All edits here are copy-on-write by contract: the model owns its data and
+//! never mutates source document bytes.
+
+mod error;
+mod registry;
+mod serialize;
+mod thread;
+mod workflow;
+
+pub use error::ReviewError;
+pub use registry::{ReviewFilter, ReviewRegistry, ReviewSummary};
+pub use serialize::{dict_to_registry, registry_to_dict};
+pub use thread::{CommentThread, Reply, ReplyId, ThreadId};
+pub use workflow::{HistoryEntry, ReviewState, ReviewStatus};
+
+use crate::pdf::Value;
