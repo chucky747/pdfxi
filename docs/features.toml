@@ -780,54 +780,68 @@ title = "Export to PostScript"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-forms/src/acroform.rs",
+    "crates/pdfxi-forms/src/acroform/tests.rs",
     "crates/pdfxi-forms/src/lib.rs",
-    "crates/pdfxi-forms/src/form.rs",
-    "crates/pdfxi-forms/src/fill.rs",
-    "crates/pdfxi-forms/src/field.rs",
 ]
 domain = "Forms"
 evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (the lib.rs doc example is rendered as a ```text block, not compiled or run, because the host denies generated doctest binaries with os error 5).
-cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 66 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
+cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps: EXIT=0.
 """
 id = "FORMS-001"
 notes = """
-T-0035 adds a FormFill filling session over the existing Form model. set/fill_many/fill_from_fdf delegate every write to Form::set_value, which now enforces a fixed check order (unknown field, read-only, value-shape type mismatch, clearing a required field). ValueKind categorises FieldValue variants and Field::accepts encodes the per-type compatibility matrix (text accepts text + number, checkbox accepts bool, radio accepts at most one choice, choice accepts one or many, button accepts only empty, signature accepts text, unknown accepts all). Validation gained InvalidValueType so the shape check is also enforced on a pure validation pass. FillReport reports net changes in ascending field-name order, collapsing repeated writes to the original old value and dropping fields restored to their original value; finish/finish_validated/into_form expose the filled form. Loading values from PDF /AcroForm dictionaries and writing widget appearances are still deferred, so the row remains in-progress.
+T-0043 adds a real /AcroForm loader that populates the existing Form model from
+a catalog dictionary through the dependency-free FormSource adapter trait.
+It walks /Fields and /Kids, resolves inherited /FT, /Ff, /V, /DV, /T, /TU,
+/Opt, /MaxLen, /Q and /DA, builds dotted fully qualified names, maps /V and /DV
+into FieldValue, and feeds directly into FormFill. A missing /AcroForm returns
+AcroFormLoad::NoForm; /Kids cycles and duplicate qualified names are structured
+LoadError variants; malformed values fall back to FieldValue::Empty. Loading a
+form is now covered, but writing widget annotations, generating appearances and
+flattening are still deferred, so the row remains in-progress.
 """
 priority = "P1"
 status = "in-progress"
 tests = [
-    "fill::tests::fills_each_supported_field_type",
-    "fill::tests::type_mismatch_is_rejected_without_recording_a_change",
-    "fill::tests::read_only_and_required_fields_are_rejected",
-    "fill::tests::changed_fields_are_ordered_by_name_and_net_changes_collapse",
-    "fill::tests::fill_many_stops_at_first_error_but_keeps_prior_writes",
-    "fill::tests::finish_and_finish_validated_report_the_same_changes",
-    "fdf::tests::fdf_applies_to_a_form_fill_session",
+    "acroform::tests::loads_text_checkbox_and_choice_fields",
+    "acroform::tests::loaded_values_flow_into_fill_session",
+    "acroform::tests::missing_acroform_returns_no_form",
+    "acroform::tests::cyclic_kids_is_an_error",
+    "acroform::tests::duplicate_fully_qualified_names_is_an_error",
 ]
 title = "Fill existing AcroForm fields"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/lib.rs",
-    "crates/pdfxi-forms/src/field.rs",
-    "crates/pdfxi-forms/src/form.rs",
+    "crates/pdfxi-forms/src/acroform.rs",
+    "crates/pdfxi-forms/src/acroform/tests.rs",
 ]
 domain = "Forms"
 evidence = """
-cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 50 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
-cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 66 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
+cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps: EXIT=0.
 """
 id = "FORMS-002"
 notes = """
-FieldValue now includes Number(f64) alongside Empty/Text/Bool/Choice, so numeric fields (a PDF text field with a number format) and choice multi-selects are first-class. Equality is a total relation: canonical_f64_bits treats all NaNs as equal and both zeros as equal, letting FieldValue and Form keep Eq and PartialEq. Added FieldValue::number/kind/as_number, ValueKind with stable labels, Field::accepted_kinds/accepts, Form::value, and new FormError::TypeMismatch/RequiredField variants. Field::validate rejects wrong-shaped values through ValidationError::InvalidValueType. Creating widget annotations and appearances in a PDF is still deferred, so the row remains in-progress.
+The loader classifies /Tx as Text, /Ch as Choice, /Btn as CheckBox/Radio/
+Pushbutton using the /Ff radio (bit 16) and pushbutton (bit 17) flags, and /Sig
+as Signature. Unknown or missing /FT is preserved as FieldType::Unknown with
+its value kept, so no field is dropped. Radio options come from /Opt or, when
+that is absent, /AP /N normal-state names. /MaxLen becomes a TextConstraint,
+choice /Opt becomes the option list, and checkbox /V states (On/Yes/True or
+Off/No/False) map to booleans. Creating widget annotations and appearances is
+still deferred, so the row remains in-progress.
 """
 priority = "P2"
 status = "in-progress"
 tests = [
-    "fill::tests::fills_each_supported_field_type",
-    "calculation::tests::calculation_rounding_is_half_away_from_zero",
-    "fdf::tests::fdf_round_trip_preserves_every_value_kind",
+    "acroform::tests::loads_text_checkbox_and_choice_fields",
+    "acroform::tests::handles_signature_and_pushbutton_fields",
+    "acroform::tests::widget_kids_collapse_into_one_terminal_field",
+    "acroform::tests::preserves_unknown_field_type_as_opaque",
+    "acroform::tests::malformed_values_fall_back_to_empty",
+    "acroform::tests::hex_escapes_in_names_decode",
 ]
 title = "Create text checkbox radio choice and button fields"
 
@@ -954,14 +968,30 @@ tests = []
 title = "Distribute and collect forms locally"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-forms/src/acroform.rs",
+    "crates/pdfxi-forms/src/acroform/tests.rs",
+]
 domain = "Forms"
-evidence = ""
+evidence = """
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): exit 0, 66 unit passed, 0 failed; 0 doctests executed (doc examples are rendered as ```text blocks, not compiled or run, due to the host's os error 5 on generated doctest binaries).
+cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps: EXIT=0.
+"""
 id = "FORMS-010"
-notes = ""
+notes = """
+Signature fields are now recognised while loading: a terminal field with /FT
+/Sig becomes FieldType::Signature and its /V name is loaded as a FieldValue::
+Text signing label. Document-level /DA and /Q defaults from the /AcroForm
+dictionary are inherited by signature fields as well. Actual signature
+creation, cryptographic validation and workflow UI remain owned by the security
+lane and are deferred, so the row stays in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "acroform::tests::handles_signature_and_pushbutton_fields",
+    "acroform::tests::resolves_reference_chains_and_root_defaults",
+]
 title = "Electronic signature fields and workflows"
 
 [[feature]]

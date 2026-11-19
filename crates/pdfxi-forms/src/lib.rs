@@ -16,11 +16,15 @@
 //!   numeric fields with deterministic rounding.
 //! - [`export_fdf`] / [`import_fdf`] — round-trippable FDF 1.7 field data, plus
 //!   a small [`export_xfdf`] XML subset.
+//! - [`load_acroform`] — loads a real PDF catalog `/AcroForm` dictionary into a
+//!   [`Form`] through the dependency-free [`FormSource`] adapter trait.
 //!
-//! Field names are treated as already fully qualified (for example
-//! `order.address.city`); the crate does not parse hierarchical name trees.
-//! All operations are deterministic and allocate only as needed. Writing widget
-//! annotations, generating appearances, and flattening remain future work.
+//! Field names are fully qualified (for example `order.address.city`). Callers
+//! that build fields directly supply the dotted path; [`load_acroform`] builds
+//! it from the inherited `/T` partial names of a real field tree using `.` as
+//! the separator. All operations are deterministic and allocate only as needed.
+//! Writing widget annotations, generating appearances, and flattening remain
+//! future work.
 //!
 //! # Example
 //!
@@ -44,6 +48,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod acroform;
 mod calculation;
 mod fdf;
 mod field;
@@ -51,6 +56,10 @@ mod fill;
 mod form;
 mod validation;
 
+pub use acroform::{
+    AcroFormLoad, FormSource, LoadError, LoadedFieldInfo, LoadedForm, ObjectRef, PdfValue,
+    load_acroform,
+};
 pub use calculation::{
     Calculation, CalculationError, CalculationOp, CalculationReport, CalculationResult,
     run_calculations,
