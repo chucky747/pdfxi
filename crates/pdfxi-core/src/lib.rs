@@ -6,7 +6,8 @@
 //! `pdfxi-render`; editing semantics live in `pdfxi-edit`.
 //!
 //! [`Document::from_bytes`] validates the file header immediately and parses
-//! the structural layer (classic xref table, trailer, catalog and page tree)
+//! the structural layer (classic xref table or PDF 1.5+ xref stream, trailer,
+//! catalog and page tree, including objects held in `/ObjStm` streams)
 //! eagerly. Structural errors are retained on the handle and surfaced by the
 //! page accessors, so callers can still inspect the version of a file whose
 //! body is damaged.
@@ -22,6 +23,9 @@ pub mod page;
 mod lexer;
 mod parser;
 mod writer;
+
+#[cfg(test)]
+mod xref_tests;
 
 pub use content::extract_text;
 pub use filter::{
@@ -61,6 +65,12 @@ pub enum Error {
     /// The classic xref table was structurally malformed.
     #[error("malformed xref table: {0}")]
     MalformedXref(String),
+    /// A cross-reference stream (`/Type /XRef`) was structurally malformed.
+    #[error("malformed xref stream: {0}")]
+    MalformedXrefStream(String),
+    /// An object stream (`/Type /ObjStm`) was structurally malformed.
+    #[error("malformed object stream: {0}")]
+    MalformedObjectStream(String),
     /// The chain of `/Prev` xref sections contains a cycle.
     #[error("xref /Prev cycle detected at byte offset {0}")]
     XrefCycle(usize),
@@ -425,12 +435,23 @@ impl Document {
     }
 
     /// Return the parsed structure only when the document can be saved.
+    ///
+    /// Xref-stream inputs (including documents that reach one through a
+    /// `/Prev` chain) are declined with [`Error::UnsupportedState`] rather than
+    /// silently rewritten: the writer emits only classic tables and would drop
+    /// objects held in object streams. Encrypted documents are declined for the
+    /// same reason — the writer does not encrypt its output.
     fn supported_structure(&self) -> Result<&Structure> {
         match &self.structure {
             Ok(structure) => {
                 if structure.xref.trailer().contains_key("Encrypt") {
                     return Err(Error::UnsupportedState(
                         "encrypted documents cannot be saved",
+                    ));
+                }
+                if structure.xref.uses_xref_stream {
+                    return Err(Error::UnsupportedState(
+                        "cross-reference streams are not supported",
                     ));
                 }
                 Ok(structure)

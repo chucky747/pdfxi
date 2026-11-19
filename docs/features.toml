@@ -1701,14 +1701,56 @@ tests = [
 title = "Cross-reference tables and streams"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "docs/FEATURES.md",
+    "crates/pdfxi-core/src/parser.rs",
+    "crates/pdfxi-core/src/xref_tests.rs",
+]
 domain = "Standards"
-evidence = ""
+evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 75 passed, 0 failed (see test names above). cargo clippy -p pdfxi-core --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-core --check: clean."
 id = "STD-003"
-notes = ""
+notes = """
+Implemented PDF 1.5+ cross-reference streams and object streams in pdfxi-core.
+The parser now dispatches at startxref between classic tables and /Type /XRef
+streams, decodes the stream with the existing bounded Flate pipeline (honoring
+/DecodeParms), parses /W (widths capped at 8 bytes), /Index (or /Size),
+/Root, /Prev and /Type, and reads the three big-endian entry fields including
+type-2 (compressed) entries. /Prev chains may mix classic tables and streams;
+entries merge newest-wins and revisiting an offset is rejected as XrefCycle.
+/ObjStm streams are expanded on demand: /N, /First and the header pairs are
+bounds-checked, the object number at the indexed slot is validated against the
+type-2 entry, and the body is parsed lazily with a nesting-depth guard. The page
+tree, page_text and save/save_incremental behavior for classic documents is
+unchanged; saving an xref-stream input is now explicitly declined with
+Error::UnsupportedState so compressed objects are never silently dropped.
+
+SECURITY FIX (reviewer blocker on merged T-0023): PNG predictor reconstruction
+in filter.rs now rejects row_length > decoded data length before allocating
+`previous_row`, so a tiny valid zlib stream with a hostile /DecodeParms
+(/Predictor 15 /Columns 4294967295) returns a structured MalformedDeflate error
+instead of attempting a multi-gigabyte allocation. Regression test:
+filter::tests::hostile_columns_is_rejected_before_allocating_predictor_row.
+The /Columns -> row_length computation uses checked multiplication and the
+decoded length is already bounded by DEFAULT_DECODE_CAP.
+
+STD-003 also names linearization, which is outside T-0031's scope and remains
+unimplemented; the row stays in-progress. No /XRefStm hybrid-reference support
+was added (not requested by this task).
+"""
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "xref_tests::xref_stream_parses_page_tree_content_and_decode_parms",
+    "xref_tests::object_stream_resolves_page_and_content_via_type_two_entries",
+    "xref_tests::absurd_object_stream_count_is_rejected",
+    "xref_tests::mixed_classic_and_stream_prev_chain_is_newest_wins",
+    "xref_tests::truncated_xref_stream_is_a_structured_error",
+    "xref_tests::hostile_xref_field_width_is_rejected",
+    "xref_tests::wrong_width_array_length_is_rejected",
+    "xref_tests::cyclic_prev_offset_is_detected",
+    "filter::tests::hostile_columns_is_rejected_before_allocating_predictor_row",
+    "tests::save_rejects_xref_stream_with_structured_error",
+]
 title = "Object streams and linearization"
 
 [[feature]]

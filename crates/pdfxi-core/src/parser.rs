@@ -1,13 +1,21 @@
 //! Cross-reference and page-tree parsing.
 //!
-//! This module implements the classic (table-based) cross-reference format
-//! defined by ISO 32000, including chained `/Prev` sections produced by
-//! incremental updates. Xref streams and object streams are deliberately out
-//! of scope for this stage and remain handled by a later task.
+//! This module implements both cross-reference formats defined by ISO 32000:
+//! the classic table-based form (including chained `/Prev` sections produced
+//! by incremental updates) and the stream-based form introduced in PDF 1.5.
+//! Xref streams encode their entries as fixed-width big-endian fields inside a
+//! Flate-compressed stream; object streams (`/ObjStm`) hold several indirect
+//! objects in one compressed stream and are referenced by type-2 xref entries.
+//!
+//! Both formats are merged into one [`XrefTable`], so the rest of the crate
+//! resolves object references through a single code path. Every read is
+//! bounds-checked, widths and counts are validated against hostile values,
+//! `/Prev` chains are cycle-detected, and no parser path can panic on input.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
+use crate::filter::{decode_stream, filters_from_dictionary};
 use crate::lexer::Lexer;
 use crate::object::{Dictionary, Object, ObjectId};
 use crate::page::{Page, Rectangle};
@@ -19,22 +27,47 @@ const MAX_REFERENCE_DEPTH: usize = 32;
 const MAX_PAGES: usize = 1_000_000;
 /// Maximum number of chained `/Prev` xref sections.
 const MAX_XREF_SECTIONS: usize = 64;
-/// Maximum number of entries in one xref subsection, relative to file size.
+/// Maximum number of entries in one classic xref subsection, relative to file size.
 const XREF_ENTRY_MIN_BYTES: usize = 4;
+/// Largest byte width accepted for a single `/W` field of an xref stream.
+///
+/// PDF field values are at most 64 bits, so any width above eight is hostile.
+const MAX_XREF_FIELD_WIDTH: u8 = 8;
+/// Upper bound on entries declared by a single xref stream or subsection.
+///
+/// This is independent of the stream-length check: it keeps a hostile `/Index`
+/// from forcing a large `HashMap` allocation even when the width is zero.
+const MAX_XREF_ENTRIES: u32 = 16_000_000;
+/// Upper bound on the number of subsections declared by `/Index`.
+const MAX_XREF_SUBSECTIONS: usize = 4096;
+/// Upper bound on objects packed into a single `/ObjStm`.
+const MAX_OBJECT_STREAM_OBJECTS: u32 = 1_000_000;
+/// Upper bound on nested object-stream resolution (object streams are not
+/// allowed to contain other object streams by specification; the guard stops
+/// a malformed file from recursing indefinitely).
+const MAX_OBJECT_STREAM_DEPTH: u8 = 8;
 
 /// One entry of a cross-reference table.
 #[derive(Debug, Clone)]
 enum XrefEntry {
-    /// The object number exists but the object is free.
+    /// The object number exists but the object is free (or a null placeholder).
     Free,
     /// The object is in use at the given byte offset.
     InUse {
         /// Byte offset of the indirect object definition.
         offset: usize,
     },
+    /// The object lives inside an object stream (a type-2 xref entry).
+    Compressed {
+        /// Object number of the `/ObjStm` that contains the object.
+        objstm: u32,
+        /// Zero-based index of the object inside that stream's header.
+        index: u32,
+    },
 }
 
-/// A single classic `xref` section and its trailer.
+/// A single cross-reference section (classic table or xref stream) and its
+/// trailer dictionary.
 #[derive(Debug, Clone)]
 struct XrefSection {
     entries: HashMap<u32, XrefEntry>,
@@ -47,18 +80,24 @@ struct XrefSection {
 pub(crate) struct XrefTable {
     entries: HashMap<u32, XrefEntry>,
     trailer: Dictionary,
+    /// `true` when any section in the `/Prev` chain was an xref stream.
+    ///
+    /// The write path uses this to decline such documents explicitly instead of
+    /// dropping compressed objects during a save.
+    pub(crate) uses_xref_stream: bool,
 }
 
 impl XrefTable {
     /// Return `(object number, byte offset)` for every in-use object, sorted by
-    /// object number. Free entries are omitted.
+    /// object number. Free entries and objects stored in object streams are
+    /// omitted; the latter have no standalone byte offset.
     pub(crate) fn in_use_entries(&self) -> Vec<(u32, usize)> {
         let mut entries: Vec<(u32, usize)> = self
             .entries
             .iter()
             .filter_map(|(number, entry)| match entry {
                 XrefEntry::InUse { offset } => Some((*number, *offset)),
-                XrefEntry::Free => None,
+                XrefEntry::Free | XrefEntry::Compressed { .. } => None,
             })
             .collect();
         entries.sort_unstable_by_key(|(number, _)| *number);
@@ -256,10 +295,7 @@ fn parse_xref_section(data: &[u8], offset: usize) -> Result<XrefSection> {
         Object::Dictionary(dictionary) => dictionary,
         _ => return Err(Error::MissingTrailer),
     };
-    let prev = match trailer.get("Prev") {
-        Some(Object::Integer(value)) if *value >= 0 => usize::try_from(*value).ok(),
-        _ => None,
-    };
+    let prev = prev_from_dictionary(&trailer);
     Ok(XrefSection {
         entries,
         trailer,
@@ -267,11 +303,316 @@ fn parse_xref_section(data: &[u8], offset: usize) -> Result<XrefSection> {
     })
 }
 
-/// Merge all xref sections reachable through `/Prev`.
+/// Read a valid `/Prev` byte offset from a trailer dictionary.
+fn prev_from_dictionary(dictionary: &Dictionary) -> Option<usize> {
+    match dictionary.get("Prev") {
+        Some(Object::Integer(value)) if *value >= 0 => usize::try_from(*value).ok(),
+        _ => None,
+    }
+}
+
+/// Parse one xref stream section at `offset`.
+///
+/// An xref stream is an indirect object whose dictionary doubles as the section
+/// trailer. Its `/W` array gives the byte widths of the three fixed-width,
+/// big-endian fields of each entry; `/Index` (or `/Size`) selects which object
+/// numbers those entries describe. The stream bytes are decoded through the
+/// normal filter pipeline (typically `FlateDecode` with optional
+/// `/DecodeParms`) using the existing decode cap.
+fn parse_xref_stream(data: &[u8], offset: usize) -> Result<XrefSection> {
+    let object = parse_indirect_object_at(data, offset, None)?;
+    let (dictionary, raw) = match object {
+        Object::Stream { dictionary, data } => (dictionary, data),
+        _ => return Err(Error::MissingXref(offset)),
+    };
+    if dictionary.get("Type").and_then(Object::as_name) != Some("XRef") {
+        return Err(Error::MissingXref(offset));
+    }
+
+    let (width_type, width_two, width_three) = parse_xref_widths(&dictionary)?;
+    let row_width = usize::from(width_type)
+        .checked_add(usize::from(width_two))
+        .and_then(|sum| sum.checked_add(usize::from(width_three)))
+        .ok_or_else(|| Error::MalformedXrefStream("xref entry width overflow".to_owned()))?;
+
+    let filters = filters_from_dictionary(&dictionary)?;
+    let decoded = decode_stream(&raw, &filters)?;
+
+    let indices = parse_xref_index(&dictionary)?;
+    let total_entries = indices
+        .iter()
+        .try_fold(0u64, |sum, &(_, count)| sum.checked_add(u64::from(count)))
+        .ok_or_else(|| Error::MalformedXrefStream("/Index entry count overflow".to_owned()))?;
+    if total_entries > u64::from(MAX_XREF_ENTRIES) {
+        return Err(Error::MalformedXrefStream(
+            "xref stream declares too many entries".to_owned(),
+        ));
+    }
+    if row_width == 0 {
+        if total_entries > 0 {
+            return Err(Error::MalformedXrefStream(
+                "xref stream has entries but no field width".to_owned(),
+            ));
+        }
+    } else {
+        let required = total_entries.checked_mul(row_width as u64).ok_or_else(|| {
+            Error::MalformedXrefStream("xref stream data size overflow".to_owned())
+        })?;
+        if required > decoded.len() as u64 {
+            return Err(Error::MalformedXrefStream(format!(
+                "xref stream data is truncated: need {required} bytes, have {}",
+                decoded.len()
+            )));
+        }
+    }
+
+    let mut entries = HashMap::new();
+    let mut position = 0usize;
+    for (first, count) in indices {
+        for index in 0..count {
+            let object_number = first.checked_add(index).ok_or_else(|| {
+                Error::MalformedXrefStream("xref object number overflow".to_owned())
+            })?;
+            // A zero-width type field means type 1 for every entry.
+            let kind = read_xref_field(&decoded, &mut position, width_type, 1)?;
+            let field_two = read_xref_field(&decoded, &mut position, width_two, 0)?;
+            let field_three = read_xref_field(&decoded, &mut position, width_three, 0)?;
+            let entry = match kind {
+                0 => XrefEntry::Free,
+                1 => {
+                    let offset = usize::try_from(field_two).map_err(|_| {
+                        Error::MalformedXrefStream(format!(
+                            "object {object_number} has an out-of-range offset"
+                        ))
+                    })?;
+                    if offset >= data.len() {
+                        return Err(Error::MalformedXrefStream(format!(
+                            "object {object_number} points past end of file"
+                        )));
+                    }
+                    XrefEntry::InUse { offset }
+                }
+                2 => {
+                    let objstm = u32::try_from(field_two).map_err(|_| {
+                        Error::MalformedXrefStream(format!(
+                            "object {object_number} has an invalid object stream number"
+                        ))
+                    })?;
+                    if objstm == 0 {
+                        return Err(Error::MalformedXrefStream(format!(
+                            "object {object_number} references object stream 0"
+                        )));
+                    }
+                    let index = u32::try_from(field_three).map_err(|_| {
+                        Error::MalformedXrefStream(format!(
+                            "object {object_number} has an invalid object stream index"
+                        ))
+                    })?;
+                    XrefEntry::Compressed { objstm, index }
+                }
+                // ISO 32000 reserves values above 2 for future use and asks
+                // readers to treat them as null entries.
+                _ => XrefEntry::Free,
+            };
+            entries.insert(object_number, entry);
+        }
+    }
+
+    let prev = prev_from_dictionary(&dictionary);
+    Ok(XrefSection {
+        entries,
+        trailer: dictionary,
+        prev,
+    })
+}
+
+/// Parse the three byte widths from an xref stream's `/W` array.
+fn parse_xref_widths(dictionary: &Dictionary) -> Result<(u8, u8, u8)> {
+    let array = dictionary
+        .get("W")
+        .and_then(Object::as_array)
+        .ok_or_else(|| Error::MalformedXrefStream("missing /W array".to_owned()))?;
+    if array.len() != 3 {
+        return Err(Error::MalformedXrefStream(format!(
+            "/W must have three entries, found {}",
+            array.len()
+        )));
+    }
+    let mut widths = [0u8; 3];
+    for (slot, item) in widths.iter_mut().zip(array.iter()) {
+        let value = item.as_i64().filter(|value| *value >= 0).ok_or_else(|| {
+            Error::MalformedXrefStream("/W entries must be non-negative integers".to_owned())
+        })?;
+        let width = u8::try_from(value)
+            .ok()
+            .filter(|width| *width <= MAX_XREF_FIELD_WIDTH)
+            .ok_or_else(|| {
+                Error::MalformedXrefStream(format!(
+                    "/W field width {value} exceeds the {MAX_XREF_FIELD_WIDTH} byte limit"
+                ))
+            })?;
+        *slot = width;
+    }
+    Ok((widths[0], widths[1], widths[2]))
+}
+
+/// Parse `/Index` (or the `[0 /Size]` fallback) into `(first, count)` pairs.
+fn parse_xref_index(dictionary: &Dictionary) -> Result<Vec<(u32, u32)>> {
+    match dictionary.get("Index") {
+        None => {
+            let size = non_negative_u32(dictionary.get("Size")).ok_or_else(|| {
+                Error::MalformedXrefStream(
+                    "xref stream needs /Size when /Index is absent".to_owned(),
+                )
+            })?;
+            if size == 0 {
+                return Ok(Vec::new());
+            }
+            Ok(vec![(0, size)])
+        }
+        Some(Object::Array(items)) => {
+            if items.is_empty() || items.len() % 2 != 0 {
+                return Err(Error::MalformedXrefStream(
+                    "/Index must contain an even number of integers".to_owned(),
+                ));
+            }
+            let subsection_count = items.len() / 2;
+            if subsection_count > MAX_XREF_SUBSECTIONS {
+                return Err(Error::MalformedXrefStream(
+                    "xref stream declares too many /Index subsections".to_owned(),
+                ));
+            }
+            let mut pairs = Vec::with_capacity(subsection_count);
+            for chunk in items.as_chunks::<2>().0 {
+                let first = non_negative_u32(Some(&chunk[0])).ok_or_else(|| {
+                    Error::MalformedXrefStream(
+                        "/Index start must be a non-negative integer".to_owned(),
+                    )
+                })?;
+                let count = non_negative_u32(Some(&chunk[1])).ok_or_else(|| {
+                    Error::MalformedXrefStream(
+                        "/Index count must be a non-negative integer".to_owned(),
+                    )
+                })?;
+                pairs.push((first, count));
+            }
+            Ok(pairs)
+        }
+        _ => Err(Error::MalformedXrefStream(
+            "/Index must be an array".to_owned(),
+        )),
+    }
+}
+
+/// Read one big-endian field of `width` bytes, advancing `position`.
+///
+/// A width of zero consumes no bytes and yields `default`, which is how the
+/// PDF specification represents an omitted field.
+fn read_xref_field(decoded: &[u8], position: &mut usize, width: u8, default: u64) -> Result<u64> {
+    if width == 0 {
+        return Ok(default);
+    }
+    let end = position
+        .checked_add(usize::from(width))
+        .ok_or_else(|| Error::MalformedXrefStream("xref field offset overflow".to_owned()))?;
+    let bytes = decoded
+        .get(*position..end)
+        .ok_or_else(|| Error::MalformedXrefStream("xref stream entry is truncated".to_owned()))?;
+    let mut value = 0u64;
+    for &byte in bytes {
+        value = (value << 8) | u64::from(byte);
+    }
+    *position = end;
+    Ok(value)
+}
+
+/// Parse the indirect object that begins at `offset`.
+///
+/// When `expected` is supplied the object number and generation must match,
+/// which validates a classic xref entry against the object body. Xref-stream
+/// resolution passes `None` because it runs before a table is available.
+fn parse_indirect_object_at(
+    data: &[u8],
+    offset: usize,
+    expected: Option<(u32, u16)>,
+) -> Result<Object> {
+    let trouble = |reason: String| Error::MalformedObject {
+        number: expected.map_or(0, |(number, _)| number),
+        reason,
+    };
+    let mut lexer = Lexer::new(data, offset)?;
+    lexer.skip_ws();
+    let number_token = lexer
+        .read_regular()
+        .ok_or_else(|| trouble("missing object number".to_owned()))?;
+    let number = parse_decimal(number_token, "object number")
+        .map_err(|_| trouble("invalid object number".to_owned()))?;
+    if let Some((wanted, _)) = expected
+        && u64::try_from(number).ok() != Some(u64::from(wanted))
+    {
+        return Err(trouble(format!("xref points to object {number}")));
+    }
+
+    lexer.skip_ws();
+    let generation_token = lexer
+        .read_regular()
+        .ok_or_else(|| trouble("missing generation number".to_owned()))?;
+    let generation = parse_decimal(generation_token, "object generation")
+        .map_err(|_| trouble("invalid generation number".to_owned()))?;
+    if generation > usize::from(u16::MAX) {
+        return Err(trouble("generation exceeds 65535".to_owned()));
+    }
+    if let Some((_, wanted_generation)) = expected
+        && generation != usize::from(wanted_generation)
+    {
+        return Err(trouble(
+            "generation does not match the xref entry".to_owned(),
+        ));
+    }
+
+    lexer
+        .expect_keyword(b"obj")
+        .map_err(|_| trouble("missing obj keyword".to_owned()))?;
+    lexer.parse_value(0)
+}
+
+/// Distinguish a classic `xref` table from an xref stream at `offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectionKind {
+    /// The bytes begin with the classic `xref` keyword.
+    Classic,
+    /// The bytes begin with an indirect object header (`N G obj`).
+    Stream,
+}
+
+/// Inspect the token at `offset` to decide how the section must be parsed.
+fn section_kind(data: &[u8], offset: usize) -> Result<SectionKind> {
+    let mut lexer = Lexer::new(data, offset)?;
+    lexer.skip_ws();
+    let token = lexer
+        .read_regular()
+        .ok_or_else(|| Error::MalformedXref("empty xref section".to_owned()))?;
+    if token == b"xref" {
+        Ok(SectionKind::Classic)
+    } else if !token.is_empty() && token.iter().all(u8::is_ascii_digit) {
+        Ok(SectionKind::Stream)
+    } else {
+        Err(Error::MalformedXref(format!(
+            "unexpected token at xref offset {offset}"
+        )))
+    }
+}
+
+/// Merge all xref sections reachable through `/Prev`, classic and stream alike.
+///
+/// Sections are visited newest first. Entries are merged newest-wins through
+/// `or_insert`, and trailer keys are applied oldest-first so the newest section
+/// wins there too. Revisiting an offset is a cycle and is rejected.
 fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
     let mut sections = Vec::new();
     let mut next = Some(start);
     let mut seen = HashSet::new();
+    let mut uses_xref_stream = false;
 
     while let Some(offset) = next {
         if !seen.insert(offset) {
@@ -282,7 +623,13 @@ fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
                 "too many chained xref sections".to_owned(),
             ));
         }
-        let section = parse_xref_section(data, offset)?;
+        let section = match section_kind(data, offset)? {
+            SectionKind::Classic => parse_xref_section(data, offset)?,
+            SectionKind::Stream => {
+                uses_xref_stream = true;
+                parse_xref_stream(data, offset)?
+            }
+        };
         next = section.prev;
         sections.push(section);
     }
@@ -299,63 +646,160 @@ fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
             trailer.insert(key.clone(), value.clone());
         }
     }
-    Ok(XrefTable { entries, trailer })
+    Ok(XrefTable {
+        entries,
+        trailer,
+        uses_xref_stream,
+    })
 }
 
 /// Parse and return the indirect object identified by `id`.
+///
+/// Both xref entry forms are handled: type-1 entries are read at their byte
+/// offset, while type-2 entries are expanded from their `/ObjStm`. The `depth`
+/// argument bounds nested object-stream resolution.
 fn load_object(data: &[u8], xref: &XrefTable, id: ObjectId) -> Result<Object> {
+    load_object_inner(data, xref, id, 0)
+}
+
+/// Implementation of [`load_object`] carrying an object-stream depth guard.
+fn load_object_inner(data: &[u8], xref: &XrefTable, id: ObjectId, depth: u8) -> Result<Object> {
     let entry = xref
         .entries
         .get(&id.number)
         .ok_or(Error::ObjectNotFound(id.number))?;
-    let offset = match entry {
-        XrefEntry::Free => return Err(Error::FreeObject(id.number)),
-        XrefEntry::InUse { offset, .. } => *offset,
-    };
-
-    let mut lexer = Lexer::new(data, offset)?;
-    lexer.skip_ws();
-    let number_token = lexer.read_regular().ok_or_else(|| Error::MalformedObject {
-        number: id.number,
-        reason: "missing object number".to_owned(),
-    })?;
-    let number =
-        parse_decimal(number_token, "object number").map_err(|_| Error::MalformedObject {
-            number: id.number,
-            reason: "invalid object number".to_owned(),
-        })?;
-    if number != id.number as usize {
-        return Err(Error::MalformedObject {
-            number: id.number,
-            reason: format!("xref points to object {number}"),
-        });
-    }
-
-    lexer.skip_ws();
-    let generation_token = lexer.read_regular().ok_or_else(|| Error::MalformedObject {
-        number: id.number,
-        reason: "missing generation number".to_owned(),
-    })?;
-    let generation = parse_decimal(generation_token, "object generation").map_err(|_| {
-        Error::MalformedObject {
-            number: id.number,
-            reason: "invalid generation number".to_owned(),
+    match entry {
+        XrefEntry::Free => Err(Error::FreeObject(id.number)),
+        XrefEntry::InUse { offset } => {
+            parse_indirect_object_at(data, *offset, Some((id.number, id.generation)))
         }
-    })?;
-    if generation != usize::from(id.generation) {
-        return Err(Error::MalformedObject {
-            number: id.number,
-            reason: "generation does not match the xref entry".to_owned(),
-        });
+        XrefEntry::Compressed { objstm, index } => {
+            if depth >= MAX_OBJECT_STREAM_DEPTH {
+                return Err(Error::MalformedObjectStream(
+                    "object stream nesting is too deep".to_owned(),
+                ));
+            }
+            load_compressed_object(data, xref, *objstm, *index, Some(id.number), depth + 1)
+        }
+    }
+}
+
+/// Extract object `index` from the `/ObjStm` addressed by `objstm`.
+///
+/// The stream is decoded with the normal filter pipeline, its `/N` header pairs
+/// are parsed and bounds-checked, and only the requested object body is parsed
+/// on demand. When `expected_number` is supplied the header's object number
+/// must match, which detects a corrupt type-2 entry.
+fn load_compressed_object(
+    data: &[u8],
+    xref: &XrefTable,
+    objstm: u32,
+    index: u32,
+    expected_number: Option<u32>,
+    depth: u8,
+) -> Result<Object> {
+    let container = load_object_inner(data, xref, ObjectId::new(objstm, 0), depth)?;
+    let (dictionary, raw) = match container {
+        Object::Stream { dictionary, data } => (dictionary, data),
+        _ => {
+            return Err(Error::MalformedObjectStream(format!(
+                "object stream {objstm} is not a stream"
+            )));
+        }
+    };
+    if dictionary.get("Type").and_then(Object::as_name) != Some("ObjStm") {
+        return Err(Error::MalformedObjectStream(format!(
+            "object {objstm} is not an /ObjStm"
+        )));
     }
 
-    lexer
-        .expect_keyword(b"obj")
-        .map_err(|_| Error::MalformedObject {
-            number: id.number,
-            reason: "missing obj keyword".to_owned(),
+    let count = non_negative_u32(dictionary.get("N")).ok_or_else(|| {
+        Error::MalformedObjectStream(format!("object stream {objstm} has an invalid /N"))
+    })?;
+    if count == 0 || count > MAX_OBJECT_STREAM_OBJECTS {
+        return Err(Error::MalformedObjectStream(format!(
+            "object stream {objstm} declares an out-of-range /N of {count}"
+        )));
+    }
+    let first = usize::try_from(non_negative_u32(dictionary.get("First")).ok_or_else(|| {
+        Error::MalformedObjectStream(format!("object stream {objstm} has an invalid /First"))
+    })?)
+    .map_err(|_| {
+        Error::MalformedObjectStream(format!("object stream {objstm} has an oversized /First"))
+    })?;
+
+    let filters = filters_from_dictionary(&dictionary)?;
+    let decoded = decode_stream(&raw, &filters)?;
+    if first > decoded.len() {
+        return Err(Error::MalformedObjectStream(format!(
+            "object stream {objstm} /First {first} lies outside its {}-byte data",
+            decoded.len()
+        )));
+    }
+
+    // Parse the `N` pairs of (object number, relative offset) that make up the
+    // object stream header. `read_regular` stops at whitespace and delimiters,
+    // which is exactly how the header is laid out.
+    let mut lexer = Lexer::new(&decoded, 0)?;
+    let mut offsets: Vec<(u32, u32)> = Vec::with_capacity(count as usize);
+    for pair in 0..count {
+        lexer.skip_ws();
+        let number_token = lexer.read_regular().ok_or_else(|| {
+            Error::MalformedObjectStream(format!(
+                "object stream {objstm} header pair {pair} is truncated"
+            ))
         })?;
-    lexer.parse_value(0)
+        let number = parse_u32_token(number_token).ok_or_else(|| {
+            Error::MalformedObjectStream(format!(
+                "object stream {objstm} header pair {pair} has an invalid object number"
+            ))
+        })?;
+        lexer.skip_ws();
+        let offset_token = lexer.read_regular().ok_or_else(|| {
+            Error::MalformedObjectStream(format!(
+                "object stream {objstm} header pair {pair} is missing its offset"
+            ))
+        })?;
+        let relative = parse_u32_token(offset_token).ok_or_else(|| {
+            Error::MalformedObjectStream(format!(
+                "object stream {objstm} header pair {pair} has an invalid offset"
+            ))
+        })?;
+        offsets.push((number, relative));
+    }
+    if lexer.position() > first {
+        return Err(Error::MalformedObjectStream(format!(
+            "object stream {objstm} header runs past /First"
+        )));
+    }
+
+    let (number, relative) = offsets.get(index as usize).ok_or_else(|| {
+        Error::MalformedObjectStream(format!(
+            "object stream {objstm} has no entry at index {index}"
+        ))
+    })?;
+    if let Some(expected) = expected_number
+        && *number != expected
+    {
+        return Err(Error::MalformedObjectStream(format!(
+            "object stream {objstm} index {index} holds object {number}, expected {expected}"
+        )));
+    }
+    let absolute = first.checked_add(*relative as usize).ok_or_else(|| {
+        Error::MalformedObjectStream(format!("object stream {objstm} offset overflow"))
+    })?;
+    if absolute >= decoded.len() {
+        return Err(Error::MalformedObjectStream(format!(
+            "object stream {objstm} object {number} lies outside its data"
+        )));
+    }
+    let mut body = Lexer::new(&decoded, absolute)?;
+    body.parse_value(0)
+}
+
+/// Parse a non-negative decimal token into a `u32`.
+fn parse_u32_token(token: &[u8]) -> Option<u32> {
+    std::str::from_utf8(token).ok()?.parse::<u32>().ok()
 }
 
 /// Resolve indirect references to their underlying object value.

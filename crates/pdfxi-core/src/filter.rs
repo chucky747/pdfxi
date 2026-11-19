@@ -845,6 +845,16 @@ fn apply_predictor(data: &[u8], params: &FlateParams) -> Result<Vec<u8>> {
             "predictor row length must be positive".to_owned(),
         ));
     }
+    // A well-formed predictor stream must contain at least one full row.
+    // Reject an oversized row *before* allocating `previous_row`: `row_length`
+    // is derived from attacker-controlled `/DecodeParms`, and `data.len()` is
+    // already bounded by the decode cap. Without this check a tiny zlib stream
+    // with a huge `/Columns` could force a multi-gigabyte allocation here.
+    if row_length > data.len() {
+        return Err(Error::MalformedDeflate(
+            "truncated predictor row in Flate stream".to_owned(),
+        ));
+    }
 
     let fixed_filter = params.predictor.fixed_png_filter();
     let mut output = Vec::with_capacity(data.len());
@@ -1165,6 +1175,28 @@ mod tests {
         let params = FlateParams::new(Predictor::PngUp, 1, 8, 4);
         assert!(matches!(
             flate(&compressed, params),
+            Err(Error::MalformedDeflate(_))
+        ));
+    }
+
+    #[test]
+    fn hostile_columns_is_rejected_before_allocating_predictor_row() {
+        // A two-byte valid zlib stream with an enormous /Columns must be
+        // rejected as a truncated row before `previous_row` is allocated.
+        // This is a regression test for the hostile-/DecodeParms allocation
+        // blocker: before the up-front `row_length > data.len()` check this
+        // call tried to allocate a multi-gigabyte buffer.
+        let compressed = zlib_stored(&[1, 2]);
+        let params = FlateParams::new(Predictor::PngOptimal, 1, 8, u32::MAX);
+        assert!(matches!(
+            flate(&compressed, params),
+            Err(Error::MalformedDeflate(message))
+                if message.contains("truncated predictor row")
+        ));
+
+        let params = FlateParams::new(Predictor::PngUp, 1, 8, u32::MAX);
+        assert!(matches!(
+            flate(&zlib_stored(&[1, 2]), params),
             Err(Error::MalformedDeflate(_))
         ));
     }
