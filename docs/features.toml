@@ -938,9 +938,9 @@ docs = [
     "crates/pdfxi-forms/src/lib.rs",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 85 passed / 0 failed. build_appearance takes the current FieldValue explicitly, so a filled form can regenerate its appearance for a prospective value."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 85 passed / 0 failed."
 id = "FORMS-001"
-notes = "A filled field's current value can now be rendered into an appearance stream through build_appearance(field, widget, value). Dirty-appearance tracking and writing the new /AP back into a concrete /AcroForm remain with the document-writer integration."
+notes = "A filled field's current value can be rendered through build_appearance(field, widget, value). Writing the regenerated /AP back into a concrete /AcroForm remains pending."
 priority = "P1"
 status = "in-progress"
 tests = [
@@ -957,9 +957,9 @@ docs = [
     "crates/pdfxi-forms/src/appearance/tests.rs",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 appearance tests passed as part of 85/85 total. cargo fmt/clippy/doc clean."
+evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 passed as part of 85/85 total."
 id = "FORMS-002"
-notes = "Appearance generation for text, checkbox, radio, choice and pushbutton widgets is now delivered via build_appearance with deterministic /AP state dictionaries and widget-local content streams. Widget annotation serialization into a real PDF dictionary is still deferred, so the row stays in-progress."
+notes = "Appearance generation for text, checkbox, radio, choice and pushbutton widgets is delivered via build_appearance with deterministic /AP state dictionaries. Widget annotation serialization is still deferred."
 priority = "P2"
 status = "in-progress"
 tests = [
@@ -1064,9 +1064,9 @@ title = "Import and export FDF and XFDF"
 [[feature]]
 docs = ["crates/pdfxi-forms/src/appearance.rs"]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 appearance tests passed as part of 85/85 total; clippy/doc clean."
+evidence = "cargo test -p pdfxi-forms appearance::tests (CARGO_TARGET_DIR=target/lanes/forms): 19 passed as part of 85/85 total."
 id = "FORMS-007"
-notes = "Generating a self-contained appearance stream with a widget-local BBox and named on/off states is the prerequisite for preserving appearance during flattening. The flatten operation itself (merging the stream into page content and removing the widget) is not implemented here."
+notes = "Self-contained appearance streams with widget-local BBox and named on/off states are the prerequisite for flattening; the flatten operation itself is not implemented here."
 priority = "P2"
 status = "in-progress"
 tests = [
