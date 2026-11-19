@@ -2,6 +2,20 @@
 
 [PDFXI Guide](README.md)
 
+# Getting started
+
+- [Getting started](getting-started.md)
+- [CLI reference](cli.md)
+
+# Using PDFXI
+
+- [Authoring](authoring.md)
+- [Forms](forms.md)
+- [Security](security.md)
+- [Accessibility](accessibility.md)
+- [Automation](automation.md)
+- [Standards and preflight](standards.md)
+
 # Reference
 
 - [Goal and plan](plan.md)
@@ -9,10 +23,4 @@
 - [Feature matrix](features.md)
 - [Testing and performance](testing.md)
 - [Project memory](memory.md)
-- [CLI reference](../../CLI.md)
-
-<!-- Planned chapters for later milestones:
-- Viewer (M1): see ../../features/view.md
-- Authoring (M2), Editing and security (M3), Standards (M4),
-  Conversion (M5), Professional workflows (M6), Release (M7).
--->
+- [CLI reference (authoritative)](../../CLI.md)

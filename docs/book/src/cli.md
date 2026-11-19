@@ -1,0 +1,71 @@
+# CLI reference
+
+The `pdfxi` binary is the headless, deterministic shell over the PDFXI crates.
+It never prompts, uses the network, or writes telemetry. This page is the
+in-book summary; [docs/CLI.md](../../CLI.md) is the authoritative reference with
+complete JSON shapes and pasted example output.
+
+```text
+pdfxi <COMMAND> [OPTIONS]
+pdfxi <COMMAND> --help
+```
+
+## Commands
+
+| Command | Purpose | Status |
+|---|---|---|
+| `info <FILE> [--json]` | Path, PDF version, byte length, page count | verified (`AUTO-009`) |
+| `text <FILE>` | Plain text from page content streams | verified (`AUTO-010`) |
+| `search <FILE> <QUERY> [--case-sensitive] [--whole-word] [--json]` | Cross-page text search | implemented |
+| `render <FILE> --page N --scale S --out PATH [--format png\|ppm]` | Rasterize one page | implemented, `pdfium` build |
+| `action list <FILE>` | List named actions in an action file | implemented |
+| `action show <FILE> <NAME>` | Show an action's steps and parameters | implemented |
+| `action run <FILE> <NAME> --input <PATH>... [--output-dir DIR] [--json]` | Run an action over inputs | implemented, staging-only |
+| `droplet <ACTION_FILE> <NAME> <INPUT>... [--json]` | Explorer-friendly `action run` | implemented, staging-only |
+
+Commands are integration-tested by invoking the real binary; see
+`crates/pdfxi-cli/tests/cli.rs`.
+
+## Conventions worth remembering
+
+- `render --page` is **zero-based**, matching the `Renderer` trait. `search`
+  page numbers in output are **one-based**.
+- `render --scale` is required, finite, and in `(0, 8]`; `1.0` is 72 DPI.
+- `search` matches ASCII case-insensitively by default. Offsets in output are
+  zero-based Unicode scalar offsets into a page's concatenated text.
+- A `search` with no matches exits `0`, prints nothing on stdout, and writes
+  `no matches` to stderr — in both text and JSON modes.
+- `--json` is available on `info`, `search`, `action run`, and `droplet`.
+  Output is pretty-printed JSON with stable field names; new fields are additive.
+- `text` decodes FlateDecode streams transparently. Another filter is reported
+  as an error that names the filter and page.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (including a no-match search) |
+| `1` | Runtime failure: I/O, parse, validation, failed job, or missing `pdfium` for `render` |
+| `2` | Argument/usage error reported by the parser |
+
+`PDFIUM_PATH` selects the PDFium shared library for `render`; on Windows the
+fallback is `%LOCALAPPDATA%\pdfxi\pdfium\bin\pdfium.dll`. `CARGO_TARGET_DIR` is a
+build-time Cargo setting, not a runtime variable.
+
+## Examples
+
+```powershell
+pdfxi info .\fixtures\minimal.pdf
+pdfxi info --json .\fixtures\minimal.pdf
+pdfxi text .\fixtures\minimal.pdf
+pdfxi search .\fixtures\minimal.pdf PDFXI --json
+pdfxi render .\fixtures\minimal.pdf --page 0 --scale 2.0 --out .\page.png
+pdfxi action list .\staging.act
+pdfxi action show .\staging.act nightly
+pdfxi action run .\staging.act nightly --input .\fixtures\minimal.pdf --json
+pdfxi droplet .\staging.act nightly .\fixtures\minimal.pdf
+```
+
+See [Automation](automation.md) for the action-file format and the staging-only
+executor's guarantees, and [Getting started](getting-started.md) for build and
+fixture setup.

@@ -2,9 +2,10 @@
 
 > **Status: M1 slice verified; later viewer rows in progress.** Open/display,
 > layouts, zoom/fit, thumbnails, bookmarks, attachments, links, and find/select
-> are verified in the matrix. Print, rotate, tabs, split view, layers, full
-> screen, reflow, portfolios, compare, and the loupe remain in progress or
-> planned. See [Feature and milestone status](#feature-and-milestone-status)
+> are verified in the matrix, as is the tabbed interface (`VIEW-005`). Print,
+> rotate, split view, layers, full screen, reflow, portfolios, compare, and the
+> loupe remain in progress or planned. See
+> [Feature and milestone status](#feature-and-milestone-status)
 > and the canonical [feature matrix](../FEATURES.md) before relying on any item.
 
 This page documents the viewing and navigation surface delivered by milestone
@@ -87,10 +88,9 @@ lane.
 - Find text within the open document, with next/previous result navigation and
   a match count. Results come from the `text_page` path in the `Renderer`
   contract and are highlighted on the canvas.
-- **Matrix gap:** `docs/features.toml` has no dedicated in-document search row.
-  `MANAGE-003` is cross-file search and `EDIT-003` is find-and-replace; neither
-  is the M1 read-only find. This gap is being reported to the integrator rather
-  than filled with an invented feature ID.
+- The dedicated matrix row is `VIEW-017` ("Find text in a document and select
+  copy text"), which is `verified`. `MANAGE-003` is cross-file search and
+  `EDIT-003` is find-and-replace; neither is this read-only find.
 
 ### Text selection
 

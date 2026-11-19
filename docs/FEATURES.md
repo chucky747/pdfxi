@@ -4,7 +4,7 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 25 verified, 40 in-progress, 75 planned.
+Current status: 25 verified, 45 in-progress, 70 planned.
 
 ## Detailed feature pages
 
@@ -15,7 +15,11 @@ Narrative documentation for the M1 viewer and CLI slice:
 - [Command-line interface](features/cli.md) - `pdfxi info`, `text`, `render`,
   `search`, `action`, and `droplet` commands with examples.
 
-An mdBook entry point is available in [docs/book/src/README.md](book/src/README.md).
+Task-oriented M2 chapters live in the [mdBook](book/src/README.md):
+[authoring](book/src/authoring.md), [forms](book/src/forms.md),
+[security](book/src/security.md), [accessibility](book/src/accessibility.md),
+[automation](book/src/automation.md), and
+[standards/preflight](book/src/standards.md).
 
 ## Status legend
 
@@ -31,7 +35,7 @@ An mdBook entry point is available in [docs/book/src/README.md](book/src/README.
 
 | Domain | Rows | Primary milestones |
 |---|---:|---|
-| View & Navigate | 17 | M1, M2 |
+| View & Navigate | 18 | M1, M2 |
 | Create | 14 | M2, M5 |
 | Edit | 15 | M2, M3 |
 | Export | 9 | M2, M4, M5 |

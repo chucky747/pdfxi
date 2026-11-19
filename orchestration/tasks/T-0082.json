@@ -3,7 +3,7 @@
   "lane": "docs",
   "title": "Complete CLI reference and M2 mdBook pages",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0012"],
   "owns": [
     "docs/CLI.md",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0082.toml"
   ],
   "acceptance": "cargo xtask docs",
-  "evidence": ""
+  "evidence": "docs/evidence/docs/T-0082.md"
 }
