@@ -1,0 +1,63 @@
+# Manifest template for a machine that has `cargo-fuzz` and nightly Rust.
+#
+# This is intentionally a standalone workspace (it declares `[workspace]`).
+# The canonical workspace root `Cargo.toml` is integrator-owned and does NOT
+# list `fuzz` as a member, so adding it there would violate the claim boundary.
+# On this host `cargo fuzz`, nightly, and `libfuzzer-sys` are all unavailable,
+# so this manifest is not built by the fast checks. The equivalent plain
+# functions and their deterministic runner live in
+# `crates/pdfxi-testkit/src/fuzz.rs` and `examples/fuzz_smoke.rs`.
+
+[package]
+name = "pdfxi-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "libFuzzer targets for the PDFXI parsers, filters, content streams, forms, and crypto."
+license = "MIT OR Apache-2.0"
+
+# This marker is what `cargo fuzz` looks for when locating the fuzz crate.
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pdfxi-testkit = { path = "../crates/pdfxi-testkit" }
+
+[[bin]]
+name = "parser"
+path = "fuzz_targets/parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "filters"
+path = "fuzz_targets/filters.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "content"
+path = "fuzz_targets/content.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "forms"
+path = "fuzz_targets/forms.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto"
+path = "fuzz_targets/crypto.rs"
+test = false
+doc = false
+bench = false

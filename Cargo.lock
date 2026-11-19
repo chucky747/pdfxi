@@ -2513,6 +2513,8 @@ name = "pdfxi-testkit"
 version = "0.1.0"
 dependencies = [
  "pdfxi-core",
+ "pdfxi-forms",
+ "pdfxi-security",
 ]
 
 [[package]]

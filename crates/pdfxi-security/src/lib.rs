@@ -31,11 +31,13 @@
 //! - [`x509`] — X.509 certificate parsing, deterministic name display,
 //!   extensions, caller-clocked chain validation, and digital IDs whose private
 //!   keys stay behind an opaque [`KeyHandle`] trait.
+//! - [`timestamp`] — RFC 3161 `TSTInfo` parsing, token signature and imprint
+//!   checks, caller-clocked chain validation at `genTime`, a replay/skew guard,
+//!   nonce verification, and a conservative mapping onto [`SignatureStatus`].
 //!
-//! All operations are deterministic and allocate only as needed. RFC 3161
-//! timestamps and trust/revocation management are layered on in later milestones
-//! without changing the public surface. No operation logs secrets or document
-//! contents.
+//! All operations are deterministic and allocate only as needed. Trust and
+//! revocation management (SEC-007) remain layered on by the caller; no operation
+//! here logs secrets or document contents.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -51,6 +53,7 @@ mod redaction;
 mod sanitization;
 mod signature;
 pub mod standard_handler;
+pub mod timestamp;
 pub mod x509;
 
 pub use cms::{
@@ -74,6 +77,11 @@ pub use standard_handler::{
     Decryptor, PASSWORD_PADDING, SecurityParameters, StandardSecurityHandler, compute_file_key,
     compute_o_and_oe, compute_o_value, compute_perms, compute_u_and_ue, compute_u_value,
     pad_password,
+};
+pub use timestamp::{
+    Accuracy, MessageImprint, TimestampPolicy, TimestampStatus, TimestampTokenParams,
+    TimestampValidation, TimestampValidationContext, TstInfo, build_timestamp_token,
+    encode_tst_info, parse_tst_info, validate_timestamp_token,
 };
 pub use x509::{
     BasicConstraints, Certificate, CertificateVerifier, ChainReport, Clock, DigitalId,

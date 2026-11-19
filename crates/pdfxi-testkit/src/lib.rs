@@ -29,6 +29,13 @@
 //! page labels, annotations, forms, and a documented-password encrypted sample.
 //! Their builders, manifest, and golden snapshot helpers are described in that
 //! module; the files live under `fixtures/authoring/`.
+//!
+//! # Fuzz entry points
+//!
+//! [`fuzz`] exposes five small, panic-free functions that feed arbitrary bytes
+//! to the real parser, filter, content, form, and crypto code. They back both
+//! the committed `fuzz/fuzz_targets/*.rs` libFuzzer files and the deterministic
+//! `fuzz_smoke` example and integration tests.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -36,6 +43,7 @@
 pub mod authoring;
 pub mod bench;
 pub mod fixtures;
+pub mod fuzz;
 pub mod golden;
 pub mod hash;
 pub mod malformed;

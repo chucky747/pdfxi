@@ -9,11 +9,19 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+# The fuzz entry points in `src/fuzz.rs` are plain library functions that call
+# the real parsers, filters, form loaders, and crypto primitives. They must be
+# reachable from the `fuzz_smoke` example and from integration tests, so these
+# are normal dependencies rather than dev-dependencies. `pdfxi-core` keeps its
+# dev-dependency back-edge, which Cargo permits (one edge of the cycle is a
+# dev-dependency and is absent from a normal build).
+pdfxi-core = { path = "../pdfxi-core" }
+pdfxi-forms = { path = "../pdfxi-forms" }
+pdfxi-security = { path = "../pdfxi-security" }
 
 [dev-dependencies]
 # Test-only reverse edge used by the authoring corpus integration tests so every
 # committed fixture can be parsed through the real `pdfxi_core::Document`.
 # `pdfxi-core` already dev-depends on this crate; Cargo permits cycles made only
 # of dev-dependencies, and this edge is never present in a normal build.
-pdfxi-core = { path = "../pdfxi-core" }
 

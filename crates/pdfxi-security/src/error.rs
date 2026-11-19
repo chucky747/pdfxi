@@ -133,6 +133,12 @@ pub enum SecurityError {
         /// Category that was still present after sanitization.
         category: SanitizationCategory,
     },
+    /// A CMS token did not carry the RFC 3161 `id-ct-TSTInfo` content type.
+    TimestampTokenTypeInvalid,
+    /// A `TSTInfo` used a version other than v1.
+    TimestampVersionUnsupported(u64),
+    /// A required `TSTInfo` field was absent from an otherwise well-formed value.
+    TimestampFieldMissing(&'static str),
 }
 
 impl fmt::Display for SecurityError {
@@ -234,6 +240,15 @@ impl fmt::Display for SecurityError {
             ),
             Self::SanitizationVerificationFailed { category } => {
                 write!(f, "sanitization category still present: {category}")
+            }
+            Self::TimestampTokenTypeInvalid => {
+                write!(f, "CMS token is not an RFC 3161 timestamp token")
+            }
+            Self::TimestampVersionUnsupported(version) => {
+                write!(f, "unsupported RFC 3161 TSTInfo version: {version}")
+            }
+            Self::TimestampFieldMissing(name) => {
+                write!(f, "required TSTInfo field missing: {name}")
             }
         }
     }

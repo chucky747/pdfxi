@@ -3,7 +3,7 @@
   "lane": "qa",
   "title": "Add fuzz targets for parsers filters forms and crypto",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0039", "T-0024"],
   "owns": [
     "fuzz/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0081.toml"
   ],
   "acceptance": "cargo xtask verify --no-docs",
-  "evidence": ""
+  "evidence": "docs/evidence/qa/T-0081.md"
 }
