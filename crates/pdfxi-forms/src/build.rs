@@ -9,14 +9,23 @@
 //! model ([`FieldSpec::to_field`]) and the PDF object model
 //! ([`FieldSpec::field_dictionary`], [`FieldSpec::widget_annotation`]).
 //!
-//! [`acroform_dictionary`] assembles a complete `/AcroForm` dictionary from a
+//! [`acroform_dictionary`] assembles an `/AcroForm` dictionary *model* from a
 //! slice of specs. The emitted values use [`crate::acroform::PdfValue`], the
 //! crate's dependency-free object-model boundary, so a host with a concrete
 //! writer can serialise them without this crate depending on `pdfxi-core`.
 //!
+//! This is a modelling layer, not a PDF writer and not a full field-tree
+//! builder: each spec produces one merged field/widget node with one widget
+//! annotation (a radio group is represented as one node with `/Opt` options,
+//! not one widget annotation per option), and the widget's `/P` entry is a
+//! placeholder reference derived from the zero-based [`FieldSpec::page`]
+//! index rather than a resolved page object. A host writer must attach the
+//! real page object reference and radio-state appearances.
+//!
 //! All emission is deterministic: dictionary keys are stored in a `BTreeMap`
-//! and arrays keep the order of the supplied specs. Geometry and colour are
-//! validated before emission; nothing here panics on hostile input.
+//! and arrays keep the order of the supplied specs. Geometry, derived rectangle
+//! edges, colour and the page index are validated before emission; nothing
+//! here panics on hostile input.
 
 use crate::acroform::{ObjectRef, PdfValue};
 use crate::appearance::{Alignment, BorderStyle, RgbColor, WidgetRect};
@@ -37,10 +46,13 @@ const BTN_PUSHBUTTON: u32 = 1 << 16;
 pub enum CreationError {
     /// The field name was empty.
     EmptyName,
-    /// The widget rectangle contained a non-finite coordinate.
+    /// The widget rectangle contained a non-finite coordinate, including a
+    /// computed right or top edge.
     NonFiniteRect,
     /// The widget rectangle had a zero or negative extent.
     ZeroSizedRect,
+    /// The page index could not be converted to a one-based PDF object number.
+    PageOverflow(u32),
     /// The border width was non-finite or negative.
     InvalidBorderWidth,
     /// A colour had a component outside `0.0..=1.0` or non-finite.
@@ -62,6 +74,12 @@ impl fmt::Display for CreationError {
             Self::EmptyName => write!(f, "field name must not be empty"),
             Self::NonFiniteRect => write!(f, "widget rectangle has a non-finite coordinate"),
             Self::ZeroSizedRect => write!(f, "widget rectangle has a zero or negative extent"),
+            Self::PageOverflow(page) => {
+                write!(
+                    f,
+                    "page index {page} cannot be mapped to a PDF object number"
+                )
+            }
             Self::InvalidBorderWidth => write!(f, "border width must be finite and non-negative"),
             Self::InvalidColor(what) => write!(f, "{what} colour component is out of range"),
             Self::TooManyOptions { count, max } => {
@@ -334,16 +352,23 @@ impl FieldSpec {
     /// # Errors
     ///
     /// Returns [`CreationError`] for an empty name, invalid geometry or colour,
-    /// too many options, or a non-finite numeric value.
+    /// an unmappable page index, too many options, or a non-finite numeric
+    /// value. The derived `right`/`top` edges are checked as well as the raw
+    /// rectangle components, because a finite sum can still overflow to
+    /// infinity.
     pub fn validate(&self) -> Result<(), CreationError> {
         if self.name.is_empty() {
             return Err(CreationError::EmptyName);
         }
-        if !self.rect.is_finite() {
+        if !self.rect.is_finite() || !self.rect.right().is_finite() || !self.rect.top().is_finite()
+        {
             return Err(CreationError::NonFiniteRect);
         }
         if self.rect.is_zero_sized() {
             return Err(CreationError::ZeroSizedRect);
+        }
+        if self.page.checked_add(1).is_none() {
+            return Err(CreationError::PageOverflow(self.page));
         }
         if !self.border_width.is_finite() || self.border_width < 0.0 {
             return Err(CreationError::InvalidBorderWidth);
@@ -441,7 +466,7 @@ impl FieldSpec {
         );
         dict.insert(
             "Kids".to_owned(),
-            PdfValue::Array(vec![self.widget_annotation_unchecked()]),
+            PdfValue::Array(vec![self.widget_annotation_dictionary()?]),
         );
         Ok(PdfValue::Dictionary(dict))
     }
@@ -449,18 +474,20 @@ impl FieldSpec {
     /// Emits the widget annotation dictionary for this field.
     ///
     /// Contains `/Type /Annot`, `/Subtype /Widget`, `/Rect`, `/F 4`, `/BS`,
-    /// `/MK`, and `/P` (an indirect reference whose object number is the
-    /// one-based page index derived from [`FieldSpec::page`]).
+    /// `/MK`, and `/P`. The `/P` value is a *placeholder* indirect reference
+    /// whose object number is the one-based [`FieldSpec::page`] index; a host
+    /// writer must replace it with the real page object reference.
     ///
     /// # Errors
     ///
-    /// Returns [`CreationError`] when [`FieldSpec::validate`] fails.
+    /// Returns [`CreationError`] when [`FieldSpec::validate`] fails, including
+    /// [`CreationError::PageOverflow`] for a page index that cannot be mapped.
     pub fn widget_annotation(&self) -> Result<PdfValue, CreationError> {
         self.validate()?;
-        Ok(self.widget_annotation_unchecked())
+        self.widget_annotation_dictionary()
     }
 
-    fn widget_annotation_unchecked(&self) -> PdfValue {
+    fn widget_annotation_dictionary(&self) -> Result<PdfValue, CreationError> {
         let mut dict = BTreeMap::new();
         dict.insert("Type".to_owned(), PdfValue::Name("Annot".to_owned()));
         dict.insert("Subtype".to_owned(), PdfValue::Name("Widget".to_owned()));
@@ -489,22 +516,30 @@ impl FieldSpec {
         mk.insert("BG".to_owned(), color_array(self.background));
         dict.insert("MK".to_owned(), PdfValue::Dictionary(mk));
         // A zero-based page index maps to the one-based PDF page object number.
+        // Use checked arithmetic so an extreme index is a typed error rather
+        // than a debug panic or a wrapped, invalid reference in release.
+        let page_object = self
+            .page
+            .checked_add(1)
+            .ok_or(CreationError::PageOverflow(self.page))?;
         dict.insert(
             "P".to_owned(),
-            PdfValue::Reference(ObjectRef::new(self.page + 1, 0)),
+            PdfValue::Reference(ObjectRef::new(page_object, 0)),
         );
         if let Some(tooltip) = &self.tooltip {
             dict.insert("TU".to_owned(), PdfValue::Text(tooltip.clone()));
         }
-        PdfValue::Dictionary(dict)
+        Ok(PdfValue::Dictionary(dict))
     }
 }
 
-/// Builds a complete `/AcroForm` dictionary from a slice of field specs.
+/// Builds an `/AcroForm` dictionary model from a slice of field specs.
 ///
-/// The returned value is a [`PdfValue::Dictionary`] with `/Fields` (one entry
-/// per spec, in the given order), `/NeedAppearances false` and a default
-/// appearance string.
+/// The returned value is a [`PdfValue::Dictionary`] with `/Fields` (one merged
+/// field/widget node per spec, in the given order), `/NeedAppearances false`
+/// and a default appearance string. It models the dictionary shape only; it
+/// does not create PDF objects, resolve page references or emit appearance
+/// streams.
 ///
 /// # Errors
 ///
@@ -720,5 +755,29 @@ mod tests {
             nan_value.to_field(),
             Err(CreationError::NonFiniteValue("current"))
         );
+    }
+
+    #[test]
+    fn maximum_page_index_is_a_typed_error() {
+        let spec = FieldSpec::text("f", rect(), u32::MAX);
+        assert_eq!(spec.validate(), Err(CreationError::PageOverflow(u32::MAX)));
+        assert_eq!(spec.to_field(), Err(CreationError::PageOverflow(u32::MAX)));
+        assert_eq!(
+            spec.field_dictionary(),
+            Err(CreationError::PageOverflow(u32::MAX))
+        );
+        assert_eq!(
+            spec.widget_annotation(),
+            Err(CreationError::PageOverflow(u32::MAX))
+        );
+    }
+
+    #[test]
+    fn overflowing_rect_edges_are_rejected() {
+        let spec = FieldSpec::text("f", WidgetRect::new(f32::MAX, 0.0, f32::MAX, 10.0), 0);
+        assert!(!spec.rect().right().is_finite());
+        assert_eq!(spec.validate(), Err(CreationError::NonFiniteRect));
+        assert_eq!(spec.widget_annotation(), Err(CreationError::NonFiniteRect));
+        assert_eq!(spec.field_dictionary(), Err(CreationError::NonFiniteRect));
     }
 }

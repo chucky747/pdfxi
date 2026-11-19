@@ -14,7 +14,8 @@
 //!   changes in deterministic, name-sorted order.
 //! - [`FieldSpec`] / [`acroform_dictionary`] — typed creation of text,
 //!   checkbox, radio, choice, pushbutton and signature fields, with widget
-//!   rectangles, page association and valid AcroForm/widget dictionaries.
+//!   rectangles, page association and well-formed AcroForm/widget dictionary
+//!   models (page references are placeholders; radio groups use one widget).
 //! - [`Validator`] / [`Rule`] / [`Format`] / [`Pattern`] — configurable
 //!   validation (required, max length, numeric/currency/date, pattern, choice
 //!   membership and custom [`ValidationHook`]s) with a deterministic

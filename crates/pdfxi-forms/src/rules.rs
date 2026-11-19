@@ -133,7 +133,10 @@ impl Pattern {
         if chars.first() == Some(&'^') {
             index = 1;
         }
-        let end = if chars.last() == Some(&'$') && chars.len() > index {
+        // A trailing '$' is an anchor only when it is not escaped. Counting the
+        // immediately preceding backslashes handles '\\$' (escaped literal)
+        // and '\\\\$' (escaped backslash followed by an anchor).
+        let end = if chars.len() > index && is_unescaped_trailing_anchor(&chars, chars.len() - 1) {
             chars.len() - 1
         } else {
             chars.len()
@@ -218,6 +221,21 @@ impl fmt::Display for Pattern {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.source)
     }
+}
+
+/// Returns `true` when `chars[index]` is a `$` preceded by an even number of
+/// backslashes, i.e. an unescaped trailing anchor rather than a literal.
+fn is_unescaped_trailing_anchor(chars: &[char], index: usize) -> bool {
+    if chars.get(index) != Some(&'$') {
+        return false;
+    }
+    let mut cursor = index;
+    let mut backslashes = 0usize;
+    while cursor > 0 && chars[cursor - 1] == '\\' {
+        backslashes += 1;
+        cursor -= 1;
+    }
+    backslashes.is_multiple_of(2)
 }
 
 fn push_token(tokens: &mut Vec<Token>, atom: Atom) {
@@ -787,6 +805,24 @@ mod tests {
             Pattern::parse("a**").unwrap_err(),
             PatternError::DoubleQuantifier('*')
         );
+    }
+
+    #[test]
+    fn escaped_trailing_dollar_is_a_literal() {
+        let literal = Pattern::parse(r"x\$").unwrap();
+        assert!(literal.is_match("x$"));
+        assert!(!literal.is_match("x"));
+        assert_eq!(literal.source(), r"x\$");
+
+        // An unescaped trailing '$' remains a no-op full-match anchor.
+        let anchored = Pattern::parse("x$").unwrap();
+        assert!(anchored.is_match("x"));
+        assert!(!anchored.is_match("xy"));
+
+        // An escaped backslash before '$' leaves a genuine anchor.
+        let escaped_slash = Pattern::parse(r"x\\$").unwrap();
+        assert!(escaped_slash.is_match(r"x\"));
+        assert!(!escaped_slash.is_match(r"x\$"));
     }
 
     #[test]

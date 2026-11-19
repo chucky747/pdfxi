@@ -1180,9 +1180,9 @@ docs = [
     "docs/evidence/forms/T-0080.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms: 144 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
+evidence = "cargo test -p pdfxi-forms: 147 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
 id = "FORMS-002"
-notes = "Typed field creation for all six widget types with name, tooltip, values, flags, options, max length, alignment, border/colour, rectangle and page. Valid AcroForm dictionaries and widget annotations are emitted into the PdfValue model. Deterministic /AP generation already existed via build_appearance. Serialising the emitted dictionaries into a concrete PDF and a property-editing UI remain deferred."
+notes = "Typed field creation for all six widget types with name, tooltip, values, flags, options, max length, alignment, border/colour, rectangle and page. Well-formed dictionary models are emitted into the PdfValue model; /P is a placeholder page-object reference and the host writer must substitute the real page reference. Deterministic /AP generation already existed via build_appearance. Serialising the emitted dictionaries into a concrete PDF and a property-editing UI remain deferred."
 priority = "P2"
 status = "in-progress"
 tests = [
@@ -1197,6 +1197,7 @@ tests = [
     "appearance::tests::radio_group_states",
     "appearance::tests::choice_combo_renders_single_line",
     "appearance::tests::choice_list_renders_highlight_and_rows",
+    "build::tests::maximum_page_index_is_a_typed_error",
 ]
 title = "Create text checkbox radio choice and button fields"
 
@@ -1210,7 +1211,7 @@ docs = [
     "docs/evidence/forms/T-0080.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms: 144 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
+evidence = "cargo test -p pdfxi-forms: 147 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
 id = "FORMS-003"
 notes = "Added configurable validation (required, max length, numeric/currency/date formats, dependency-free pattern, choice membership, custom hook trait) with typed per-field errors and a name-sorted deterministic summary. Calculations now include Min/Max, bounded simplified arithmetic, and an order-independent dependency plan with cycle detection and deterministic results. No arbitrary scripts are run. Property-editing UI and Acrobat calculation-order semantics for cyclic dependencies remain deferred."
 priority = "P2"
@@ -1228,6 +1229,8 @@ tests = [
     "calculation::tests::plan_is_order_independent_and_respects_dependencies",
     "calculation::tests::plan_detects_dependency_cycles_before_applying",
     "build::tests::create_text_field_with_typed_properties",
+    "build::tests::overflowing_rect_edges_are_rejected",
+    "rules::tests::escaped_trailing_dollar_is_a_literal",
 ]
 title = "Field properties calculations and validation"
 
@@ -1549,18 +1552,23 @@ title = "Sign and certify documents"
 docs = [
     "crates/pdfxi-security/src/cms.rs",
     "crates/pdfxi-security/src/signature.rs",
+    "crates/pdfxi-security/src/timestamp.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "docs/evidence/security/T-0077.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 93 passed, 0 failed. Signature validation paths are covered by the cms::tests::* cases listed above."
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 149 passed, 0 failed, including 15 timestamp::tests cases covering valid token, wrong imprint, bad CMS signature, tampered TSTInfo digest, untrusted TSA, certificate-invalid-at-genTime, nonce mismatch, future/skew, malformed DER, missing fields and status mapping. fmt/clippy(-D warnings)/rustdoc(-D warnings) clean for pdfxi-security. docs/evidence/security/T-0077.md"
 id = "SEC-006"
 notes = """
-Signature validation is implemented for the CMS subset (digest recomputation,
-signed-attribute checks, signature verification via the provider, and distinct
-errors for tampering, truncation, and unsupported algorithms). RFC 3161
-timestamps and trust/revocation management are not part of this task and remain
-planned; signingTime is encoded/decoded as a signed attribute but no trusted
-timestamp token is requested or validated yet. Row stays in-progress until
-those capabilities land.
+Signature validation for the CMS subset remains as before (digest recomputation,
+signed-attribute checks, signature verification via the provider, typed
+tampering/truncation/algorithm errors). T-0077 adds RFC 3161 trusted timestamp
+validation: TSTInfo parsing, CMS token signature and TSTInfo digest verification,
+messageImprint matching, caller-clocked chain trust at genTime, replay/skew and
+nonce policy, and a conservative TimestampStatus -> SignatureStatus mapping.
+Revocation/CRL checking, trust-manager UI and applying these checks inside a
+concrete PDF signature workflow remain planned (SEC-007), so the row stays
+in-progress rather than verified.
 """
 priority = "P3"
 status = "in-progress"
@@ -1571,6 +1579,16 @@ tests = [
     "cms::tests::unsupported_algorithms_are_rejected_distinctly",
     "cms::tests::detached_verification_uses_supplied_content",
     "cms::tests::metadata_maps_all_digest_algorithms",
+    "timestamp::tests::valid_token_validates_and_maps_to_valid_status",
+    "timestamp::tests::wrong_message_imprint_is_distinguished",
+    "timestamp::tests::bad_cms_signature_is_distinguished",
+    "timestamp::tests::untrusted_tsa_is_distinguished",
+    "timestamp::tests::timestamp_outside_certificate_validity_is_distinguished",
+    "timestamp::tests::nonce_mismatch_is_distinguished",
+    "timestamp::tests::future_timestamp_beyond_skew_is_rejected",
+    "timestamp::tests::malformed_der_produces_typed_error",
+    "timestamp::tests::missing_fields_produce_typed_error",
+    "timestamp::tests::status_mapping_keeps_valid_conservative",
 ]
 title = "Timestamp and signature validation"
 
