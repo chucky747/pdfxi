@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-core",
+    "id":  "T-0041",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-core/src/**",
+                 "orchestration/feature-updates/T-0041.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0008",
+                       "T-0029"
+                   ],
+    "title":  "Implement page operations merge split rotate reorder",
+    "priority":  "P1",
+    "lane":  "core"
+}
