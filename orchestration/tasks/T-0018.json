@@ -1,0 +1,16 @@
+{
+    "acceptance":  "cargo test -p pdfxi-security",
+    "id":  "T-0018",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-security/**",
+                 "orchestration/feature-updates/T-0018.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Create security encryption and permission model",
+    "priority":  "P1",
+    "lane":  "security"
+}

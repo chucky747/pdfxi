@@ -1,0 +1,17 @@
+{
+    "acceptance":  "cargo test -p pdfxi-convert -p pdfxi-standards",
+    "id":  "T-0019",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-convert/**",
+                 "crates/pdfxi-standards/**",
+                 "orchestration/feature-updates/T-0019.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0002"
+                   ],
+    "title":  "Create converter and standards contracts",
+    "priority":  "P1",
+    "lane":  "convert"
+}

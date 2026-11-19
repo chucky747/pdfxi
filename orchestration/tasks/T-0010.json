@@ -4,6 +4,7 @@
     "evidence":  "",
     "owns":  [
                  "crates/pdfxi-cli/**",
+                 "crates/pdfxi-core/**",
                  "orchestration/feature-updates/T-0010.toml"
              ],
     "status":  "queued",

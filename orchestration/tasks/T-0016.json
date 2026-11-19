@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo test -p pdfxi-testkit",
+    "id":  "T-0016",
+    "evidence":  "",
+    "owns":  [
+                 "crates/pdfxi-testkit/**",
+                 "fixtures/**",
+                 "corpus/**",
+                 "orchestration/feature-updates/T-0016.toml"
+             ],
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0007"
+                   ],
+    "title":  "Create M1 fixture corpus and golden harness",
+    "priority":  "P1",
+    "lane":  "qa"
+}
