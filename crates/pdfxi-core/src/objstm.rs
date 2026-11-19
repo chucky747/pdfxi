@@ -29,8 +29,14 @@ use crate::{Error, Result};
 
 /// Default upper bound on the number of objects packed into one `/ObjStm`.
 const DEFAULT_MAX_OBJECTS_PER_STREAM: usize = 128;
-/// Hard upper bound accepted for [`ObjectStreamOptions::max_objects_per_stream`].
-const MAX_OBJECTS_PER_STREAM: usize = 1_000_000;
+/// Hard upper bound on the members of a single generated `/ObjStm`.
+///
+/// A type-2 xref entry stores the member index in the two-byte `/W` field, so
+/// an index at or above `2^16` would wrap and point at the wrong object. The
+/// bound is `u16::MAX` rather than `u16::MAX + 1`: indices are zero based, so
+/// leaving the highest representable index unused keeps the field clear of the
+/// wrap boundary even if a caller miscounts members.
+const MAX_OBJECTS_PER_STREAM: usize = u16::MAX as usize;
 /// Byte width of the type field of a generated xref-stream entry.
 const TYPE_WIDTH: u8 = 1;
 /// Byte width of the second field (object offset or object-stream number).
@@ -51,7 +57,9 @@ pub struct ObjectStreamOptions {
     pub compress: bool,
     /// Maximum number of objects packed into a single `/ObjStm`.
     ///
-    /// Must be non-zero and no greater than one million. The default is 128.
+    /// Must be non-zero and no greater than 65,535 (`u16::MAX`), because a
+    /// type-2 xref entry stores the member index in a two-byte field. The
+    /// default is 128.
     pub max_objects_per_stream: usize,
     /// Object number assigned to the first generated object stream.
     ///
@@ -293,12 +301,16 @@ pub fn plan_object_streams(
             data: encoded,
         };
         for (member_index, (id, _)) in chunk.iter().enumerate() {
+            let index = u16::try_from(member_index).map_err(|_| {
+                Error::CannotSerialize(format!(
+                    "object stream member index {member_index} does not fit the {}-byte xref field",
+                    FIELD_THREE_WIDTH
+                ))
+            })?;
             packed.push(PackedObjectRef {
                 id: *id,
                 stream: stream_id,
-                index: u32::try_from(member_index).map_err(|_| {
-                    Error::CannotSerialize("object stream index exceeds u32".to_owned())
-                })?,
+                index: u32::from(index),
             });
         }
         // The relative offsets computed above are embedded in the stream header;
@@ -473,7 +485,10 @@ enum XrefEntrySpec {
         /// Object number of the containing `/ObjStm`.
         objstm: u32,
         /// Zero-based member index in the object stream header.
-        index: u32,
+        ///
+        /// Stored as `u16` so the two-byte xref field can never be overflowed
+        /// by a member index, even if a caller bypasses the planner.
+        index: u16,
     },
 }
 
@@ -675,11 +690,17 @@ fn build_document(
         );
     }
     for item in &plan.packed {
+        let index = u16::try_from(item.index).map_err(|_| {
+            Error::CannotSerialize(format!(
+                "object stream member index {} does not fit the {}-byte xref field",
+                item.index, FIELD_THREE_WIDTH
+            ))
+        })?;
         entries.insert(
             item.id.number,
             XrefEntrySpec::Compressed {
                 objstm: item.stream.number,
-                index: item.index,
+                index,
             },
         );
     }
@@ -1099,6 +1120,71 @@ mod tests {
             write_object_stream_document(&objects, ObjectId::new(99, 0), &uncompressed_options()),
             Err(Error::MissingRoot)
         ));
+    }
+
+    #[test]
+    fn object_stream_member_limit_rejects_65536_before_xref_index_wraps() {
+        // A type-2 xref entry stores its member index in a two-byte field. An
+        // over-large per-stream limit would make index 65,536 wrap to zero and
+        // silently resolve to the wrong object, so the planner rejects it
+        // before any object data is allocated or written.
+        assert_eq!(FIELD_THREE_WIDTH, 2);
+        assert_eq!(MAX_OBJECTS_PER_STREAM, 65_535);
+
+        let too_large = ObjectStreamOptions {
+            max_objects_per_stream: 65_536,
+            ..ObjectStreamOptions::default()
+        };
+        let error = plan_object_streams(&[], &too_large)
+            .expect_err("65,536 members per stream must be rejected");
+        assert!(
+            matches!(error, Error::CannotSerialize(ref reason) if reason.contains("outside 1..=65535")),
+            "unexpected error: {error}"
+        );
+
+        // The largest accepted limit still plans successfully with no objects.
+        let largest_ok = ObjectStreamOptions {
+            max_objects_per_stream: 65_535,
+            ..ObjectStreamOptions::default()
+        };
+        assert!(plan_object_streams(&[], &largest_ok).is_ok());
+
+        // The old one-million limit is rejected as well.
+        let million = ObjectStreamOptions {
+            max_objects_per_stream: 1_000_000,
+            ..ObjectStreamOptions::default()
+        };
+        assert!(matches!(
+            plan_object_streams(&[], &million),
+            Err(Error::CannotSerialize(_))
+        ));
+    }
+
+    #[test]
+    fn object_stream_at_the_member_limit_keeps_indices_in_range() {
+        // Uses null objects so 65,536 inputs cost only a few megabytes. With the
+        // largest accepted per-stream limit the planner must split into two
+        // streams and keep every index inside the two-byte xref field.
+        let objects: Vec<(ObjectId, Object)> = (1..=65_536u32)
+            .map(|number| (ObjectId::new(number, 0), Object::Null))
+            .collect();
+        let options = ObjectStreamOptions {
+            compress: false,
+            max_objects_per_stream: 65_535,
+            ..ObjectStreamOptions::default()
+        };
+        let plan = plan_object_streams(&objects, &options).expect("plan builds");
+        assert_eq!(plan.streams.len(), 2);
+        assert_eq!(plan.packed.len(), 65_536);
+        assert_eq!(plan.packed[0].index, 0);
+        assert_eq!(plan.packed[65_534].index, 65_534);
+        assert_eq!(plan.packed[65_535].stream, plan.streams[1].0);
+        assert_eq!(plan.packed[65_535].index, 0);
+        assert!(
+            plan.packed
+                .iter()
+                .all(|item| u16::try_from(item.index).is_ok())
+        );
     }
 
     #[test]
