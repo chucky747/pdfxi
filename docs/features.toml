@@ -10,25 +10,33 @@ tests = []
 title = "Open and print PDF documents"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-render/src/lib.rs"
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-render -p pdfxi-text (T-0009)"
 id = "VIEW-002"
-notes = ""
+notes = "Renderer contract frozen: PageIndex, RenderedPage, RenderError, Renderer with cancellation and progress. Layout policy is owned by the app lane; this row tracks the rendering surface it consumes."
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-render::tests::mock_renderer_produces_expected_raster_and_progress",
+    "pdfxi-render::tests::empty_document_and_out_of_range_pages_are_rejected",
+    "pdfxi-render::tests::cancellation_stops_render_before_pixels_are_built",
+]
 title = "Single page continuous and two-page layouts"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-render/src/lib.rs"
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-render -p pdfxi-text (T-0009)"
 id = "VIEW-003"
-notes = ""
+notes = "Scale is an explicit render_page input (1.0 = 72 DPI); Progress and CancellationToken provide the feedback and stop semantics zoom/pan require. Fit modes and loupe remain app-lane work."
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-render::tests::invalid_scale_is_rejected",
+    "pdfxi-render::tests::progress_fraction_handles_unknown_and_complete_work",
+    "pdfxi-render::tests::cancellation_stops_render_before_pixels_are_built",
+]
 title = "Zoom pan loupe and fit modes"
 
 [[feature]]
@@ -1409,14 +1417,18 @@ tests = []
 title = "Font embedding and CID fonts"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-render/src/lib.rs"
 domain = "Standards"
-evidence = ""
+evidence = "cargo test -p pdfxi-render -p pdfxi-text (T-0009)"
 id = "STD-005"
-notes = ""
+notes = "Raster contract uses tightly packed RGBA with explicit width/height so a future PDFium backend can carry transparency and blend results. Actual blend-mode fidelity is deferred to the backend milestone."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "pdfxi-render::tests::mock_renderer_produces_expected_raster_and_progress",
+    "pdfxi-text::tests::search_returns_exact_byte_offsets_in_reading_order",
+    "pdfxi-text::tests::search_is_case_insensitive_by_default_and_can_be_exact",
+]
 title = "Transparency and blend modes"
 
 [[feature]]
