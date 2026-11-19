@@ -8,6 +8,8 @@
 //!   option that is not in its export-value list.
 //! - [`ValidationError::InvalidText`] — a text field violates its configured
 //!   [`TextConstraint`](crate::TextConstraint).
+//! - [`ValidationError::InvalidValueType`] — a value's representation does not
+//!   match its field type (for example text in a checkbox).
 //!
 //! No I/O, JavaScript, or external dependency is involved.
 
@@ -38,6 +40,15 @@ pub enum ValidationError {
         /// Human-readable description of the violated rule.
         reason: String,
     },
+    /// The value's representation does not match the field's type.
+    InvalidValueType {
+        /// Fully qualified name of the offending field.
+        field: String,
+        /// Slash-separated list of accepted value categories.
+        expected: String,
+        /// The category actually found.
+        found: String,
+    },
 }
 
 impl ValidationError {
@@ -46,7 +57,8 @@ impl ValidationError {
         match self {
             Self::MissingRequired { field }
             | Self::InvalidChoice { field, .. }
-            | Self::InvalidText { field, .. } => field,
+            | Self::InvalidText { field, .. }
+            | Self::InvalidValueType { field, .. } => field,
         }
     }
 }
@@ -64,6 +76,14 @@ impl fmt::Display for ValidationError {
             Self::InvalidText { field, reason } => {
                 write!(f, "field '{field}' has invalid text: {reason}")
             }
+            Self::InvalidValueType {
+                field,
+                expected,
+                found,
+            } => write!(
+                f,
+                "field '{field}' holds a {found} value; expected one of {expected}"
+            ),
         }
     }
 }

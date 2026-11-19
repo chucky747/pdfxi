@@ -723,50 +723,85 @@ tests = []
 title = "Export to PostScript"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/lib.rs"
+docs = [
+    "crates/pdfxi-forms/src/lib.rs",
+    "crates/pdfxi-forms/src/form.rs",
+    "crates/pdfxi-forms/src/fill.rs",
+    "crates/pdfxi-forms/src/field.rs",
+]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out. cargo fmt -p pdfxi-forms -- --check: clean. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: clean. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): success."
+evidence = """
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0. Doc tests require TEMP pointed at target/lanes/forms/doctest-tmp because this sandbox denies execution from the system temp dir.
+cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
+"""
 id = "FORMS-001"
-notes = "Delivers the field/form model needed to fill existing AcroForm fields: FieldType, FieldFlags, FieldValue, Field, and Form with exact fully-qualified-name lookup, duplicate-name rejection, default-value handling, required/read-only flags, set_value/reset/reset_field, and stable insertion-order enumeration. Validation reports missing-required, invalid-choice, and invalid-text errors. Loading fields from PDF /AcroForm dictionaries and writing them back, plus appearance generation, remain for later forms tasks, so the row is in-progress."
+notes = """
+T-0035 adds a FormFill filling session over the existing Form model. set/fill_many/fill_from_fdf delegate every write to Form::set_value, which now enforces a fixed check order (unknown field, read-only, value-shape type mismatch, clearing a required field). ValueKind categorises FieldValue variants and Field::accepts encodes the per-type compatibility matrix (text accepts text + number, checkbox accepts bool, radio accepts at most one choice, choice accepts one or many, button accepts only empty, signature accepts text, unknown accepts all). Validation gained InvalidValueType so the shape check is also enforced on a pure validation pass. FillReport reports net changes in ascending field-name order, collapsing repeated writes to the original old value and dropping fields restored to their original value; finish/finish_validated/into_form expose the filled form. Loading values from PDF /AcroForm dictionaries and writing widget appearances are still deferred, so the row remains in-progress.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
-    "pdfxi_forms::form::tests::field_lookup_by_fully_qualified_name",
-    "pdfxi_forms::form::tests::duplicate_field_names_are_rejected",
-    "pdfxi_forms::form::tests::from_fields_detects_duplicates",
-    "pdfxi_forms::form::tests::required_field_missing_fails_validation",
-    "pdfxi_forms::form::tests::set_value_refuses_read_only_and_unknown_fields",
-    "pdfxi_forms::form::tests::reset_restores_default_values",
+    "fill::tests::fills_each_supported_field_type",
+    "fill::tests::type_mismatch_is_rejected_without_recording_a_change",
+    "fill::tests::read_only_and_required_fields_are_rejected",
+    "fill::tests::changed_fields_are_ordered_by_name_and_net_changes_collapse",
+    "fill::tests::fill_many_stops_at_first_error_but_keeps_prior_writes",
+    "fill::tests::finish_and_finish_validated_report_the_same_changes",
+    "fdf::tests::fdf_applies_to_a_form_fill_session",
 ]
 title = "Fill existing AcroForm fields"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/lib.rs"
+docs = [
+    "crates/pdfxi-forms/src/lib.rs",
+    "crates/pdfxi-forms/src/field.rs",
+    "crates/pdfxi-forms/src/form.rs",
+]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: clean. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): success."
+evidence = """
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0.
+cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
+"""
 id = "FORMS-002"
-notes = "FieldType distinguishes text, checkbox, radio, choice, button, signature, and unknown fields; FieldFlags is a dependency-free u32 bit set (required, read-only, no-export, plus common text/choice bits that preserve unknown bits); FieldValue covers Empty/Text/Bool/Choice; TextConstraint enforces min/max length and allow-lists. Choice and radio fields validate selected values against an export-value list. This is the model layer only; creating widget annotations and appearances in a PDF is deferred, keeping the row in-progress."
+notes = """
+FieldValue now includes Number(f64) alongside Empty/Text/Bool/Choice, so numeric fields (a PDF text field with a number format) and choice multi-selects are first-class. Equality is a total relation: canonical_f64_bits treats all NaNs as equal and both zeros as equal, letting FieldValue and Form keep Eq and PartialEq. Added FieldValue::number/kind/as_number, ValueKind with stable labels, Field::accepted_kinds/accepts, Form::value, and new FormError::TypeMismatch/RequiredField variants. Field::validate rejects wrong-shaped values through ValidationError::InvalidValueType. Creating widget annotations and appearances in a PDF is still deferred, so the row remains in-progress.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
-    "pdfxi_forms::form::tests::fully_valid_form_passes_validation",
-    "pdfxi_forms::form::tests::choice_field_rejects_value_outside_choices",
-    "pdfxi_forms::form::tests::text_field_enforces_constraints",
-    "pdfxi_forms::form::tests::fields_are_enumerated_in_stable_insertion_order",
-    "pdfxi_forms::form::tests::read_only_fields_are_skipped_by_bulk_reset",
-    "pdfxi_forms::field::tests::with_default_initializes_current_value",
+    "fill::tests::fills_each_supported_field_type",
+    "calculation::tests::calculation_rounding_is_half_away_from_zero",
+    "fdf::tests::fdf_round_trip_preserves_every_value_kind",
 ]
 title = "Create text checkbox radio choice and button fields"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-forms/src/lib.rs",
+    "crates/pdfxi-forms/src/calculation.rs",
+    "crates/pdfxi-forms/src/validation.rs",
+]
 domain = "Forms"
-evidence = ""
+evidence = """
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0.
+cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
+"""
 id = "FORMS-003"
-notes = ""
+notes = """
+Added a Calculation model for sum/product/average over named numeric fields. evaluate is side-effect free; apply writes the rounded result through Form::set_value (inheriting read-only and type checks); run_calculations applies an ordered batch and returns a CalculationReport. Rounding is deterministic (f64::round, ties away from zero, six decimals by default, at most 12). Non-numeric input is documented and rejected with CalculationError::NonNumeric (no implicit string coercion, no JavaScript); missing fields, empty operand sets, non-finite results, and invalid decimal counts have dedicated variants. Property editing UI and the Acrobat calculation-order semantics for cyclic dependencies are deferred, so the row remains in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "calculation::tests::calculation_sum_is_deterministic",
+    "calculation::tests::calculation_product_is_deterministic",
+    "calculation::tests::calculation_average_is_deterministic",
+    "calculation::tests::calculation_rounding_is_half_away_from_zero",
+    "calculation::tests::calculation_fails_on_non_numeric_input",
+    "calculation::tests::calculation_fails_on_missing_or_empty_sources",
+    "calculation::tests::calculation_apply_writes_the_target_field",
+    "calculation::tests::run_calculations_applies_in_order_and_reports_results",
+]
 title = "Field properties calculations and validation"
 
 [[feature]]
@@ -792,14 +827,41 @@ tests = []
 title = "Automatically recognize static form fields"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-forms/src/lib.rs",
+    "crates/pdfxi-forms/src/fdf.rs",
+]
 domain = "Forms"
-evidence = ""
+evidence = """
+cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 50 unit passed + 1 doctest passed, 0 failed, EXIT=0.
+cargo fmt -p pdfxi-forms -- --check: EXIT=0. cargo clippy -p pdfxi-forms --all-targets -- -D warnings: EXIT=0. cargo doc -p pdfxi-forms --no-deps (RUSTDOCFLAGS=-D warnings): EXIT=0.
+"""
 id = "FORMS-006"
-notes = ""
+notes = '''
+Added FDF 1.7 export/import. export_fdf writes a canonical %FDF-1.7 object with /Fields sorted by name, skipping NO_EXPORT fields: literal strings escape ( ) \\ and newlines, control bytes use short escapes, and non-ASCII UTF-8 bytes use three-digit octal escapes for byte-exact round-trips. Booleans map to /On and /Off, multi-select choices to arrays of literal strings, numbers to bare PDF numbers, and non-finite numbers are rejected with FdfError::NonFiniteNumber. import_fdf is a bounds-checked byte parser (header/version, indirect objects, trailer, trailer references, nested arrays/dictionaries, literal strings with nesting and octal escapes) that returns structured FdfError variants with byte offsets for malformed input. FdfDocument fields feed directly into FormFill::fill_from_fdf. export_xfdf emits a small schema-compatible XML subset (escaped names/values, one <value> per choice) but XFDF import is deliberately out of scope for this task; the row therefore stays in-progress.
+'''
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "fdf::tests::fdf_round_trip_preserves_every_value_kind",
+    "fdf::tests::fdf_escapes_parentheses_backslash_and_newlines",
+    "fdf::tests::fdf_escapes_non_ascii_bytes_as_octal",
+    "fdf::tests::fdf_multiline_text_round_trips_exactly",
+    "fdf::tests::fdf_multi_choice_round_trips_as_a_string_array",
+    "fdf::tests::fdf_applies_to_a_form_fill_session",
+    "fdf::tests::fdf_skips_no_export_fields",
+    "fdf::tests::export_rejects_non_finite_numbers",
+    "fdf::tests::fdf_rejects_missing_header",
+    "fdf::tests::fdf_rejects_unsupported_version",
+    "fdf::tests::fdf_rejects_missing_fields_array",
+    "fdf::tests::fdf_rejects_unterminated_string",
+    "fdf::tests::fdf_rejects_invalid_utf8_escape",
+    "fdf::tests::fdf_rejects_octal_escape_above_255",
+    "fdf::tests::fdf_rejects_trailing_data_after_eof",
+    "fdf::tests::fdf_rejects_field_without_a_name",
+    "fdf::tests::fdf_export_is_canonical_and_handles_an_empty_form",
+    "fdf::tests::xfdf_export_escapes_xml_and_lists_choice_values",
+]
 title = "Import and export FDF and XFDF"
 
 [[feature]]

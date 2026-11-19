@@ -116,11 +116,48 @@ impl FieldFlags {
     }
 }
 
+/// The broad category of a [`FieldValue`].
+///
+/// [`Field::accepts`] uses this coarse classification to reject values whose
+/// representation does not match the widget type before they enter a form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValueKind {
+    /// [`FieldValue::Empty`].
+    Empty,
+    /// [`FieldValue::Text`].
+    Text,
+    /// [`FieldValue::Bool`].
+    Bool,
+    /// [`FieldValue::Choice`].
+    Choice,
+    /// [`FieldValue::Number`].
+    Number,
+}
+
+impl ValueKind {
+    /// Returns a stable, human-readable label for this kind.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Text => "text",
+            Self::Bool => "boolean",
+            Self::Choice => "choice",
+            Self::Number => "number",
+        }
+    }
+}
+
 /// The current or default value of a field.
 ///
 /// The representation is deliberately small and total: every widget state maps
 /// to one of these variants, and an untouched field uses [`FieldValue::Empty`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Numeric values are represented by [`FieldValue::Number`]. PDF has no separate
+/// "number" widget type; a numeric field is a text field with a number format,
+/// so [`FieldType::Text`] accepts both [`FieldValue::Text`] and
+/// [`FieldValue::Number`]. Calculations operate on [`FieldValue::Number`]
+/// values only.
+#[derive(Debug, Clone, Default)]
 pub enum FieldValue {
     /// The field carries no value.
     #[default]
@@ -131,11 +168,61 @@ pub enum FieldValue {
     Bool(bool),
     /// Zero or more selected option names (choice and radio fields).
     ///
-    /// A single radio selection is represented as a one-element vector.
+    /// A single radio selection is represented as a one-element vector; a
+    /// multi-select list box holds several entries.
     Choice(Vec<String>),
+    /// A numeric value, used by formatted number fields and calculations.
+    ///
+    /// Non-finite values are rejected by FDF export and calculation evaluation.
+    Number(f64),
 }
 
+/// Canonicalises the bit pattern of an `f64` so equality is a total relation.
+///
+/// All NaNs compare equal and the two zeros compare equal, which lets
+/// [`FieldValue`] implement [`Eq`] despite holding a floating-point number.
+fn canonical_f64_bits(value: f64) -> u64 {
+    if value.is_nan() {
+        f64::NAN.to_bits()
+    } else if value == 0.0 {
+        0.0_f64.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
+impl PartialEq for FieldValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Empty, Self::Empty) => true,
+            (Self::Text(a), Self::Text(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Choice(a), Self::Choice(b)) => a == b,
+            (Self::Number(a), Self::Number(b)) => canonical_f64_bits(*a) == canonical_f64_bits(*b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for FieldValue {}
+
 impl FieldValue {
+    /// Creates a numeric value, rejecting nothing (see [`FieldValue::Number`]).
+    pub const fn number(value: f64) -> Self {
+        Self::Number(value)
+    }
+
+    /// Returns the category of this value.
+    pub const fn kind(&self) -> ValueKind {
+        match self {
+            Self::Empty => ValueKind::Empty,
+            Self::Text(_) => ValueKind::Text,
+            Self::Bool(_) => ValueKind::Bool,
+            Self::Choice(_) => ValueKind::Choice,
+            Self::Number(_) => ValueKind::Number,
+        }
+    }
+
     /// Returns `true` when this value is [`FieldValue::Empty`].
     pub fn is_empty(&self) -> bool {
         matches!(self, Self::Empty)
@@ -161,6 +248,14 @@ impl FieldValue {
     pub fn as_choices(&self) -> Option<&[String]> {
         match self {
             Self::Choice(values) => Some(values),
+            _ => None,
+        }
+    }
+
+    /// Returns the contained number, if this is a [`FieldValue::Number`].
+    pub const fn as_number(&self) -> Option<f64> {
+        match self {
+            Self::Number(value) => Some(*value),
             _ => None,
         }
     }
@@ -374,6 +469,61 @@ impl Field {
         self.flags.is_read_only()
     }
 
+    /// Returns the value categories this field's type can hold.
+    ///
+    /// The classification is intentionally coarse: it checks the *shape* of a
+    /// value, not whether a choice is in the option list or a text satisfies its
+    /// constraints (those are checked by [`Field::validate`]).
+    ///
+    /// - [`FieldType::Text`] accepts [`ValueKind::Text`] and
+    ///   [`ValueKind::Number`] (a PDF number field is a text field with a
+    ///   number format).
+    /// - [`FieldType::CheckBox`] accepts [`ValueKind::Bool`].
+    /// - [`FieldType::Radio`] accepts [`ValueKind::Choice`] with at most one
+    ///   selection.
+    /// - [`FieldType::Choice`] accepts [`ValueKind::Choice`] (one or many
+    ///   selections).
+    /// - [`FieldType::Button`] accepts only [`ValueKind::Empty`] because a
+    ///   pushbutton carries no value.
+    /// - [`FieldType::Signature`] accepts [`ValueKind::Text`] (the signing
+    ///   name).
+    /// - [`FieldType::Unknown`] accepts every kind, preserving forward
+    ///   compatibility.
+    ///
+    /// Every type also accepts [`ValueKind::Empty`] except buttons, which are
+    /// always empty.
+    pub fn accepted_kinds(&self) -> &'static [ValueKind] {
+        match self.field_type {
+            FieldType::Text => &[ValueKind::Empty, ValueKind::Text, ValueKind::Number],
+            FieldType::CheckBox => &[ValueKind::Empty, ValueKind::Bool],
+            FieldType::Radio => &[ValueKind::Empty, ValueKind::Choice],
+            FieldType::Choice => &[ValueKind::Empty, ValueKind::Choice],
+            FieldType::Button => &[ValueKind::Empty],
+            FieldType::Signature => &[ValueKind::Empty, ValueKind::Text],
+            FieldType::Unknown => &[
+                ValueKind::Empty,
+                ValueKind::Text,
+                ValueKind::Bool,
+                ValueKind::Choice,
+                ValueKind::Number,
+            ],
+        }
+    }
+
+    /// Returns `true` when `value` has an acceptable shape for this field.
+    pub fn accepts(&self, value: &FieldValue) -> bool {
+        if !self.accepted_kinds().contains(&value.kind()) {
+            return false;
+        }
+        // A radio group selects exactly one option at a time.
+        if self.field_type == FieldType::Radio
+            && let Some(selected) = value.as_choices()
+        {
+            return selected.len() <= 1;
+        }
+        true
+    }
+
     /// Replaces the current value.
     ///
     /// Read-only enforcement is the responsibility of [`crate::Form`], which
@@ -391,9 +541,10 @@ impl Field {
     ///
     /// Returns `Ok(())` when the value is acceptable, otherwise a
     /// [`ValidationError`] describing the problem. Required-but-empty fields,
-    /// out-of-range choices, and constrained text that fails its rules are all
-    /// reported here; button, checkbox, signature, and unknown fields have no
-    /// extra constraints beyond "required".
+    /// values of the wrong shape, out-of-range choices, and constrained text
+    /// that fails its rules are all reported here; button, checkbox, signature,
+    /// and unknown fields have no extra constraints beyond "required" and the
+    /// coarse value shape.
     pub fn validate(&self) -> Result<(), ValidationError> {
         if self.value.is_empty() {
             return if self.is_required() {
@@ -403,6 +554,20 @@ impl Field {
             } else {
                 Ok(())
             };
+        }
+
+        if !self.accepts(&self.value) {
+            let expected = self
+                .accepted_kinds()
+                .iter()
+                .map(|kind| kind.label())
+                .collect::<Vec<_>>()
+                .join("/");
+            return Err(ValidationError::InvalidValueType {
+                field: self.name.clone(),
+                expected,
+                found: self.value.kind().label().to_owned(),
+            });
         }
 
         match self.field_type {

@@ -6,7 +6,7 @@
 //! single source of truth, there is no secondary index that could drift out of
 //! sync with the fields.
 
-use crate::field::{Field, FieldValue};
+use crate::field::{Field, FieldValue, ValueKind};
 use crate::validation::Validation;
 use std::fmt;
 
@@ -19,6 +19,17 @@ pub enum FormError {
     FieldNotFound(String),
     /// The target field is read-only and cannot be changed.
     ReadOnlyField(String),
+    /// The value's representation does not fit the target field's type.
+    TypeMismatch {
+        /// Fully qualified name of the target field.
+        field: String,
+        /// Slash-separated list of accepted value categories.
+        expected: String,
+        /// The category of the rejected value.
+        found: ValueKind,
+    },
+    /// A required field cannot be cleared by assigning an empty value.
+    RequiredField(String),
 }
 
 impl fmt::Display for FormError {
@@ -29,6 +40,18 @@ impl fmt::Display for FormError {
             }
             Self::FieldNotFound(name) => write!(f, "no field named '{name}'"),
             Self::ReadOnlyField(name) => write!(f, "field '{name}' is read-only"),
+            Self::TypeMismatch {
+                field,
+                expected,
+                found,
+            } => write!(
+                f,
+                "field '{field}' holds a {} value; expected one of {expected}",
+                found.label()
+            ),
+            Self::RequiredField(name) => {
+                write!(f, "required field '{name}' cannot be set to empty")
+            }
         }
     }
 }
@@ -41,7 +64,7 @@ impl std::error::Error for FormError {}
 /// [`Form::fields`] and used when collecting [`Form::validate`] errors. Values
 /// may be changed with [`Form::set_value`] (which refuses read-only fields)
 /// and restored with [`Form::reset`] / [`Form::reset_field`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Form {
     fields: Vec<Field>,
 }
@@ -97,17 +120,50 @@ impl Form {
         self.field(name).is_some()
     }
 
+    /// Returns the current value of a named field.
+    ///
+    /// Returns [`FormError::FieldNotFound`] when no field has that fully
+    /// qualified name. Unlike [`Form::field`], this reports the missing name as
+    /// an error so session code can use one error type for reads and writes.
+    pub fn value(&self, name: &str) -> Result<&FieldValue, FormError> {
+        self.field(name)
+            .map(Field::value)
+            .ok_or_else(|| FormError::FieldNotFound(name.to_owned()))
+    }
+
     /// Sets the current value of a named field.
     ///
-    /// Returns [`FormError::FieldNotFound`] if the name is unknown, or
-    /// [`FormError::ReadOnlyField`] if the field is read-only. A successful
-    /// call never changes the default value, so [`Form::reset`] can undo it.
+    /// Checks are applied in a fixed order so callers get deterministic errors:
+    /// an unknown name yields [`FormError::FieldNotFound`], a read-only field
+    /// yields [`FormError::ReadOnlyField`], a value whose representation does not
+    /// fit the widget yields [`FormError::TypeMismatch`], and clearing a required
+    /// field yields [`FormError::RequiredField`].
+    ///
+    /// A successful call never changes the default value, so [`Form::reset`] can
+    /// undo it. Content constraints (choice options, text rules) are checked by
+    /// [`Form::validate`] rather than here.
     pub fn set_value(&mut self, name: &str, value: FieldValue) -> Result<(), FormError> {
         let field = self
             .field_mut(name)
             .ok_or_else(|| FormError::FieldNotFound(name.to_owned()))?;
         if field.is_read_only() {
             return Err(FormError::ReadOnlyField(name.to_owned()));
+        }
+        if !field.accepts(&value) {
+            let expected = field
+                .accepted_kinds()
+                .iter()
+                .map(|kind| kind.label())
+                .collect::<Vec<_>>()
+                .join("/");
+            return Err(FormError::TypeMismatch {
+                field: name.to_owned(),
+                expected,
+                found: value.kind(),
+            });
+        }
+        if field.is_required() && value.is_empty() {
+            return Err(FormError::RequiredField(name.to_owned()));
         }
         field.set_value(value);
         Ok(())

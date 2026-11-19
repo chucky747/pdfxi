@@ -8,23 +8,56 @@
 //! - [`Form`] — an ordered, uniquely named collection of fields with lookup,
 //!   value mutation, reset, and validation.
 //! - [`Validation`] / [`ValidationError`] — the side-effect-free result of
-//!   checking every field, including missing-required, invalid-choice, and
-//!   invalid-text problems.
+//!   checking every field, including missing-required, invalid-choice,
+//!   invalid-value-type, and invalid-text problems.
+//! - [`FormFill`] / [`FillReport`] — a filling session that records net field
+//!   changes in deterministic, name-sorted order.
+//! - [`Calculation`] / [`CalculationOp`] — sum, product, and average of named
+//!   numeric fields with deterministic rounding.
+//! - [`export_fdf`] / [`import_fdf`] — round-trippable FDF 1.7 field data, plus
+//!   a small [`export_xfdf`] XML subset.
 //!
 //! Field names are treated as already fully qualified (for example
 //! `order.address.city`); the crate does not parse hierarchical name trees.
-//! All operations are deterministic and allocate only as needed. Future
-//! milestones will add calculations, FDF/XFDF, and flattening on top of this
-//! model without changing its public contracts.
+//! All operations are deterministic and allocate only as needed. Writing widget
+//! annotations, generating appearances, and flattening remain future work.
+//!
+//! # Example
+//!
+//! ```text
+//! use pdfxi_forms::{Calculation, CalculationOp, Field, FieldValue, Form, FormFill, FieldType};
+//!
+//! let mut form = Form::from_fields([
+//!     Field::new("a", FieldType::Text).with_value(FieldValue::number(2.0)),
+//!     Field::new("b", FieldType::Text).with_value(FieldValue::number(3.0)),
+//!     Field::new("total", FieldType::Text),
+//! ]).unwrap();
+//! Calculation::new("total", CalculationOp::Sum, ["a", "b"])
+//!     .apply(&mut form).unwrap();
+//! assert_eq!(form.value("total"), Ok(&FieldValue::number(5.0)));
+//!
+//! let mut fill = FormFill::new(form);
+//! fill.set("a", FieldValue::number(10.0)).unwrap();
+//! assert_eq!(fill.changes().len(), 1);
+//! ```
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod calculation;
+mod fdf;
 mod field;
+mod fill;
 mod form;
 mod validation;
 
-pub use field::{Field, FieldFlags, FieldType, FieldValue, TextConstraint};
+pub use calculation::{
+    Calculation, CalculationError, CalculationOp, CalculationReport, CalculationResult,
+    run_calculations,
+};
+pub use fdf::{FdfDocument, FdfError, FdfField, export_fdf, export_xfdf, import_fdf};
+pub use field::{Field, FieldFlags, FieldType, FieldValue, TextConstraint, ValueKind};
+pub use fill::{ChangedField, FillReport, FormFill};
 pub use form::{Form, FormError};
 pub use validation::{Validation, ValidationError};
 
