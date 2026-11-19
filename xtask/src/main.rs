@@ -248,10 +248,31 @@ fn goal_verify(milestone: Option<&str>, all: bool, allow_dirty: bool) -> Result<
     features_verify()?;
 
     if let Some(milestone) = milestone {
-        if milestone != "M0" {
+        if !matches!(milestone, "M0" | "M1") {
             bail!(
-                "milestone {milestone} is not implemented yet; only M0 is available in this build"
+                "milestone {milestone} is not implemented yet; only M0 and M1 are available in this build"
             );
+        }
+        if milestone == "M1" {
+            let rows = load_features()?;
+            let required = [
+                "STD-011", "STD-012", "AUTO-009", "AUTO-010", "VIEW-001", "VIEW-002", "VIEW-003",
+            ];
+            let missing: Vec<&str> = required
+                .iter()
+                .copied()
+                .filter(|id| {
+                    !rows
+                        .iter()
+                        .any(|row| row.id == *id && row.status == "verified")
+                })
+                .collect();
+            if !missing.is_empty() {
+                bail!(
+                    "M1 requires these feature rows to be verified: {}",
+                    missing.join(", ")
+                );
+            }
         }
         run("cargo", &["fmt", "--all", "--check"])?;
         run("cargo", &["test", "--workspace"])?;
