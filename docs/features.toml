@@ -1605,3 +1605,69 @@ priority = "P1"
 status = "planned"
 tests = []
 title = "Incremental update and digital preservation"
+
+# --- M1 verified engineering slices -----------------------------------------
+
+[[feature]]
+id = "STD-011"
+domain = "Standards"
+title = "Classic xref table and startxref parser"
+priority = "P0"
+status = "verified"
+tests = [
+    "pdfxi_core::tests::parses_one_page_pdf_from_testkit",
+    "pdfxi_core::tests::parses_multi_page_pdf_and_preserves_order",
+    "pdfxi_core::tests::rejects_missing_xref",
+    "pdfxi_core::tests::rejects_bad_startxref",
+    "pdfxi_core::tests::rejects_malformed_xref_entry",
+]
+docs = "docs/evidence/core/T-0008.md"
+evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
+notes = "Classic xref subsections, trailer, /Root, startxref, and /Prev chains with cycle detection. Xref streams remain in-progress under STD-002."
+
+[[feature]]
+id = "STD-012"
+domain = "Standards"
+title = "Page tree traversal with inherited attributes"
+priority = "P0"
+status = "verified"
+tests = [
+    "pdfxi_core::tests::parses_multi_page_pdf_and_preserves_order",
+    "pdfxi_core::tests::rejects_missing_root_and_pages",
+    "pdfxi_core::tests::rejects_invalid_media_box_and_page_tree_cycle",
+]
+docs = "docs/evidence/core/T-0008.md"
+evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
+notes = "Recursive /Pages walk, /Count, inherited MediaBox/Resources, page order, and cycle guards."
+
+[[feature]]
+id = "AUTO-009"
+domain = "Automation"
+title = "CLI info command with stable JSON output"
+priority = "P1"
+status = "verified"
+tests = [
+    "cli::info_reports_three_page_fixture",
+    "cli::info_json_has_stable_fields",
+    "cli::missing_file_reports_error",
+    "cli::non_pdf_reports_error",
+]
+docs = "docs/evidence/core/T-0010.md"
+evidence = "cargo test -p pdfxi-cli: 9 passed; docs/evidence/core/T-0010.md"
+notes = "pdfxi info and pdfxi info --json report file, version, bytes, and real page count."
+
+[[feature]]
+id = "AUTO-010"
+domain = "Automation"
+title = "CLI text extraction for uncompressed content streams"
+priority = "P1"
+status = "verified"
+tests = [
+    "cli::text_extracts_from_uncompressed_stream",
+    "cli::text_extracts_tj_tj_array_and_quote_operators",
+    "cli::text_extracts_each_page_of_multipage_fixture",
+    "cli::text_filtered_stream_fails",
+]
+docs = "docs/evidence/core/T-0010.md"
+evidence = "cargo test -p pdfxi-core -p pdfxi-cli: 24 + 9 passed; docs/evidence/core/T-0010.md"
+notes = "Bounds-checked Tj, TJ, single-quote, and double-quote extraction; compressed streams return a clear error."
