@@ -41,15 +41,15 @@ id = "VIEW-002"
 notes = """
 The dependency-free CanvasLayout arrangements for SinglePage, Continuous,
 TwoPage and TwoPageContinuous, half-open hit testing, page_point mapping and
-scroll clamping are unchanged. T-0028 connects those rectangles to real page
-rasters: ensure_visible renders only pages whose rectangle intersects the
-viewport at the current scroll offset, so scroll/layout changes drive which
+scroll clamping are implemented and tested. T-0028 connects those rectangles to
+real page rasters: ensure_visible renders only pages whose rectangle intersects
+the viewport at the current scroll offset, so scroll/layout changes drive which
 rasters are produced; an empty layout renders nothing. Rasters are uploaded
-into the same page rectangles that the placeholder outlined. A thumbnail pane
-is still pending, so the row stays in-progress.
+into the same page rectangles that the placeholder outlined. The thumbnail pane
+is a separate row (VIEW-007).
 """
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
     "canvas::tests::layout_ordering_for_all_four_modes",
     "canvas::tests::two_page_spread_pairing_into_rows",
@@ -73,16 +73,15 @@ domain = "View & Navigate"
 evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passed, 0 failed. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed (raster::tests::zoom_and_rotation_changes_invalidate_the_previous_raster and raster::tests::caching_avoids_a_second_render ok)."
 id = "VIEW-003"
 notes = """
-CanvasLayout still resolves Zoom::FitWidth/FitPage against the widest row and
-custom zoom scales page rectangles linearly; max_scroll/clamp_scroll bound
-panning and sanitize non-finite offsets. T-0028 adds real raster keys at the
-resolved canvas scale: each zoom level has a distinct scale_bits key, so zooming
-invalidates the previous raster and triggers a fresh render, while returning to
-a previous zoom reuses the cached raster. Loupe and gesture panning remain
-future work, so the row stays in-progress.
+CanvasLayout resolves Zoom::FitWidth/FitPage against the widest row and custom
+zoom scales page rectangles linearly; max_scroll/clamp_scroll bound panning and
+sanitize non-finite offsets. T-0028 adds real raster keys at the resolved canvas
+scale: each zoom level has a distinct scale_bits key, so zooming invalidates the
+previous raster and triggers a fresh render, while returning to a previous zoom
+reuses the cached raster. The loupe magnifier is tracked separately as VIEW-018.
 """
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
     "canvas::tests::zoom_scaling_multiplies_page_extent",
     "canvas::tests::fit_modes_resolve_against_the_widest_row",
@@ -1949,3 +1948,14 @@ tests = [
     "tests::selection_copies_text_across_pages",
 ]
 title = "Find text in a document and select copy text"
+
+[[feature]]
+docs = "docs/features/view.md"
+domain = "View & Navigate"
+evidence = ""
+id = "VIEW-018"
+notes = "Split from VIEW-003 (2026-11-19) so zoom/pan/fit could be verified without claiming the magnifier. See docs/decisions/0007-viewer-row-split.md."
+priority = "P2"
+status = "planned"
+tests = []
+title = "Loupe magnifier and gesture navigation"
