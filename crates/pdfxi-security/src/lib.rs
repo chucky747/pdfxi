@@ -19,11 +19,17 @@
 //! - [`standard_handler`] — real password authentication and per-object
 //!   decryption for PDF encryption revisions 2–6
 //!   ([`StandardSecurityHandler`], [`Decryptor`], [`SecurityParameters`]).
+//! - [`RedactionPlan`] / [`RedactionReport`] — page-scoped rectangle and text
+//!   redaction with deterministic ordering and strict residual verification
+//!   against caller-supplied post-redaction text.
+//! - [`Sanitizer`] / [`SanitizationReport`] — category-based sanitization plans
+//!   with deterministic actions and removal verification against a supplied
+//!   inventory.
 //!
 //! All operations are deterministic and allocate only as needed. CMS/PKCS#7
-//! verification, timestamps, redaction, and sanitization will be layered onto
-//! these contracts in later milestones without changing the public surface.
-//! No operation logs secrets or document contents.
+//! verification and timestamps will be layered onto these contracts in later
+//! milestones without changing the public surface. No operation logs secrets
+//! or document contents.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -33,6 +39,8 @@ mod encryption;
 mod error;
 mod permissions;
 mod protector;
+mod redaction;
+mod sanitization;
 mod signature;
 pub mod standard_handler;
 
@@ -40,6 +48,14 @@ pub use encryption::EncryptionMethod;
 pub use error::{Result, SecurityError};
 pub use permissions::{PasswordRole, Permission, Permissions};
 pub use protector::{MockProtector, Protector};
+pub use redaction::{
+    PageBounds, PageNumber, RedactionPlan, RedactionRect, RedactionRegion, RedactionReport,
+    ResidualOccurrence, ResidualSource, TextPattern,
+};
+pub use sanitization::{
+    SanitizationAction, SanitizationCategory, SanitizationInventory, SanitizationOperation,
+    SanitizationReport, Sanitizer,
+};
 pub use signature::{DigestAlgorithm, SignatureCoverage, SignatureInfo, SignatureStatus};
 pub use standard_handler::{
     Decryptor, PASSWORD_PADDING, SecurityParameters, StandardSecurityHandler, compute_file_key,

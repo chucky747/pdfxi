@@ -17,6 +17,7 @@
 
 pub mod content;
 pub mod filter;
+pub mod metadata;
 pub mod object;
 pub mod page;
 pub mod pages;
@@ -31,6 +32,10 @@ mod xref_tests;
 pub use content::extract_text;
 pub use filter::{
     DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
+};
+pub use metadata::{
+    DocumentInfo, PdfDate, XmpMetadata, decode_text_string, encode_text_string, parse_pdf_date,
+    parse_xmp,
 };
 pub use object::{Object, ObjectId};
 pub use page::{Page, Rectangle};
@@ -187,6 +192,12 @@ pub enum Error {
     /// An object value could not be serialized to PDF syntax.
     #[error("cannot serialize object: {0}")]
     CannotSerialize(String),
+    /// An XMP packet was malformed or used an unsupported XML construct.
+    #[error("malformed XMP packet: {0}")]
+    MalformedXmp(String),
+    /// A document metadata entry did not have the expected object type.
+    #[error("invalid document metadata: {0}")]
+    InvalidMetadata(String),
 }
 
 /// Result type used by the core crate.
@@ -204,6 +215,9 @@ pub struct Document {
     version: String,
     structure: std::result::Result<Structure, Error>,
     changes: BTreeMap<ObjectId, Object>,
+    /// Trailer keys staged by metadata writes, applied on top of the source
+    /// trailer by both save paths. Copy-on-write like [`Self::changes`].
+    trailer_entries: Dictionary,
 }
 
 impl Document {
@@ -227,6 +241,7 @@ impl Document {
             version,
             structure,
             changes: BTreeMap::new(),
+            trailer_entries: Dictionary::new(),
         })
     }
 
@@ -414,6 +429,9 @@ impl Document {
 
         let highest = objects.last().map_or(0, |(number, _)| *number);
         let mut trailer = structure.xref.trailer();
+        for (key, value) in &self.trailer_entries {
+            trailer.insert(key.clone(), value.clone());
+        }
         let size = trailer_size(&trailer, highest);
         trailer.insert("Size".to_owned(), Object::Integer(i64::from(size)));
         trailer.insert("Root".to_owned(), Object::Reference(structure.root_id));
@@ -453,6 +471,9 @@ impl Document {
         writer::write_xref_section(&mut out, &offsets, false);
 
         let mut trailer = structure.xref.trailer();
+        for (key, value) in &self.trailer_entries {
+            trailer.insert(key.clone(), value.clone());
+        }
         let size = trailer_size(&trailer, highest);
         trailer.insert("Size".to_owned(), Object::Integer(i64::from(size)));
         trailer.insert("Root".to_owned(), Object::Reference(structure.root_id));

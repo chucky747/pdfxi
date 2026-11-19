@@ -8,6 +8,8 @@
 
 use std::fmt;
 
+use crate::sanitization::SanitizationCategory;
+
 /// A failure produced by a security operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecurityError {
@@ -35,6 +37,38 @@ pub enum SecurityError {
     CertificateRevoked,
     /// A protector or test double was misconfigured.
     Configuration(String),
+    /// A page number was zero; PDF page numbers are 1-based.
+    InvalidPageNumber,
+    /// A redaction rectangle had zero or negative area.
+    EmptyRedactionRegion,
+    /// A rectangle or page-bound coordinate was NaN or infinite.
+    NonFiniteCoordinate,
+    /// Page bounds had a non-finite or non-positive dimension.
+    InvalidPageBounds,
+    /// A redaction rectangle referenced a page absent from the supplied bounds.
+    UnknownPage {
+        /// The offending 1-based page number.
+        page: u32,
+    },
+    /// A redaction rectangle extended outside its declared page bounds.
+    RedactionRegionOutOfBounds {
+        /// The offending 1-based page number.
+        page: u32,
+    },
+    /// A redaction text pattern was empty or whitespace-only.
+    EmptyRedactionPattern,
+    /// Strict redaction verification found residual content.
+    RedactionVerificationFailed {
+        /// Page whose text contained the residual.
+        page: u32,
+        /// Byte offset of the residual within that page's text.
+        offset: usize,
+    },
+    /// Strict sanitization verification found a category still present.
+    SanitizationVerificationFailed {
+        /// Category that was still present after sanitization.
+        category: SanitizationCategory,
+    },
 }
 
 impl fmt::Display for SecurityError {
@@ -58,6 +92,26 @@ impl fmt::Display for SecurityError {
             Self::SignatureExpired => write!(f, "signature or certificate has expired"),
             Self::CertificateRevoked => write!(f, "signing certificate was revoked"),
             Self::Configuration(message) => write!(f, "security configuration error: {message}"),
+            Self::InvalidPageNumber => write!(f, "page number must be at least 1"),
+            Self::EmptyRedactionRegion => {
+                write!(f, "redaction rectangle has zero or negative area")
+            }
+            Self::NonFiniteCoordinate => write!(f, "redaction coordinate was not finite"),
+            Self::InvalidPageBounds => write!(f, "page bounds must be finite and positive"),
+            Self::UnknownPage { page } => {
+                write!(f, "page {page} is not present in the supplied page bounds")
+            }
+            Self::RedactionRegionOutOfBounds { page } => {
+                write!(f, "redaction rectangle lies outside page {page}")
+            }
+            Self::EmptyRedactionPattern => write!(f, "redaction text pattern was empty"),
+            Self::RedactionVerificationFailed { page, offset } => write!(
+                f,
+                "redacted content remains on page {page} at byte offset {offset}"
+            ),
+            Self::SanitizationVerificationFailed { category } => {
+                write!(f, "sanitization category still present: {category}")
+            }
         }
     }
 }

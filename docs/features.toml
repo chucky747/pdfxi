@@ -669,14 +669,30 @@ tests = []
 title = "Flatten annotations and form fields"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-security/src/redaction.rs",
+    "crates/pdfxi-security/src/error.rs",
+]
 domain = "Edit"
-evidence = ""
+evidence = "cargo test -p pdfxi-security redaction::tests (CARGO_TARGET_DIR=target/lanes/security): 16 redaction tests passed as part of 72/72 total. cargo clippy -p pdfxi-security --all-targets --all-features -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-security --no-deps: clean."
 id = "EDIT-013"
-notes = ""
+notes = "Rectangle and literal-text redaction plans with finite/non-empty/page-bounds validation, canonical ordering, and strict/permissive post-redaction text verification with page + byte offset residuals. Actual content-stream rewriting and raster image removal remain with the edit/render lanes."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "redaction::tests::rect_validation_rejects_empty_and_non_finite_coordinates",
+    "redaction::tests::page_bounds_and_page_number_are_validated",
+    "redaction::tests::plan_validation_enforces_page_bounds_and_known_pages",
+    "redaction::tests::pattern_redaction_coverage_detects_every_occurrence",
+    "redaction::tests::residual_detection_strict_mode_fails",
+    "redaction::tests::residual_detection_permissive_mode_reports_without_failing",
+    "redaction::tests::multi_page_ordering_of_residuals_is_page_major",
+    "redaction::tests::case_insensitive_matching_reports_original_byte_offsets",
+    "redaction::tests::case_insensitive_offsets_survive_unicode_case_expansion",
+    "redaction::tests::rectangle_removed_text_is_verified_and_label_source_is_reported",
+    "redaction::tests::empty_plan_verifies_clean_in_both_modes",
+    "redaction::tests::plan_is_deterministic_regardless_of_insertion_order",
+]
 title = "Redaction marks and permanent removal"
 
 [[feature]]
@@ -1221,25 +1237,46 @@ tests = []
 title = "Trust manager and revocation checks"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-security/src/sanitization.rs",
+    "crates/pdfxi-security/src/error.rs",
+]
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security sanitization::tests (CARGO_TARGET_DIR=target/lanes/security): 14 sanitization tests passed as part of 72/72 total. cargo clippy -p pdfxi-security --all-targets --all-features -- -D warnings: clean."
 id = "SEC-008"
-notes = ""
+notes = "Category-based sanitizer covering metadata, embedded files, annotations, JavaScript, and form values with deterministic ordered actions and strict/permissive verification against a caller-supplied inventory. Applying the actions to a concrete PDF object graph is still pending."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "sanitization::tests::full_plan_is_canonical_and_complete",
+    "sanitization::tests::embedded_file_and_annotation_actions_are_planned",
+    "sanitization::tests::javascript_actions_are_planned",
+    "sanitization::tests::form_value_action_clears_values",
+    "sanitization::tests::verification_confirms_categories_are_removed",
+    "sanitization::tests::verification_detects_residual_categories_in_canonical_order",
+    "sanitization::tests::strict_mode_fails_when_a_category_remains",
+    "sanitization::tests::permissive_mode_reports_without_failing",
+    "sanitization::tests::unselected_categories_are_never_residuals",
+    "sanitization::tests::empty_plan_produces_no_actions_and_verifies_clean",
+    "sanitization::tests::plan_is_deterministic_for_equivalent_selections",
+]
 title = "Sanitize document and remove hidden information"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = ["crates/pdfxi-security/src/sanitization.rs"]
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security sanitization::tests::metadata_actions_remove_info_and_xmp (CARGO_TARGET_DIR=target/lanes/security): passed; full suite 72 passed / 0 failed."
 id = "SEC-009"
-notes = ""
+notes = "Info dictionary and XMP metadata scrubbing are modelled as two deterministic Remove actions under the Metadata category and verified via the post-sanitization inventory. Real Info/XMP stream deletion is owned by the core document writer and is not yet wired."
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "sanitization::tests::metadata_actions_remove_info_and_xmp",
+    "sanitization::tests::category_identifiers_round_trip",
+    "sanitization::tests::verification_confirms_categories_are_removed",
+    "sanitization::tests::strict_mode_fails_when_a_category_remains",
+    "sanitization::tests::permissive_mode_reports_without_failing",
+]
 title = "Metadata and XMP scrubbing"
 
 [[feature]]
@@ -1772,14 +1809,31 @@ tests = []
 title = "WASM plugin host"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-core/src/metadata.rs"
 domain = "Document Management"
-evidence = ""
+evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 16 new metadata tests pass; 110 unit + 6 integration total, 0 failed, EXIT=0. cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps: EXIT=0."
 id = "MANAGE-001"
-notes = ""
+notes = "Core implementation of document properties and XMP metadata: DocumentInfo reads/writes the classic /Info dictionary through the trailer and set_object with tolerant PdfDate parsing and UTF-16BE/PDFDocEncoding text strings; XmpMetadata parses and writes the catalog /Metadata stream with a namespace-prefix-tolerant RDF/XML reader, Flate decode, deterministic XML output, and structured Error::MalformedXmp. This is the headless core layer; a UI properties panel remains a separate app-lane concern."
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "metadata::tests::utf16_and_pdfdoc_round_trip",
+    "metadata::tests::pdfdoc_and_utf16_decode_specific_vectors",
+    "metadata::tests::strict_date_parses_all_components_and_offset",
+    "metadata::tests::malformed_date_is_preserved_raw",
+    "metadata::tests::info_reads_hand_built_dictionary",
+    "metadata::tests::info_missing_returns_none",
+    "metadata::tests::info_write_and_reparse",
+    "metadata::tests::parse_canonical_xmp_packet",
+    "metadata::tests::xmp_parser_is_namespace_prefix_tolerant",
+    "metadata::tests::malformed_xml_is_structured_error",
+    "metadata::tests::xmp_missing_returns_none",
+    "metadata::tests::xmp_parse_of_canonical_packet_from_document",
+    "metadata::tests::flate_compressed_metadata_stream_decodes",
+    "metadata::tests::xmp_write_and_reparse",
+    "metadata::tests::xmp_write_is_deterministic",
+    "metadata::tests::save_round_trips_metadata",
+]
 title = "Document properties and XMP metadata"
 
 [[feature]]
