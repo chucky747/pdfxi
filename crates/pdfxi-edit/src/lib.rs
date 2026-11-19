@@ -5,7 +5,9 @@
 //! page-space primitives, [`annotation`] defines the review and drawing
 //! annotation model with hit-testing, bounds, and clamping helpers, and [`pdf`]
 //! maps annotations to and from a dependency-free PDF dictionary intermediate
-//! with validation and deterministic appearance geometry.
+//! with validation and deterministic appearance geometry, and [`navigation`]
+//! models bookmarks, links, and attachments with the same dictionary
+//! round-trip approach.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
 //! source document bytes in place.
@@ -15,12 +17,18 @@
 
 pub mod annotation;
 pub mod geometry;
+pub mod navigation;
 pub mod pdf;
 
 pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
 };
 pub use geometry::{GeometryError, PageGeometry, PageIndex, Point, Rect};
+pub use navigation::{
+    Attachment, Bookmark, Destination, FitType, Link, LinkBorder, LinkHighlight, LinkTarget,
+    MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link, dict_to_name_tree,
+    dict_to_outline, link_to_dict, name_tree_to_dict, outline_to_dict,
+};
 
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {

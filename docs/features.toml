@@ -192,25 +192,55 @@ tests = [
 title = "Page thumbnails and navigation pane"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/navigation/outline.rs",
+    "crates/pdfxi-edit/src/navigation/mod.rs",
+    "crates/pdfxi-edit/src/navigation/error.rs",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit navigation::outline navigation::tests navigation::error (CARGO_TARGET_DIR=target/lanes/author): all 16 bookmark/destination/error tests passed. cargo clippy -p pdfxi-edit --all-targets -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps: clean."
 id = "VIEW-008"
-notes = ""
+notes = "Bookmark tree with sibling order, closed/open signed counts, cycle and orphan rejection, and all destination fit variants. Article threads remain out of scope for this row; the bookmark/destination portion is delivered."
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "navigation::tests::destination_fit_variants_round_trip",
+    "navigation::tests::xyz_all_null_coordinates_round_trip",
+    "navigation::tests::invalid_fit_name_and_arguments_are_rejected",
+    "navigation::outline::tests::outline_round_trip_three_levels_with_sibling_order",
+    "navigation::outline::tests::open_and_closed_counts_are_signed",
+    "navigation::outline::tests::cycle_in_next_chain_is_rejected",
+    "navigation::outline::tests::cycle_in_parent_chain_is_rejected",
+    "navigation::outline::tests::orphan_child_is_rejected",
+    "navigation::outline::tests::missing_reference_is_rejected",
+    "navigation::outline::tests::duplicate_ids_are_rejected",
+    "navigation::outline::tests::empty_outline_round_trip",
+    "navigation::outline::tests::serialization_is_deterministic",
+    "navigation::error::tests::error_messages_are_descriptive",
+]
 title = "Bookmarks destinations and article threads"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/navigation/attachment.rs",
+    "crates/pdfxi-edit/src/navigation/mod.rs",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit navigation::attachment (CARGO_TARGET_DIR=target/lanes/author): all 8 name-tree/attachment tests passed. cargo clippy -p pdfxi-edit --all-targets -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps: clean."
 id = "VIEW-009"
-notes = ""
+notes = "Embedded-file name-tree /Names round-trip, name size limits, deterministic name ordering, and duplicate-key rejection. Stream bytes are caller-held via XI_StreamRef and are not embedded in the dictionary intermediate."
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "navigation::attachment::tests::name_tree_round_trip",
+    "navigation::attachment::tests::names_are_sorted_and_deterministic",
+    "navigation::attachment::tests::attachment_value_round_trip",
+    "navigation::attachment::tests::name_size_limit_is_enforced",
+    "navigation::attachment::tests::duplicate_name_is_rejected",
+    "navigation::attachment::tests::malformed_names_array_is_rejected",
+    "navigation::attachment::tests::get_returns_registered_attachment",
+    "navigation::attachment::tests::empty_name_tree_round_trip",
+]
 title = "Attachments and embedded files"
 
 [[feature]]
@@ -225,14 +255,24 @@ tests = []
 title = "Optional content layers"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/navigation/link.rs",
+    "crates/pdfxi-edit/src/navigation/mod.rs",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit navigation::link (CARGO_TARGET_DIR=target/lanes/author): all 6 link tests passed. cargo clippy -p pdfxi-edit --all-targets -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps: clean."
 id = "VIEW-011"
-notes = ""
+notes = "Link /Link annotation round-trips for URI, internal destination, and named-action targets, all four /H highlight modes, and border. Named destinations map to the model's named-action variant."
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "navigation::link::tests::uri_link_round_trip",
+    "navigation::link::tests::internal_destination_link_round_trip",
+    "navigation::link::tests::named_action_link_round_trip",
+    "navigation::link::tests::all_highlight_modes_round_trip",
+    "navigation::link::tests::goto_action_destination_is_parsed",
+    "navigation::link::tests::invalid_link_dictionaries_are_rejected",
+]
 title = "Links and named destinations"
 
 [[feature]]

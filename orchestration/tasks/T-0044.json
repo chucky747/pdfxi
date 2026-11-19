@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-edit",
     "id":  "T-0044",
-    "evidence":  "",
+    "evidence":  "docs/evidence/author/T-0044.md",
     "owns":  [
                  "crates/pdfxi-edit/**",
                  "orchestration/feature-updates/T-0044.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0013",
                        "T-0034"

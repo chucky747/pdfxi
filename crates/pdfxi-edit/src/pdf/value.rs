@@ -82,6 +82,14 @@ impl Value {
         }
     }
 
+    /// Returns the mutable items when this value is a [`Value::Array`].
+    pub fn as_array_mut(&mut self) -> Option<&mut Vec<Value>> {
+        match self {
+            Self::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
     /// Returns the dictionary when this value is a [`Value::Dictionary`].
     pub fn as_dict(&self) -> Option<&Dict> {
         match self {
