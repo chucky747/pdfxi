@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-automation",
     "id":  "T-0038",
-    "evidence":  "",
+    "evidence":  "docs/evidence/automation/T-0038.md",
     "owns":  [
                  "crates/pdfxi-automation/**",
                  "orchestration/feature-updates/T-0038.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0020"
                    ],

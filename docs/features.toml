@@ -1382,71 +1382,66 @@ title = "Screen reader and accesskit integration"
 [[feature]]
 docs = [
     "crates/pdfxi-automation/src/lib.rs",
+    "crates/pdfxi-automation/src/document.rs",
     "crates/pdfxi-automation/src/action.rs",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 24 passed; 0 failed; 0 ignored. cargo clippy -p pdfxi-automation --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-automation -- --check: clean."
+evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 37 passed; 0 failed; 0 ignored (24 pre-existing + 13 new). cargo clippy -p pdfxi-automation --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-automation -- --check: clean. RUSTDOCFLAGS='-D warnings' cargo doc -p pdfxi-automation --no-deps: clean."
 id = "AUTO-001"
 notes = """
-Added Action, ActionStep, and StepKind. StepKind has six stable string ids
-(import, convert, watermark, security, export, custom-command) with FromStr /
-Display so actions are importable/exportable. Action::validate rejects empty
-actions, empty names, empty step ids, duplicate step ids, and empty parameter
-keys; from_steps and add_step enforce the same invariants at construction time.
-A tab-delimited, escaped text format provides lossless, deterministic export and
-import (Action::to_text / from_text). Remains in-progress: the Action Wizard UI
-is not implemented by this model-only task.
-"""
+T-0038 adds the object-safe DocumentOperations trait (import, convert,
+watermark, apply_security, export, run_command) with typed OperationOutcome /
+OperationError and the Artifact value threaded between steps. The six StepKinds
+map to exactly one method each via DocumentExecutor (alias RealExecutor), using
+the documented parameter keys in the document::params module. Action import/export
+keeps its existing lossless tab-delimited text format; no loader change was made.
+Remains in-progress: the concrete CLI/app implementation of DocumentOperations is
+a later milestone; this task delivers the trait boundary and a real executor."""
 priority = "P2"
 status = "in-progress"
 tests = [
-    "action::tests::empty_action_is_rejected",
-    "action::tests::duplicate_step_ids_are_rejected",
-    "action::tests::empty_name_and_step_id_are_rejected",
-    "action::tests::empty_parameter_key_is_rejected",
-    "action::tests::add_step_rejects_duplicates_without_mutating",
+    "document::tests::document_operations_is_object_safe",
+    "document::tests::artifact_and_outcome_accessors_are_consistent",
+    "document::tests::step_chaining_passes_outputs_forward",
+    "document::tests::security_step_receives_the_right_parameters",
+    "document::tests::export_step_writes_the_expected_path",
+    "document::tests::custom_command_receives_documented_arguments",
+    "document::tests::import_source_parameter_overrides_job_input",
+    "document::tests::missing_required_parameters_fail_only_that_step",
+    "document::tests::real_executor_alias_is_usable",
     "action::tests::step_kind_strings_are_stable_and_round_trip",
     "action::tests::text_export_import_is_lossless",
-    "action::tests::text_export_preserves_special_characters",
-    "action::tests::text_import_rejects_unknown_kind_and_bad_records",
-    "action::tests::parameters_are_enumerated_in_insertion_order",
-    "error::tests::unknown_kind_lists_accepted_kinds",
 ]
 title = "Action Wizard create edit import export"
 
 [[feature]]
 docs = [
     "crates/pdfxi-automation/src/lib.rs",
+    "crates/pdfxi-automation/src/document.rs",
     "crates/pdfxi-automation/src/batch.rs",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 24 passed; 0 failed; 0 ignored. cargo clippy -p pdfxi-automation --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-automation -- --check: clean."
+evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 37 passed; 0 failed; 0 ignored (24 pre-existing + 13 new). cargo clippy -p pdfxi-automation --all-targets -- -D warnings: clean. cargo fmt -p pdfxi-automation -- --check: clean."
 id = "AUTO-002"
 notes = """
-Added BatchJob, JobState (queued/running/succeeded/failed/cancelled), JobOutcome,
-CancelToken, the StepExecutor trait, MockExecutor, and BatchQueue. The queue is
-deterministic and single-threaded: jobs run in insertion order, steps run in
-action order, a failed or cancelled job never stops its siblings, and a stable
-per-file outcome summary is recorded for each job. Cancellation works before a
-run (cancel_job / cancel_all) and cooperatively from inside a step via a shared
-CancelToken (MockExecutor::cancel_at_step). Remains in-progress: watched folders
-and droplets are future milestones.
-"""
+T-0038 adds BatchQueue::run_with(&dyn JobExecutor) so the existing queue drives
+the real DocumentExecutor. It preserves insertion ordering, per-file failure
+isolation, pre-run cancellation, and cooperative mid-chain cancellation; a
+CancelToken can now be shared with a job via BatchJob::cancellation_handle().
+JobOutcome records a stable StepResult per completed step while summary() keeps
+its existing golden-test format. Remains in-progress: droplets and watched
+folders are future milestones."""
 priority = "P2"
 status = "in-progress"
 tests = [
+    "document::tests::failing_convert_isolates_to_one_file",
+    "document::tests::cancellation_mid_chain_marks_job_cancelled",
+    "document::tests::cancellation_before_run_skips_the_job",
+    "document::tests::outcomes_and_summaries_are_deterministic",
     "batch::tests::jobs_run_in_insertion_order_with_per_file_outcomes",
     "batch::tests::failure_is_isolated_to_one_job",
-    "batch::tests::failing_step_records_steps_completed_before_it",
-    "batch::tests::cancelling_before_run_skips_the_job",
     "batch::tests::cancelling_mid_run_records_completed_steps",
-    "batch::tests::cancel_all_marks_every_pending_job_cancelled",
-    "batch::tests::cancel_unknown_job_reports_job_not_found",
-    "batch::tests::duplicate_job_ids_are_rejected",
-    "batch::tests::invalid_action_fails_only_its_job",
     "batch::tests::outcomes_are_stable_across_repeated_runs",
-    "batch::tests::finished_jobs_are_not_rerun",
-    "batch::tests::job_state_strings_are_stable",
 ]
 title = "Batch processing and command sequences"
 

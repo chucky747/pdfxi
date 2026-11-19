@@ -12,6 +12,7 @@
 //! [`MockExecutor::cancel_at_step`]); the runner checks it before every step.
 
 use crate::action::{Action, ActionStep};
+use crate::document::{ExecutionStop, JobExecution, JobExecutor, StepResult};
 use crate::error::AutomationError;
 use std::cell::Cell;
 use std::fmt;
@@ -56,12 +57,15 @@ impl fmt::Display for JobState {
 /// An outcome is terminal: its [`state`](JobOutcome::state) is one of
 /// [`JobState::Succeeded`], [`JobState::Failed`], or [`JobState::Cancelled`].
 /// It records the step ids that completed in order, plus the failing step and
-/// message when applicable. [`JobOutcome::summary`] produces a stable,
+/// message when applicable. When the job was run through a [`JobExecutor`], it
+/// also records a stable [`StepResult`] per completed step, available through
+/// [`JobOutcome::step_results`]. [`JobOutcome::summary`] produces a stable,
 /// one-line rendering suitable for logs and golden tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobOutcome {
     state: JobState,
     completed_steps: Vec<String>,
+    step_results: Vec<StepResult>,
     failed_step: Option<String>,
     message: Option<String>,
 }
@@ -72,6 +76,7 @@ impl JobOutcome {
         Self {
             state: JobState::Succeeded,
             completed_steps,
+            step_results: Vec::new(),
             failed_step: None,
             message: None,
         }
@@ -86,6 +91,7 @@ impl JobOutcome {
         Self {
             state: JobState::Failed,
             completed_steps,
+            step_results: Vec::new(),
             failed_step: Some(failed_step.into()),
             message: Some(message.into()),
         }
@@ -96,6 +102,7 @@ impl JobOutcome {
         Self {
             state: JobState::Cancelled,
             completed_steps,
+            step_results: Vec::new(),
             failed_step: None,
             message: None,
         }
@@ -109,6 +116,57 @@ impl JobOutcome {
     /// Returns the ids of steps that completed, in execution order.
     pub fn completed_steps(&self) -> &[String] {
         &self.completed_steps
+    }
+
+    /// Returns the stable per-step results recorded by a [`JobExecutor`].
+    ///
+    /// The list is empty for jobs run through the default [`MockExecutor`],
+    /// which has no typed per-step output to record.
+    pub fn step_results(&self) -> &[StepResult] {
+        &self.step_results
+    }
+
+    /// Builds an outcome from a real executor's [`JobExecution`].
+    pub(crate) fn from_execution(execution: JobExecution) -> Self {
+        let completed_steps = execution.completed_steps().to_vec();
+        let step_results = execution.step_results().to_vec();
+        match execution.stop() {
+            ExecutionStop::Completed => Self {
+                state: JobState::Succeeded,
+                completed_steps,
+                step_results,
+                failed_step: None,
+                message: None,
+            },
+            ExecutionStop::Failed { step, message } => Self {
+                state: JobState::Failed,
+                completed_steps,
+                step_results,
+                failed_step: Some(step.clone()),
+                message: Some(message.clone()),
+            },
+            ExecutionStop::Cancelled => Self {
+                state: JobState::Cancelled,
+                completed_steps,
+                step_results,
+                failed_step: None,
+                message: None,
+            },
+        }
+    }
+
+    /// Builds a cancellation outcome preserving steps already completed.
+    pub(crate) fn cancelled_with_steps(
+        completed_steps: Vec<String>,
+        step_results: Vec<StepResult>,
+    ) -> Self {
+        Self {
+            state: JobState::Cancelled,
+            completed_steps,
+            step_results,
+            failed_step: None,
+            message: None,
+        }
     }
 
     /// Returns the id of the step that failed, if this is a failure outcome.
@@ -313,6 +371,15 @@ impl BatchJob {
         &self.cancel_token
     }
 
+    /// Returns a shared handle to this job's cancellation token.
+    ///
+    /// Handing this to an executor (or a document operations implementation)
+    /// lets a step cancel the job it is running, which the queue observes at the
+    /// next cancellation check.
+    pub fn cancellation_handle(&self) -> Rc<CancelToken> {
+        Rc::clone(&self.cancel_token)
+    }
+
     /// Signals cancellation for this job.
     pub fn cancel(&self) {
         self.cancel_token.cancel();
@@ -428,6 +495,21 @@ impl BatchQueue {
         }
     }
 
+    /// Runs every unfinished job through a [`JobExecutor`] in insertion order.
+    ///
+    /// This is the entry point for real, document-backed execution (see
+    /// [`DocumentExecutor`](crate::document::DocumentExecutor)). It preserves the
+    /// same guarantees as [`BatchQueue::run_all`]: jobs run in insertion order,
+    /// a failed or cancelled job never stops its siblings, a job cancelled before
+    /// its turn records zero completed steps, and cancellation observed during a
+    /// job records the steps completed before stopping. The resulting summaries
+    /// are byte-for-byte identical to the mock path for the same step outcomes.
+    pub fn run_with(&mut self, executor: &dyn JobExecutor) {
+        for index in 0..self.jobs.len() {
+            self.run_job_with(index, executor);
+        }
+    }
+
     fn run_job(&mut self, index: usize) {
         if matches!(
             self.jobs[index].state,
@@ -490,6 +572,51 @@ impl BatchQueue {
         } else {
             (JobState::Succeeded, JobOutcome::succeeded(completed))
         };
+        self.finish(index, state, outcome);
+    }
+
+    fn run_job_with(&mut self, index: usize, executor: &dyn JobExecutor) {
+        if matches!(
+            self.jobs[index].state,
+            JobState::Succeeded | JobState::Failed | JobState::Cancelled
+        ) {
+            return;
+        }
+
+        if let Err(error) = self.jobs[index].action.validate() {
+            let outcome = JobOutcome::failed(Vec::new(), "<action>", error.to_string());
+            self.finish(index, JobState::Failed, outcome);
+            return;
+        }
+
+        let token = Rc::clone(&self.jobs[index].cancel_token);
+        if token.is_cancelled() {
+            self.finish(
+                index,
+                JobState::Cancelled,
+                JobOutcome::cancelled(Vec::new()),
+            );
+            return;
+        }
+
+        let input = self.jobs[index].input.clone();
+        let action = self.jobs[index].action.clone();
+        self.jobs[index].state = JobState::Running;
+
+        let execution = executor.execute_job(&input, &action, &token);
+        let mut outcome = JobOutcome::from_execution(execution);
+
+        // Cancellation takes precedence over completion, matching run_all: a
+        // token signalled at any point during the job marks it cancelled while
+        // retaining the steps that completed before the signal.
+        if token.is_cancelled() && outcome.state() != JobState::Cancelled {
+            outcome = JobOutcome::cancelled_with_steps(
+                outcome.completed_steps().to_vec(),
+                outcome.step_results().to_vec(),
+            );
+        }
+
+        let state = outcome.state();
         self.finish(index, state, outcome);
     }
 

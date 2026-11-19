@@ -9,6 +9,11 @@
 //! - [`BatchJob`] / [`BatchQueue`] — a deterministic, single-threaded runner
 //!   that executes jobs through a [`StepExecutor`], isolates failures, supports
 //!   cooperative cancellation, and records a [`JobOutcome`] per file.
+//! - [`DocumentOperations`] / [`DocumentExecutor`] — the object-safe document
+//!   interface and its real executor. [`DocumentExecutor`] maps each step kind to
+//!   one operation, threads the produced [`Artifact`] between steps, honours
+//!   cancellation, and records stable [`StepResult`]s. [`BatchQueue::run_with`]
+//!   drives it through the object-safe [`JobExecutor`] bridge.
 //! - [`AutomationError`] — actionable, self-describing errors for every
 //!   rejection path.
 //!
@@ -22,11 +27,17 @@
 
 mod action;
 mod batch;
+mod document;
 mod error;
 
 pub use action::{Action, ActionStep, StepKind};
 pub use batch::{
     BatchJob, BatchQueue, CancelToken, JobOutcome, JobState, MockExecutor, StepExecutor,
+};
+pub use document::params;
+pub use document::{
+    Artifact, DocumentExecutor, DocumentOperations, ExecutionStop, JobExecution, JobExecutor,
+    OperationError, OperationOutcome, RealExecutor, StepResult,
 };
 pub use error::AutomationError;
 
