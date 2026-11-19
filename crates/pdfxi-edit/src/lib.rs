@@ -15,7 +15,10 @@
 //! selection, and copy-on-write composition helpers. [`redaction`] applies a
 //! plan of rectangles and text patterns to content streams, removing the
 //! affected operators (not merely covering them), stripping annotations and
-//! metadata, and verifying removal with a typed report.
+//! metadata, and verifying removal with a typed report. [`flatten()`] replaces
+//! annotations and form widgets with permanent content-stream placements,
+//! removing them from `/Annots` (and the AcroForm when widgets are flattened)
+//! with a typed report and a dry-run mode.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
 //! source document bytes in place.
@@ -24,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod annotation;
+pub mod flatten;
 pub mod geometry;
 pub mod header_footer;
 pub mod navigation;
@@ -34,6 +38,10 @@ pub mod watermark;
 
 pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
+};
+pub use flatten::{
+    Appearance, FlattenError, FlattenEvent, FlattenInput, FlattenOptions, FlattenReport,
+    FlattenedDocument, FlattenedPage, PageBox, SkipReason, Widget, flatten,
 };
 pub use geometry::{GeometryError, PageGeometry, PageIndex, Point, Rect};
 pub use header_footer::{

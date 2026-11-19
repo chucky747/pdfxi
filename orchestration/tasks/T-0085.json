@@ -3,12 +3,12 @@
   "lane": "author",
   "title": "Flatten annotations and form fields into page content",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0034", "T-0044", "T-0060"],
   "owns": [
     "crates/pdfxi-edit/**",
     "orchestration/feature-updates/T-0085.toml"
   ],
   "acceptance": "cargo test -p pdfxi-edit",
-  "evidence": ""
+  "evidence": "docs/evidence/author/T-0085.md"
 }

@@ -205,6 +205,31 @@ impl Matrix {
             self.b * x + self.d * y + self.f,
         )
     }
+
+    /// Return the six coefficients in PDF `cm` operand order `[a, b, c, d, e, f]`.
+    pub const fn coefficients(self) -> [f64; 6] {
+        [self.a, self.b, self.c, self.d, self.e, self.f]
+    }
+
+    /// Format this transform as the six operands of a PDF `cm` operator.
+    ///
+    /// Negative zero is normalized to `0` so byte output is deterministic and
+    /// identical for transforms that differ only in the sign of a zero term.
+    pub fn to_pdf(self) -> String {
+        let clean = |value: f64| {
+            if value == 0.0 { 0.0 } else { value }
+        };
+        let [a, b, c, d, e, f] = self.coefficients();
+        format!(
+            "{} {} {} {} {} {}",
+            clean(a),
+            clean(b),
+            clean(c),
+            clean(d),
+            clean(e),
+            clean(f)
+        )
+    }
 }
 
 /// A 1-based PDF page number.
@@ -2499,6 +2524,19 @@ mod tests {
         );
         assert_eq!(applied.report().removed_operator_count(), 1);
         assert!(!content_str(&applied, 1).contains("SECRET"));
+    }
+
+    #[test]
+    fn matrix_to_pdf_is_deterministic_and_normalizes_negative_zero() {
+        let identity = Matrix::IDENTITY;
+        assert_eq!(identity.coefficients(), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(identity.to_pdf(), "1 0 0 1 0 0");
+        let rotation = Matrix::new(0.0, 1.0, -1.0, 0.0, -0.0, 90.0);
+        assert_eq!(rotation.to_pdf(), "0 1 -1 0 0 90");
+        assert_eq!(
+            rotation.to_pdf(),
+            Matrix::new(0.0, 1.0, -1.0, 0.0, 0.0, 90.0).to_pdf()
+        );
     }
 
     #[test]
