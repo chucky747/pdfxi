@@ -8,8 +8,16 @@ license.workspace = true
 authors.workspace = true
 publish = false
 
+[[bin]]
+name = "pdfxi"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 pdfxi-core = { path = "../pdfxi-core" }
+serde.workspace = true
+serde_json.workspace = true
 
+[dev-dependencies]
+pdfxi-testkit = { path = "../pdfxi-testkit" }

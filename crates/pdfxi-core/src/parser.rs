@@ -43,7 +43,7 @@ struct XrefSection {
 
 /// The merged cross-reference table for a document.
 #[derive(Debug, Clone)]
-struct XrefTable {
+pub(crate) struct XrefTable {
     entries: HashMap<u32, XrefEntry>,
     trailer: Dictionary,
 }
@@ -55,6 +55,7 @@ pub(crate) struct Structure {
     pub(crate) trailer_size: Option<u32>,
     pub(crate) declared_page_count: Option<u32>,
     pub(crate) pages: Vec<Page>,
+    pub(crate) xref: XrefTable,
 }
 
 /// Parse the structural layer of a PDF: xref, trailer, catalog and page tree.
@@ -88,7 +89,43 @@ pub(crate) fn parse_document(data: &[u8]) -> Result<Structure> {
         trailer_size,
         declared_page_count,
         pages,
+        xref,
     })
+}
+
+/// Return the concatenated, unfiltered content bytes for `page`.
+///
+/// Each `/Contents` reference is loaded through the cross-reference table and
+/// must resolve to a stream object. Streams carrying a `/Filter` are rejected
+/// with [`Error::FilteredContent`] so callers never receive encoded bytes by
+/// mistake.
+pub(crate) fn page_content(data: &[u8], structure: &Structure, page: &Page) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for id in &page.contents {
+        let object = load_object(data, &structure.xref, *id)?;
+        match object {
+            Object::Stream { dictionary, data } => {
+                if has_filter(&dictionary) {
+                    return Err(Error::FilteredContent(*id));
+                }
+                if !out.is_empty() {
+                    out.push(b'\n');
+                }
+                out.extend_from_slice(&data);
+            }
+            _ => return Err(Error::ContentNotStream(*id)),
+        }
+    }
+    Ok(out)
+}
+
+/// Return `true` when a stream dictionary declares at least one real filter.
+fn has_filter(dictionary: &Dictionary) -> bool {
+    match dictionary.get("Filter") {
+        None | Some(Object::Null) => false,
+        Some(Object::Array(items)) => items.iter().any(|item| !matches!(item, Object::Null)),
+        Some(_) => true,
+    }
 }
 
 /// Locate the final `startxref` marker and read its byte offset.

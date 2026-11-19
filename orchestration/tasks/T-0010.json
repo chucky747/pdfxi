@@ -1,13 +1,13 @@
 {
     "acceptance":  "cargo run -p pdfxi-cli -- info fixtures/minimal.pdf",
     "id":  "T-0010",
-    "evidence":  "",
+    "evidence":  "docs/evidence/core/T-0010.md",
     "owns":  [
                  "crates/pdfxi-cli/**",
                  "crates/pdfxi-core/**",
                  "orchestration/feature-updates/T-0010.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0008"
                    ],

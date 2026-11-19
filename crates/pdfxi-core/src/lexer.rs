@@ -31,7 +31,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Return the byte at the cursor, if any.
-    fn byte(&self) -> Option<u8> {
+    pub(crate) fn byte(&self) -> Option<u8> {
         self.data.get(self.pos).copied()
     }
 

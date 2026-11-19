@@ -1228,14 +1228,24 @@ tests = []
 title = "Sandboxed Acrobat-compatible JavaScript subset"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-cli/src/main.rs"
 domain = "Automation"
-evidence = ""
+evidence = "cargo test -p pdfxi-core -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): pdfxi-cli 9 passed; pdfxi-core 24 passed; 0 failed. Real CLI invocation printed info, JSON and text for a generated one-page PDF."
 id = "AUTO-005"
-notes = ""
+notes = """CLI `info` (human + --json) and `text` implemented against the real parser. `text` supports Tj, TJ, ', " over uncompressed streams and reports clear errors for compressed/non-stream content. Remaining scriptable operations are pending later milestones."""
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "info_reports_one_page_fixture",
+    "info_reports_three_page_fixture",
+    "info_json_has_stable_fields",
+    "text_extracts_from_uncompressed_stream",
+    "text_extracts_each_page_of_multipage_fixture",
+    "text_extracts_tj_tj_array_and_quote_operators",
+    "info_missing_file_fails",
+    "info_non_pdf_fails",
+    "text_filtered_stream_fails",
+]
 title = "CLI for every scriptable operation"
 
 [[feature]]

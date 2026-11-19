@@ -175,6 +175,9 @@ dependencies = [
  "anyhow",
  "clap",
  "pdfxi-core",
+ "pdfxi-testkit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

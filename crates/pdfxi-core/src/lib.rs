@@ -14,12 +14,14 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod content;
 pub mod object;
 pub mod page;
 
 mod lexer;
 mod parser;
 
+pub use content::extract_text;
 pub use object::{Object, ObjectId};
 pub use page::{Page, Rectangle};
 
@@ -95,6 +97,12 @@ pub enum Error {
     /// A nesting or container-size limit was exceeded.
     #[error("PDF nesting limit ({0}) exceeded")]
     NestingTooDeep(usize),
+    /// A page content stream uses a filter that text extraction does not support.
+    #[error("content stream {0} is filtered; text extraction supports uncompressed streams only")]
+    FilteredContent(ObjectId),
+    /// A `/Contents` entry did not resolve to a stream object.
+    #[error("content object {0} is not a stream")]
+    ContentNotStream(ObjectId),
     /// The requested feature is not implemented in this build.
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
@@ -181,6 +189,43 @@ impl Document {
     pub fn pages(&self) -> Result<Vec<Page>> {
         let structure = self.structure.as_ref().map_err(Clone::clone)?;
         Ok(structure.pages.clone())
+    }
+
+    /// Return the unfiltered content bytes of the page at `index`.
+    ///
+    /// The byte streams referenced by the page's `/Contents` entry are resolved
+    /// through the cross-reference table and concatenated in draw order. A
+    /// stream that declares a `/Filter` is rejected with
+    /// [`Error::FilteredContent`] because this build does not decode stream
+    /// filters; callers receive a clear error rather than undecoded bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural error when the document body is damaged,
+    /// [`Error::PageNotFound`] when `index` is out of range,
+    /// [`Error::FilteredContent`] when a stream is compressed, and
+    /// [`Error::ContentNotStream`] when a `/Contents` entry is not a stream.
+    pub fn page_content(&self, index: usize) -> Result<Vec<u8>> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        let page = structure
+            .pages
+            .get(index)
+            .ok_or(Error::PageNotFound(index))?;
+        parser::page_content(&self.bytes, structure, page)
+    }
+
+    /// Extract the text shown by the page at `index`.
+    ///
+    /// This is a convenience wrapper that reads the page's unfiltered content
+    /// bytes with [`Document::page_content`] and passes them to
+    /// [`extract_text`]. It supports the `Tj`, `TJ`, `'` and `"` operators.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from [`Document::page_content`] or [`extract_text`].
+    pub fn page_text(&self, index: usize) -> Result<String> {
+        let bytes = self.page_content(index)?;
+        extract_text(&bytes)
     }
 
     /// Return the indirect identifier of the catalog referenced by `/Root`.
@@ -306,6 +351,36 @@ mod tests {
         out.into_bytes()
     }
 
+    /// Build a one-page PDF whose object 4 is the supplied content object body.
+    fn one_page_pdf_with_content(body: &str) -> Vec<u8> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Contents 4 0 R >>"
+                .to_owned(),
+            body.to_owned(),
+        ];
+        let mut out = String::from("%PDF-1.7\n");
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, object));
+        }
+        let xref = out.len();
+        out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+        out.push_str("0000000000 65535 f \n");
+        for offset in &offsets {
+            out.push_str(&format!("{:010} 00000 n \n", offset));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+            objects.len() + 1,
+            xref
+        ));
+        out.into_bytes()
+    }
+
     #[test]
     fn accepts_pdf_header_and_reads_version() {
         let doc = Document::from_bytes(b"%PDF-1.7\n%%EOF\n".to_vec()).expect("valid header");
@@ -422,5 +497,63 @@ mod tests {
         let cycle = replace_once(&multi_page_pdf(1), "/Kids [ 3 0 R ]", "/Kids [ 2 0 R ]");
         let doc = Document::from_bytes(cycle).expect("header");
         assert!(matches!(doc.page_count(), Err(Error::MalformedPageTree(_))));
+    }
+
+    #[test]
+    fn page_content_returns_raw_unfiltered_bytes() {
+        let doc = Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("valid fixture");
+        let bytes = doc.page_content(0).expect("content bytes");
+        let text = String::from_utf8(bytes).expect("ASCII stream");
+        assert!(text.contains("BT /F1 24 Tf 72 720 Td (Hello, PDFXI!) Tj ET"));
+    }
+
+    #[test]
+    fn page_text_extracts_minimal_fixture() {
+        let doc = Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("valid fixture");
+        assert_eq!(doc.page_text(0).expect("page text"), "Hello, PDFXI!");
+    }
+
+    #[test]
+    fn page_text_extracts_each_page_of_multipage_fixture() {
+        let doc = Document::from_bytes(multi_page_pdf(3)).expect("valid fixture");
+        for index in 0..3 {
+            assert_eq!(
+                doc.page_text(index).expect("page text"),
+                format!("Page {}", index + 1)
+            );
+        }
+    }
+
+    #[test]
+    fn page_content_rejects_filtered_stream() {
+        let content = "BT (Hi) Tj ET";
+        let body = format!(
+            "<< /Length {} /Filter /FlateDecode >>\nstream\n{}\nendstream",
+            content.len(),
+            content
+        );
+        let doc = Document::from_bytes(one_page_pdf_with_content(&body)).expect("valid fixture");
+        assert!(matches!(
+            doc.page_content(0),
+            Err(Error::FilteredContent(id)) if id == ObjectId::new(4, 0)
+        ));
+        assert!(matches!(doc.page_text(0), Err(Error::FilteredContent(_))));
+    }
+
+    #[test]
+    fn page_content_rejects_non_stream_object() {
+        let doc = Document::from_bytes(one_page_pdf_with_content("<< /Type /Font >>"))
+            .expect("valid fixture");
+        assert!(matches!(
+            doc.page_content(0),
+            Err(Error::ContentNotStream(id)) if id == ObjectId::new(4, 0)
+        ));
+    }
+
+    #[test]
+    fn page_content_rejects_out_of_range_index() {
+        let doc = Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("valid fixture");
+        assert!(matches!(doc.page_content(9), Err(Error::PageNotFound(9))));
+        assert!(matches!(doc.page_text(9), Err(Error::PageNotFound(9))));
     }
 }
