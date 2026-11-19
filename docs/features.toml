@@ -133,14 +133,50 @@ tests = [
 title = "Split and tile document windows"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/thumbnail.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "crates/pdfxi-render/tests/thumbnail_pdfium.rs",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = '''
+CARGO_TARGET_DIR=D:\Documents\opencode-work\target\lanes\render; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll.
+cargo test -p pdfxi-render: 19 unit tests passed, 0 failed, EXIT=0 (5 pre-existing + 14 new thumbnail unit tests; doc-tests 0).
+cargo test -p pdfxi-render --features pdfium: 19 unit + 4 pdfium_backend integration + 2 thumbnail_pdfium integration passed, 0 failed, EXIT=0. Both new PDFium tests ran and passed: thumbnail_of_minimal_pdf_is_nonzero_sized_and_non_uniform, cached_pdfium_thumbnail_matches_a_fresh_generation.
+cargo fmt -p pdfxi-render -- --check: EXIT=0.
+cargo clippy -p pdfxi-render --all-targets -- -D warnings: EXIT=0. cargo clippy -p pdfxi-render --all-targets --features pdfium -- -D warnings: EXIT=0.
+RUSTDOCFLAGS="-D warnings" cargo doc -p pdfxi-render --no-deps: EXIT=0 (default and --features pdfium).
+'''
 id = "VIEW-007"
-notes = ""
+notes = """
+Added `pdfxi_render::thumbnail`, a dependency-free page-thumbnail engine on top of the existing `Renderer` contract. Public API: `ThumbnailSpec { max_width, max_height, scale }` with `new`/`with_scale`/`validate`; `contain_dimensions` and `contains_dimensions` for a documented aspect-preserving contain fit (integer-rounded, clamped to 1x1, never larger than the box); pure-Rust `resize_rgba` nearest-neighbor resizer using widened `u64` arithmetic, a `min(src-1, ...)` clamp for the last column/row, and checked buffer/overflow validation; `Thumbnail { page, width, height, pixels }` with read-only accessors; `ThumbnailError` with typed variants and a transparent `Render(RenderError)` wrapper; stateless `ThumbnailGenerator::generate`; and `ThumbnailCache` with (page, spec) keys, documented least-recently-used eviction, optional entry limit (0 disables retention), `get`/`contains`/`hits`/`len`/`is_empty`/`clear`.
+
+Generation is a documented two-phase cover-and-downscale strategy: render at scale 1.0 to measure the page, compute the cover factor that makes the raster at least as large as the box in both axes, multiply by the spec's oversample scale, render again, then nearest-neighbor downscale to the contained fit. This guarantees downsampling instead of upscaling. For a given renderer/page/spec the output is byte-for-byte deterministic. Cancellation is checked before, between, and inside both render phases; progress from both phases is mapped onto a two-unit range. All renderer errors (cancellation, out-of-range pages, invalid scale) propagate through `ThumbnailError::Render`. `#![forbid(unsafe_code)]` remains and no non-test code uses unwrap/expect/panic.
+
+Tests use a scale-aware counting mock renderer: wide/tall/square aspect fit, exact RGBA length, nearest-neighbor corner/replication sampling, buffer-mismatch and zero-dimension rejection, zero-size spec rejection without rendering, invalid-scale rejection, out-of-range and cancellation propagation (before and between phases), cache hit avoids re-rendering, deterministic equality, LRU eviction order, `clear`, zero-limit behaviour, and progress reporting. Optional `#[cfg(feature = "pdfium")]` integration tests generate a thumbnail of fixtures/minimal.pdf and assert non-zero dimensions, exact RGBA length, a non-uniform image, and that a cached generation matches a fresh one.
+
+Collateral (rustdoc hygiene only): replaced two pre-existing broken/redundant intra-doc links in lib.rs and pdfium_backend.rs so `RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-render --no-deps` passes both with and without the `pdfium` feature. VIEW-007 remains in-progress because the navigation-pane UI (dock widget, scroll list, selection wiring) belongs to the app lane; the thumbnail engine it consumes is now delivered here.
+"""
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "thumbnail::tests::contain_fit_preserves_aspect_for_wide_tall_and_square_pages",
+    "thumbnail::tests::thumbnail_fit_is_aspect_preserving_for_wide_tall_and_square_pages",
+    "thumbnail::tests::resize_rgba_uses_nearest_neighbor_at_corners_and_replicates_on_upscale",
+    "thumbnail::tests::resize_rgba_rejects_zero_dims_overflow_and_buffer_mismatch",
+    "thumbnail::tests::zero_size_spec_is_rejected_without_rendering",
+    "thumbnail::tests::invalid_scale_is_rejected_without_rendering",
+    "thumbnail::tests::out_of_range_page_error_propagates",
+    "thumbnail::tests::cancellation_is_propagated_before_and_between_phases",
+    "thumbnail::tests::cache_hit_avoids_rendering_again_and_is_deterministic",
+    "thumbnail::tests::cache_eviction_order_is_least_recently_used",
+    "thumbnail::tests::clear_drops_entries_history_and_hits",
+    "thumbnail::tests::zero_limit_cache_never_retains_entries",
+    "thumbnail::tests::progress_is_reported_across_both_phases",
+    "thumbnail::tests::oversampling_yields_the_same_fit_dimensions",
+    "thumbnail_of_minimal_pdf_is_nonzero_sized_and_non_uniform",
+    "cached_pdfium_thumbnail_matches_a_fresh_generation",
+]
 title = "Page thumbnails and navigation pane"
 
 [[feature]]

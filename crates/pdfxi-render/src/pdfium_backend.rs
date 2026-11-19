@@ -1,4 +1,4 @@
-//! PDFium-backed implementation of the [`Renderer`](crate::Renderer) contract.
+//! PDFium-backed implementation of the [`Renderer`] contract.
 //!
 //! This module is only compiled when the `pdfium` Cargo feature is enabled so
 //! that default builds of `pdfxi-render` remain free of native dependencies.
@@ -11,7 +11,7 @@
 //! marshall, a higher-level lock is still required so that a multi-step
 //! operation (load document → get page → render → copy pixels) cannot interleave
 //! with another caller. This module therefore keeps one process-wide PDFium
-//! instance behind a [`Mutex`] and holds that mutex for the whole render. The
+//! instance behind a [`std::sync::Mutex`] and holds that mutex for the whole render. The
 //! design is a deliberately bounded "pool" of one worker; it can be widened to
 //! a real per-worker pool later without changing the [`Renderer`] contract.
 //!

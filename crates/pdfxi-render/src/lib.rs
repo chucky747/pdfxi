@@ -10,9 +10,14 @@
 //! cancellation between steps and report [`Progress`] as work advances. This
 //! keeps the UI responsive and lets a closed document stop outstanding work.
 //!
-//! The optional `pdfium` feature adds [`PdfiumRenderer`], a native backend that
+//! The optional `pdfium` feature adds `PdfiumRenderer`, a native backend that
 //! loads a document and produces tightly packed RGBA rasters. Default builds do
 //! not link PDFium.
+//!
+//! The [`thumbnail`] module builds aspect-preserving page thumbnails on top of
+//! any [`Renderer`], with a pure-Rust nearest-neighbor resizer and an optional
+//! least-recently-used cache. It adds no dependencies and is available in every
+//! build.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -23,6 +28,10 @@ pub mod pdfium_backend;
 
 #[cfg(feature = "pdfium")]
 pub use pdfium_backend::PdfiumRenderer;
+
+/// Dependency-free page-thumbnail generation and LRU caching on top of the
+/// [`Renderer`] contract.
+pub mod thumbnail;
 
 use std::sync::{
     Arc,
