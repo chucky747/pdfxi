@@ -3,9 +3,9 @@
 //! This module is the window-free brain of the thumbnail pane. It owns the
 //! per-page metadata, the visible-row math for a scrollable vertical list, the
 //! active/selected page, and a **bounded** queue of thumbnail-generation
-//! requests. It deliberately contains **no `egui` types**: the GUI layer in
-//! [`crate::ui`] is responsible for drawing tiles and uploading cached RGBA
-//! thumbnails into textures. Keeping this state GUI-free means every
+//! requests. It deliberately contains **no `egui` types**: the feature-gated
+//! native viewer shell is responsible for drawing tiles and uploading cached
+//! RGBA thumbnails into textures. Keeping this state GUI-free means every
 //! deterministic behavior — visibility, mapping, dedupe, prefetch, selection,
 //! and cache reuse — can be tested with a mock [`Renderer`] and no window.
 //!

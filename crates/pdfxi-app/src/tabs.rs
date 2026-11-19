@@ -1,7 +1,14 @@
 //! Document tab identity, state, and deterministic title computation.
+//!
+//! A [`DocumentTab`] is the unit of per-document view state: its stable id, the
+//! source path used for duplicate detection, the unsaved-changes flag, and all
+//! view settings (page, zoom, layout, rotation, and canvas scroll offset).
+//! Keeping this state on the tab — rather than on the window — is what lets a
+//! tabbed workspace restore a document's view exactly when it is reactivated.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::canvas::CanvasPoint;
 use crate::view::{Rotation, ViewMode, Zoom};
 
 /// A stable identifier for an open document tab.
@@ -46,16 +53,31 @@ pub fn display_name_from_path(path: &Path) -> String {
     name.to_string()
 }
 
+/// Normalize a filesystem path into a comparison key for duplicate detection.
+///
+/// Backslashes become forward slashes, the Unicode lowercase form is used, and
+/// trailing separators are removed. This makes `C:\Docs\a.pdf` and
+/// `c:/docs/a.pdf` compare equal on every platform. Empty and root-only paths
+/// produce an empty key, which callers should treat as "no path identity" (so
+/// two untitled documents are never merged).
+pub fn normalize_path_key(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    let normalized = raw.replace('\\', "/").to_lowercase();
+    normalized.trim_end_matches('/').to_string()
+}
+
 /// The full state of one open document in the viewer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DocumentTab {
     id: TabId,
     display_name: String,
+    path: Option<PathBuf>,
     view_mode: ViewMode,
     zoom: Zoom,
     rotation: Rotation,
     current_page: usize,
     page_count: usize,
+    scroll: CanvasPoint,
     dirty: bool,
 }
 
@@ -65,18 +87,25 @@ impl DocumentTab {
         Self {
             id,
             display_name: display_name.into(),
+            path: None,
             view_mode: ViewMode::default(),
             zoom: Zoom::default(),
             rotation: Rotation::default(),
             current_page: 0,
             page_count: 0,
+            scroll: CanvasPoint::default(),
             dirty: false,
         }
     }
 
     /// Create a tab whose display name is derived from a path's file name.
+    ///
+    /// The path itself is retained so a workspace can detect when the same
+    /// document is opened a second time and focus the existing tab instead.
     pub fn from_path(id: TabId, path: &Path) -> Self {
-        Self::new(id, display_name_from_path(path))
+        let mut tab = Self::new(id, display_name_from_path(path));
+        tab.path = Some(path.to_path_buf());
+        tab
     }
 
     /// This tab's stable identifier.
@@ -87,6 +116,22 @@ impl DocumentTab {
     /// The human-readable document name shown in the tab strip.
     pub fn display_name(&self) -> &str {
         &self.display_name
+    }
+
+    /// The source path of this document, when it was opened from a path.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// The normalized duplicate-detection key for this tab's path.
+    ///
+    /// Returns `None` for tabs without a path or with an empty/root-only path;
+    /// callers must not merge such tabs.
+    pub fn path_key(&self) -> Option<String> {
+        self.path
+            .as_deref()
+            .map(normalize_path_key)
+            .filter(|key| !key.is_empty())
     }
 
     /// The page layout mode for this tab.
@@ -102,6 +147,32 @@ impl DocumentTab {
     /// The page rotation for this tab.
     pub fn rotation(&self) -> Rotation {
         self.rotation
+    }
+
+    /// The canvas scroll offset saved for this tab.
+    ///
+    /// Restoring this value when a tab is reactivated keeps the viewer at the
+    /// same position the user left, alongside the page, zoom, layout, and
+    /// rotation settings.
+    pub fn scroll_offset(&self) -> CanvasPoint {
+        self.scroll
+    }
+
+    /// Save a canvas scroll offset for this tab.
+    ///
+    /// Non-finite and negative components are sanitized to zero so a restored
+    /// view is always finite and deterministic, matching the canvas clamp
+    /// behavior. No viewport is needed here; the canvas clamps to content bounds
+    /// at paint time.
+    pub fn set_scroll_offset(&mut self, offset: CanvasPoint) {
+        let sanitize = |value: f32| {
+            if value.is_finite() && value > 0.0 {
+                value
+            } else {
+                0.0
+            }
+        };
+        self.scroll = CanvasPoint::new(sanitize(offset.x), sanitize(offset.y));
     }
 
     /// The zero-based index of the currently displayed page.
@@ -235,5 +306,39 @@ mod tests {
         assert_eq!(tab.current_page(), 1);
         tab.set_page_count(0);
         assert_eq!(tab.current_page(), 0);
+    }
+
+    #[test]
+    fn path_identity_is_normalized_for_duplicate_detection() {
+        let windows = Path::new(r"C:\Docs\Report.PDF");
+        let unix = Path::new("c:/docs/report.pdf");
+        assert_eq!(display_name_from_path(windows), "Report.PDF");
+        assert_eq!(normalize_path_key(windows), "c:/docs/report.pdf");
+        assert_eq!(normalize_path_key(windows), normalize_path_key(unix));
+
+        let tab = DocumentTab::from_path(TabId::from_u64(1), windows);
+        assert_eq!(tab.path(), Some(windows));
+        assert_eq!(tab.path_key().as_deref(), Some("c:/docs/report.pdf"));
+
+        let untitled = DocumentTab::new(TabId::from_u64(2), "Untitled");
+        assert_eq!(untitled.path(), None);
+        assert_eq!(untitled.path_key(), None);
+        let root = DocumentTab::from_path(TabId::from_u64(3), Path::new("/"));
+        assert_eq!(root.path_key(), None, "root-only paths carry no identity");
+    }
+
+    #[test]
+    fn scroll_offset_is_sanitized_and_restorable() {
+        let mut tab = DocumentTab::new(TabId::from_u64(1), "doc");
+        assert_eq!(tab.scroll_offset(), CanvasPoint::new(0.0, 0.0));
+
+        tab.set_scroll_offset(CanvasPoint::new(120.5, 900.0));
+        assert_eq!(tab.scroll_offset(), CanvasPoint::new(120.5, 900.0));
+
+        // Non-finite and negative values become zero, never NaN/infinity.
+        tab.set_scroll_offset(CanvasPoint::new(f32::NAN, f32::INFINITY));
+        assert_eq!(tab.scroll_offset(), CanvasPoint::new(0.0, 0.0));
+        tab.set_scroll_offset(CanvasPoint::new(-5.0, -1.0));
+        assert_eq!(tab.scroll_offset(), CanvasPoint::new(0.0, 0.0));
     }
 }

@@ -31,6 +31,13 @@
 //! - [`TextConverter`] is a [`Converter`] adapter that exports pre-extracted
 //!   page data as [`ExportKind::Text`] or [`ExportKind::Json`], keeping parsing
 //!   and rendering out of the export path.
+//! - [`create`] writes new PDFs from plain text, a small Markdown subset, and
+//!   PNG/JPEG images. It has its own deterministic classic-xref writer, a
+//!   [`CreateError`] derived from `thiserror`, documented
+//!   page/margin/font metrics and DPI/page-fit rules, and embeds raw image
+//!   streams without a decoder dependency. This is the only module that adds a
+//!   runtime dependency (`thiserror`, already in the workspace and lockfile);
+//!   `pdfxi-core` is used only as a dev-dependency for round-trip tests.
 //!
 //! The text/JSON modules are always compiled and add no dependencies, so a
 //! `--no-default-features` build stays dependency-free.
@@ -62,6 +69,7 @@
 #![forbid(unsafe_code)]
 
 mod converter;
+pub mod create;
 mod error;
 mod export;
 pub mod image;
@@ -74,6 +82,11 @@ mod text;
 mod text_converter;
 
 pub use converter::{Converter, MockConverter};
+pub use create::{
+    CreateError, CreateImageFormat, CreateOptions, DEFAULT_DPI, Margins, PageSize,
+    create_from_image, create_from_markdown, create_from_text, create_pdf_from_file,
+    create_pdf_from_path,
+};
 pub use error::ConversionError;
 pub use export::ExportKind;
 pub use image::{ImageFormat, encode, encode_png, encode_ppm};

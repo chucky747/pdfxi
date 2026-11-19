@@ -9,4 +9,5 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+thiserror.workspace = true
 

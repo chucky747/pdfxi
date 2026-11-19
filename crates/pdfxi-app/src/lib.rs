@@ -13,9 +13,15 @@
 //! The [`thumbs`] module adds the window-free state and math for a page-thumbnail
 //! navigation pane: visible-row ranges, page/row mapping, active-page tracking,
 //! and a bounded prefetch request queue backed by `pdfxi-render`'s cache.
+//! [`AppState`] is the tabbed document workspace: it owns an insertion-ordered
+//! set of stable-id tabs, each with its own path, dirty flag, and per-tab view
+//! state (page, zoom, layout, rotation, and scroll offset). Open, close,
+//! reorder, next/previous, and close-others are deterministic operations with
+//! typed errors, including an unsaved-close policy hook.
 //! An optional native viewer shell built on `egui`/`eframe` is available behind
 //! the `ui` feature; it wires [`find`], [`selection`], and [`thumbs`] into a find
-//! bar, copy command, and thumbnail side panel.
+//! bar, copy command, and thumbnail side panel, and renders a tab strip with
+//! close buttons, an active highlight, and tab keyboard shortcuts.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -42,8 +48,8 @@ pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
 };
-pub use state::{AppError, AppState};
-pub use tabs::{DocumentTab, TabId, display_name_from_path};
+pub use state::{AppError, AppState, CloseDecision, CloseOthersOutcome, CloseOutcome, OpenOutcome};
+pub use tabs::{DocumentTab, TabId, display_name_from_path, normalize_path_key};
 pub use thumbs::*;
 pub use toolset::Toolset;
 pub use view::{DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, Rotation, ViewMode, Zoom};

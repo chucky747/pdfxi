@@ -17,10 +17,10 @@
 //! # XFDF scope
 //!
 //! [`export_xfdf`] emits a small, schema-compatible XML subset (`<xfdf>`,
-//! `<fields>`, `<field name="...">`, `<value>`). Import of XFDF is intentionally
-//! out of scope for this task: FDF is the single round-trip format, and adding a
-//! second parser would duplicate the field-name and value mapping without
-//! changing the observable field model.
+//! `<fields>`, `<field name="...">`, `<value>`). The matching importer lives in
+//! [`crate::xfdf`]: [`crate::import_xfdf`] parses that XML and maps its values
+//! onto the target form's field types, while FDF remains the byte-oriented
+//! round-trip format.
 
 use crate::field::{Field, FieldValue};
 use crate::form::Form;
@@ -294,10 +294,10 @@ pub fn export_fdf(form: &Form) -> Result<String, FdfError> {
 
 /// Exports a small XFDF-compatible XML subset.
 ///
-/// Only export is provided: FDF is the single round-trip format for this task,
-/// and a second parser would duplicate the field-name and value mapping without
-/// changing the observable field model. Text values are XML-escaped, booleans
-/// become `On`/`Off`, and each choice selection becomes its own `<value>` element.
+/// Text values are XML-escaped, booleans become `On`/`Off`, and each choice
+/// selection becomes its own `<value>` element. The companion importer is
+/// [`crate::import_xfdf`], which reverses this mapping using the target form's
+/// field types.
 pub fn export_xfdf(form: &Form) -> Result<String, FdfError> {
     let mut fields: Vec<&Field> = form
         .fields()

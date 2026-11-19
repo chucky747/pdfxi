@@ -34,13 +34,29 @@
 //! placeholders. Clicking a tile marks that page active and scrolls the canvas
 //! to it, while canvas scrolling updates the active tile so the two views stay
 //! in sync. Only visible rows (plus a documented prefetch margin) are requested.
+//!
+//! # Tabbed document interface
+//!
+//! The top tab strip shows one labelled tile per open document. Selectable
+//! labels highlight the active tab and activate on click; each tile also has a
+//! close button. `Ctrl+Tab` / `Ctrl+Shift+Tab` walk the strip with wraparound and
+//! `Ctrl+W` closes the active tab. Opening the same path twice focuses the
+//! existing tab. Closing a dirty document is routed through a
+//! [`UiClosePolicy`] hook so unsaved work is not silently discarded. Each tab
+//! keeps its own page, zoom, layout, rotation, and scroll offset, which the
+//! shell saves on switch-away and restores on switch-back. A fixed placeholder
+//! is shown while no document is open. All of these paths are exposed as
+//! window-free [`PdfxiApp`] methods so they are unit tested without a GUI.
+
+use std::path::Path;
 
 use egui::Key;
 
 use crate::{
-    AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, DEFAULT_ZOOM,
-    FindMatch, FindOptions, FindState, OwnedSpan, OwnedTextPage, PageSize, SelectionModel, TabId,
-    ThumbnailPaneState, Toolset, ViewMode, Zoom, app_name,
+    AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
+    DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, OpenOutcome, OwnedSpan,
+    OwnedTextPage, PageSize, SelectionModel, TabId, ThumbnailPaneState, Toolset, ViewMode, Zoom,
+    app_name,
 };
 
 #[cfg(feature = "pdfium")]
@@ -85,6 +101,36 @@ const THUMBS_PER_FRAME: usize = 4;
 
 /// Placeholder page count assigned to a demo tab (no real document is loaded).
 pub const DEMO_PAGE_COUNT: usize = 3;
+
+/// How the shell handles a close request for a tab with unsaved changes.
+///
+/// This is the UI-side implementation of the workspace's unsaved-close policy
+/// hook. It is a small `Copy` value so every close path (button, `Ctrl+W`, and
+/// close-others) can consult it without borrowing the whole application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiClosePolicy {
+    /// Discard unsaved changes and close immediately.
+    DiscardDirty,
+    /// Refuse to close a dirty tab and show a status prompt instead.
+    ///
+    /// This is the default: it prevents accidental data loss. A production
+    /// viewer would raise a save/discard/cancel dialog here; the headless shell
+    /// reports the refusal through [`PdfxiApp::status`] so the behavior is
+    /// deterministic and testable without a window.
+    #[default]
+    RequireClean,
+}
+
+impl UiClosePolicy {
+    /// Translate this policy into a model-level [`CloseDecision`] for `tab`.
+    fn decide(self, tab: &DocumentTab) -> CloseDecision {
+        match self {
+            Self::DiscardDirty => CloseDecision::Close,
+            Self::RequireClean if tab.is_dirty() => CloseDecision::Keep,
+            Self::RequireClean => CloseDecision::Close,
+        }
+    }
+}
 
 /// Width of a demo page in PDF points (US Letter).
 const DEMO_PAGE_WIDTH_PT: f32 = 612.0;
@@ -360,6 +406,8 @@ pub fn run() {
 pub struct PdfxiApp {
     state: AppState,
     status: String,
+    /// Unsaved-change policy consulted by every tab-close action.
+    close_policy: UiClosePolicy,
     scroll_x: f32,
     scroll_y: f32,
     selection: SelectionModel,
@@ -439,8 +487,22 @@ impl PdfxiApp {
     /// With `pdfium`, the tab's page count comes from the real fixture so the
     /// canvas never asks the renderer for a page the document does not have.
     pub fn open_demo_tab(&mut self) -> TabId {
+        // Preserve the outgoing tab's view before a new tab becomes active.
+        self.save_scroll_to_active();
         let name = format!("Demo Document {}", self.state.tab_count() + 1);
         let id = self.state.open_tab(name);
+        self.finish_new_tab(id);
+        self.status = format!("Opened demo tab {id}");
+        id
+    }
+
+    /// Initialize the shared demo helpers for a newly opened tab.
+    ///
+    /// The shell has one find/selection/thumbnail helper set driven by the
+    /// active tab's page count; this resets it for the new document and starts
+    /// that document's view at the top. Per-tab view state (page, zoom, layout,
+    /// rotation, and scroll) lives on the [`DocumentTab`] itself.
+    fn finish_new_tab(&mut self, id: TabId) {
         let page_count = self.demo_page_count();
         if let Some(tab) = self.state.tab_mut(id) {
             tab.set_page_count(page_count);
@@ -457,8 +519,6 @@ impl PdfxiApp {
         self.thumb_follow_active = true;
         #[cfg(feature = "pdfium")]
         self.thumb_textures.clear();
-        self.status = format!("Opened demo tab {id}");
-        id
     }
 
     /// The page count used for demo tabs.
@@ -477,23 +537,223 @@ impl PdfxiApp {
         DEMO_PAGE_COUNT
     }
 
-    /// Close the active tab, if any.
+    /// Close the active tab, if any, using the configured [`UiClosePolicy`].
+    ///
+    /// A vetoed close leaves the workspace untouched and reports why through
+    /// [`Self::status`]. With no active tab the status is `"No tab to close"`,
+    /// preserving the original shell behavior.
     pub fn close_active_tab(&mut self) {
-        match self.state.active_tab_id() {
-            Some(id) => {
-                let _ = self.state.close_tab(id);
-                self.status = format!("Closed tab {id}");
+        if let Some(id) = self.state.active_tab_id() {
+            let _ = self.close_tab_by_id(id);
+        } else {
+            self.status = "No tab to close".to_string();
+        }
+    }
+
+    /// Close a specific tab, consulting the unsaved-change policy hook.
+    ///
+    /// Returns `true` when the tab was actually removed. Returns `false` when
+    /// the tab was kept by the policy, did not exist, or no tab was active; in
+    /// every case [`Self::status`] describes the outcome.
+    pub fn close_tab_by_id(&mut self, id: TabId) -> bool {
+        let policy = self.close_policy;
+        let title = self.state.tab_title(id).unwrap_or_default();
+        let outcome = match self
+            .state
+            .close_tab_with_policy(id, |tab| policy.decide(tab))
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.status = error.to_string();
+                return false;
             }
-            None => self.status = "No tab to close".to_string(),
+        };
+        match outcome {
+            crate::CloseOutcome::Closed { .. } => {
+                self.status = format!("Closed tab {id}");
+                self.restore_scroll_from_active();
+                true
+            }
+            crate::CloseOutcome::Cancelled { .. } => {
+                self.status = format!("Unsaved changes in {title}; save or discard before closing");
+                false
+            }
         }
     }
 
     /// Make the tab with the given id active, if it exists.
+    ///
+    /// The outgoing tab's scroll position is saved on its own state before the
+    /// switch and the incoming tab's position is restored afterwards.
     pub fn activate_tab(&mut self, id: TabId) {
+        self.save_scroll_to_active();
         match self.state.activate_tab(id) {
-            Ok(()) => self.status = format!("Activated tab {id}"),
-            Err(error) => self.status = error.to_string(),
+            Ok(()) => {
+                self.on_active_tab_changed();
+                self.status = format!("Activated tab {id}");
+            }
+            Err(error) => {
+                self.restore_scroll_from_active();
+                self.status = error.to_string();
+            }
         }
+    }
+
+    /// Activate the next tab with wraparound (the `Ctrl+Tab` action).
+    ///
+    /// Returns `false` with a status message when no tab is active.
+    pub fn activate_next_tab(&mut self) -> bool {
+        self.save_scroll_to_active();
+        match self.state.activate_next() {
+            Ok(id) => {
+                self.on_active_tab_changed();
+                self.status = format!("Activated tab {id}");
+                true
+            }
+            Err(error) => {
+                self.restore_scroll_from_active();
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Activate the previous tab with wraparound (the `Ctrl+Shift+Tab` action).
+    ///
+    /// Returns `false` with a status message when no tab is active.
+    pub fn activate_previous_tab(&mut self) -> bool {
+        self.save_scroll_to_active();
+        match self.state.activate_previous() {
+            Ok(id) => {
+                self.on_active_tab_changed();
+                self.status = format!("Activated tab {id}");
+                true
+            }
+            Err(error) => {
+                self.restore_scroll_from_active();
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Open a document path, focusing an existing tab when the path is already
+    /// open (the model's duplicate-path rule).
+    ///
+    /// A newly opened document gets the same demo helpers as [`Self::open_demo_tab`];
+    /// a reused one simply restores its saved view and becomes active.
+    pub fn open_document(&mut self, path: &Path) -> OpenOutcome {
+        self.save_scroll_to_active();
+        let outcome = self.state.open_document(path);
+        match outcome {
+            OpenOutcome::Opened { id } => {
+                self.finish_new_tab(id);
+                self.status = format!("Opened {}", path.display());
+            }
+            OpenOutcome::Focused { id } => {
+                self.on_active_tab_changed();
+                self.status = format!("Focused existing tab {id}");
+            }
+        }
+        outcome
+    }
+
+    /// Close every tab except the active one, consulting the configured
+    /// [`UiClosePolicy`] for each candidate tab.
+    ///
+    /// This applies the same unsaved-change rule as the tab-strip close button
+    /// and `Ctrl+W`: with [`UiClosePolicy::RequireClean`] a dirty tab is kept
+    /// open; with [`UiClosePolicy::DiscardDirty`] it is closed. Returns a typed
+    /// report of the ids that were closed and the ids the policy kept, so a
+    /// caller can see exactly what happened without parsing the status string.
+    pub fn close_other_tabs(&mut self) -> crate::CloseOthersOutcome {
+        let policy = self.close_policy;
+        let outcome = self
+            .state
+            .close_other_tabs_with_policy(|tab| policy.decide(tab));
+        let kept = outcome.kept.len();
+        self.status = if kept == 0 {
+            format!("Closed {} other tab(s)", outcome.closed.len())
+        } else {
+            format!(
+                "Closed {} other tab(s); kept {} with unsaved changes",
+                outcome.closed.len(),
+                kept
+            )
+        };
+        outcome
+    }
+
+    /// Move a tab to a new position in the strip. Returns `false` on a bad id
+    /// or index, with the reason in [`Self::status`].
+    pub fn reorder_tab(&mut self, id: TabId, new_index: usize) -> bool {
+        match self.state.reorder_tab(id, new_index) {
+            Ok(()) => {
+                self.status = format!("Moved tab {id} to position {}", new_index + 1);
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// A headless snapshot of the tab strip: `(id, label, is_active)` triples in
+    /// insertion order.
+    ///
+    /// The real `egui` tab strip renders from this same data, so the labels,
+    /// order, and active highlight can be asserted without opening a window.
+    pub fn tab_strip_snapshot(&self) -> Vec<(TabId, String, bool)> {
+        self.state
+            .tabs()
+            .map(|tab| {
+                let id = tab.id();
+                (id, tab.title(), self.state.active_tab_id() == Some(id))
+            })
+            .collect()
+    }
+
+    /// Select the unsaved-change policy used by tab-close actions.
+    pub fn set_close_policy(&mut self, policy: UiClosePolicy) {
+        self.close_policy = policy;
+    }
+
+    /// The unsaved-change policy currently used by tab-close actions.
+    pub fn close_policy(&self) -> UiClosePolicy {
+        self.close_policy
+    }
+
+    /// The live canvas scroll offset of the active view.
+    pub fn scroll_offset(&self) -> CanvasPoint {
+        CanvasPoint::new(self.scroll_x, self.scroll_y)
+    }
+
+    /// Persist the live scroll offset onto the active tab before a switch.
+    fn save_scroll_to_active(&mut self) {
+        if let Some(tab) = self.state.active_tab_mut() {
+            tab.set_scroll_offset(CanvasPoint::new(self.scroll_x, self.scroll_y));
+        }
+    }
+
+    /// Load the active tab's saved scroll offset into the live canvas view.
+    fn restore_scroll_from_active(&mut self) {
+        if let Some(tab) = self.state.active_tab() {
+            let offset = tab.scroll_offset();
+            self.scroll_x = offset.x;
+            self.scroll_y = offset.y;
+        } else {
+            self.scroll_x = 0.0;
+            self.scroll_y = 0.0;
+        }
+    }
+
+    /// Restore per-tab view state and drop navigation requests aimed at the
+    /// tab that was just left.
+    fn on_active_tab_changed(&mut self) {
+        self.restore_scroll_from_active();
+        self.pending_scroll = false;
+        self.pending_page_scroll = None;
     }
 
     /// Increase the active tab's custom zoom by one `ZOOM_STEP`.
@@ -626,6 +886,11 @@ impl PdfxiApp {
         let active = active_page_from_canvas_scroll(layout, self.scroll_y);
         if self.thumbs.set_active_page(active) {
             self.thumb_follow_active = true;
+            // Page position is per-tab view state, so scrolling a document and
+            // then switching away and back returns to the same page.
+            if let Some(tab) = self.state.active_tab_mut() {
+                tab.set_current_page(active);
+            }
             true
         } else {
             false
@@ -950,23 +1215,36 @@ impl PdfxiApp {
     }
 
     /// Render the document tab strip.
+    ///
+    /// Labels, order, and the active highlight come from the window-free
+    /// [`Self::tab_strip_snapshot`]. Each tab also gets a small close button;
+    /// close requests are deferred until after the `egui` closure so the
+    /// workspace is never mutated while the UI borrows it. With no open tab the
+    /// strip shows a fixed placeholder.
     fn tabs_ui(&mut self, ui: &mut egui::Ui) {
+        let snapshot = self.tab_strip_snapshot();
+        if snapshot.is_empty() {
+            ui.label("No documents open");
+            return;
+        }
+        let mut activate = None;
+        let mut close = None;
         ui.horizontal_wrapped(|ui| {
-            // Collect ids first so the mutable activate call does not overlap
-            // the immutable borrow of the tab collection.
-            let ids: Vec<TabId> = self.state.tabs().map(|tab| tab.id()).collect();
-            if ids.is_empty() {
-                ui.label("No documents open");
-                return;
-            }
-            for id in ids {
-                let selected = self.state.active_tab_id() == Some(id);
-                let title = self.state.tab_title(id).unwrap_or_default();
-                if ui.selectable_label(selected, title).clicked() {
-                    self.activate_tab(id);
+            for (id, label, is_active) in snapshot {
+                if ui.selectable_label(is_active, label).clicked() {
+                    activate = Some(id);
+                }
+                if ui.small_button("×").clicked() {
+                    close = Some(id);
                 }
             }
         });
+        if let Some(id) = activate {
+            self.activate_tab(id);
+        }
+        if let Some(id) = close {
+            self.close_tab_by_id(id);
+        }
     }
 
     /// Render the status header and the placeholder canvas area.
@@ -1138,6 +1416,12 @@ impl PdfxiApp {
                     }
                 }
 
+                // Persist the active tab's final scroll position so a later tab
+                // switch can restore exactly where the user left this document.
+                if let Some(tab) = self.state.active_tab_mut() {
+                    tab.set_scroll_offset(CanvasPoint::new(self.scroll_x, self.scroll_y));
+                }
+
                 let copy_text = self.selection.selected_text(&self.demo_text);
                 ui.label(canvas_info_line(hit, &copy_text));
             });
@@ -1147,6 +1431,8 @@ impl PdfxiApp {
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         let (
             open,
+            next_tab,
+            prev_tab,
             close,
             zoom_in,
             zoom_out,
@@ -1162,6 +1448,8 @@ impl PdfxiApp {
             let shift = input.modifiers.shift;
             (
                 ctrl && input.key_pressed(Key::N),
+                ctrl && !shift && input.key_pressed(Key::Tab),
+                ctrl && shift && input.key_pressed(Key::Tab),
                 ctrl && input.key_pressed(Key::W),
                 ctrl && input.key_pressed(Key::Equals),
                 ctrl && input.key_pressed(Key::Minus),
@@ -1177,6 +1465,12 @@ impl PdfxiApp {
 
         if open {
             self.open_demo_tab();
+        }
+        if next_tab {
+            self.activate_next_tab();
+        }
+        if prev_tab {
+            self.activate_previous_tab();
         }
         if close {
             self.close_active_tab();
@@ -1692,5 +1986,192 @@ mod tests {
             app.raster_cache
                 .contains(RasterKey::new(0, layout.scale(), Rotation::Deg0))
         );
+    }
+
+    // ---- T-0069 tabbed-interface UI helpers -----------------------------
+
+    #[test]
+    fn tab_strip_snapshot_reflects_labels_order_and_active_highlight() {
+        let mut app = PdfxiApp::new();
+        assert!(app.tab_strip_snapshot().is_empty());
+
+        let a = app.open_demo_tab();
+        let b = app.open_demo_tab();
+        let snapshot = app.tab_strip_snapshot();
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].0, a);
+        assert!(snapshot[0].1.contains("Demo Document 1"));
+        assert!(!snapshot[0].2);
+        assert_eq!(snapshot[1].0, b);
+        assert!(snapshot[1].1.contains("Demo Document 2"));
+        assert!(snapshot[1].2, "the newest tab is active");
+
+        app.activate_tab(a);
+        let snapshot = app.tab_strip_snapshot();
+        assert!(snapshot[0].2);
+        assert!(!snapshot[1].2);
+    }
+
+    #[test]
+    fn keyboard_tab_helpers_wrap_and_close() {
+        let mut app = PdfxiApp::new();
+        let a = app.open_demo_tab();
+        let b = app.open_demo_tab();
+        let c = app.open_demo_tab();
+        assert_eq!(app.state().active_tab_id(), Some(c));
+
+        assert!(app.activate_next_tab(), "Ctrl+Tab wraps to the first tab");
+        assert_eq!(app.state().active_tab_id(), Some(a));
+        assert!(
+            app.activate_previous_tab(),
+            "Ctrl+Shift+Tab wraps to the last tab"
+        );
+        assert_eq!(app.state().active_tab_id(), Some(c));
+
+        app.close_active_tab();
+        assert_eq!(app.state().active_tab_id(), Some(b));
+        app.close_active_tab();
+        app.close_active_tab();
+        assert!(app.tab_strip_snapshot().is_empty());
+
+        assert!(!app.activate_next_tab(), "no active tab to walk from");
+        assert_eq!(app.status(), "no tab is currently active");
+    }
+
+    #[test]
+    fn ui_close_policy_rejects_closing_dirty_tabs_until_allowed() {
+        let mut app = PdfxiApp::new();
+        assert_eq!(app.close_policy(), UiClosePolicy::RequireClean);
+        let id = app.open_demo_tab();
+        app.state.tab_mut(id).expect("demo tab").set_dirty(true);
+        assert_eq!(app.tab_strip_snapshot()[0].1, "Demo Document 1 *");
+
+        assert!(!app.close_tab_by_id(id), "dirty close is vetoed by default");
+        assert!(app.state().tab(id).is_some());
+        assert!(app.status().contains("Unsaved changes"), "{}", app.status());
+
+        app.set_close_policy(UiClosePolicy::DiscardDirty);
+        assert!(app.close_tab_by_id(id));
+        assert!(app.state().is_empty());
+    }
+
+    #[test]
+    fn per_tab_scroll_offset_is_saved_and_restored_on_switch() {
+        let mut app = PdfxiApp::new();
+        let a = app.open_demo_tab();
+        app.scroll_x = 12.0;
+        app.scroll_y = 345.0;
+
+        let b = app.open_demo_tab();
+        // Opening b saved a's scroll and started b at the top.
+        assert_eq!(
+            app.state().tab(a).map(|tab| tab.scroll_offset()),
+            Some(CanvasPoint::new(12.0, 345.0))
+        );
+        assert_eq!(app.scroll_offset(), CanvasPoint::new(0.0, 0.0));
+
+        app.scroll_x = 4.0;
+        app.scroll_y = 50.0;
+        app.activate_tab(a);
+        assert_eq!(app.scroll_offset(), CanvasPoint::new(12.0, 345.0));
+        assert_eq!(
+            app.state().tab(b).map(|tab| tab.scroll_offset()),
+            Some(CanvasPoint::new(4.0, 50.0))
+        );
+
+        app.scroll_y = 700.0;
+        app.activate_tab(b);
+        assert_eq!(app.scroll_offset(), CanvasPoint::new(4.0, 50.0));
+        assert_eq!(
+            app.state().tab(a).map(|tab| tab.scroll_offset()),
+            Some(CanvasPoint::new(12.0, 700.0))
+        );
+    }
+
+    #[test]
+    fn open_document_dedups_and_restores_view_via_ui() {
+        let mut app = PdfxiApp::new();
+        let first = app.open_document(Path::new(r"C:\docs\a.pdf"));
+        let id = match first {
+            OpenOutcome::Opened { id } => id,
+            other => panic!("unexpected outcome: {other:?}"),
+        };
+        app.scroll_y = 222.0;
+        let again = app.open_document(Path::new("c:/docs/A.PDF"));
+        assert_eq!(again, OpenOutcome::Focused { id });
+        assert_eq!(app.state().tab_count(), 1);
+        assert_eq!(app.scroll_offset(), CanvasPoint::new(0.0, 222.0));
+        assert!(app.status().contains("Focused existing tab"));
+    }
+
+    #[test]
+    fn reorder_and_close_others_via_ui_helpers() {
+        let mut app = PdfxiApp::new();
+        let a = app.open_demo_tab();
+        let b = app.open_demo_tab();
+        let c = app.open_demo_tab();
+        assert!(app.reorder_tab(c, 0));
+        let order: Vec<TabId> = app
+            .tab_strip_snapshot()
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(order, vec![c, a, b]);
+        assert!(!app.reorder_tab(c, 9), "out-of-range reorder is rejected");
+
+        app.activate_tab(b);
+        let outcome = app.close_other_tabs();
+        assert_eq!(outcome.closed, vec![c, a]);
+        assert!(outcome.kept.is_empty());
+        let order: Vec<TabId> = app
+            .tab_strip_snapshot()
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(order, vec![b]);
+        assert!(app.status().contains("Closed 2 other tab(s)"));
+    }
+
+    #[test]
+    fn close_others_policy_keeps_dirty_tabs() {
+        let mut app = PdfxiApp::new();
+        let dirty = app.open_demo_tab();
+        let clean = app.open_demo_tab();
+        let active = app.open_demo_tab();
+        app.state.tab_mut(dirty).expect("dirty tab").set_dirty(true);
+
+        // RequireClean (default) vetoes the dirty tab exactly like Ctrl+W does.
+        let outcome = app.close_other_tabs();
+        assert_eq!(outcome.closed, vec![clean]);
+        assert_eq!(outcome.kept, vec![dirty]);
+        assert_eq!(app.state().active_tab_id(), Some(active));
+        assert_eq!(app.state().tab_count(), 2);
+        assert!(app.state().tab(dirty).is_some(), "dirty tab retained");
+        assert!(
+            app.status().contains("kept 1 with unsaved changes"),
+            "{}",
+            app.status()
+        );
+
+        // Opting in to discard closes the retained tab on a later request.
+        app.set_close_policy(UiClosePolicy::DiscardDirty);
+        let outcome = app.close_other_tabs();
+        assert_eq!(outcome.closed, vec![dirty]);
+        assert!(outcome.kept.is_empty());
+        assert_eq!(app.state().tab_count(), 1);
+        assert_eq!(app.state().active_tab_id(), Some(active));
+    }
+
+    #[test]
+    fn close_button_targets_a_specific_tab_without_activating_it() {
+        let mut app = PdfxiApp::new();
+        let a = app.open_demo_tab();
+        let b = app.open_demo_tab();
+        assert_eq!(app.state().active_tab_id(), Some(b));
+
+        assert!(app.close_tab_by_id(a));
+        assert_eq!(app.state().active_tab_id(), Some(b));
+        assert_eq!(app.state().tab_count(), 1);
+        assert_eq!(app.status(), format!("Closed tab {a}"));
     }
 }

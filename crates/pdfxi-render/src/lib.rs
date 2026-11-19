@@ -51,6 +51,16 @@ pub mod thumbnail;
 /// platform printer adapter is a later concern.
 pub mod print;
 
+/// Dependency-free page-image export: PNG, baseline JPEG, and uncompressed
+/// multi-page TIFF with DPI and page-fit controls. Reuses the print pipeline for
+/// page selection and cancellation, and adds pure-Rust encoders.
+pub mod export;
+
+pub use export::{
+    AlphaPolicy, ColorMode, DEFAULT_EXPORT_DPI, ExportError, ExportOptions, ExportedImage, FitMode,
+    ImageFormat, MAX_EXPORT_DPI, encode_image, export_pages,
+};
+
 pub use print::{
     Duplex, Margins, Orientation, PageScaleMode, PageSelection, Paper, PrintError, PrintJob,
     PrintPage, PrintSettings, PrintSpool, PrintSpooler, SpoolSummary, parse_page_ranges,

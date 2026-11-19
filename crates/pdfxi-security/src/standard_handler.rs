@@ -16,6 +16,15 @@
 //!    the file key and the effective [`Permissions`].
 //! 3. Decrypt (or encrypt) individual streams with
 //!    [`Decryptor::decrypt_object`] / [`Decryptor::encrypt_object`].
+//!    For AES streams a caller-supplied IV can be passed to
+//!    [`Decryptor::encrypt_object_with_iv`]; a fresh random IV per stream is
+//!    required by ISO 32000-2 for revisions 5 and 6 (AESV3).
+//!
+//! For AES-256 (revisions 5 and 6) the 32-byte file key is used directly as
+//! every object's key; per-stream isolation is provided by the IV, which is
+//! stored as the first 16 bytes of each encrypted stream. For AES-128 the
+//! per-object key is MD5(file key || object number || generation || "sAlT").
+//! PKCS#7 padding is applied to every AES stream.
 //!
 //! The free functions at the bottom of this module compute the `/O`, `/U`,
 //! `/UE`, `/OE`, and `/Perms` dictionary values so that test fixtures (and a
@@ -58,9 +67,11 @@ fn trunc_127(password: &[u8]) -> &[u8] {
 /// The values from an `/Encrypt` dictionary needed by the standard handler.
 ///
 /// All byte fields are the raw decoded strings from the dictionary; this crate
-/// does not parse PDF syntax, so callers supply them directly. No field is ever
-/// included in a log message or error value.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// does not parse PDF syntax, so callers supply them directly. Every byte field
+/// (including `/O`, `/U`, `/OE`, `/UE`, `/Perms`, and the document ID) is
+/// redacted in [`std::fmt::Debug`] output; only the non-secret numeric and
+/// boolean fields are shown. No field value is ever included in an error value.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SecurityParameters {
     /// Security handler revision (`/R`): 2, 3, 4, 5, or 6.
     pub revision: u8,
@@ -87,6 +98,27 @@ pub struct SecurityParameters {
     /// For V4, whether the stream crypt filter selects AESV2 rather than V2
     /// (RC4). Ignored for V5, which always uses AESV3.
     pub aes_streams: bool,
+}
+
+impl std::fmt::Debug for SecurityParameters {
+    /// Redacts every byte field so that a diagnostic print cannot leak the
+    /// password-derived dictionary entries or the document ID.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityParameters")
+            .field("revision", &self.revision)
+            .field("version", &self.version)
+            .field("key_length_bits", &self.key_length_bits)
+            .field("o", &"<redacted>")
+            .field("u", &"<redacted>")
+            .field("p", &self.p)
+            .field("id_first", &"<redacted>")
+            .field("encrypt_metadata", &self.encrypt_metadata)
+            .field("ue", &"<redacted>")
+            .field("oe", &"<redacted>")
+            .field("perms", &"<redacted>")
+            .field("aes_streams", &self.aes_streams)
+            .finish()
+    }
 }
 
 impl SecurityParameters {
@@ -347,9 +379,19 @@ fn verify_perms(file_key: &[u8], params: &SecurityParameters) -> Result<()> {
 /// The user password is tried first, then the owner password. Both checks use
 /// constant-time comparisons, and a failed authentication returns
 /// [`SecurityError::WrongPassword`] regardless of which entry failed.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct StandardSecurityHandler {
     params: SecurityParameters,
+}
+
+impl std::fmt::Debug for StandardSecurityHandler {
+    /// Delegates to the redacting [`SecurityParameters`] implementation so no
+    /// dictionary byte value can appear in a diagnostic print.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StandardSecurityHandler")
+            .field("params", &self.params)
+            .finish()
+    }
 }
 
 impl StandardSecurityHandler {
@@ -499,8 +541,13 @@ impl Decryptor {
         Ok(digest[..length].to_vec())
     }
 
-    /// Deterministic IV used when *encrypting* an AES stream. It is prepended
-    /// to the ciphertext; readers use the stored bytes directly.
+    /// Deterministic fallback IV used by [`Self::encrypt_object`].
+    ///
+    /// The value is derived from the (secret) file key, the object number, and
+    /// the generation, so distinct objects receive distinct IVs. It is *not* a
+    /// substitute for the fresh random IV mandated by ISO 32000-2; callers that
+    /// re-encrypt the same object should pass a random IV to
+    /// [`Self::encrypt_object_with_iv`] instead.
     fn aes_stream_iv(&self, object_number: u32, generation: u16) -> Result<[u8; 16]> {
         let mut input = Vec::with_capacity(self.file_key.len() + 9);
         input.extend_from_slice(&self.file_key);
@@ -536,20 +583,47 @@ impl Decryptor {
     }
 
     /// Encrypt a stream or string belonging to the given object and generation.
+    ///
+    /// This convenience method uses a deterministic IV derived from the file
+    /// key, object number, and generation. It is reproducible and useful for
+    /// fixtures.
+    /// Production writers should prefer [`Self::encrypt_object_with_iv`] with a
+    /// fresh random IV: ISO 32000-2 §7.6.3.3 requires a distinct, unpredictable
+    /// IV for every AES stream, including all revision-5 and revision-6
+    /// streams. The IV is prepended to the returned ciphertext.
     pub fn encrypt_object(
         &self,
         object_number: u32,
         generation: u16,
         plaintext: &[u8],
     ) -> Result<Vec<u8>> {
+        let iv = self.aes_stream_iv(object_number, generation)?;
+        self.encrypt_object_with_iv(object_number, generation, plaintext, &iv)
+    }
+
+    /// Encrypt a stream with an explicit initialization vector.
+    ///
+    /// `iv` is prepended to the returned ciphertext so that
+    /// [`Self::decrypt_object`] can recover it. Callers should generate a fresh
+    /// random 16-byte IV for each AES stream; this crate has no OS-entropy
+    /// dependency and deliberately does not invent one. For RC4 the IV is
+    /// ignored (RC4 is a stream cipher and uses no IV); for an unencrypted
+    /// document the plaintext is returned unchanged.
+    pub fn encrypt_object_with_iv(
+        &self,
+        object_number: u32,
+        generation: u16,
+        plaintext: &[u8],
+        iv: &[u8; 16],
+    ) -> Result<Vec<u8>> {
         let key = self.object_key(object_number, generation)?;
         match self.method() {
             EncryptionMethod::None => Ok(plaintext.to_vec()),
             EncryptionMethod::Rc4_40 | EncryptionMethod::Rc4_128 => Ok(rc4::rc4(&key, plaintext)),
             EncryptionMethod::Aes128 | EncryptionMethod::Aes256 => {
-                let iv = self.aes_stream_iv(object_number, generation)?;
-                let mut output = iv.to_vec();
-                output.extend_from_slice(&aes::encrypt_cbc(&key, &iv, plaintext)?);
+                let mut output = Vec::with_capacity(iv.len() + plaintext.len() + 16);
+                output.extend_from_slice(iv);
+                output.extend_from_slice(&aes::encrypt_cbc(&key, iv, plaintext)?);
                 Ok(output)
             }
         }
@@ -667,6 +741,19 @@ mod tests {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
+    fn from_hex(text: &str) -> Vec<u8> {
+        let bytes = text.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len() / 2);
+        let mut index = 0;
+        while index < bytes.len() {
+            let hi = (bytes[index] as char).to_digit(16).expect("hex digit");
+            let lo = (bytes[index + 1] as char).to_digit(16).expect("hex digit");
+            out.push(((hi << 4) | lo) as u8);
+            index += 2;
+        }
+        out
+    }
+
     fn r2_params() -> SecurityParameters {
         // A revision-2 (RC4-40) fixture built with this crate's writer helpers.
         let user = b"user";
@@ -714,7 +801,7 @@ mod tests {
         params
     }
 
-    fn r5_r6_params(revision: u8) -> SecurityParameters {
+    fn r5_r6_params_with(revision: u8, encrypt_metadata: bool, p: u32) -> SecurityParameters {
         let user = b"open-sesame";
         let owner = b"owner-secret";
         let file_key = [0x5Au8; 32];
@@ -726,21 +813,25 @@ mod tests {
             compute_u_and_ue(revision, user, &file_key, &u_salt, &u_key_salt).expect("U/UE");
         let (o, oe) =
             compute_o_and_oe(revision, owner, &u, &file_key, &o_salt, &o_key_salt).expect("O/OE");
-        let perms = compute_perms(&file_key, 0xffff_f0d4, true, &[1, 2, 3, 4]).expect("Perms");
+        let perms = compute_perms(&file_key, p, encrypt_metadata, &[1, 2, 3, 4]).expect("Perms");
         SecurityParameters {
             revision,
             version: 5,
             key_length_bits: 256,
             o: o.to_vec(),
             u: u.to_vec(),
-            p: 0xffff_f0d4,
+            p,
             id_first: ID.to_vec(),
-            encrypt_metadata: true,
+            encrypt_metadata,
             ue: ue.to_vec(),
             oe: oe.to_vec(),
             perms: perms.to_vec(),
             aes_streams: false,
         }
+    }
+
+    fn r5_r6_params(revision: u8) -> SecurityParameters {
+        r5_r6_params_with(revision, true, 0xffff_f0d4)
     }
 
     #[test]
@@ -951,5 +1042,401 @@ mod tests {
         let mut params = r5_r6_params(5);
         params.ue.clear();
         assert!(StandardSecurityHandler::new(params).is_err());
+    }
+
+    #[test]
+    fn revision_5_aes256_object_round_trip_for_user_and_owner() {
+        let handler = StandardSecurityHandler::new(r5_r6_params(5)).expect("handler");
+        for password in [b"open-sesame".as_slice(), b"owner-secret".as_slice()] {
+            let session = handler.authenticate(password).expect("auth");
+            assert_eq!(session.method(), EncryptionMethod::Aes256);
+            let iv = [0x33u8; 16];
+            let payload = b"revision 5 AES-256 stream payload";
+            let ciphertext = session
+                .encrypt_object_with_iv(12, 3, payload, &iv)
+                .expect("encrypt");
+            assert_eq!(&ciphertext[..16], &iv);
+            assert_eq!((ciphertext.len() - 16) % 16, 0);
+            assert_eq!(
+                session.decrypt_object(12, 3, &ciphertext).expect("decrypt"),
+                payload.to_vec()
+            );
+        }
+    }
+
+    #[test]
+    fn revision_6_aes256_object_round_trip_for_user_and_owner() {
+        let handler = StandardSecurityHandler::new(r5_r6_params(6)).expect("handler");
+        for password in [b"open-sesame".as_slice(), b"owner-secret".as_slice()] {
+            let session = handler.authenticate(password).expect("auth");
+            assert_eq!(session.method(), EncryptionMethod::Aes256);
+            let iv = [0x77u8; 16];
+            for (object, generation) in [(1u32, 0u16), (2, 0), (1, 1)] {
+                let plaintext = b"revision 6 hardened AES-256 payload";
+                let ciphertext = session
+                    .encrypt_object_with_iv(object, generation, plaintext, &iv)
+                    .expect("encrypt");
+                assert_eq!(
+                    session
+                        .decrypt_object(object, generation, &ciphertext)
+                        .expect("decrypt"),
+                    plaintext.to_vec()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn revision_5_and_6_reject_wrong_passwords() {
+        for revision in [5u8, 6u8] {
+            let handler = StandardSecurityHandler::new(r5_r6_params(revision)).expect("handler");
+            for candidate in [
+                b"".as_slice(),
+                b"open-sesam",
+                b"owner-secre",
+                b"OPEN-SESAME",
+                b"open-sesame!",
+            ] {
+                assert_eq!(
+                    handler.authenticate(candidate).err(),
+                    Some(SecurityError::WrongPassword),
+                    "revision {revision} accepted a wrong password"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn aes256_object_key_is_file_key_and_isolation_comes_from_iv() {
+        for revision in [5u8, 6u8] {
+            let session = StandardSecurityHandler::new(r5_r6_params(revision))
+                .expect("handler")
+                .authenticate(b"open-sesame")
+                .expect("auth");
+            // AESV3 uses the file key directly for every object; there is no
+            // per-object MD5/sAlT derivation. Object isolation comes from the
+            // IV stored in each stream instead.
+            let expected = vec![0x5Au8; 32];
+            assert_eq!(session.object_key(1, 0).expect("key"), expected);
+            assert_eq!(session.object_key(2, 7).expect("key"), expected);
+
+            let plaintext = b"identical plaintext in two streams";
+            let first = session
+                .encrypt_object_with_iv(1, 0, plaintext, &[0x11u8; 16])
+                .expect("encrypt first");
+            let second = session
+                .encrypt_object_with_iv(2, 0, plaintext, &[0x22u8; 16])
+                .expect("encrypt second");
+            assert_ne!(first, second);
+            assert_eq!(
+                session.decrypt_object(1, 0, &first).expect("decrypt first"),
+                plaintext.to_vec()
+            );
+            assert_eq!(
+                session
+                    .decrypt_object(2, 0, &second)
+                    .expect("decrypt second"),
+                plaintext.to_vec()
+            );
+        }
+    }
+
+    #[test]
+    fn tampered_perms_block_is_rejected_for_revisions_5_and_6() {
+        for revision in [5u8, 6u8] {
+            // Flipping a bit of the encrypted /Perms block breaks the "adb"
+            // marker after decryption.
+            let mut params = r5_r6_params(revision);
+            params.perms[15] ^= 0x01;
+            let handler = StandardSecurityHandler::new(params).expect("handler");
+            assert_eq!(
+                handler.authenticate(b"open-sesame").err(),
+                Some(SecurityError::WrongPassword)
+            );
+            assert_eq!(
+                handler.authenticate(b"owner-secret").err(),
+                Some(SecurityError::WrongPassword)
+            );
+
+            // Changing /P without recomputing /Perms breaks the stored-P check.
+            let mut params = r5_r6_params(revision);
+            params.p ^= 0x04;
+            assert_eq!(
+                StandardSecurityHandler::new(params)
+                    .expect("handler")
+                    .authenticate(b"open-sesame")
+                    .err(),
+                Some(SecurityError::WrongPassword)
+            );
+        }
+    }
+
+    #[test]
+    fn aes256_object_pkcs7_padding_round_trip_for_many_lengths() {
+        for revision in [5u8, 6u8] {
+            let session = StandardSecurityHandler::new(r5_r6_params(revision))
+                .expect("handler")
+                .authenticate(b"open-sesame")
+                .expect("auth");
+            for length in [0usize, 1, 15, 16, 17, 31, 32, 33, 47, 64] {
+                let plaintext: Vec<u8> = (0..length).map(|index| (index % 251) as u8).collect();
+                let iv = [0x5Cu8; 16];
+                let ciphertext = session
+                    .encrypt_object_with_iv(4, 0, &plaintext, &iv)
+                    .expect("encrypt");
+                assert_eq!((ciphertext.len() - 16) % 16, 0);
+                assert!(ciphertext.len() >= 32);
+                assert_eq!(
+                    session.decrypt_object(4, 0, &ciphertext).expect("decrypt"),
+                    plaintext,
+                    "revision {revision} length {length}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn aes256_encrypt_with_distinct_ivs_produces_unique_ciphertexts() {
+        let session = StandardSecurityHandler::new(r5_r6_params(5))
+            .expect("handler")
+            .authenticate(b"open-sesame")
+            .expect("auth");
+        let ivs = [[1u8; 16], [2u8; 16], [3u8; 16], [4u8; 16]];
+        let mut ciphertexts = Vec::new();
+        for iv in ivs {
+            let ciphertext = session
+                .encrypt_object_with_iv(7, 0, b"repeated payload", &iv)
+                .expect("encrypt");
+            assert_eq!(&ciphertext[..16], &iv, "the IV must be stored verbatim");
+            assert!(
+                ciphertexts
+                    .iter()
+                    .all(|previous: &Vec<u8>| previous != &ciphertext)
+            );
+            ciphertexts.push(ciphertext);
+        }
+        // The deterministic convenience path still yields distinct IVs for
+        // distinct objects, but always emits the object's derived IV.
+        let derived_a = session.encrypt_object(1, 0, b"payload").expect("encrypt");
+        let derived_b = session.encrypt_object(2, 0, b"payload").expect("encrypt");
+        assert_ne!(&derived_a[..16], &derived_b[..16]);
+        assert_eq!(&derived_a[..16], &session.aes_stream_iv(1, 0).expect("iv"));
+    }
+
+    #[test]
+    fn encrypt_metadata_false_is_recorded_and_verified_in_perms() {
+        for revision in [5u8, 6u8] {
+            let params = r5_r6_params_with(revision, false, 0xffff_f0d4);
+            let session = StandardSecurityHandler::new(params)
+                .expect("handler")
+                .authenticate(b"open-sesame")
+                .expect("auth");
+            let ciphertext = session
+                .encrypt_object_with_iv(1, 0, b"metadata excluded", &[0x44u8; 16])
+                .expect("encrypt");
+            assert_eq!(
+                session.decrypt_object(1, 0, &ciphertext).expect("decrypt"),
+                b"metadata excluded".to_vec()
+            );
+
+            // A dictionary that claims EncryptMetadata=true while /Perms
+            // records 'F' must be rejected for both passwords.
+            let mut wrong = r5_r6_params_with(revision, false, 0xffff_f0d4);
+            wrong.encrypt_metadata = true;
+            let handler = StandardSecurityHandler::new(wrong).expect("handler");
+            assert_eq!(
+                handler.authenticate(b"open-sesame").err(),
+                Some(SecurityError::WrongPassword)
+            );
+            assert_eq!(
+                handler.authenticate(b"owner-secret").err(),
+                Some(SecurityError::WrongPassword)
+            );
+        }
+    }
+
+    #[test]
+    fn revision_5_fixed_vector_decrypt_matches_dotnet_oracle() {
+        // Independent oracle: .NET System.Security.Cryptography.Aes,
+        // CBC/PKCS7, key = 0x5A repeated 32 times, IV = 01 02 ... 10,
+        // plaintext = ASCII "PDFXI AES-256 fixed vector!". The blob is
+        // IV (16 bytes) || ciphertext (32 bytes).
+        let blob = from_hex(
+            "0102030405060708090a0b0c0d0e0f10\
+             5253bc88496b58583765c97a86ed55\
+             0e1bfbbfaae7082aeabcc8d8be4621815b",
+        );
+        let session = StandardSecurityHandler::new(r5_r6_params(5))
+            .expect("handler")
+            .authenticate(b"open-sesame")
+            .expect("auth");
+        let plaintext = session
+            .decrypt_object(9, 0, &blob)
+            .expect("decrypt fixed vector");
+        assert_eq!(plaintext, b"PDFXI AES-256 fixed vector!".to_vec());
+
+        let mut iv = [0u8; 16];
+        iv.copy_from_slice(&blob[..16]);
+        let reencrypted = session
+            .encrypt_object_with_iv(9, 0, &plaintext, &iv)
+            .expect("encrypt");
+        assert_eq!(reencrypted, blob);
+    }
+
+    #[test]
+    fn malformed_key_lengths_are_rejected() {
+        for revision in [5u8, 6u8] {
+            let mut params = r5_r6_params(revision);
+            params.key_length_bits = 128;
+            assert_eq!(
+                StandardSecurityHandler::new(params).err(),
+                Some(SecurityError::InvalidKeyLength(128))
+            );
+            let mut params = r5_r6_params(revision);
+            params.ue = vec![0u8; 16];
+            assert!(matches!(
+                StandardSecurityHandler::new(params),
+                Err(SecurityError::Configuration(_))
+            ));
+        }
+        let mut r2 = r2_params();
+        r2.key_length_bits = 128;
+        assert_eq!(
+            StandardSecurityHandler::new(r2).err(),
+            Some(SecurityError::InvalidKeyLength(128))
+        );
+        let mut r4 = r4_params(false);
+        r4.key_length_bits = 129;
+        assert_eq!(
+            StandardSecurityHandler::new(r4).err(),
+            Some(SecurityError::InvalidKeyLength(129))
+        );
+    }
+
+    #[test]
+    fn encrypt_metadata_false_changes_revision_4_file_key() {
+        let user = b"user-password";
+        let owner = b"owner-password";
+        let mut params = SecurityParameters {
+            revision: 4,
+            version: 4,
+            key_length_bits: 128,
+            o: compute_o_value(owner, user, 4, 128).expect("O"),
+            u: vec![0u8; 32],
+            p: 0xffff_f0c0,
+            id_first: ID.to_vec(),
+            encrypt_metadata: false,
+            ue: Vec::new(),
+            oe: Vec::new(),
+            perms: Vec::new(),
+            aes_streams: false,
+        };
+        let key = compute_file_key(user, &params).expect("file key");
+        params.u = compute_u_value(&key, &params).expect("U");
+        let session = StandardSecurityHandler::new(params.clone())
+            .expect("handler")
+            .authenticate(user)
+            .expect("auth");
+        assert_eq!(session.method(), EncryptionMethod::Rc4_128);
+
+        // The 0xFF padding is part of the revision-4 file key derivation, so
+        // flipping the flag invalidates the stored /U value.
+        params.encrypt_metadata = true;
+        assert_eq!(
+            StandardSecurityHandler::new(params)
+                .expect("handler")
+                .authenticate(user)
+                .err(),
+            Some(SecurityError::WrongPassword)
+        );
+    }
+
+    #[test]
+    fn revision_6_independent_known_answer_vector_authenticates() {
+        // Independent ISO 32000-2 revision 6 vector generated with .NET
+        // System.Security.Cryptography (SHA-256/384/512, AES-128-CBC/NoPadding
+        // for Algorithm 2.B, AES-256-CBC/NoPadding for UE/OE, AES-256-ECB for
+        // Perms). This test builds SecurityParameters from literal bytes and
+        // never calls this crate's fixture builders, so it is not circular.
+        // Exact inputs and provenance are in docs/evidence/security/T-0061.md.
+        let params = SecurityParameters {
+            revision: 6,
+            version: 5,
+            key_length_bits: 256,
+            o: from_hex(
+                "aa016afc1f4e41eb76a48b751d629051250729776dddb7bdb4b979b0d927ef7b\
+                 c1c2c3c4c5c6c7c8d1d2d3d4d5d6d7d8",
+            ),
+            u: from_hex(
+                "92ea6b87f138e443ab74862314594bac4af95908dfd9aa7b0367f23fbcd78165\
+                 a1a2a3a4a5a6a7a8b1b2b3b4b5b6b7b8",
+            ),
+            p: 0xffff_f0c0,
+            id_first: ID.to_vec(),
+            encrypt_metadata: true,
+            ue: from_hex("679576aa8327ab15fd49602f7b087d802500e6307b2b99ce134074d7324969eb"),
+            oe: from_hex("862ee8029ae32fdde6ea0040c59ed420504811f04a069c4a7f4f11ab67d4db07"),
+            perms: from_hex("1d51ca26471ad76a7a113862555e1fd1"),
+            aes_streams: false,
+        };
+
+        // Direct Algorithm 2.B known answer: the seed is SHA-256(user password
+        // || U validation salt) computed by .NET. The crate must hash it to the
+        // independent U validation prefix using its own Algorithm 2.B only.
+        let seed = from_hex("da3db03777a35ff354523e0900c6c7d9032c4feb5a334bb47361c19965779711");
+        let digest = algorithm_2b(&seed, b"iso6-user-password", &[]).expect("Algorithm 2.B");
+        assert_eq!(
+            hex(&digest),
+            "92ea6b87f138e443ab74862314594bac4af95908dfd9aa7b0367f23fbcd78165"
+        );
+
+        // Authenticating both roles validates /U, /UE, /O, /OE and /Perms
+        // against values produced entirely outside this crate.
+        let handler = StandardSecurityHandler::new(params).expect("handler");
+        let user = handler
+            .authenticate(b"iso6-user-password")
+            .expect("user password");
+        assert_eq!(user.method(), EncryptionMethod::Aes256);
+        assert_eq!(user.permissions().role(), PasswordRole::User);
+        assert_eq!(
+            user.permissions().bits(),
+            Permission::from_bits_truncated(0xffff_f0c0)
+        );
+        let owner = handler
+            .authenticate(b"iso6-owner-password")
+            .expect("owner password");
+        assert_eq!(owner.permissions().role(), PasswordRole::Owner);
+        assert_eq!(
+            handler.authenticate(b"iso6-user-password!").err(),
+            Some(SecurityError::WrongPassword)
+        );
+    }
+
+    #[test]
+    fn debug_redacts_dictionary_byte_fields() {
+        let params = r5_r6_params(6);
+        let values = [
+            hex(&params.o),
+            hex(&params.u),
+            hex(&params.ue),
+            hex(&params.oe),
+            hex(&params.perms),
+            hex(&params.id_first),
+        ];
+        let rendered = format!("{params:?}");
+        assert!(rendered.contains("<redacted>"));
+        for value in &values {
+            assert!(!rendered.contains(value), "Debug leaked a byte field");
+        }
+
+        let handler = StandardSecurityHandler::new(params).expect("handler");
+        let handler_rendered = format!("{handler:?}");
+        assert!(handler_rendered.contains("<redacted>"));
+        for value in &values {
+            assert!(
+                !handler_rendered.contains(value),
+                "handler Debug leaked a byte field"
+            );
+        }
     }
 }

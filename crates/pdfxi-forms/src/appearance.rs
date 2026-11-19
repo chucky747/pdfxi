@@ -516,6 +516,16 @@ fn fmt_num(value: f32) -> String {
     if text.is_empty() { "0" } else { text }.to_owned()
 }
 
+/// Formats a number exactly as appearance content streams do.
+///
+/// Flattening uses this to emit coordinate transforms that are byte-for-byte
+/// consistent with the numeric literals produced by [`build_appearance`].
+/// Non-finite values become `0`, values are rounded to two decimals, and
+/// trailing zeroes are removed.
+pub fn format_number(value: f32) -> String {
+    fmt_num(value)
+}
+
 /// Escapes one byte as a three-digit octal PDF literal escape.
 fn push_octal(out: &mut String, byte: u8) {
     out.push('\\');
