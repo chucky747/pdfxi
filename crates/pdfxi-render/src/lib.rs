@@ -24,6 +24,13 @@
 //! instance with the same process-wide mutex discipline as rasterization. The
 //! conversion helpers live in a private, native-free module so they can be
 //! exercised with synthetic characters in default builds.
+//!
+//! The [`mod@print`] module turns any [`Renderer`] into an ordered list of print
+//! rasters. It validates job settings (page selection, copies, scale, paper,
+//! margins), parses 1-based page ranges such as `1-3,5,7-`, honours
+//! cancellation, reports progress, and emits a stable [`SpoolSummary`]. It is
+//! pure Rust and produces rasters only; sending them to a platform printer is a
+//! later adapter.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -38,6 +45,17 @@ pub use pdfium_backend::PdfiumRenderer;
 /// Dependency-free page-thumbnail generation and LRU caching on top of the
 /// [`Renderer`] contract.
 pub mod thumbnail;
+
+/// Dependency-free print raster pipeline: page selection, job settings, page
+/// ranges, and cancellation-aware raster spooling. Produces rasters only; a
+/// platform printer adapter is a later concern.
+pub mod print;
+
+pub use print::{
+    Duplex, Margins, Orientation, PageScaleMode, PageSelection, Paper, PrintError, PrintJob,
+    PrintPage, PrintSettings, PrintSpool, PrintSpooler, SpoolSummary, parse_page_ranges,
+    selection_from_ranges,
+};
 
 /// Backend-agnostic conversion of per-character text runs into `pdfxi_text`
 /// pages. Private to this crate: the PDFium backend consumes it, and its mock

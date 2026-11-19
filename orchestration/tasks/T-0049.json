@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-render --features pdfium",
     "id":  "T-0049",
-    "evidence":  "",
+    "evidence":  "docs/evidence/render/T-0049.md",
     "owns":  [
                  "crates/pdfxi-render/**",
                  "orchestration/feature-updates/T-0049.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0021",
                        "T-0032"

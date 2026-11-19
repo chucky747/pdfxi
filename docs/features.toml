@@ -1,31 +1,59 @@
 [[feature]]
-docs = "crates/pdfxi-render/src/pdfium_backend.rs"
+docs = [
+    "crates/pdfxi-render/src/print.rs",
+    "crates/pdfxi-render/src/lib.rs",
+]
 domain = "View & Navigate"
-evidence = 'cargo test -p pdfxi-render --features pdfium (CARGO_TARGET_DIR=target/lanes/render, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 5 unit passed + 4 integration passed, 0 failed, EXIT=0. cargo test -p pdfxi-render (default): 5 unit passed, 0 failed, EXIT=0. cargo fmt -p pdfxi-render -- --check: EXIT=0. cargo clippy -p pdfxi-render --all-targets --features pdfium -- -D warnings: EXIT=0. Installed PDFium FileVersion=160.0.8165.0 (pdfium-render 0.9.5 default pdfium_8125 bindings).'
-id = "VIEW-001"
-notes = '''
-Added an optional `pdfium` feature and optional pdfium-render 0.9.5 dependency;
-default builds stay dependency-light (`default = []`) and compile the backend
-out entirely. PdfiumRenderer binds the native library from PDFIUM_PATH, then
-%LOCALAPPDATA%\pdfxi\pdfium\bin\pdfium.dll, the current directory, and finally
-the system search path. It loads a document from bytes or a file, implements
-Renderer::render_page/page_count, and returns tightly packed RGBA at the
-requested scale (1.0 == 72 DPI) via PdfRenderConfig::scale_page_by_factor.
-PDFium is not thread-safe, so one process-wide Pdfium instance is held behind a
-Mutex and that lock is kept for the whole load/get-page/render/copy sequence;
-a documented bounded pool of one. Invalid scale, out-of-range page, cancelled
-tokens, missing files, and malformed documents all return structured
-RenderError variants without panicking. Progress is reported as work advances.
-This is the backend POC only: app tile/canvas wiring, printing, and golden SSIM
-comparison remain future tasks, hence in-progress.
+evidence = '''
+CARGO_TARGET_DIR=target/lanes/render, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll.
+cargo test -p pdfxi-render: 42 unit passed + 0 integration (0 tests in 3 feature-gated harnesses) + 0 doc tests, 0 failed, EXIT=0.
+cargo test -p pdfxi-render --features pdfium: 42 unit passed + 12 integration passed (pdfium_backend 4, pdfium_text 6, thumbnail_pdfium 2) + 0 doc tests, 0 failed, EXIT=0.
+cargo fmt -p pdfxi-render -- --check: EXIT=0.
+cargo clippy -p pdfxi-render --all-targets --all-features -- -D warnings: EXIT=0.
+cargo doc -p pdfxi-render --no-deps with RUSTDOCFLAGS=-D warnings: EXIT=0.
 '''
+id = "VIEW-001"
+notes = """
+T-0049 adds a dependency-free `print` module to pdfxi-render. It defines a
+validated `PrintSettings` job model (page selection: all/single/inclusive
+range/explicit list; copies; fit/actual/custom-percent scale; orientation;
+duplex; named paper; margins; target DPI) with structured `PrintError`
+variants. `parse_page_ranges` parses 1-based expressions such as "1-3,5,7-",
+supports open spans, suppresses duplicates, sorts results, and rejects
+malformed/out-of-range/zero input with stable errors. `PrintJob` resolves a
+selection against a page count into a sorted, deduplicated, copy-expanded
+(page-major) list; `PrintJob::from_pages` accepts already-parsed zero-based
+indices. `PrintSpooler::spool` renders through `&dyn Renderer` at the chosen
+scale (measuring once at scale 1.0 for Fit), checks cancellation before the
+first page and between pages, reports whole-raster progress, and returns
+`PrintPage { page, width_px, height_px, rgba, dpi }` rasters plus a stable
+`SpoolSummary { pages, first_page, last_page, total_pixels }`.
+
+This produces rasters only; handing them to a platform printer is explicitly a
+later adapter and is why VIEW-001 remains in-progress. All public items have
+rustdoc, the crate denies missing docs and forbids unsafe code, and non-test
+code uses no unwrap/expect/panic.
+"""
 priority = "P0"
 status = "in-progress"
 tests = [
-    "tests/pdfium_backend.rs::renders_minimal_pdf_page_zero_at_scale_one",
-    "tests/pdfium_backend.rs::invalid_document_returns_structured_error",
-    "tests/pdfium_backend.rs::missing_file_returns_structured_error",
-    "tests/pdfium_backend.rs::invalid_inputs_are_rejected_without_panicking",
+    "print::tests::parse_handles_singles_closed_ranges_and_open_ranges",
+    "print::tests::parse_suppresses_duplicates_and_sorts",
+    "print::tests::parse_rejects_out_of_range_and_zero",
+    "print::tests::settings_validation_rejects_bad_fields",
+    "print::tests::out_of_range_selection_is_rejected",
+    "print::tests::empty_selection_is_rejected",
+    "print::tests::explicit_list_is_sorted_deduplicated_and_page_major_with_copies",
+    "print::tests::range_and_all_selections_resolve_to_zero_based_pages",
+    "print::tests::actual_percent_and_fit_scaling_produce_expected_dimensions",
+    "print::tests::orientation_and_margins_change_fit_dimensions",
+    "print::tests::dpi_scales_raster_dimensions",
+    "print::tests::cancellation_before_spool_does_not_render",
+    "print::tests::cancellation_between_pages_stops_after_first_page",
+    "print::tests::progress_is_monotone_and_complete",
+    "print::tests::summary_is_stable_and_counts_copies_and_pixels",
+    "print::tests::deterministic_order_and_copy_expansion_are_byte_stable",
+    "print::tests::zero_sized_fit_measurement_is_rejected",
 ]
 title = "Open and print PDF documents"
 
