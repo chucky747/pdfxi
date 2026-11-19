@@ -1,12 +1,12 @@
 {
     "acceptance":  "cargo test -p pdfxi-cli --features pdfium",
     "id":  "T-0025",
-    "evidence":  "",
+    "evidence":  "docs/evidence/core/T-0025.md",
     "owns":  [
                  "crates/pdfxi-cli/**",
                  "orchestration/feature-updates/T-0025.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0010",
                        "T-0021"

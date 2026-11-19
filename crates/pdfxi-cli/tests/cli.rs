@@ -212,8 +212,250 @@ fn text_filtered_stream_fails() {
     let pdf = TempPdf::new(&one_page_pdf("/Filter /FlateDecode", "BT (Hello) Tj ET"));
     let output = run(&["text", pdf.arg()]);
     assert!(!output.status.success(), "filtered stream should fail");
+    // The core now decodes FlateDecode transparently, so a stream that merely
+    // declares the filter but carries plaintext reports a DEFLATE error. An
+    // unsupported filter still reports "filtered"; both mean no text is shown.
+    let message = stderr(&output);
     assert!(
-        stderr(&output).contains("filtered"),
+        message.contains("filtered") || message.to_ascii_lowercase().contains("deflate"),
+        "stderr: {message}"
+    );
+}
+
+/// A unique output path that removes its file when the test finishes.
+struct TempOut {
+    path: PathBuf,
+    display: String,
+}
+
+impl TempOut {
+    /// Choose a unique, not-yet-created path with the given extension.
+    fn new(extension: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let name = format!(
+            "pdfxi-cli-out-{}-{nanos}-{id}.{extension}",
+            std::process::id()
+        );
+        let path = std::env::temp_dir().join(name);
+        let display = path.to_string_lossy().into_owned();
+        Self { path, display }
+    }
+
+    /// Return the path as a command-line argument.
+    fn arg(&self) -> &str {
+        &self.display
+    }
+}
+
+impl Drop for TempOut {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Build an output path whose parent directory does not exist.
+#[cfg(feature = "pdfium")]
+fn unwritable_output_path() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "pdfxi-cli-no-such-dir-{}-{nanos}-{id}",
+        std::process::id()
+    ));
+    assert!(!dir.exists(), "fixture parent directory must not exist");
+    dir.join("out.png").to_string_lossy().into_owned()
+}
+
+/// Parse a binary P6 header, returning `(width, height, pixel_offset)`.
+#[cfg(feature = "pdfium")]
+fn parse_ppm_header(bytes: &[u8]) -> (usize, usize, usize) {
+    assert!(bytes.starts_with(b"P6\n"), "not a P6 PPM");
+    let rest = &bytes[3..];
+    let line_end = rest
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .expect("PPM dimension line");
+    let dims = std::str::from_utf8(&rest[..line_end]).expect("UTF-8 dimensions");
+    let mut fields = dims.split_whitespace();
+    let width: usize = fields.next().expect("PPM width").parse().expect("width");
+    let height: usize = fields.next().expect("PPM height").parse().expect("height");
+    assert!(rest[line_end + 1..].starts_with(b"255\n"), "PPM max value");
+    (width, height, 3 + line_end + 1 + 4)
+}
+
+/// Read width and height from a PNG IHDR chunk.
+#[cfg(feature = "pdfium")]
+fn png_dimensions(bytes: &[u8]) -> (usize, usize) {
+    assert_eq!(
+        &bytes[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+    );
+    assert_eq!(&bytes[8..12], &[0u8, 0, 0, 13], "IHDR length");
+    assert_eq!(&bytes[12..16], &b"IHDR"[..]);
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    (width as usize, height as usize)
+}
+
+#[cfg(not(feature = "pdfium"))]
+#[test]
+fn render_without_pdfium_reports_missing_feature() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let out = TempOut::new("png");
+    let output = run(&[
+        "render",
+        pdf.arg(),
+        "--page",
+        "0",
+        "--scale",
+        "1.0",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(!output.status.success(), "render must fail without pdfium");
+    assert!(
+        stderr(&output).contains("built without pdfium"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[cfg(feature = "pdfium")]
+#[test]
+fn render_minimal_pdf_to_ppm_and_png() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+
+    let ppm = TempOut::new("ppm");
+    let output = run(&[
+        "render",
+        pdf.arg(),
+        "--page",
+        "0",
+        "--scale",
+        "1.0",
+        "--out",
+        ppm.arg(),
+        "--format",
+        "ppm",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let ppm_bytes = fs::read(&ppm.path).expect("read PPM output");
+    let (ppm_width, ppm_height, pixel_offset) = parse_ppm_header(&ppm_bytes);
+    assert!(
+        ppm_width > 0 && ppm_height > 0,
+        "PPM dimensions must be positive"
+    );
+    assert!(
+        ppm_bytes.len() > pixel_offset,
+        "PPM must contain pixel bytes"
+    );
+    assert_eq!(
+        ppm_bytes.len(),
+        pixel_offset + ppm_width * ppm_height * 3,
+        "P6 payload must be width * height * 3 bytes"
+    );
+
+    let png = TempOut::new("png");
+    let output = run(&[
+        "render",
+        pdf.arg(),
+        "--page",
+        "0",
+        "--scale",
+        "1.0",
+        "--out",
+        png.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let png_bytes = fs::read(&png.path).expect("read PNG output");
+    let (png_width, png_height) = png_dimensions(&png_bytes);
+    assert_eq!((png_width, png_height), (ppm_width, ppm_height));
+    assert!(
+        png_bytes.len() > 8 + 12 + 13 + 12,
+        "PNG needs an IDAT chunk"
+    );
+    assert_eq!(
+        &png_bytes[png_bytes.len() - 8..png_bytes.len() - 4],
+        &b"IEND"[..],
+        "PNG must end with IEND"
+    );
+}
+
+#[cfg(feature = "pdfium")]
+#[test]
+fn render_rejects_invalid_page() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let out = TempOut::new("png");
+    let output = run(&[
+        "render",
+        pdf.arg(),
+        "--page",
+        "99",
+        "--scale",
+        "1.0",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(!output.status.success(), "out-of-range page must fail");
+    assert!(
+        stderr(&output).contains("out of range"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[cfg(feature = "pdfium")]
+#[test]
+fn render_rejects_invalid_scale() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    for scale in ["0", "-1", "NaN"] {
+        let out = TempOut::new("png");
+        let output = run(&[
+            "render",
+            pdf.arg(),
+            "--page",
+            "0",
+            "--scale",
+            scale,
+            "--out",
+            out.arg(),
+        ]);
+        assert!(!output.status.success(), "scale {scale} must fail");
+        assert!(
+            stderr(&output).contains("invalid scale"),
+            "stderr for scale {scale}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[cfg(feature = "pdfium")]
+#[test]
+fn render_rejects_unwritable_output_path() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let path = unwritable_output_path();
+    let output = run(&[
+        "render",
+        pdf.arg(),
+        "--page",
+        "0",
+        "--scale",
+        "1.0",
+        "--out",
+        &path,
+    ]);
+    assert!(!output.status.success(), "unwritable output must fail");
+    assert!(
+        stderr(&output).contains("failed to write"),
         "stderr: {}",
         stderr(&output)
     );

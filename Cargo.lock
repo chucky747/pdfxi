@@ -2452,6 +2452,7 @@ dependencies = [
  "anyhow",
  "clap",
  "pdfxi-core",
+ "pdfxi-render",
  "pdfxi-testkit",
  "serde",
  "serde_json",

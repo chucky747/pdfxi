@@ -16,8 +16,16 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 pdfxi-core = { path = "../pdfxi-core" }
+# Optional native renderer used only by `pdfxi render`. Default builds keep the
+# CLI free of PDFium and still compile the command as a clear error path.
+pdfxi-render = { path = "../pdfxi-render", optional = true }
 serde.workspace = true
 serde_json.workspace = true
+
+[features]
+default = []
+# Enable the `render` command's PDFium-backed rasterization.
+pdfium = ["dep:pdfxi-render", "pdfxi-render/pdfium"]
 
 [dev-dependencies]
 pdfxi-testkit = { path = "../pdfxi-testkit" }

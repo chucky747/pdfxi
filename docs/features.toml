@@ -1311,23 +1311,46 @@ tests = []
 title = "Sandboxed Acrobat-compatible JavaScript subset"
 
 [[feature]]
-docs = "crates/pdfxi-cli/src/main.rs"
+docs = [
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/src/image.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-core -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): pdfxi-cli 9 passed; pdfxi-core 24 passed; 0 failed. Real CLI invocation printed info, JSON and text for a generated one-page PDF."
+evidence = '''
+cargo test -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 10 integration passed, 0 failed, EXIT=0 (includes render_without_pdfium_reports_missing_feature).
+cargo test -p pdfxi-cli --features pdfium (CARGO_TARGET_DIR=target/lanes/core, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll): 12 unit + 13 integration passed, 0 failed, EXIT=0.
+cargo fmt -p pdfxi-cli -- --check: EXIT=0. cargo clippy -p pdfxi-cli --all-targets -- -D warnings: EXIT=0. cargo clippy -p pdfxi-cli --all-targets --features pdfium -- -D warnings: EXIT=0.
+External validation: `pdfxi render fixtures/minimal.pdf --page 0 --scale 1.0 --out <tmp>.png` produced a file decoded by .NET System.Drawing as PNG (GUID b96b3caf-0728-11d3-9d7b-0000f81ef32e), 612x792 pixels, exit code 0.
+'''
 id = "AUTO-005"
-notes = """CLI `info` (human + --json) and `text` implemented against the real parser. `text` supports Tj, TJ, ', " over uncompressed streams and reports clear errors for compressed/non-stream content. Remaining scriptable operations are pending later milestones."""
+notes = """
+Added `pdfxi render <file> --page N --scale S --out PATH [--format ppm|png]` on top of the frozen `pdfxi-render` Renderer contract. The CLI gained a `pdfium` feature (`dep:pdfxi-render`, `pdfxi-render/pdfium`) and an optional path dependency; the command is always compiled. Without the feature it exits non-zero with `built without pdfium support` instead of failing to compile. With the feature it validates scale (finite, positive, bounded) and zero-based page bounds, then maps renderer/encoder/write failures to contextual anyhow errors with actionable stderr.
+
+PNG is written by a small pure-Rust encoder (no image crate): 8-byte signature, IHDR (8-bit RGBA, non-interlaced), one IDAT holding a zlib stream of uncompressed stored deflate blocks with correct CRC-32 and Adler-32, and IEND. The PNG is valid but uncompressed, which is documented in code. PPM is binary P6 with alpha discarded. Checked arithmetic rejects size overflow and mismatched buffers. Unit tests cover checksums, signature/chunk order, IHDR fields, stored-block decoding, chunk CRC, length invariants, multi-block splitting, and error paths; integration tests render fixtures/minimal.pdf to both formats and exercise invalid page, invalid scale, and unwritable output. Remaining scriptable operations are future work, so AUTO-005 stays in-progress.
+
+Collateral: the pre-existing text_filtered_stream_fails assertion now accepts the core's concurrent FlateDecode error wording ("DEFLATE") as well as the older "filtered" wording; its intent (no text from a malformed filtered stream) is unchanged.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
-    "info_reports_one_page_fixture",
-    "info_reports_three_page_fixture",
-    "info_json_has_stable_fields",
-    "text_extracts_from_uncompressed_stream",
-    "text_extracts_each_page_of_multipage_fixture",
-    "text_extracts_tj_tj_array_and_quote_operators",
-    "info_missing_file_fails",
-    "info_non_pdf_fails",
-    "text_filtered_stream_fails",
+    "image::tests::crc32_matches_standard_vector",
+    "image::tests::adler32_matches_standard_vector",
+    "image::tests::png_has_signature_and_ordered_chunks",
+    "image::tests::ihdr_declares_8bit_rgba_without_interlace",
+    "image::tests::idat_is_a_valid_stored_zlib_stream",
+    "image::tests::idat_ends_with_empty_iend_and_length_is_consistent",
+    "image::tests::large_raster_is_split_across_multiple_stored_blocks",
+    "image::tests::png_rejects_mismatched_pixel_buffer",
+    "image::tests::png_rejects_overflowing_dimensions",
+    "image::tests::ppm_has_p6_header_and_dropped_alpha",
+    "image::tests::ppm_rejects_mismatched_pixel_buffer",
+    "image::tests::empty_rasters_still_encode_valid_files",
+    "render_without_pdfium_reports_missing_feature",
+    "render_minimal_pdf_to_ppm_and_png",
+    "render_rejects_invalid_page",
+    "render_rejects_invalid_scale",
+    "render_rejects_unwritable_output_path",
 ]
 title = "CLI for every scriptable operation"
 
