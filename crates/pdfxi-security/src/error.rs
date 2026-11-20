@@ -248,6 +248,25 @@ pub enum SecurityError {
     PolicyExpired(String),
     /// The caller was denied an operation by a protection policy.
     PolicyPermissionDenied(&'static str),
+    /// A caller-supplied PKCS#8-style private key was structurally invalid.
+    ///
+    /// The static label names the offending field; key bytes are never carried.
+    DigitalIdKeyMalformed(&'static str),
+    /// A private key's algorithm OID did not match its certificate's public key.
+    DigitalIdKeyAlgorithmMismatch,
+    /// A password-protected digital-ID store envelope was structurally invalid.
+    StoreEnvelopeMalformed(&'static str),
+    /// A password-protected store envelope failed its integrity check.
+    ///
+    /// This is returned both for a wrong password and for tampered bytes; the two
+    /// are deliberately indistinguishable so a guess cannot probe the store.
+    StoreEnvelopeIntegrityFailed,
+    /// A password-protected store envelope used an unsupported version.
+    StoreEnvelopeVersionUnsupported(u8),
+    /// A timestamp-authority token model field was invalid.
+    TsaTokenInvalid(&'static str),
+    /// A detached signature's supplied certificate did not match its signer.
+    DetachedSignerMismatch,
 }
 
 impl fmt::Display for SecurityError {
@@ -495,6 +514,33 @@ impl fmt::Display for SecurityError {
             }
             Self::PolicyPermissionDenied(operation) => {
                 write!(f, "protection policy denied operation: {operation}")
+            }
+            Self::DigitalIdKeyMalformed(field) => {
+                write!(f, "malformed PKCS#8 private key field: {field}")
+            }
+            Self::DigitalIdKeyAlgorithmMismatch => {
+                write!(f, "private key algorithm does not match the certificate")
+            }
+            Self::StoreEnvelopeMalformed(field) => {
+                write!(f, "digital-ID store envelope is malformed: {field}")
+            }
+            Self::StoreEnvelopeIntegrityFailed => {
+                write!(f, "digital-ID store envelope integrity check failed")
+            }
+            Self::StoreEnvelopeVersionUnsupported(version) => {
+                write!(
+                    f,
+                    "unsupported digital-ID store envelope version: {version}"
+                )
+            }
+            Self::TsaTokenInvalid(field) => {
+                write!(f, "timestamp-authority token field is invalid: {field}")
+            }
+            Self::DetachedSignerMismatch => {
+                write!(
+                    f,
+                    "detached signature signer does not match the supplied certificate"
+                )
             }
         }
     }

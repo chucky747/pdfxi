@@ -61,6 +61,13 @@
 //! - [`policy`] — named local protection policies with deterministic
 //!   plans/reports and caller-supplied time (SEC-011). No rights-management
 //!   server is involved.
+//! - [`digital_id_lifecycle`] — validated caller-supplied PKCS#8-style key plus
+//!   certificate pairs, a sorted and deterministic digital-ID store with
+//!   caller-clocked validity and rotation, and a password-protected store
+//!   envelope built from the existing AES/SHA primitives (SEC-004).
+//! - [`timestamp_authority`] — a caller-supplied TSA token model with imprint,
+//!   nonce, validity-window and policy checks, plus detached-signature
+//!   validation wiring against a supplied certificate (SEC-006).
 //!
 //! All operations are deterministic and allocate only as needed. No operation
 //! here logs secrets or document contents.
@@ -73,6 +80,9 @@ pub mod certificate_encryption;
 pub mod cms;
 pub mod crypto;
 pub mod der;
+/// Local digital-ID lifecycle: validated key/certificate pairs, a deterministic
+/// store, and a password-protected store envelope (SEC-004).
+pub mod digital_id_lifecycle;
 mod encryption;
 pub mod encryption_writer;
 mod error;
@@ -87,6 +97,8 @@ pub mod security_envelope;
 mod signature;
 pub mod standard_handler;
 pub mod timestamp;
+/// Timestamp-authority token model and detached-signature validation wiring (SEC-006).
+pub mod timestamp_authority;
 /// Local trust manager, CRLs, and deterministic trust/revocation reports (SEC-007).
 pub mod trust_manager;
 pub mod x509;
@@ -99,6 +111,10 @@ pub use certificate_encryption::{
 pub use cms::{
     InMemorySignatureProvider, SignatureProvider, SignedDataParams, SignerIdentifier,
     build_signed_data, digest, modpow_u128, verify_signed_data, verify_signed_data_detached,
+};
+pub use digital_id_lifecycle::{
+    DigitalIdLifecycleStore, ExportedKeyPair, IdListing, KeyCertificatePair, PrivateKeyPkcs8,
+    open_store, seal_store,
 };
 pub use encryption::EncryptionMethod;
 pub use encryption_writer::{
@@ -142,6 +158,10 @@ pub use timestamp::{
     Accuracy, MessageImprint, TimestampPolicy, TimestampStatus, TimestampTokenParams,
     TimestampValidation, TimestampValidationContext, TstInfo, build_timestamp_token,
     encode_tst_info, parse_tst_info, validate_timestamp_token,
+};
+pub use timestamp_authority::{
+    DetachedSignatureReport, TsaStatus, TsaTokenModel, TsaValidationReport,
+    validate_detached_signature_against_certificate, validate_tsa_token,
 };
 pub use trust_manager::{
     Crl, RevocationEvidence, RevocationPolicy, RevocationReason, RevocationStatus,

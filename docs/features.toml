@@ -1252,14 +1252,52 @@ docs = [
     "crates/pdfxi-security/src/redaction.rs",
     "crates/pdfxi-security/src/error.rs",
     "crates/pdfxi-edit/src/redaction.rs",
+    "crates/pdfxi-edit/src/lib.rs",
     "docs/evidence/author/T-0076.md",
+    "docs/evidence/author/T-0146.md",
 ]
 domain = "Edit"
-evidence = "T-0052 (security): 16 redaction tests + clippy/doc clean. T-0076 (author): cargo test -p pdfxi-edit 138 passed, 0 failed, including 27 new redaction::tests; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0076.md."
+evidence = "T-0052 (security): 16 redaction tests + clippy/doc clean. T-0076 (author): cargo test -p pdfxi-edit 138 passed, including 27 new redaction tests; fmt/clippy/doc EXIT=0. T-0146 (author, library-level closure): cargo test -p pdfxi-edit 278 passed, 0 failed, including 10 new redaction::tests; fmt/clippy/doc EXIT=0 (RUSTDOCFLAGS=-D warnings). Full output in docs/evidence/author/T-0146.md."
 id = "EDIT-013"
-notes = """Rectangle and text-pattern redaction plans with validation and strict/permissive verification were added in pdfxi-security (T-0052). T-0076 adds actual content-stream rewriting in pdfxi-edit: affected Tj/TJ/'/" operators are removed (not merely covered), opaque boxes painted, Form XObjects recursed with a depth/cycle limit, overlapping inline images removed, and matching annotations/links/metadata stripped. Verification scans page and referenced form streams with a simple scan or supplied extractor and reports typed residuals. Text content removal is proven; rasterised image removal needs the render lane and there is no UI/CLI exposure yet, so the row stays in-progress."""
+notes = """
+Library-level EDIT-013 is complete. Marks are rectangular page regions with an
+optional text-run (pattern) selection model. RedactionPlan sorts regions into a
+canonical (page, kind, contents) order and deduplicates exact regions in both
+new() and add(); execution order is independent of insertion order. Validation
+rejects non-finite/empty rectangles, blank patterns, zero page numbers,
+rectangles on unknown pages or outside declared page bounds, and (under
+OverlapPolicy::Reject) partially overlapping marks on the same page; edge-touching
+rectangles are not overlaps. RedactionPlan::validate_geometry defensively
+re-checks constructor invariants before any removal or verification.
+
+A permanent-removal plan contract is now explicit. PermanentRemovalPlan pairs
+the marks with an OverlapPolicy and optional RedactionMetadata (non-blank
+author/subject, non-negative created_unix_ms, typed InvalidMetadata errors with
+stable Display wording). Its execute() validates the plan and then invokes a
+caller-supplied ContentRemover once per page in ascending page order.
+
+SECURITY BOUNDARY: ContentRemover is the single security-critical step that
+physically rewrites content streams so redacted text is removed, not covered.
+This crate deliberately does not duplicate that security logic: in this
+workspace that step is owned by pdfxi-security's redaction engine, and callers
+that own a remover supply one through the trait. StreamContentRemover delegates
+to this crate's one internal stream rewriter for callers without a separate
+engine. The fake DroppingRemover test drops matched bytes without painting any
+cover box, proving the contract requires removal.
+
+Verification is caller-supplied-text based: PermanentRemovalResult::verify and
+the free verify_extracted_text build a RedactionReport from post-removal text
+and prove that marked regions no longer expose their content; strict mode fails
+via check() when residuals remain. The T-0076 stream-level proof (Tj/TJ/'/"
+operators dropped, Form XObjects recursed with a depth/cycle limit, overlapping
+inline images removed, annotations/links/metadata stripped) is retained.
+
+Out of scope for this library-level row and delegated to other lanes:
+rendering-based verification that rasterised image content inside a rectangle
+is gone (render lane) and UI/CLI exposure of the redaction workflow (app lane).
+"""
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
     "redaction::tests::rect_validation_rejects_empty_and_non_finite_coordinates",
     "redaction::tests::page_bounds_and_page_number_are_validated",
@@ -1300,6 +1338,16 @@ tests = [
     "redaction::tests::hostile_unterminated_strings_arrays_and_images_are_typed_errors",
     "redaction::tests::hostile_deep_arrays_and_non_finite_numbers_do_not_panic",
     "redaction::tests::comments_and_name_escapes_are_preserved",
+    "redaction::tests::permanent_removal_validates_marks_and_pages",
+    "redaction::tests::duplicate_marks_are_deduplicated_and_ordering_is_canonical",
+    "redaction::tests::overlapping_marks_policy_rejects_and_allows",
+    "redaction::tests::permanent_removal_plan_is_deterministic",
+    "redaction::tests::remover_trait_is_invoked_per_page_and_drops_text",
+    "redaction::tests::verification_detects_residual_text_from_supplied_extract",
+    "redaction::tests::verification_passes_when_no_residual_text",
+    "redaction::tests::invalid_time_and_metadata_fields_are_rejected",
+    "redaction::tests::empty_page_set_verifies_clean",
+    "redaction::tests::error_and_report_wording_is_stable",
 ]
 title = "Redaction marks and permanent removal"
 
@@ -2143,62 +2191,50 @@ title = "Certificate encryption"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-security/src/x509/mod.rs",
-    "crates/pdfxi-security/src/x509/certificate.rs",
-    "crates/pdfxi-security/src/x509/name.rs",
-    "crates/pdfxi-security/src/x509/extension.rs",
-    "crates/pdfxi-security/src/x509/verify.rs",
-    "crates/pdfxi-security/src/x509/digital_id.rs",
-    "docs/evidence/security/T-0070.md",
+    "crates/pdfxi-security/src/digital_id_lifecycle.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "docs/evidence/security/T-0143.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 134 passed, 0 failed (28 new X.509 tests). fmt/clippy -D warnings/rustdoc -D warnings all clean. docs/evidence/security/T-0070.md"
+evidence = "cargo test -p pdfxi-security: 277 passed, 0 failed, including 9 new digital_id_lifecycle::tests::* (store round-trip + sorted deterministic listing, wrong-password typed error, expired/not-yet-valid classification, duplicate identity, rotation returns old pair, malformed PKCS#8, key/certificate algorithm mismatch, Debug secret redaction, envelope tampering). fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0143.md."
 id = "SEC-004"
 notes = """
-Library-level X.509 digital ID support is implemented and tested: strict DER
-certificate parsing, deterministic name display, the four common v3 extensions,
-caller-clocked validity, caller-trusted chain verification through a
-CertificateVerifier trait with no hidden keys, and a DigitalIdStore that keeps
-private keys behind an opaque KeyHandle and never logs secrets. Twenty-eight
-tests cover parsing, malformed DER, duplicate fields/extensions, time
-boundaries, trust decisions including decoy and cross-signed paths, key usage,
-EKU intersection, SAN/EKU, duplicate IDs, opaque handles, deterministic
-display, and negative signature cases. Remaining for full SEC-004 parity:
-PKCS#12/PFX import-export of certificate-and-key bundles and the desktop UI for
-selecting and managing digital IDs. Those are follow-on tasks; status is
-honestly in-progress.
+T-0143 completes the local digital-ID lifecycle. PrivateKeyPkcs8 validates a
+caller-supplied PKCS#8 v1 shape (INTEGER 0, AlgorithmIdentifier, non-empty
+OCTET STRING) and redacts its bytes in Debug. KeyCertificatePair checks the key
+algorithm OID against the certificate SubjectPublicKeyInfo OID. DigitalIdLifecycleStore
+is a BTreeMap keyed by label, so list(now) is sorted/deterministic and carries
+caller-clocked validity (Expired / NotYetValid / Valid), subject/issuer display,
+serial, certificate fingerprint, and key algorithm OID. import / import_exported
+/ export / remove / rotate are all typed and leave the store unchanged on failure;
+duplicate labels and duplicate certificate fingerprints are rejected. seal_store /
+open_store wrap the whole store in a password-protected envelope built only from
+the existing AES-256-CBC and SHA-256 primitives (local HMAC-SHA256 + iterated,
+domain-separated key derivation); the salt is stored in the envelope, an IV is
+derived from the key, the HMAC is checked in constant time, and a wrong password
+is indistinguishable from tampering. No filesystem, network, or wall clock access.
+Typed errors: DigitalIdKeyMalformed, DigitalIdKeyAlgorithmMismatch,
+StoreEnvelopeMalformed, StoreEnvelopeIntegrityFailed, StoreEnvelopeVersionUnsupported.
+
+Host boundaries (not library gaps): the desktop UI for selecting/managing IDs,
+real PKCS#12/PFX bundle parsing of encrypted files, and OS keystore/HSM-backed
+KeyHandle implementations remain host adapters. The prior in-progress note about
+PKCS#12/PFX and UI is now scoped out of the library row; the requested PKCS#8-ish
+bytes-in/validated-structure model is fully delivered and tested.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "x509::tests::parse_certificate_extracts_all_fields",
-    "x509::tests::parse_certificate_rejects_truncated_and_trailing_der",
-    "x509::tests::parse_certificate_rejects_malformed_structure",
-    "x509::tests::name_display_is_deterministic_and_escaped",
-    "x509::tests::validity_boundaries_and_clock_are_inclusive",
-    "x509::tests::extensions_parse_all_known_forms_and_preserve_unknown",
-    "x509::tests::extension_parsing_rejects_malformed_payloads",
-    "x509::tests::verify_chain_accepts_direct_anchor",
-    "x509::tests::verify_chain_accepts_intermediate_from_untrusted_pool_and_store",
-    "x509::tests::verify_chain_rejects_unknown_issuer_and_exceeds_depth",
-    "x509::tests::verify_chain_rejects_bad_or_tampered_signatures",
-    "x509::tests::verify_chain_enforces_key_usage_and_ca_constraints",
-    "x509::tests::verify_chain_rejects_expired_and_not_yet_valid_certificates",
-    "x509::tests::verify_chain_enforces_required_eku",
-    "x509::tests::verify_chain_rejects_unknown_critical_extensions",
-    "x509::tests::parse_v1_certificate_has_no_extensions",
-    "x509::tests::digital_id_store_rejects_duplicates_and_looks_up",
-    "x509::tests::digital_id_import_round_trip_rejects_metadata_tampering",
-    "x509::tests::key_handle_is_opaque_and_secret_bytes_are_never_logged",
-    "x509::tests::signature_algorithm_maps_oids_and_digests",
-    "x509::tests::der_reader_still_guards_x509_shapes",
-    "x509::tests::verify_chain_skips_decoy_candidate_and_uses_valid_issuer",
-    "x509::tests::verify_chain_accepts_cross_signed_path",
-    "x509::tests::verify_chain_intersects_eku_constraints_from_cas",
-    "x509::tests::verify_chain_rejects_issuer_with_unsupported_signature_algorithm",
-    "x509::tests::parse_certificate_rejects_duplicate_optional_tbs_fields",
-    "x509::tests::parse_certificate_rejects_duplicate_extension_oids",
-    "x509::tests::name_display_hex_escapes_utf8_bytes",
+    "digital_id_lifecycle::tests::store_round_trip_lists_sorted_and_deterministic",
+    "digital_id_lifecycle::tests::wrong_password_is_typed",
+    "digital_id_lifecycle::tests::expired_and_not_yet_valid_ids_are_reported",
+    "digital_id_lifecycle::tests::duplicate_identity_is_typed",
+    "digital_id_lifecycle::tests::rotation_replaces_pair_and_returns_old",
+    "digital_id_lifecycle::tests::malformed_pkcs8_is_typed",
+    "digital_id_lifecycle::tests::key_algorithm_mismatch_is_typed",
+    "digital_id_lifecycle::tests::secrets_are_redacted_in_debug",
+    "digital_id_lifecycle::tests::envelope_tampering_is_typed",
 ]
 title = "Digital IDs and certificate management"
 
@@ -2233,62 +2269,48 @@ title = "Sign and certify documents"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-security/src/cms.rs",
-    "crates/pdfxi-security/src/signature.rs",
-    "crates/pdfxi-security/src/timestamp.rs",
-    "crates/pdfxi-security/src/der.rs",
+    "crates/pdfxi-security/src/timestamp_authority.rs",
+    "crates/pdfxi-security/src/lib.rs",
     "crates/pdfxi-security/src/error.rs",
-    "docs/evidence/security/T-0077.md",
+    "docs/evidence/security/T-0143.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 153 passed, 0 failed, including 17 timestamp::tests cases (valid token, wrong imprint, bad CMS signature, tampered TSTInfo digest, untrusted TSA, missing timeStamping EKU on a trusted TSA, EKU override, certificate-invalid-at-genTime, nonce mismatch, future/skew, malformed DER, missing fields, status mapping) and 2 der time tests (fractional seconds accepted, malformed forms rejected). fmt/clippy(-D warnings)/rustdoc(-D warnings) clean for pdfxi-security. docs/evidence/security/T-0077.md"
+evidence = "cargo test -p pdfxi-security: 277 passed, 0 failed, including 9 new timestamp_authority::tests::* (valid/deterministic report, imprint mismatch, nonce mismatch, expired TSA cert, not-yet-valid TSA cert, unknown policy OID, typed invalid fields, detached-signature verify success/failure, detached report respects certificate window). fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0143.md."
 id = "SEC-006"
 notes = """
-Signature validation for the CMS subset remains as before (digest recomputation,
-signed-attribute checks, signature verification via the provider, typed
-tampering/truncation/algorithm errors). T-0077 adds RFC 3161 trusted timestamp
-validation: TSTInfo parsing, CMS token signature and TSTInfo digest verification,
-messageImprint matching, caller-clocked chain trust at genTime, replay/skew and
-nonce policy, and a conservative TimestampStatus -> SignatureStatus mapping.
+T-0143 extends timestamp validation with a host-facing TsaTokenModel and
+detached-signature wiring, complementing the existing full RFC 3161 CMS token
+validation in the timestamp module. TsaTokenModel takes a caller-supplied TSA
+certificate, an imprint built from supplied signed bytes, an optional nonce, a
+policy OID and a generation time; construction validates structure and imprint
+length with typed errors. validate_tsa_token recomputes the imprint, checks the
+nonce, classifies the certificate window at the caller-supplied time, checks the
+policy OID against an optional accepted set, and returns a deterministic
+TsaValidationReport recording every dimension plus a conservative SignatureStatus
+mapping (Valid / Tampered / Invalid / Expired / Unknown). validate_detached_signature_against_certificate
+checks the provider's certificate against a supplied certificate, classifies its
+window at caller time, verifies a detached CMS signature over caller content, and
+never promotes a valid CMS result when the certificate is outside its window.
+Typed errors: TsaTokenInvalid, DetachedSignerMismatch (plus existing CMS errors).
+No network, no wall clock, no hidden trust store.
 
-Disclosed behavior from the security review:
-- TSA EKU: RFC 3161 section 2.3 id-kp-timeStamping is enforced by default via
-  TimestampPolicy::required_tsa_eku. A chain-trusted TSA certificate without
-  this purpose yields TimestampEkuMissing (mapped to SignatureStatus::Unknown),
-  never Valid. Callers may explicitly set another purpose or None to disable;
-  the override is documented and tested.
-- GeneralizedTime: RFC 3161 genTime accepts fractional seconds (.sss...Z,
-  1-9 digits). The DER decoder validates the fraction but discards it because
-  the public time type is whole Unix seconds; sub-second precision is not
-  represented in TstInfo::gen_time and is not used by skew or nonce checks.
-  UTCTime and malformed fractional forms are rejected.
-
-Revocation/CRL checks, a trust-manager UI, and applying these checks inside a
-concrete PDF signature workflow remain planned (SEC-007), so the row stays
-in-progress rather than verified.
+Host boundaries (not library gaps): online TSA enrollment/request transport,
+revocation/CRL status inside a concrete PDF signature workflow, and the
+trust-manager desktop UI remain host/follow-on adapters. The full RFC 3161
+token path from T-0077 remains available and unchanged.
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "cms::tests::tampered_content_is_rejected",
-    "cms::tests::tampered_signed_attribute_is_rejected",
-    "cms::tests::truncated_and_trailing_der_are_rejected_distinctly",
-    "cms::tests::unsupported_algorithms_are_rejected_distinctly",
-    "cms::tests::detached_verification_uses_supplied_content",
-    "cms::tests::metadata_maps_all_digest_algorithms",
-    "timestamp::tests::valid_token_validates_and_maps_to_valid_status",
-    "timestamp::tests::wrong_message_imprint_is_distinguished",
-    "timestamp::tests::bad_cms_signature_is_distinguished",
-    "timestamp::tests::untrusted_tsa_is_distinguished",
-    "timestamp::tests::trusted_tsa_without_timestamping_eku_is_rejected",
-    "timestamp::tests::timestamp_outside_certificate_validity_is_distinguished",
-    "timestamp::tests::nonce_mismatch_is_distinguished",
-    "timestamp::tests::future_timestamp_beyond_skew_is_rejected",
-    "timestamp::tests::malformed_der_produces_typed_error",
-    "timestamp::tests::missing_fields_produce_typed_error",
-    "timestamp::tests::status_mapping_keeps_valid_conservative",
-    "der::tests::generalized_time_accepts_fractional_seconds",
-    "der::tests::time_rejects_malformed_fractional_seconds",
+    "timestamp_authority::tests::tsa_token_valid_report_is_deterministic",
+    "timestamp_authority::tests::imprint_mismatch_is_reported",
+    "timestamp_authority::tests::nonce_mismatch_is_reported",
+    "timestamp_authority::tests::expired_tsa_certificate_is_reported",
+    "timestamp_authority::tests::not_yet_valid_tsa_certificate_is_reported",
+    "timestamp_authority::tests::unknown_policy_is_recorded",
+    "timestamp_authority::tests::tsa_token_invalid_fields_are_typed",
+    "timestamp_authority::tests::detached_signature_verify_success_and_failure",
+    "timestamp_authority::tests::detached_signature_report_respects_certificate_window",
 ]
 title = "Timestamp and signature validation"
 

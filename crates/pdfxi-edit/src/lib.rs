@@ -36,7 +36,12 @@
 //! helpers. [`redaction`] applies a
 //! plan of rectangles and text patterns to content streams, removing the
 //! affected operators (not merely covering them), stripping annotations and
-//! metadata, and verifying removal with a typed report. [`flatten()`] replaces
+//! metadata, and verifying removal with a typed report. It also exposes a
+//! permanent-removal contract ([`redaction::PermanentRemovalPlan`]) that pairs
+//! deduplicated, canonically ordered marks with a caller-supplied
+//! [`redaction::ContentRemover`] (the content-stream removal step owned by
+//! pdfxi-security) and verifies the result against caller-supplied text.
+//! [`flatten()`] replaces
 //! annotations and form widgets with permanent content-stream placements,
 //! removing them from `/Annots` (and the AcroForm only when every widget is
 //! gone) with a typed report that also exposes the appearance bytes emitted as
@@ -112,9 +117,11 @@ pub use paragraph_edit::{
     ParagraphEdit, ReflowOptions, ReflowedLine, Replacement, TextSpan, reflow_paragraph,
 };
 pub use redaction::{
-    AppliedPage, AppliedRedaction, FormXObject, Matrix, PageNumber, RedactionError, RedactionInput,
-    RedactionOptions, RedactionPlan, RedactionRect, RedactionRegion, RedactionReport, Removal,
-    RemovalKind, Residual, ResidualSource, TextPattern, apply, redact, scan_text,
+    AppliedPage, AppliedRedaction, ContentRemover, FormXObject, Matrix, OverlapPolicy, PageNumber,
+    PermanentRemovalPlan, PermanentRemovalResult, RedactionError, RedactionInput,
+    RedactionMetadata, RedactionOptions, RedactionPlan, RedactionRect, RedactionRegion,
+    RedactionReport, Removal, RemovalKind, Residual, ResidualSource, StreamContentRemover,
+    TextPattern, apply, redact, scan_text, verify_extracted_text,
 };
 pub use review::{
     CommentThread, HistoryEntry, ParticipantStatusSummary, ParticipantSummary, Reply, ReplyId,

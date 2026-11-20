@@ -35,12 +35,24 @@
 //! extractor with [`AppliedRedaction::verify_with`]; [`RedactionReport::check`]
 //! enforces the strict policy. Verification accepts a cancellation closure.
 //!
+//! # Permanent-removal contract
+//!
+//! [`PermanentRemovalPlan`] pairs the marks ([`RedactionPlan`]) with a
+//! caller-supplied [`ContentRemover`], the single security-critical step that
+//! *physically rewrites* content streams. In this workspace that step is
+//! implemented by the `pdfxi-security` redaction engine; this crate deliberately
+//! does **not** duplicate that security logic. A caller that owns a remover
+//! supplies one through the trait, and [`PermanentRemovalResult::verify`] proves
+//! against caller-supplied extracted text that the removed regions no longer
+//! expose their content. Marks are deduplicated and canonically ordered, and an
+//! [`OverlapPolicy`] decides whether overlapping marks are allowed or rejected.
+//!
 //! # No hidden state
 //!
 //! Edits are copy-on-write: input bytes and dictionaries are borrowed and the
-//! redacted copies are returned in [`AppliedRedaction`]. There is no unsafe
-//! code, no external dependency, and every long loop checks the cancellation
-//! closure.
+//! redacted copies are returned in [`AppliedRedaction`] and
+//! [`PermanentRemovalResult`]. There is no unsafe code, no external dependency,
+//! and every long loop checks the cancellation closure.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -73,6 +85,18 @@ pub enum RedactionError {
     RegionOutOfBounds {
         /// The offending 1-based page number.
         page: u32,
+    },
+    /// Two distinct redaction marks on a page overlap and the plan's
+    /// [`OverlapPolicy`] forbids it.
+    OverlappingMarks {
+        /// The offending 1-based page number.
+        page: u32,
+    },
+    /// A provenance/metadata field on a [`PermanentRemovalPlan`] was invalid.
+    InvalidMetadata {
+        /// Stable name of the offending field (`author`, `subject`, or
+        /// `created_unix_ms`).
+        field: &'static str,
     },
     /// Form XObject recursion exceeded the configured depth limit.
     FormDepthExceeded {
@@ -120,6 +144,12 @@ impl fmt::Display for RedactionError {
                     f,
                     "redaction rectangle on page {page} exceeds the page bounds"
                 )
+            }
+            Self::OverlappingMarks { page } => {
+                write!(f, "redaction marks overlap on page {page}")
+            }
+            Self::InvalidMetadata { field } => {
+                write!(f, "invalid redaction metadata field: {field}")
             }
             Self::FormDepthExceeded { name, max_depth } => write!(
                 f,
@@ -518,10 +548,16 @@ pub struct RedactionPlan {
 }
 
 impl RedactionPlan {
-    /// Build a plan from regions, sorting them into canonical order.
+    /// Build a plan from regions, sorting into canonical order and removing
+    /// exact duplicates.
+    ///
+    /// Regions are ordered by `(page, kind, contents)`; after sorting, adjacent
+    /// equal regions are collapsed so a repeated mark is applied and painted
+    /// exactly once. This makes the plan a canonical set rather than a list.
     pub fn new(regions: impl IntoIterator<Item = RedactionRegion>) -> Self {
         let mut regions: Vec<RedactionRegion> = regions.into_iter().collect();
         regions.sort();
+        regions.dedup();
         Self { regions }
     }
 
@@ -532,10 +568,11 @@ impl RedactionPlan {
         }
     }
 
-    /// Add a region and restore canonical ordering.
+    /// Add a region, restoring canonical ordering and removing duplicates.
     pub fn add(&mut self, region: RedactionRegion) {
         self.regions.push(region);
         self.regions.sort();
+        self.regions.dedup();
     }
 
     /// Regions in canonical `(page, kind, contents)` order.
@@ -553,15 +590,43 @@ impl RedactionPlan {
         self.regions.len()
     }
 
+    /// Re-check the constructor invariants of every region without page context.
+    ///
+    /// This is defensive: [`RedactionRect::new`] and [`TextPattern::new`]
+    /// already reject non-finite coordinates, empty rectangles, and blank
+    /// patterns, but a plan received from another layer is rechecked before any
+    /// removal or verification so malformed geometry can never reach a stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RedactionError::NonFiniteCoordinate`],
+    /// [`RedactionError::EmptyRegion`], or [`RedactionError::EmptyPattern`] for
+    /// the first offending region.
+    pub fn validate_geometry(&self) -> Result<(), RedactionError> {
+        for region in &self.regions {
+            match region {
+                RedactionRegion::Rect { rect, .. } => {
+                    RedactionRect::new(rect.x0(), rect.y0(), rect.x1(), rect.y1())?;
+                }
+                RedactionRegion::Text { pattern, .. } => {
+                    TextPattern::new(pattern.literal(), pattern.is_case_sensitive())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validate the plan against an input's pages and optional page bounds.
     ///
     /// A rectangle must reference a page present in `input.pages` and, when a
-    /// bounds entry exists for that page, lie inside it.
+    /// bounds entry exists for that page, lie inside it. Geometry is rechecked
+    /// first via [`Self::validate_geometry`].
     ///
     /// # Errors
     ///
     /// See [`RedactionError::UnknownPage`] and [`RedactionError::RegionOutOfBounds`].
     pub fn validate(&self, input: &RedactionInput) -> Result<(), RedactionError> {
+        self.validate_geometry()?;
         for region in &self.regions {
             let page = region.page().get();
             if let Some(rect) = region.as_rect() {
@@ -599,6 +664,24 @@ impl FormXObject {
     }
 }
 
+/// Policy for redaction marks whose rectangles overlap on the same page.
+///
+/// Edge-touching rectangles never count as overlapping, and exact duplicates
+/// are removed from the plan before this policy is evaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverlapPolicy {
+    /// Allow overlapping marks; each is applied independently (the default).
+    ///
+    /// Overlaps are harmless for removal: a text operator overlapping any mark
+    /// is dropped, and the opaque boxes simply cover the union of the areas.
+    #[default]
+    Allow,
+    /// Reject overlapping marks with [`RedactionError::OverlappingMarks`].
+    ///
+    /// Useful for callers that require a plan with mutually disjoint regions.
+    Reject,
+}
+
 /// Options controlling redaction application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedactionOptions {
@@ -608,6 +691,8 @@ pub struct RedactionOptions {
     pub paint_boxes: bool,
     /// Whether verification failures make [`AppliedRedaction::check`] fail.
     pub strict_verification: bool,
+    /// How overlapping rectangle marks are treated; see [`OverlapPolicy`].
+    pub overlap_policy: OverlapPolicy,
 }
 
 impl Default for RedactionOptions {
@@ -616,8 +701,43 @@ impl Default for RedactionOptions {
             max_form_depth: 8,
             paint_boxes: true,
             strict_verification: true,
+            overlap_policy: OverlapPolicy::Allow,
         }
     }
+}
+
+/// Check a plan's rectangle marks against its overlap policy.
+///
+/// Only distinct rectangles on the same page are compared; a pair overlaps when
+/// their intersection has positive area (edge contact is allowed). Exact
+/// duplicates are already removed by [`RedactionPlan::new`]/[`RedactionPlan::add`].
+fn validate_overlaps(plan: &RedactionPlan, policy: OverlapPolicy) -> Result<(), RedactionError> {
+    if policy == OverlapPolicy::Allow {
+        return Ok(());
+    }
+    let mut rects: Vec<(u32, &RedactionRect)> = plan
+        .regions()
+        .iter()
+        .filter_map(|region| region.as_rect().map(|rect| (region.page().get(), rect)))
+        .collect();
+    rects.sort_by(|(page_a, rect_a), (page_b, rect_b)| {
+        page_a.cmp(page_b).then_with(|| rect_a.cmp(rect_b))
+    });
+    for index in 0..rects.len() {
+        for other in rects.iter().take(index) {
+            if other.0 == rects[index].0
+                && rects[index].1.overlaps_box((
+                    other.1.x0(),
+                    other.1.y0(),
+                    other.1.x1(),
+                    other.1.y1(),
+                ))
+            {
+                return Err(RedactionError::OverlappingMarks { page: other.0 });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Input to [`apply`]: the pages, their dictionaries, referenced forms, and
@@ -892,6 +1012,282 @@ impl AppliedRedaction {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Permanent-removal contract
+// ---------------------------------------------------------------------------
+
+/// The security-critical content-stream removal step.
+///
+/// Implementations physically rewrite a page's content stream so redacted text
+/// is **gone**, never merely covered by an opaque box. This crate does not own
+/// that security logic: in this workspace it is provided by the
+/// `pdfxi-security` redaction engine. A caller that owns a remover supplies one
+/// through this trait; [`StreamContentRemover`] adapts this crate's own stream
+/// rewriter for callers that have no separate security engine. The contract
+/// never duplicates the security implementation.
+pub trait ContentRemover {
+    /// Permanently remove the content selected by `marks` from `content`.
+    ///
+    /// `page` is the 1-based page number. The implementation must *drop* the
+    /// bytes of text-showing operators inside the marked regions, not paint
+    /// over them, and return the rewritten stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed [`RedactionError`] when the stream cannot be rewritten.
+    fn remove_content(
+        &self,
+        page: u32,
+        content: &[u8],
+        marks: &RedactionPlan,
+    ) -> Result<Vec<u8>, RedactionError>;
+}
+
+/// Optional provenance recorded with a [`PermanentRemovalPlan`].
+///
+/// Models the author/date metadata carried by a redaction-mark annotation.
+/// Fields that are present must be well formed; see [`Self::validate`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RedactionMetadata {
+    /// Author of the redaction, when present (must be non-blank).
+    pub author: Option<String>,
+    /// Subject or description, when present (must be non-blank).
+    pub subject: Option<String>,
+    /// Creation time as non-negative Unix milliseconds, when present.
+    pub created_unix_ms: Option<i64>,
+}
+
+impl RedactionMetadata {
+    /// Validate the optional metadata fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RedactionError::InvalidMetadata`] for a blank `author` or
+    /// `subject`, or a negative `created_unix_ms`.
+    pub fn validate(&self) -> Result<(), RedactionError> {
+        if let Some(author) = &self.author
+            && author.trim().is_empty()
+        {
+            return Err(RedactionError::InvalidMetadata { field: "author" });
+        }
+        if let Some(subject) = &self.subject
+            && subject.trim().is_empty()
+        {
+            return Err(RedactionError::InvalidMetadata { field: "subject" });
+        }
+        if self.created_unix_ms.is_some_and(|value| value < 0) {
+            return Err(RedactionError::InvalidMetadata {
+                field: "created_unix_ms",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A permanent-removal plan: the marks plus the policy and metadata governing
+/// how they are physically removed from content streams.
+///
+/// The plan is validated (metadata, geometry, page bounds, overlap policy)
+/// before any [`ContentRemover`] is invoked. It is copy-on-write: [`Self::execute`]
+/// borrows its inputs and returns rewritten bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermanentRemovalPlan {
+    marks: RedactionPlan,
+    overlap_policy: OverlapPolicy,
+    metadata: RedactionMetadata,
+}
+
+impl PermanentRemovalPlan {
+    /// Build a plan from marks with the default policy and empty metadata.
+    pub fn new(marks: RedactionPlan) -> Self {
+        Self {
+            marks,
+            overlap_policy: OverlapPolicy::Allow,
+            metadata: RedactionMetadata::default(),
+        }
+    }
+
+    /// Override the overlap policy for this plan.
+    pub fn with_overlap_policy(mut self, policy: OverlapPolicy) -> Self {
+        self.overlap_policy = policy;
+        self
+    }
+
+    /// Attach provenance metadata to this plan.
+    pub fn with_metadata(mut self, metadata: RedactionMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// The underlying marks.
+    pub fn marks(&self) -> &RedactionPlan {
+        &self.marks
+    }
+
+    /// The overlap policy in effect.
+    pub const fn overlap_policy(&self) -> OverlapPolicy {
+        self.overlap_policy
+    }
+
+    /// The attached provenance metadata.
+    pub fn metadata(&self) -> &RedactionMetadata {
+        &self.metadata
+    }
+
+    /// Validate metadata, geometry, page context, and overlap policy.
+    ///
+    /// # Errors
+    ///
+    /// See [`RedactionError::InvalidMetadata`], [`RedactionPlan::validate`],
+    /// and [`RedactionError::OverlappingMarks`].
+    pub fn validate(&self, input: &RedactionInput) -> Result<(), RedactionError> {
+        self.metadata.validate()?;
+        self.marks.validate(input)?;
+        validate_overlaps(&self.marks, self.overlap_policy)
+    }
+
+    /// Execute the plan, invoking `remover` once for each input page.
+    ///
+    /// The returned [`PermanentRemovalResult`] holds the rewritten bytes and can
+    /// verify them against caller-supplied extracted text with
+    /// [`PermanentRemovalResult::verify`]. Page iteration is in ascending
+    /// page order, independent of insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Propagates validation, cancellation, and remover errors as
+    /// [`RedactionError`].
+    pub fn execute<R: ContentRemover>(
+        &self,
+        input: &RedactionInput,
+        remover: &R,
+        cancel: &impl Fn() -> bool,
+    ) -> Result<PermanentRemovalResult, RedactionError> {
+        self.validate(input)?;
+        let mut pages = BTreeMap::new();
+        for (&page, content) in &input.pages {
+            if cancel() {
+                return Err(RedactionError::Cancelled);
+            }
+            let rewritten = remover.remove_content(page, content, &self.marks)?;
+            pages.insert(page, rewritten);
+        }
+        Ok(PermanentRemovalResult {
+            pages,
+            marks: self.marks.clone(),
+        })
+    }
+}
+
+/// Rewritten pages produced by [`PermanentRemovalPlan::execute`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermanentRemovalResult {
+    pages: BTreeMap<u32, Vec<u8>>,
+    marks: RedactionPlan,
+}
+
+impl PermanentRemovalResult {
+    /// Rewritten content of a page, when it was present in the input.
+    pub fn page_content(&self, page: u32) -> Option<&[u8]> {
+        self.pages.get(&page).map(Vec::as_slice)
+    }
+
+    /// All rewritten pages, keyed by 1-based page number.
+    pub fn pages(&self) -> &BTreeMap<u32, Vec<u8>> {
+        &self.pages
+    }
+
+    /// The marks that were applied.
+    pub fn marks(&self) -> &RedactionPlan {
+        &self.marks
+    }
+
+    /// Verify the removed regions against caller-supplied extracted text.
+    ///
+    /// `page_text` maps 1-based page numbers to text extracted *after* removal.
+    /// The returned [`RedactionReport`] is clean when none of the marked content
+    /// remains; call [`RedactionReport::check`] to enforce the strict policy.
+    ///
+    /// # Errors
+    ///
+    /// Propagates geometry and cancellation errors as [`RedactionError`].
+    pub fn verify(
+        &self,
+        page_text: &BTreeMap<u32, String>,
+        strict: bool,
+        cancel: &impl Fn() -> bool,
+    ) -> Result<RedactionReport, RedactionError> {
+        verify_extracted_text(&self.marks, page_text, strict, cancel)
+    }
+}
+
+/// Build a [`RedactionReport`] from caller-supplied post-removal extracted text.
+///
+/// This is the verification half of the permanent-removal contract: given the
+/// text a caller extracted after a [`ContentRemover`] rewrote the streams, it
+/// reports every marked string that is still present. It reuses the same
+/// residual logic as [`AppliedRedaction::verify_with`] and never mutates input.
+///
+/// # Errors
+///
+/// Propagates geometry and cancellation errors as [`RedactionError`].
+pub fn verify_extracted_text(
+    plan: &RedactionPlan,
+    page_text: &BTreeMap<u32, String>,
+    strict: bool,
+    cancel: &impl Fn() -> bool,
+) -> Result<RedactionReport, RedactionError> {
+    plan.validate_geometry()?;
+    let residuals = residuals_for_plan(plan, page_text, cancel)?;
+    Ok(RedactionReport {
+        removals: Vec::new(),
+        residuals,
+        strict,
+    })
+}
+
+/// A [`ContentRemover`] backed by this crate's own stream rewriter.
+///
+/// It delegates to the crate's single internal stream-rewriter implementation
+/// for one page, so the security-critical removal logic exists in exactly one
+/// place. Callers with a separate security engine should supply that engine
+/// instead.
+#[derive(Debug, Clone, Default)]
+pub struct StreamContentRemover {
+    /// Options forwarded to the stream rewriter.
+    pub options: RedactionOptions,
+}
+
+impl ContentRemover for StreamContentRemover {
+    fn remove_content(
+        &self,
+        page: u32,
+        content: &[u8],
+        marks: &RedactionPlan,
+    ) -> Result<Vec<u8>, RedactionError> {
+        let never = || false;
+        let mut removals = Vec::new();
+        let mut redacted_forms = BTreeMap::new();
+        let mut visiting = Vec::new();
+        let mut form_pages = BTreeMap::new();
+        redact_stream(
+            marks,
+            page,
+            content,
+            &BTreeMap::new(),
+            Matrix::IDENTITY,
+            0,
+            None,
+            &self.options,
+            &never,
+            &mut removals,
+            &mut redacted_forms,
+            &mut visiting,
+            &mut form_pages,
+        )
+    }
+}
+
 /// Apply `plan` to every page in `input` and verify with the simple scan.
 ///
 /// The returned [`AppliedRedaction`] holds copy-on-write redacted bytes and
@@ -909,6 +1305,7 @@ pub fn apply(
     cancel: &impl Fn() -> bool,
 ) -> Result<AppliedRedaction, RedactionError> {
     plan.validate(input)?;
+    validate_overlaps(plan, options.overlap_policy)?;
     let mut removals = Vec::new();
     let mut redacted_forms = BTreeMap::new();
     let mut form_pages: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
@@ -2824,5 +3221,361 @@ mod tests {
         assert!(output.contains("% leading comment"));
         assert!(output.contains("/F#31"));
         assert!(output.contains("(x) Tj"));
+    }
+
+    // --- T-0146: permanent-removal contract ---------------------------------
+
+    /// A fake caller-supplied remover that *drops* the bytes of text matching a
+    /// pattern (it never paints a cover box), recording each page it is asked
+    /// to rewrite.
+    struct DroppingRemover {
+        calls: std::cell::RefCell<Vec<u32>>,
+    }
+
+    impl DroppingRemover {
+        fn new() -> Self {
+            Self {
+                calls: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ContentRemover for DroppingRemover {
+        fn remove_content(
+            &self,
+            page: u32,
+            content: &[u8],
+            marks: &RedactionPlan,
+        ) -> Result<Vec<u8>, RedactionError> {
+            self.calls.borrow_mut().push(page);
+            let needles: Vec<&[u8]> = marks
+                .regions()
+                .iter()
+                .filter(|region| region.page().get() == page)
+                .filter_map(|region| region.as_pattern().map(|p| p.literal().as_bytes()))
+                .collect();
+            let mut out = Vec::with_capacity(content.len());
+            let mut index = 0;
+            while index < content.len() {
+                let matched = needles
+                    .iter()
+                    .copied()
+                    .filter(|needle| !needle.is_empty() && content[index..].starts_with(needle))
+                    .max_by_key(|needle| needle.len());
+                if let Some(needle) = matched {
+                    index += needle.len();
+                } else {
+                    out.push(content[index]);
+                    index += 1;
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    fn text_map(entries: &[(u32, &str)]) -> BTreeMap<u32, String> {
+        entries
+            .iter()
+            .map(|(number, text)| (*number, (*text).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn permanent_removal_validates_marks_and_pages() {
+        let mark = RedactionRegion::rect(page(1), rect(10.0, 10.0, 20.0, 20.0));
+        let plan = PermanentRemovalPlan::new(RedactionPlan::new([mark]));
+        let mut input = RedactionInput::default();
+        input.pages.insert(1, b"BT ET\n".to_vec());
+        input
+            .page_bounds
+            .insert(1, Rect::new(0.0, 0.0, 100.0, 100.0).expect("valid bounds"));
+        assert!(plan.validate(&input).is_ok());
+
+        let unknown = PermanentRemovalPlan::new(RedactionPlan::new([RedactionRegion::rect(
+            page(2),
+            rect(1.0, 1.0, 2.0, 2.0),
+        )]));
+        assert_eq!(
+            unknown.validate(&input),
+            Err(RedactionError::UnknownPage { page: 2 })
+        );
+
+        let outside = PermanentRemovalPlan::new(RedactionPlan::new([RedactionRegion::rect(
+            page(1),
+            rect(90.0, 90.0, 110.0, 110.0),
+        )]));
+        assert_eq!(
+            outside.validate(&input),
+            Err(RedactionError::RegionOutOfBounds { page: 1 })
+        );
+    }
+
+    #[test]
+    fn duplicate_marks_are_deduplicated_and_ordering_is_canonical() {
+        let duplicate = RedactionRegion::rect(page(2), rect(1.0, 2.0, 3.0, 4.0));
+        let text = RedactionRegion::text(
+            page(1),
+            TextPattern::case_sensitive("alpha").expect("valid pattern"),
+        );
+        let built = RedactionPlan::new([
+            duplicate.clone(),
+            text.clone(),
+            duplicate.clone(),
+            text.clone(),
+        ]);
+        assert_eq!(built.len(), 2, "exact duplicates collapse to a set");
+        // The derived enum order puts the Rect variant before Text, then
+        // compares the region contents; either way the order is canonical.
+        assert_eq!(built.regions()[0], duplicate);
+        assert_eq!(built.regions()[1], text);
+
+        let mut incremental = RedactionPlan::empty();
+        incremental.add(duplicate.clone());
+        incremental.add(text.clone());
+        incremental.add(duplicate);
+        assert_eq!(incremental, built, "add() also deduplicates");
+    }
+
+    #[test]
+    fn overlapping_marks_policy_rejects_and_allows() {
+        let first = RedactionRegion::rect(page(1), rect(0.0, 0.0, 10.0, 10.0));
+        let overlapping = RedactionRegion::rect(page(1), rect(5.0, 5.0, 15.0, 15.0));
+        let plan = RedactionPlan::new([first, overlapping]);
+        let mut input = RedactionInput::default();
+        input.pages.insert(1, b"BT ET\n".to_vec());
+
+        let rejecting =
+            PermanentRemovalPlan::new(plan.clone()).with_overlap_policy(OverlapPolicy::Reject);
+        assert_eq!(
+            rejecting.validate(&input),
+            Err(RedactionError::OverlappingMarks { page: 1 })
+        );
+        assert!(
+            PermanentRemovalPlan::new(plan.clone())
+                .validate(&input)
+                .is_ok(),
+            "Allow is the default"
+        );
+
+        // `apply` honours the same policy through RedactionOptions.
+        let options = RedactionOptions {
+            overlap_policy: OverlapPolicy::Reject,
+            ..RedactionOptions::default()
+        };
+        let never = || false;
+        assert!(matches!(
+            apply(&plan, &input, &options, &never),
+            Err(RedactionError::OverlappingMarks { page: 1 })
+        ));
+
+        // Edge-touching rectangles do not overlap, even under Reject.
+        let touching = RedactionPlan::new([
+            RedactionRegion::rect(page(1), rect(0.0, 0.0, 10.0, 10.0)),
+            RedactionRegion::rect(page(1), rect(10.0, 0.0, 20.0, 10.0)),
+        ]);
+        assert!(
+            PermanentRemovalPlan::new(touching)
+                .with_overlap_policy(OverlapPolicy::Reject)
+                .validate(&input)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn permanent_removal_plan_is_deterministic() {
+        let rect_mark = RedactionRegion::rect(page(2), rect(1.0, 2.0, 3.0, 4.0));
+        let text_mark = RedactionRegion::text(
+            page(1),
+            TextPattern::case_sensitive("SECRET").expect("valid pattern"),
+        );
+        let make = |reverse: bool| {
+            let mut regions = vec![rect_mark.clone(), text_mark.clone(), text_mark.clone()];
+            if reverse {
+                regions.reverse();
+            }
+            PermanentRemovalPlan::new(RedactionPlan::new(regions))
+        };
+        assert_eq!(make(false), make(true));
+
+        let mut input = RedactionInput::default();
+        input.pages.insert(1, b"BT (SECRET) Tj ET\n".to_vec());
+        input.pages.insert(2, b"BT ET\n".to_vec());
+        let never = || false;
+        let remover = StreamContentRemover::default();
+        let first = make(false)
+            .execute(&input, &remover, &never)
+            .expect("first");
+        let second = make(true)
+            .execute(&input, &remover, &never)
+            .expect("second");
+        assert_eq!(first.pages(), second.pages());
+        assert_eq!(first.marks(), second.marks());
+    }
+
+    #[test]
+    fn remover_trait_is_invoked_per_page_and_drops_text() {
+        let plan = PermanentRemovalPlan::new(RedactionPlan::new([
+            RedactionRegion::text(
+                page(2),
+                TextPattern::case_sensitive("SECRET").expect("valid pattern"),
+            ),
+            RedactionRegion::text(
+                page(1),
+                TextPattern::case_sensitive("SECRET").expect("valid pattern"),
+            ),
+        ]));
+        let mut input = RedactionInput::default();
+        input.pages.insert(2, b"BT (SECRET) Tj ET\n".to_vec());
+        input.pages.insert(1, b"BT (SECRET) Tj ET\n".to_vec());
+        let remover = DroppingRemover::new();
+        let never = || false;
+        let result = plan.execute(&input, &remover, &never).expect("execute");
+
+        assert_eq!(
+            remover.calls.borrow().as_slice(),
+            &[1, 2],
+            "remover is called once per page in ascending order"
+        );
+        for page in [1, 2] {
+            let content =
+                String::from_utf8_lossy(result.page_content(page).unwrap_or_default()).into_owned();
+            assert!(!content.contains("SECRET"), "page {page} text was dropped");
+            assert!(content.contains("BT"), "non-text bytes are preserved");
+        }
+    }
+
+    #[test]
+    fn verification_detects_residual_text_from_supplied_extract() {
+        let pattern = TextPattern::case_sensitive("SECRET").expect("valid pattern");
+        let marks = RedactionPlan::new([RedactionRegion::text(page(1), pattern)]);
+        let never = || false;
+        let page_text = text_map(&[(1, "prefix SECRET suffix SECRET")]);
+
+        let report = verify_extracted_text(&marks, &page_text, true, &never).expect("report");
+        assert!(!report.is_clean());
+        assert_eq!(report.residuals().len(), 2);
+        assert_eq!(report.residuals()[0].offset, 7);
+        assert_eq!(
+            report.residuals()[0].source,
+            ResidualSource::Pattern("SECRET".to_owned())
+        );
+        assert!(report.check().is_err(), "strict mode fails on residuals");
+
+        // The same proof is available from an executed permanent-removal result.
+        let remover = DroppingRemover::new();
+        let mut input = RedactionInput::default();
+        input.pages.insert(1, b"BT (SECRET) Tj ET\n".to_vec());
+        let result = PermanentRemovalPlan::new(marks)
+            .execute(&input, &remover, &never)
+            .expect("execute");
+        let via_result = result.verify(&page_text, true, &never).expect("report");
+        assert_eq!(via_result, report);
+    }
+
+    #[test]
+    fn verification_passes_when_no_residual_text() {
+        let pattern = TextPattern::case_sensitive("SECRET").expect("valid pattern");
+        let marks = RedactionPlan::new([
+            RedactionRegion::text(page(1), pattern.clone()),
+            RedactionRegion::rect_with_text(page(2), rect(0.0, 0.0, 10.0, 10.0), "CONFIDENTIAL"),
+        ]);
+        let never = || false;
+        let clean = text_map(&[(1, "all public here"), (2, "nothing hidden")]);
+        for strict in [true, false] {
+            let report = verify_extracted_text(&marks, &clean, strict, &never).expect("report");
+            assert!(report.is_clean(), "no marked text remains");
+            assert!(report.check().is_ok());
+            assert_eq!(report.strict(), strict);
+        }
+    }
+
+    #[test]
+    fn invalid_time_and_metadata_fields_are_rejected() {
+        let blank_author = RedactionMetadata {
+            author: Some("  ".to_owned()),
+            ..RedactionMetadata::default()
+        };
+        assert_eq!(
+            blank_author.validate(),
+            Err(RedactionError::InvalidMetadata { field: "author" })
+        );
+        let blank_subject = RedactionMetadata {
+            subject: Some(String::new()),
+            ..RedactionMetadata::default()
+        };
+        assert_eq!(
+            blank_subject.validate(),
+            Err(RedactionError::InvalidMetadata { field: "subject" })
+        );
+        let bad_time = RedactionMetadata {
+            created_unix_ms: Some(-1),
+            ..RedactionMetadata::default()
+        };
+        assert_eq!(
+            bad_time.validate(),
+            Err(RedactionError::InvalidMetadata {
+                field: "created_unix_ms"
+            })
+        );
+
+        let mut input = RedactionInput::default();
+        input.pages.insert(1, Vec::new());
+        let plan = PermanentRemovalPlan::new(RedactionPlan::empty()).with_metadata(bad_time);
+        assert_eq!(
+            plan.validate(&input),
+            Err(RedactionError::InvalidMetadata {
+                field: "created_unix_ms"
+            })
+        );
+
+        let valid = RedactionMetadata {
+            author: Some("Alice".to_owned()),
+            subject: Some("contract".to_owned()),
+            created_unix_ms: Some(0),
+        };
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn empty_page_set_verifies_clean() {
+        let plan = PermanentRemovalPlan::new(RedactionPlan::empty());
+        let input = RedactionInput::default();
+        let never = || false;
+        let remover = DroppingRemover::new();
+        let result = plan.execute(&input, &remover, &never).expect("execute");
+        assert!(result.pages().is_empty());
+        assert!(
+            remover.calls.borrow().is_empty(),
+            "no pages means no removals"
+        );
+        let report = result
+            .verify(&text_map(&[(1, "irrelevant")]), true, &never)
+            .expect("report");
+        assert!(report.is_clean());
+        assert!(report.check().is_ok());
+    }
+
+    #[test]
+    fn error_and_report_wording_is_stable() {
+        assert_eq!(
+            RedactionError::OverlappingMarks { page: 3 }.to_string(),
+            "redaction marks overlap on page 3"
+        );
+        assert_eq!(
+            RedactionError::InvalidMetadata { field: "author" }.to_string(),
+            "invalid redaction metadata field: author"
+        );
+        assert_eq!(
+            RedactionError::VerificationFailed { page: 2, offset: 9 }.to_string(),
+            "redaction verification failed: content remains on page 2 at byte 9"
+        );
+        assert_eq!(
+            RedactionError::EmptyRegion.to_string(),
+            "redaction rectangle must have positive area"
+        );
+        assert_eq!(
+            RedactionError::NonFiniteCoordinate.to_string(),
+            "redaction rectangle has a non-finite coordinate"
+        );
     }
 }
