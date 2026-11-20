@@ -67,6 +67,15 @@ pub enum HeaderFooterError {
         /// Number of pages in the document.
         page_count: usize,
     },
+    /// An alternate page selection had a zero stride.
+    InvalidAlternateStride,
+    /// A page-set input and its overlay list had different lengths.
+    PageSetLengthMismatch {
+        /// Number of page content buffers supplied.
+        pages: usize,
+        /// Number of overlays supplied.
+        overlays: usize,
+    },
     /// A page index could not be represented as an `i64` offset, or adding it
     /// to the configured numbering start would overflow `i64`.
     PageIndexOutOfRange {
@@ -107,6 +116,15 @@ impl fmt::Display for HeaderFooterError {
                 write!(
                     f,
                     "page index {index} is outside a document of {page_count} pages"
+                )
+            }
+            Self::InvalidAlternateStride => {
+                write!(f, "alternate page selection stride must be at least 1")
+            }
+            Self::PageSetLengthMismatch { pages, overlays } => {
+                write!(
+                    f,
+                    "page set has {pages} pages but {overlays} overlays were supplied"
                 )
             }
             Self::PageIndexOutOfRange { index, start } => {
@@ -373,6 +391,17 @@ pub enum PageSelection {
     Odd,
     /// Only even-numbered pages (display positions 2, 4, 6, ...).
     Even,
+    /// Every `every`-th page, starting at the zero-based `offset` page.
+    ///
+    /// `every` must be at least 1; a zero stride is rejected by
+    /// [`HeaderFooterLayout::validate`] and treated as "no pages" by the
+    /// infallible [`PageFilter::includes`] so it can never divide by zero.
+    Alternate {
+        /// Stride between selected pages (must be at least 1).
+        every: usize,
+        /// Zero-based index of the first selected page.
+        offset: usize,
+    },
 }
 
 /// First-page and odd/even suppression rules.
@@ -393,6 +422,19 @@ impl PageFilter {
         }
     }
 
+    /// Creates a filter that draws on every `every`-th page starting at
+    /// `offset`.
+    ///
+    /// A zero stride is accepted here but selects no pages (and is rejected by
+    /// [`HeaderFooterLayout::validate`]); this keeps the infallible
+    /// [`Self::includes`] free of a divide-by-zero panic on malformed input.
+    pub const fn alternate(every: usize, offset: usize) -> Self {
+        Self {
+            suppress_first_page: false,
+            selection: PageSelection::Alternate { every, offset },
+        }
+    }
+
     /// Returns `true` when a slot is drawn on the zero-based `page_index`.
     pub fn includes(self, page_index: usize) -> bool {
         if self.suppress_first_page && page_index == 0 {
@@ -403,6 +445,9 @@ impl PageFilter {
             PageSelection::All => true,
             PageSelection::Odd => one_based % 2 == 1,
             PageSelection::Even => one_based.is_multiple_of(2),
+            PageSelection::Alternate { every, offset } => {
+                every > 0 && page_index >= offset && (page_index - offset).is_multiple_of(every)
+            }
         }
     }
 }
@@ -424,6 +469,8 @@ pub enum Token {
     Date,
     /// A caller-supplied document title.
     Title,
+    /// The caller-supplied source file name of the document.
+    FileName,
     /// Verbatim literal text.
     Literal(String),
 }
@@ -695,14 +742,16 @@ pub struct PageContext {
     pub page_index: usize,
     /// Total number of pages in the document.
     pub page_count: usize,
-    /// Document title for `{title}`.
+    /// Document title for [`Token::Title`].
     pub title: String,
-    /// Preformatted date string for `{date}`.
+    /// Preformatted date string for [`Token::Date`].
     pub date: String,
+    /// Source file name for [`Token::FileName`].
+    pub filename: String,
 }
 
 impl PageContext {
-    /// Creates a page context.
+    /// Creates a page context with an empty file name.
     pub fn new(
         page_index: usize,
         page_count: usize,
@@ -714,6 +763,39 @@ impl PageContext {
             page_count,
             title: title.into(),
             date: date.into(),
+            filename: String::new(),
+        }
+    }
+
+    /// Sets the source file name used by [`Token::FileName`].
+    pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
+        self.filename = filename.into();
+        self
+    }
+}
+
+/// Document-scoped values shared by every page of a [`render_page_set`] call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageSetContext {
+    /// Document title substituted for [`Token::Title`].
+    pub title: String,
+    /// Preformatted date string substituted for [`Token::Date`].
+    pub date: String,
+    /// Source file name substituted for [`Token::FileName`].
+    pub filename: String,
+}
+
+impl PageSetContext {
+    /// Creates a page-set context.
+    pub fn new(
+        title: impl Into<String>,
+        date: impl Into<String>,
+        filename: impl Into<String>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            date: date.into(),
+            filename: filename.into(),
         }
     }
 }
@@ -818,6 +900,11 @@ impl HeaderFooterLayout {
             return Err(HeaderFooterError::InvalidNumberingStart(
                 self.numbering.start,
             ));
+        }
+        if let PageSelection::Alternate { every, .. } = self.filter.selection
+            && every == 0
+        {
+            return Err(HeaderFooterError::InvalidAlternateStride);
         }
         Ok(())
     }
@@ -959,6 +1046,7 @@ fn substitute(
             Token::Pages => out.push_str(&context.page_count.to_string()),
             Token::Date => out.push_str(&context.date),
             Token::Title => out.push_str(&context.title),
+            Token::FileName => out.push_str(&context.filename),
             Token::Literal(text) => out.push_str(text),
         }
     }
@@ -991,6 +1079,16 @@ impl Overlay {
     /// Returns `true` when the overlay draws nothing.
     pub fn is_empty(&self) -> bool {
         self.content.is_empty()
+    }
+
+    /// Returns an owned copy of the content-stream bytes.
+    ///
+    /// The crate emits PDF *content-stream* bytes (not complete PDF files): a
+    /// writer in `pdfxi-core` wraps these in a stream object and merges
+    /// [`Self::fonts`] into the page resource dictionary. Copying here keeps the
+    /// overlay copy-on-write by contract.
+    pub fn into_bytes(&self) -> Vec<u8> {
+        self.content.as_bytes().to_vec()
     }
 }
 
@@ -1115,6 +1213,54 @@ pub fn compose_content(existing: &[u8], overlay: &Overlay) -> Vec<u8> {
     combined.push(b'\n');
     combined.extend_from_slice(overlay.content_bytes());
     combined
+}
+
+/// Renders one overlay per page of a page set in input order.
+///
+/// The layout is validated once and the number of pages is taken from
+/// `pages.len()`, so a single call applies headers, footers, and page numbers
+/// over the whole set with a shared [`PageSetContext`]. The returned vector has
+/// exactly one entry per input page; suppressed pages receive an empty
+/// [`Overlay`]. Output is deterministic for identical inputs.
+pub fn render_page_set(
+    layout: &HeaderFooterLayout,
+    pages: &[PageGeometry],
+    context: &PageSetContext,
+) -> Result<Vec<Overlay>, HeaderFooterError> {
+    layout.validate()?;
+    let page_count = pages.len();
+    layout.numbering.validate_range(page_count)?;
+    let mut overlays = Vec::with_capacity(page_count);
+    for (page_index, page) in pages.iter().enumerate() {
+        let page_context = PageContext::new(page_index, page_count, &context.title, &context.date)
+            .with_filename(&context.filename);
+        overlays.push(render_overlay(layout, page, &page_context)?);
+    }
+    Ok(overlays)
+}
+
+/// Composes each page's original content bytes with its generated overlay.
+///
+/// Returns one fresh byte vector per page in the same order as the inputs. The
+/// source buffers are copied and never mutated. A length mismatch between
+/// `pages` and `overlays` is reported as
+/// [`HeaderFooterError::PageSetLengthMismatch`] rather than truncating either
+/// list.
+pub fn compose_page_set(
+    pages: &[Vec<u8>],
+    overlays: &[Overlay],
+) -> Result<Vec<Vec<u8>>, HeaderFooterError> {
+    if pages.len() != overlays.len() {
+        return Err(HeaderFooterError::PageSetLengthMismatch {
+            pages: pages.len(),
+            overlays: overlays.len(),
+        });
+    }
+    Ok(pages
+        .iter()
+        .zip(overlays)
+        .map(|(content, overlay)| compose_content(content, overlay))
+        .collect())
 }
 
 #[cfg(test)]
@@ -1413,5 +1559,138 @@ mod tests {
                 page_count: 3
             }))
         ));
+    }
+
+    #[test]
+    fn token_substitution_includes_filename_token() {
+        let context = PageContext::new(0, 1, "Title", "DATE").with_filename("report.pdf");
+        let tokens = [
+            Token::Literal("File: ".into()),
+            Token::FileName,
+            Token::Literal(" | ".into()),
+            Token::Title,
+            Token::Literal(" | ".into()),
+            Token::Date,
+        ];
+        assert_eq!(
+            substitute(&tokens, &context, &PageNumbering::arabic()).expect("substitution"),
+            "File: report.pdf | Title | DATE"
+        );
+    }
+
+    #[test]
+    fn alternate_selection_stride_and_offset() {
+        let every_three = PageFilter::alternate(3, 1);
+        let selected: Vec<usize> = (0..10).filter(|&i| every_three.includes(i)).collect();
+        assert_eq!(selected, vec![1, 4, 7]);
+
+        let every_two = PageFilter::alternate(2, 0);
+        let selected: Vec<usize> = (0..8).filter(|&i| every_two.includes(i)).collect();
+        assert_eq!(selected, vec![0, 2, 4, 6]);
+
+        // A zero stride selects nothing and never divides by zero.
+        assert!(!PageFilter::alternate(0, 0).includes(0));
+    }
+
+    #[test]
+    fn zero_alternate_stride_is_rejected() {
+        let layout = HeaderFooterLayout::new().with_filter(PageFilter::alternate(0, 0));
+        assert!(matches!(
+            layout.validate(),
+            Err(HeaderFooterError::InvalidAlternateStride)
+        ));
+        let result = render_page_set(&layout, &[letter_page()], &PageSetContext::new("", "", ""));
+        assert!(matches!(
+            result,
+            Err(HeaderFooterError::InvalidAlternateStride)
+        ));
+    }
+
+    #[test]
+    fn render_page_set_applies_layout_over_all_pages() {
+        let layout = HeaderFooterLayout::new().with_slot(
+            Slot::FooterCenter,
+            SlotContent::new(vec![
+                Token::FileName,
+                Token::Literal(" ".into()),
+                Token::Page,
+                Token::Literal("/".into()),
+                Token::Pages,
+            ]),
+        );
+        let pages = [letter_page(), letter_page(), letter_page()];
+        let overlays = render_page_set(&layout, &pages, &PageSetContext::new("T", "D", "doc.pdf"))
+            .expect("page set");
+        assert_eq!(overlays.len(), 3);
+        for (index, overlay) in overlays.iter().enumerate() {
+            let text = overlay.content_str();
+            assert!(
+                text.contains(&format!("(doc.pdf {}/3)", index + 1)),
+                "page {index}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn render_page_set_respects_suppression_and_numbering() {
+        let layout = HeaderFooterLayout::new()
+            .with_slot(Slot::FooterRight, SlotContent::new(vec![Token::Page]))
+            .with_filter(PageFilter::alternate(2, 1))
+            .with_numbering(PageNumbering::new(5).expect("start"));
+        let pages = [letter_page(), letter_page(), letter_page(), letter_page()];
+        let overlays =
+            render_page_set(&layout, &pages, &PageSetContext::new("", "", "")).expect("page set");
+        assert!(overlays[0].is_empty(), "offset page is not selected");
+        assert!(!overlays[1].is_empty());
+        assert!(overlays[2].is_empty(), "off-stride page is not selected");
+        assert!(!overlays[3].is_empty());
+        assert!(overlays[1].content_str().contains("(6)"));
+        assert!(overlays[3].content_str().contains("(8)"));
+    }
+
+    #[test]
+    fn compose_page_set_is_copy_on_write_and_deterministic() {
+        let layout = HeaderFooterLayout::new()
+            .with_slot(Slot::FooterCenter, SlotContent::new(vec![Token::Page]));
+        let pages = vec![b"q Q".to_vec(), b"0 0 1 rg".to_vec()];
+        let geoms = [letter_page(), letter_page()];
+        let overlays =
+            render_page_set(&layout, &geoms, &PageSetContext::new("", "", "")).expect("render");
+        let before = pages.clone();
+        let first = compose_page_set(&pages, &overlays).expect("compose a");
+        let second = compose_page_set(&pages, &overlays).expect("compose b");
+        assert_eq!(pages, before, "source pages must not be mutated");
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert!(first[0].starts_with(b"q Q\n"));
+    }
+
+    #[test]
+    fn compose_page_set_length_mismatch_is_typed() {
+        let overlays = render_page_set(
+            &HeaderFooterLayout::new(),
+            &[letter_page()],
+            &PageSetContext::new("", "", ""),
+        )
+        .expect("render");
+        let pages = vec![Vec::new(), Vec::new()];
+        assert!(matches!(
+            compose_page_set(&pages, &overlays),
+            Err(HeaderFooterError::PageSetLengthMismatch {
+                pages: 2,
+                overlays: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn filename_token_renders_into_overlay_stream() {
+        let layout = HeaderFooterLayout::new().with_slot(
+            Slot::HeaderLeft,
+            SlotContent::new(vec![Token::Literal("File ".into()), Token::FileName]),
+        );
+        let context = PageContext::new(0, 1, "", "").with_filename("a(b).pdf");
+        let overlay = render_overlay(&layout, &letter_page(), &context).expect("render");
+        assert!(overlay.content_str().contains(r"(File a\(b\).pdf)"));
     }
 }

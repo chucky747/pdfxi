@@ -207,6 +207,19 @@ impl NameTree {
             .and_then(|position| self.entries.get(position))
     }
 
+    /// Removes and returns the attachment with the given name.
+    ///
+    /// Returns [`NavigationError::AttachmentNotFound`] when the key is absent.
+    /// Entries remain sorted after removal, so serialization stays
+    /// deterministic.
+    pub fn remove(&mut self, name: &str) -> Result<Attachment, NavigationError> {
+        let position = self
+            .entries
+            .binary_search_by(|entry| entry.name.as_str().cmp(name))
+            .map_err(|_| NavigationError::AttachmentNotFound(name.to_string()))?;
+        Ok(self.entries.remove(position))
+    }
+
     /// Number of attachments in the tree.
     pub fn len(&self) -> usize {
         self.entries.len()

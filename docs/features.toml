@@ -825,20 +825,24 @@ title = "Split and merge documents"
 docs = [
     "crates/pdfxi-edit/src/header_footer.rs",
     "crates/pdfxi-edit/src/lib.rs",
+    "docs/evidence/author/T-0125.md",
 ]
 domain = "Edit"
-evidence = "docs/evidence/author/T-0063.md"
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 185 passed, 0 failed, including 8 new header_footer tests (22 in the module). fmt/clippy/doc/workspace-check all EXIT=0. Full output in docs/evidence/author/T-0125.md."
 id = "EDIT-008"
 notes = """
-Library-level typed model, token substitution, rotation/MediaBox-aware overlay
-generation, literal-string escaping, deterministic output, copy-on-write
-composition, and validated page numbering (offset, five formats, prefix/suffix)
-are implemented with 14 unit tests, including checked-index regressions.
-Status is in-progress: no UI or CLI exposure for headers, footers, or page
-numbering exists yet, so the user-visible parity bar is not met.
+Library contract complete: the six-slot overlay model now renders {page},
+{pages}, {date}, {title} and {filename} tokens with margins, left/center/right
+alignment, five number formats with offset and prefix/suffix, odd/even/first-page
+and alternate (every/offset) selection, rotation/MediaBox-aware transforms,
+deterministic byte output, and typed errors (InvalidAlternateStride,
+PageSetLengthMismatch, PageIndexOutOfRange). render_page_set applies a layout to
+a whole page set; compose_page_set composes per-page bytes copy-on-write. Output
+is PDF content-stream bytes (this crate has no full PDF writer), not a complete
+PDF file. No desktop UI or CLI exposure in this task.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "token_substitution_renders_all_token_kinds",
     "page_number_formats_and_start_offset",
@@ -854,20 +858,37 @@ tests = [
     "page_index_out_of_range_is_rejected",
     "number_for_rejects_unrepresentable_and_overflowing_indices",
     "substitute_propagates_numbering_overflow",
+    "header_footer::tests::token_substitution_includes_filename_token",
+    "header_footer::tests::alternate_selection_stride_and_offset",
+    "header_footer::tests::zero_alternate_stride_is_rejected",
+    "header_footer::tests::render_page_set_applies_layout_over_all_pages",
+    "header_footer::tests::render_page_set_respects_suppression_and_numbering",
+    "header_footer::tests::compose_page_set_is_copy_on_write_and_deterministic",
+    "header_footer::tests::compose_page_set_length_mismatch_is_typed",
+    "header_footer::tests::filename_token_renders_into_overlay_stream",
 ]
 title = "Headers footers and page numbering"
 
 [[feature]]
 docs = [
     "crates/pdfxi-edit/src/watermark.rs",
-    "docs/evidence/author/T-0067.md",
+    "docs/evidence/author/T-0125.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 109 passed, 0 failed, including 11 new watermark::tests covering text geometry, page+mark rotation, tiling, ExtGState opacity, behind/front ordering, page range/suppression, determinism, resource preservation, invalid config, vector/image marks and diagonal tilt. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/author/T-0067.md."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 185 passed, 0 failed, including 3 new watermark page-set tests (14 in the module). fmt/clippy/doc/workspace-check all EXIT=0. Full output in docs/evidence/author/T-0125.md."
 id = "EDIT-009"
-notes = "Library/model layer only: typed Watermark with text/vector/image content, style (font/size/colour/opacity), rotation, position (center/tile/diagonal/absolute), scale, page range, front/behind placement and first-page/odd-even suppression. Deterministic additive content streams with MediaBox-origin and /Rotate-aware transforms, ExtGState alpha, copy-on-write composition and resource-dictionary merging that preserves unknown keys. No UI/CLI exposure yet, so status stays in-progress. See T-0067 notes."
+notes = """
+Library contract complete: typed Watermark with text/vector/image content,
+style (font/size/colour/opacity), rotation, position (center/tile/diagonal/
+absolute), scale, page range, front/behind placement and first-page/odd-even/
+alternate suppression. Deterministic additive content streams with
+MediaBox-origin and /Rotate-aware transforms, ExtGState alpha, copy-on-write
+composition and resource merging that preserves unknown keys.
+render_watermark_page_set applies one mark across a page set deterministically.
+No desktop UI or CLI exposure in this task.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "watermark::tests::text_watermark_geometry",
     "watermark::tests::rotation_transform_composes_page_and_mark_rotation",
@@ -880,6 +901,9 @@ tests = [
     "watermark::tests::invalid_configuration_is_rejected",
     "watermark::tests::vector_and_image_marks_and_missing_xobject",
     "watermark::tests::diagonal_adds_implicit_tilt",
+    "watermark::tests::render_watermark_page_set_applies_and_suppresses_deterministically",
+    "watermark::tests::render_watermark_page_set_alternate_selection",
+    "watermark::tests::render_watermark_page_set_rejects_invalid_config",
 ]
 title = "Watermarks and backgrounds"
 
@@ -895,14 +919,58 @@ tests = []
 title = "Bates numbering"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/navigation/edit.rs",
+    "crates/pdfxi-edit/src/navigation/mod.rs",
+    "crates/pdfxi-edit/src/navigation/attachment.rs",
+    "crates/pdfxi-edit/src/navigation/error.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "docs/evidence/author/T-0125.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 185 passed, 0 failed, including 16 new navigation::edit tests plus all existing outline/link/attachment/error tests. fmt/clippy/doc/workspace-check all EXIT=0. Full output in docs/evidence/author/T-0125.md."
 id = "EDIT-011"
-notes = ""
+notes = """
+Library contract complete: new navigation::edit module addresses bookmarks by
+BookmarkPath (child-index path from the outline root) with bookmark_at,
+insert_bookmark, rename_bookmark, remove_bookmark and move_bookmark; moving a
+node into itself or a descendant returns NavigationError::MoveCreatesCycle, and
+same-parent index shifts are handled. LinkStore adds/removes/replaces/lists link
+annotations by page with stable ids and a deterministic /Links dictionary.
+NameTree::remove complements insert for embedded-file add/remove. All edits are
+copy-on-write and round-trip through the existing dictionary serializers; seven
+new typed NavigationError variants cover bad paths, cycles, missing links and
+missing attachments. No desktop UI or CLI exposure in this task.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "navigation::edit::tests::bookmark_insert_at_root_and_nested_positions",
+    "navigation::edit::tests::bookmark_invalid_path_is_typed_error",
+    "navigation::edit::tests::bookmark_edits_keep_serialization_deterministic",
+    "navigation::edit::tests::bookmark_move_between_parents_preserves_hierarchy",
+    "navigation::edit::tests::bookmark_move_into_descendant_is_rejected",
+    "navigation::edit::tests::bookmark_move_to_root_is_allowed",
+    "navigation::edit::tests::bookmark_move_within_same_parent_adjusts_index",
+    "navigation::edit::tests::bookmark_path_helpers_report_shape",
+    "navigation::edit::tests::bookmark_remove_returns_node_and_reindexes",
+    "navigation::edit::tests::bookmark_rename_validates_and_updates_title",
+    "navigation::edit::tests::link_store_add_remove_replace_round_trip",
+    "navigation::edit::tests::link_store_links_on_page_is_ordered_and_isolated",
+    "navigation::edit::tests::link_store_missing_link_is_typed_error",
+    "navigation::edit::tests::link_store_to_dict_is_deterministic",
+    "navigation::edit::tests::name_tree_remove_then_insert_round_trip",
+    "navigation::edit::tests::name_tree_remove_missing_is_typed_error",
+    "navigation::outline::tests::outline_round_trip_three_levels_with_sibling_order",
+    "navigation::outline::tests::cycle_in_next_chain_is_rejected",
+    "navigation::outline::tests::cycle_in_parent_chain_is_rejected",
+    "navigation::outline::tests::orphan_child_is_rejected",
+    "navigation::link::tests::uri_link_round_trip",
+    "navigation::link::tests::internal_destination_link_round_trip",
+    "navigation::attachment::tests::name_tree_round_trip",
+    "navigation::attachment::tests::duplicate_name_is_rejected",
+    "navigation::error::tests::error_messages_are_descriptive",
+]
 title = "Bookmarks links and attachments editing"
 
 [[feature]]

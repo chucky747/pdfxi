@@ -7,12 +7,15 @@
 //! maps annotations to and from a dependency-free PDF dictionary intermediate
 //! with validation and deterministic appearance geometry, and [`navigation`]
 //! models bookmarks, links, and attachments with the same dictionary
-//! round-trip approach. [`review`] models comment threads, workflow states, and
+//! round-trip approach; `navigation::edit` adds bookmark tree editing by path,
+//! link-annotation storage, and attachment add/remove. [`review`] models comment threads, workflow states, and
 //! a filterable review registry with a dictionary round-trip. [`header_footer`]
 //! models six-slot headers, footers, and page numbering and renders them as
-//! additive content-stream overlays. [`watermark`] models text, vector, and
-//! image watermarks and backgrounds with placement, rotation, opacity, page
-//! selection, and copy-on-write composition helpers. [`redaction`] applies a
+//! additive content-stream overlays, including whole-page-set application with
+//! filename tokens and alternate page selection. [`watermark`] models text,
+//! vector, and image watermarks and backgrounds with placement, rotation,
+//! opacity, page selection, page-set application, and copy-on-write composition
+//! helpers. [`redaction`] applies a
 //! plan of rectangles and text patterns to content streams, removing the
 //! affected operators (not merely covering them), stripping annotations and
 //! metadata, and verifying removal with a typed report. [`flatten()`] replaces
@@ -47,14 +50,14 @@ pub use flatten::{
 pub use geometry::{GeometryError, PageGeometry, PageIndex, Point, Rect};
 pub use header_footer::{
     ContentMatrix, HeaderFooterError, HeaderFooterLayout, Margins, NumberFormat, Overlay,
-    PageContext, PageFilter, PageNumbering, PageSelection, Slot, SlotContent, StandardFont,
-    TextColor, TextStyle, Token, compose_content, display_dimensions, escape_literal,
-    render_overlay, transform_for_page,
+    PageContext, PageFilter, PageNumbering, PageSelection, PageSetContext, Slot, SlotContent,
+    StandardFont, TextColor, TextStyle, Token, compose_content, compose_page_set,
+    display_dimensions, escape_literal, render_overlay, render_page_set, transform_for_page,
 };
 pub use navigation::{
-    Attachment, Bookmark, Destination, FitType, Link, LinkBorder, LinkHighlight, LinkTarget,
-    MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link, dict_to_name_tree,
-    dict_to_outline, link_to_dict, name_tree_to_dict, outline_to_dict,
+    Attachment, Bookmark, BookmarkPath, Destination, FitType, Link, LinkBorder, LinkHighlight,
+    LinkStore, LinkTarget, MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link,
+    dict_to_name_tree, dict_to_outline, link_to_dict, name_tree_to_dict, outline_to_dict,
 };
 pub use redaction::{
     AppliedPage, AppliedRedaction, FormXObject, Matrix, PageNumber, RedactionError, RedactionInput,
@@ -69,7 +72,7 @@ pub use watermark::{
     ImageMark, MarkContent, PageRange, Placement, ResourceExtGState, ResourceFont, ResourcePatch,
     Suppression, VectorMark, Watermark, WatermarkError, WatermarkOverlay, WatermarkPosition,
     WatermarkStyle, apply_resource_patch, compose_content as compose_watermark_content,
-    render_watermark,
+    render_watermark, render_watermark_page_set,
 };
 
 /// Return the implementation name for diagnostics.

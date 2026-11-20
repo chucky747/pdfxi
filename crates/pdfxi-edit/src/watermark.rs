@@ -569,6 +569,12 @@ impl Watermark {
                     return false;
                 }
             }
+            PageSelection::Alternate { every, offset } => {
+                if every == 0 || page_index < offset || !(page_index - offset).is_multiple_of(every)
+                {
+                    return false;
+                }
+            }
         }
         self.page_range.contains(page_index)
     }
@@ -1024,6 +1030,26 @@ pub fn render_watermark(
         alpha,
         required_xobjects,
     })
+}
+
+/// Applies one watermark to every page of a page set in input order.
+///
+/// The watermark is validated once and the page count is taken from
+/// `pages.len()`. The returned vector has exactly one entry per input page;
+/// pages excluded by the watermark's range/suppression rules receive an empty
+/// [`WatermarkOverlay`]. Output is deterministic for identical inputs, and no
+/// page geometry or existing content is mutated.
+pub fn render_watermark_page_set(
+    watermark: &Watermark,
+    pages: &[PageGeometry],
+) -> Result<Vec<WatermarkOverlay>, WatermarkError> {
+    watermark.validate()?;
+    let page_count = pages.len();
+    let mut overlays = Vec::with_capacity(page_count);
+    for (page_index, page) in pages.iter().enumerate() {
+        overlays.push(render_watermark(watermark, page, page_index, page_count)?);
+    }
+    Ok(overlays)
 }
 
 /// Returns a fresh byte vector combining `existing` with `overlay`.
@@ -1487,5 +1513,61 @@ mod tests {
                 .effective_rotation_degrees(),
             55.0
         );
+    }
+
+    #[test]
+    fn render_watermark_page_set_applies_and_suppresses_deterministically() {
+        let watermark = text_watermark("DRAFT")
+            .with_page_range(PageRange::RangeInclusive { first: 0, last: 2 })
+            .with_suppression(Suppression {
+                suppress_first_page: true,
+                selection: PageSelection::All,
+            });
+        let pages = [letter_page(), letter_page(), letter_page(), letter_page()];
+        let overlays = render_watermark_page_set(&watermark, &pages).expect("page set");
+        assert_eq!(overlays.len(), 4);
+        assert!(overlays[0].is_empty(), "first page must be suppressed");
+        assert!(!overlays[1].is_empty());
+        assert!(!overlays[2].is_empty());
+        assert!(overlays[3].is_empty(), "page outside range must be empty");
+        assert_eq!(
+            overlays,
+            render_watermark_page_set(&watermark, &pages).expect("page set again")
+        );
+    }
+
+    #[test]
+    fn render_watermark_page_set_alternate_selection() {
+        let watermark = text_watermark("ALT").with_suppression(Suppression {
+            suppress_first_page: false,
+            selection: PageSelection::Alternate {
+                every: 2,
+                offset: 1,
+            },
+        });
+        let pages = [
+            letter_page(),
+            letter_page(),
+            letter_page(),
+            letter_page(),
+            letter_page(),
+        ];
+        let overlays = render_watermark_page_set(&watermark, &pages).expect("page set");
+        let drawn: Vec<usize> = overlays
+            .iter()
+            .enumerate()
+            .filter(|(_, overlay)| !overlay.is_empty())
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(drawn, vec![1, 3]);
+    }
+
+    #[test]
+    fn render_watermark_page_set_rejects_invalid_config() {
+        let invalid = text_watermark("X").with_scale(0.0);
+        assert!(matches!(
+            render_watermark_page_set(&invalid, &[letter_page()]),
+            Err(WatermarkError::InvalidScale(_))
+        ));
     }
 }

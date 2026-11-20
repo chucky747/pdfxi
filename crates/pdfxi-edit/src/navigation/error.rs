@@ -102,6 +102,32 @@ pub enum NavigationError {
         /// Id of the orphaned item.
         id: u64,
     },
+    /// A bookmark edit required a node path but received the empty root path.
+    BookmarkPathEmpty,
+    /// A bookmark path did not resolve to an existing node.
+    BookmarkNotFound,
+    /// A child index in a bookmark path was out of range.
+    BookmarkIndexOutOfRange {
+        /// Depth in the path where the failure occurred.
+        depth: usize,
+        /// Rejected child index.
+        index: usize,
+        /// Number of children available at that depth.
+        len: usize,
+    },
+    /// A bookmark move targeted its own descendant, which would create a cycle.
+    MoveCreatesCycle,
+    /// A link id was not present on the requested page.
+    LinkNotFound {
+        /// Zero-based page index.
+        page: usize,
+        /// Link id on that page.
+        id: u64,
+    },
+    /// The link id space was exhausted.
+    LinkIdExhausted,
+    /// An attachment name was not present in the name tree.
+    AttachmentNotFound(String),
     /// The `Next`/`Prev`/`First`/`Last` links around a sibling chain disagreed.
     BrokenSiblingLink {
         /// Id of the item where the inconsistency was detected.
@@ -177,6 +203,27 @@ impl fmt::Display for NavigationError {
             }
             Self::Cycle { id } => write!(f, "outline reference cycle detected at item {id}"),
             Self::Orphan { id } => write!(f, "outline item {id} is orphaned"),
+            Self::BookmarkPathEmpty => {
+                write!(f, "a non-empty bookmark path is required for this edit")
+            }
+            Self::BookmarkNotFound => write!(f, "bookmark path does not resolve to a node"),
+            Self::BookmarkIndexOutOfRange { depth, index, len } => write!(
+                f,
+                "bookmark index {index} at depth {depth} is outside a list of {len} children"
+            ),
+            Self::MoveCreatesCycle => {
+                write!(
+                    f,
+                    "a bookmark cannot be moved into itself or its descendants"
+                )
+            }
+            Self::LinkNotFound { page, id } => {
+                write!(f, "link {id} was not found on page {page}")
+            }
+            Self::LinkIdExhausted => write!(f, "the link id space is exhausted"),
+            Self::AttachmentNotFound(name) => {
+                write!(f, "attachment `{name}` was not found in the name tree")
+            }
             Self::BrokenSiblingLink { id } => {
                 write!(f, "outline item {id} has inconsistent sibling links")
             }
@@ -247,6 +294,17 @@ mod tests {
             NavigationError::UnknownParent { id: 2, parent: 9 },
             NavigationError::Cycle { id: 1 },
             NavigationError::Orphan { id: 5 },
+            NavigationError::BookmarkPathEmpty,
+            NavigationError::BookmarkNotFound,
+            NavigationError::BookmarkIndexOutOfRange {
+                depth: 1,
+                index: 4,
+                len: 2,
+            },
+            NavigationError::MoveCreatesCycle,
+            NavigationError::LinkNotFound { page: 2, id: 7 },
+            NavigationError::LinkIdExhausted,
+            NavigationError::AttachmentNotFound("missing.pdf".into()),
             NavigationError::BrokenSiblingLink { id: 4 },
             NavigationError::InvalidFit("Bogus".into()),
             NavigationError::InvalidFitArguments {

@@ -1,5 +1,6 @@
 //! Navigation structures: destinations, outlines (bookmarks), links, and
-//! attachments.
+//! attachments, plus path-addressed bookmark edits, a link-annotation store,
+//! and attachment add/remove (see [`BookmarkPath`] and [`LinkStore`]).
 //!
 //! This module extends the dependency-free PDF dictionary intermediate with the
 //! navigation objects that Acrobat-style authoring exposes. Like the annotation
@@ -27,11 +28,13 @@
 //! [`Value`]: crate::pdf::Value
 
 mod attachment;
+mod edit;
 mod error;
 mod link;
 mod outline;
 
 pub use attachment::{Attachment, NameTree, dict_to_name_tree, name_tree_to_dict};
+pub use edit::{BookmarkPath, LinkStore};
 pub use error::NavigationError;
 pub use link::{Link, LinkBorder, LinkHighlight, LinkTarget, dict_to_link, link_to_dict};
 pub use outline::{Bookmark, Outline, dict_to_outline, outline_to_dict};
