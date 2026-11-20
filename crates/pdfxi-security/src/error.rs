@@ -203,6 +203,36 @@ pub enum SecurityError {
     CrlMalformed,
     /// The CRL's `thisUpdate` was later than its `nextUpdate`.
     CrlInvalidWindow,
+    /// The core document layer could not be read or written while applying a
+    /// sanitizer plan.
+    ///
+    /// Only a structural reason is carried; document contents are never embedded
+    /// in an error value.
+    SanitizationCoreFailed(String),
+    /// A security envelope was built without any recipients.
+    EnvelopeNoRecipients,
+    /// A security envelope was built around an empty payload.
+    EnvelopeEmptyPayload,
+    /// Two envelope recipients shared a label.
+    EnvelopeDuplicateRecipient(String),
+    /// No envelope recipient matched the requested label.
+    EnvelopeRecipientNotFound(String),
+    /// A serialized security envelope could not be decoded.
+    EnvelopeMalformed(String),
+    /// The envelope integrity tag did not match its contents (tampering).
+    EnvelopeIntegrityFailed,
+    /// The caller was not granted a permission declared by the envelope.
+    EnvelopePermissionDenied(&'static str),
+    /// A protection policy had an empty name.
+    PolicyEmptyName,
+    /// Two protection policies shared a name.
+    PolicyDuplicateName(String),
+    /// No protection policy matched the requested name.
+    PolicyNotFound(String),
+    /// A protection policy was validated at or after its expiry time.
+    PolicyExpired(String),
+    /// The caller was denied an operation by a protection policy.
+    PolicyPermissionDenied(&'static str),
 }
 
 impl fmt::Display for SecurityError {
@@ -392,6 +422,46 @@ impl fmt::Display for SecurityError {
             }
             Self::CrlMalformed => write!(f, "certificate revocation list is malformed"),
             Self::CrlInvalidWindow => write!(f, "CRL thisUpdate is later than nextUpdate"),
+            Self::SanitizationCoreFailed(reason) => {
+                write!(f, "core document could not be sanitized: {reason}")
+            }
+            Self::EnvelopeNoRecipients => {
+                write!(f, "a security envelope requires at least one recipient")
+            }
+            Self::EnvelopeEmptyPayload => {
+                write!(f, "a security envelope requires a non-empty payload")
+            }
+            Self::EnvelopeDuplicateRecipient(label) => {
+                write!(f, "duplicate envelope recipient label: {label}")
+            }
+            Self::EnvelopeRecipientNotFound(label) => {
+                write!(f, "no envelope recipient matched label: {label}")
+            }
+            Self::EnvelopeMalformed(reason) => {
+                write!(f, "security envelope is malformed: {reason}")
+            }
+            Self::EnvelopeIntegrityFailed => {
+                write!(
+                    f,
+                    "security envelope integrity tag did not match its contents"
+                )
+            }
+            Self::EnvelopePermissionDenied(operation) => {
+                write!(f, "envelope permission denied for operation: {operation}")
+            }
+            Self::PolicyEmptyName => write!(f, "protection policy name must not be empty"),
+            Self::PolicyDuplicateName(name) => {
+                write!(f, "duplicate protection policy name: {name}")
+            }
+            Self::PolicyNotFound(name) => {
+                write!(f, "no protection policy matched name: {name}")
+            }
+            Self::PolicyExpired(name) => {
+                write!(f, "protection policy '{name}' has expired")
+            }
+            Self::PolicyPermissionDenied(operation) => {
+                write!(f, "protection policy denied operation: {operation}")
+            }
         }
     }
 }

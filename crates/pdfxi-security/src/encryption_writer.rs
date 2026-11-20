@@ -496,7 +496,7 @@ fn transform_objects(
 }
 
 /// Collect object identifiers from classic `N G obj` headers in source bytes.
-fn collect_object_ids(bytes: &[u8]) -> Vec<ObjectId> {
+pub(crate) fn collect_object_ids(bytes: &[u8]) -> Vec<ObjectId> {
     let mut ids: Vec<ObjectId> = Vec::new();
     for line in bytes.split(|byte| *byte == b'\n') {
         let text = match std::str::from_utf8(line) {
@@ -677,7 +677,7 @@ fn write_xref(out: &mut Vec<u8>, offsets: &BTreeMap<u32, usize>) {
 }
 
 /// Serialize a standalone PDF with a single classic xref table.
-fn write_pdf(
+pub(crate) fn write_pdf(
     objects: &[(ObjectId, Object)],
     root: ObjectId,
     trailer: &Dictionary,

@@ -535,6 +535,16 @@ pub struct TrustManager {
 
 impl TrustManager {
     /// Create a manager over `store` with default policies and a pinned clock.
+    ///
+    /// # Security note
+    ///
+    /// The default [`RevocationPolicy`] is deliberately permissive: a missing
+    /// CRL yields [`RevocationStatus::Unknown`] and a stale CRL yields
+    /// [`RevocationStatus::Stale`] evidence, but neither fails the decision on
+    /// its own. Callers that require fail-closed revocation must pass
+    /// [`RevocationPolicy::strict`] via [`Self::with_revocation_policy`]. A CRL
+    /// that explicitly lists a serial as revoked always fails the decision,
+    /// regardless of policy.
     pub fn new(store: TrustStore, now: u64) -> Self {
         Self {
             store,

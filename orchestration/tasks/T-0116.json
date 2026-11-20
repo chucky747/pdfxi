@@ -3,7 +3,7 @@
   "lane": "security",
   "title": "Trust revocation envelopes and policy protection",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0109"],
   "owns": [
     "crates/pdfxi-security/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0116.toml"
   ],
   "acceptance": "cargo test -p pdfxi-security",
-  "evidence": ""
+  "evidence": "docs/evidence/security/T-0116.md"
 }

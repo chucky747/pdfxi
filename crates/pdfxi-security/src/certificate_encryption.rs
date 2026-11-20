@@ -388,6 +388,12 @@ fn der_set(children: &[u8]) -> Vec<u8> {
 }
 
 /// Encode one of this module's fixed, well-formed OID constants.
+///
+/// Invariant: every caller passes a hardcoded ARC slice that `encode_oid`
+/// accepts (short arcs, no leading zero sub-identifier), so the `Result` cannot
+/// be `Err` here. `unwrap_or_default` is used only to avoid a non-test `expect`;
+/// on the impossible error path the empty bytes produce malformed DER rather
+/// than a panic, which callers reject at parse time.
 fn oid_bytes(oid: &[u32]) -> Vec<u8> {
     encode_oid(oid).unwrap_or_default()
 }
@@ -455,7 +461,7 @@ pub fn build_envelope(
 }
 
 /// The result of successfully opening an envelope.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OpenedEnvelope {
     /// Recovered plaintext bytes.
     pub plaintext: Vec<u8>,
@@ -463,6 +469,22 @@ pub struct OpenedEnvelope {
     pub recipient_label: String,
     /// Permissions granted by the sender.
     pub permissions: Permissions,
+}
+
+impl fmt::Debug for OpenedEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenedEnvelope")
+            .field(
+                "plaintext",
+                &format_args!("<{} bytes>", self.plaintext.len()),
+            )
+            .field("recipient_label", &self.recipient_label)
+            .field(
+                "permissions",
+                &format_args!("{:#x}", self.permissions.bits().bits()),
+            )
+            .finish()
+    }
 }
 
 impl OpenedEnvelope {
@@ -519,8 +541,9 @@ pub enum RecipientSelector<'a> {
 /// - [`SecurityError::CertificateEncryptionRecipientNotFound`] /
 ///   [`SecurityError::CertificateEncryptionRecipientIndexOutOfRange`] for a bad
 ///   selector.
-/// - [`SecurityError::CertificateEncryptionWrongRecipient`] when the unwrapped
-///   key does not match the envelope commitment.
+/// - [`SecurityError::CertificateEncryptionWrongRecipient`] when the supplied
+///   recipient identity does not match the envelope entry, or the unwrapped key
+///   does not match the envelope commitment.
 /// - [`SecurityError::CertificateEncryptionTamperedContent`] when content
 ///   decryption or its integrity check fails.
 pub fn open_envelope(
@@ -543,6 +566,13 @@ pub fn open_envelope(
     let recipient = recipients
         .find(&entry.label)
         .ok_or(SecurityError::CertificateEncryptionRecipientNotFound)?;
+    // Defense in depth: the certificate presented at open time must be the one
+    // the envelope was addressed to. The key commitment below already rejects a
+    // wrong unwrap, but checking the identity first yields the same typed result
+    // before any key material is processed.
+    if recipient.identifier() != entry.identifier {
+        return Err(SecurityError::CertificateEncryptionWrongRecipient);
+    }
 
     let cek = provider.unwrap_key(&entry.wrapped_key, recipient)?;
     if cek.is_empty() || sha256(&cek) != envelope.key_commitment {
@@ -870,9 +900,20 @@ mod tests {
         let outer = reader.read_tlv().expect("content info");
         reader.expect_end().expect("end");
         assert_eq!(outer.tag(), Tag::SEQUENCE);
-        let rendered = format!("{:?}", envelope(&recipients));
+        let env = envelope(&recipients);
+        let rendered = format!("{env:?}");
         assert!(!rendered.contains("confidential"));
         assert!(rendered.contains("<redacted>"));
+        let opened = open_envelope(
+            &env,
+            RecipientSelector::Index(0),
+            &recipients,
+            &InMemoryKeyWrapProvider,
+        )
+        .expect("open");
+        let opened_rendered = format!("{opened:?}");
+        assert!(!opened_rendered.contains("confidential"));
+        assert!(opened_rendered.contains("<22 bytes>"));
     }
 
     #[test]

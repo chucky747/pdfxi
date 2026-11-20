@@ -2035,27 +2035,39 @@ title = "Trust manager and revocation checks"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-security/src/sanitization.rs",
+    "crates/pdfxi-security/src/sanitize_document.rs",
+    "crates/pdfxi-security/src/lib.rs",
     "crates/pdfxi-security/src/error.rs",
+    "docs/evidence/security/T-0116.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security sanitization::tests (CARGO_TARGET_DIR=target/lanes/security): 14 sanitization tests passed as part of 72/72 total. cargo clippy -p pdfxi-security --all-targets --all-features -- -D warnings: clean."
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 236 passed, 0 failed, including all 7 new sanitize_document tests that build real classic-xref PDF bytes and verify every category is removed on the re-parsed output, determinism, copy-on-write source integrity, targeted removal, strict typed residuals, and damaged-source typed errors; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0116.md."
 id = "SEC-008"
-notes = "Category-based sanitizer covering metadata, embedded files, annotations, JavaScript, and form values with deterministic ordered actions and strict/permissive verification against a caller-supplied inventory. Applying the actions to a concrete PDF object graph is still pending."
+notes = """
+Applies the existing Sanitizer plan to a concrete pdfxi_core::Document. Actions
+run in canonical order, are copy-on-write (the source is borrowed immutably),
+and the output is re-parsed so a fresh SanitizationInventory verifies removal
+of metadata, embedded files, annotations, JavaScript, and form values. The
+trailer /Info key is dropped and its object emptied; /Metadata, /Names entries,
+/OpenAction, and page /Annots are detached and their referenced objects nulled;
+form field value keys (/V, /DV, /AP, /AS) are cleared. Strict mode maps residuals
+to SecurityError::SanitizationVerificationFailed; structural failures map to a
+typed SanitizationCoreFailed. Honest scope: classic-xref, unencrypted PDFs only;
+xref-stream, linearized, and encrypted inputs are rejected with a typed error;
+detached objects remain as null placeholders rather than being renumbered away,
+and there is no host UI/CLI exposure, so the row stays in-progress. No
+unsafe/new deps/panics.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
-    "sanitization::tests::full_plan_is_canonical_and_complete",
-    "sanitization::tests::embedded_file_and_annotation_actions_are_planned",
-    "sanitization::tests::javascript_actions_are_planned",
-    "sanitization::tests::form_value_action_clears_values",
-    "sanitization::tests::verification_confirms_categories_are_removed",
-    "sanitization::tests::verification_detects_residual_categories_in_canonical_order",
-    "sanitization::tests::strict_mode_fails_when_a_category_remains",
-    "sanitization::tests::permissive_mode_reports_without_failing",
-    "sanitization::tests::unselected_categories_are_never_residuals",
-    "sanitization::tests::empty_plan_produces_no_actions_and_verifies_clean",
-    "sanitization::tests::plan_is_deterministic_for_equivalent_selections",
+    "sanitize_document::tests::full_sanitization_removes_every_category_on_real_bytes",
+    "sanitize_document::tests::targeted_sanitization_leaves_unselected_categories",
+    "sanitize_document::tests::source_is_unchanged_after_copy_on_write_sanitize",
+    "sanitize_document::tests::sanitization_is_deterministic",
+    "sanitize_document::tests::empty_plan_is_a_no_op_with_empty_applied_list",
+    "sanitize_document::tests::strict_residual_is_a_typed_error",
+    "sanitize_document::tests::damaged_source_returns_a_typed_core_error",
 ]
 title = "Sanitize document and remove hidden information"
 
@@ -2110,25 +2122,78 @@ tests = [
 title = "Metadata and XMP scrubbing"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-security/src/security_envelope.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "docs/evidence/security/T-0116.md",
+]
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 236 passed, 0 failed, including all 8 new security_envelope tests covering deterministic round-trip, tampered payload/label integrity failures, empty/duplicate recipients, authorization, and malformed-byte typed errors; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0116.md."
 id = "SEC-010"
-notes = ""
+notes = """
+Adds a local SecurityEnvelope file format: a deterministic, length-prefixed
+binary container with a magic header, version, payload, envelope-wide
+permissions, a recipient list (label + per-recipient permissions), and a SHA-256
+integrity tag computed with the crate's existing crypto::sha primitive.
+build_security_envelope validates input; open_security_envelope verifies the tag
+and returns an OpenedSecurityEnvelope plus a deterministic EnvelopeReport;
+authorize enforces recipient and envelope permissions with typed errors. This is
+a LOCAL file envelope, not Adobe's server Rights Management format: no network,
+licence server, or host clock. It provides integrity and a declarative access
+description, NOT confidentiality (payload is stored verbatim); callers needing
+secrecy should encrypt first with certificate_encryption or the standard
+handler. Honest scope: no attachment encryption beyond wrapping already-
+encrypted bytes and no host UI/CLI exposure, so the row stays in-progress.
+No unsafe/new deps/panics.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "security_envelope::tests::round_trip_preserves_payload_recipients_and_permissions",
+    "security_envelope::tests::serialization_is_deterministic",
+    "security_envelope::tests::tampered_payload_fails_with_typed_integrity_error",
+    "security_envelope::tests::tampered_recipient_label_fails_integrity",
+    "security_envelope::tests::empty_payload_and_no_recipients_are_typed_errors",
+    "security_envelope::tests::duplicate_and_empty_labels_are_typed_errors",
+    "security_envelope::tests::authorization_honors_recipient_and_envelope_permissions",
+    "security_envelope::tests::malformed_bytes_are_typed_errors_not_panics",
+]
 title = "Security envelopes and attachment encryption"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-security/src/policy.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "docs/evidence/security/T-0116.md",
+]
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 236 passed, 0 failed, including all 7 new policy tests covering canonical plan order, watermark/expiry flags, compliant/expired validation, typed expiry and permission errors, deterministic reports, and policy-set lookups; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0116.md."
 id = "SEC-011"
-notes = ""
+notes = """
+Adds named local ProtectionPolicy values (permissions, optional expiry,
+watermark flag), a PolicySet with deterministic name ordering, and pure
+build_policy_plan / validate_policy / enforce_policy / check_permission helpers.
+Plans and reports are deterministic and in canonical action order (set
+permissions, apply watermark, check expiry). Time is a caller-supplied i64, so
+there is no host-clock read and reports are reproducible. Honest scope: this is
+a local, offline policy decision model with NO rights-management server, no
+network access, no cryptography, and no host UI/CLI exposure; enforcement is a
+decision made by the local reader, so the row stays in-progress. No
+unsafe/new deps/panics.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "policy::tests::policy_plan_is_deterministic_and_in_canonical_order",
+    "policy::tests::plan_reflects_watermark_and_expiry_flags",
+    "policy::tests::validate_policy_reports_compliant_and_expired_without_failing",
+    "policy::tests::enforce_expired_policy_returns_typed_error",
+    "policy::tests::policy_report_is_deterministic",
+    "policy::tests::permission_check_is_a_typed_error",
+    "policy::tests::policy_set_lookup_apply_and_name_validation",
+]
 title = "Policy-based protection replacement"
 
 [[feature]]

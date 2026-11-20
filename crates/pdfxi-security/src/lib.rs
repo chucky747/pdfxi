@@ -29,6 +29,9 @@
 //! - [`Sanitizer`] / [`SanitizationReport`] — category-based sanitization plans
 //!   with deterministic actions and removal verification against a supplied
 //!   inventory.
+//! - [`sanitize_document()`] — applies those plans to a concrete
+//!   [`pdfxi_core::Document`] with copy-on-write byte output and verification
+//!   against the re-parsed result (SEC-008).
 //! - [`ScrubDocument`] / [`ScrubReport`] — copy-on-write metadata and XMP
 //!   scrubbing with scrub profiles, deterministic XMP replacement, and residual
 //!   verification.
@@ -47,6 +50,12 @@
 //! - [`trust_manager`] — a local trust manager, CRL model, and deterministic
 //!   trust/revocation reports with typed failure reasons. Callers supply every
 //!   CRL; there is no network access and no host-clock read.
+//! - [`security_envelope`] — local, tamper-evident file envelopes carrying a
+//!   payload, recipient list, and permissions (SEC-010). No rights-management
+//!   server or network access is involved.
+//! - [`policy`] — named local protection policies with deterministic
+//!   plans/reports and caller-supplied time (SEC-011). No rights-management
+//!   server is involved.
 //!
 //! All operations are deterministic and allocate only as needed. No operation
 //! here logs secrets or document contents.
@@ -63,10 +72,13 @@ mod encryption;
 pub mod encryption_writer;
 mod error;
 mod permissions;
+pub mod policy;
 mod protector;
 mod redaction;
 mod sanitization;
+pub mod sanitize_document;
 mod scrub;
+pub mod security_envelope;
 mod signature;
 pub mod standard_handler;
 pub mod timestamp;
@@ -90,6 +102,10 @@ pub use encryption_writer::{
 };
 pub use error::{Result, SecurityError};
 pub use permissions::{PasswordRole, Permission, Permissions};
+pub use policy::{
+    PolicyAction, PolicyPlan, PolicyReport, PolicySet, PolicyStatus, ProtectionPolicy,
+    build_policy_plan, check_permission, enforce_policy, validate_policy,
+};
 pub use protector::{MockProtector, Protector};
 pub use redaction::{
     PageBounds, PageNumber, RedactionPlan, RedactionRect, RedactionRegion, RedactionReport,
@@ -99,10 +115,17 @@ pub use sanitization::{
     SanitizationAction, SanitizationCategory, SanitizationInventory, SanitizationOperation,
     SanitizationReport, Sanitizer,
 };
+pub use sanitize_document::{
+    AppliedSanitizationReport, SanitizedDocument, inventory_from_document, sanitize_document,
+};
 pub use scrub::{
     Allowlist, AnnotationRecord, Residual, ScrubAction, ScrubCategory, ScrubConfig, ScrubDocument,
     ScrubInventory, ScrubOperation, ScrubOutcome, ScrubProfile, ScrubReport, XmpPacket,
     XmpProperty, XmpPropertyKey, XmpStrategy,
+};
+pub use security_envelope::{
+    EnvelopeRecipient, EnvelopeReport, OpenedSecurityEnvelope, SecurityEnvelope,
+    build_security_envelope, open_security_envelope,
 };
 pub use signature::{DigestAlgorithm, SignatureCoverage, SignatureInfo, SignatureStatus};
 pub use standard_handler::{
