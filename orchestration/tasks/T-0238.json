@@ -1,0 +1,18 @@
+{
+  "id": "T-0238",
+  "lane": "security",
+  "title": "Protect PDF: AES-256 encryption, permissions, remove protection on real documents",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0214"
+  ],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/hardening/T-0238.md",
+    "orchestration/feature-updates/T-0238.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security; O-04 (set, change and remove protection; saved file honours permissions) and A-30 (Protect PDF) work on real documents",
+  "notes": "Library half of the protect pair per ADR 0012. Serves acceptance items O-04 (set/change/remove password and permissions; a saved file keeps encryption and honours permissions) and A-30 (Protect PDF: password and permissions, redact and sanitize entry points) from docs/design/FEATURE_ACCEPTANCE.md. Writes AES-256 encryption with owner/user passwords and permission bits, changes and removes protection through the pdfxi-document session of ADR 0010 (which currently refuses to save encrypted sessions with EncryptedSaveUnsupported), and proves it by reopening the saved file with PDFium and with an independent decrypt check. A serialised app shell task follows once this lands; matrix rows stay `library` until that shell task verifies them.",
+  "evidence": "docs/evidence/hardening/T-0238.md"
+}
