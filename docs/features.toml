@@ -1440,124 +1440,75 @@ title = "Repair malformed documents"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/office_export/mod.rs",
-    "crates/pdfxi-convert/src/office_export/docx.rs",
-    "crates/pdfxi-convert/src/office_export/zip.rs",
     "crates/pdfxi-convert/src/office_export/xml.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0117.md",
+    "crates/pdfxi-convert/tests/export_adapters.rs",
+    "docs/evidence/convert/T-0151.md",
 ]
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 8 docx::tests + 8 zip::tests + 4 xml::tests pass; required DOCX parts [Content_Types].xml, _rels/.rels, word/document.xml, word/styles.xml, word/numbering.xml validated; page text round-trips through <w:t> extraction; XML escaping and determinism asserted; typed DocxExportError on empty/invalid models. 205 unit + 12 integration + 0 doc passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0117.md."
+evidence = "cargo test -p pdfxi-convert: office_export_is_deterministic_and_structure_ordered asserts DocxExporter output is byte-identical across runs, comes from a valid >=3-part ZIP, orders pages ascending, and escapes '<Report & Summary>' as '&lt;Report &amp; Summary&gt;' in the raw document.xml; office_export_rejects_empty_and_malformed_models returns typed DocxExportError::Invalid(ModelError::EmptyDocument); xml_serialization_primitives_are_stable_and_escaped checks declaration/escaping/cell-ref determinism. 289 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0151.md."
 id = "EXPORT-001"
 notes = """
-DocxExporter implements the OfficeExporter contract and writes real
-WordprocessingML: paragraphs with Normal/Heading1-9/Title/Quote styles, bullet
-and decimal list levels backed by word/numbering.xml, rectangular tables with
-grid columns, page breaks between pages and a fixed sectPr page size. Core
-properties and all relationships are deterministic. Positioned text boxes are
-flattened to paragraphs and reported; unsupported blocks are reported and
-omitted. The writer consumes a pre-extracted OfficeDocument; there is no PDF
-parser, CLI command or Converter dispatch in this task, so editable export from
-raw PDF bytes is future work and the row remains in-progress.
+The existing deterministic DOCX writer is unchanged. This task adds library-level
+regression coverage for XML escaping, page ordering, ZIP validity, determinism,
+and typed empty/malformed errors, and re-exports OfficeBlock/OfficePage/
+ModelError/DocxExportError from the crate root so callers can build and validate
+models without reaching into submodules. No DOCX parser, CLI dispatch, or PDF
+extraction is added, so the row stays in-progress.
 """
 priority = "P3"
 status = "in-progress"
 tests = [
-    "office_export::zip::tests::crc32_matches_standard_vector",
-    "office_export::zip::tests::write_read_round_trip_preserves_names_and_payloads",
-    "office_export::zip::tests::output_is_deterministic",
-    "office_export::zip::tests::empty_archive_is_rejected",
-    "office_export::zip::tests::duplicate_names_are_rejected",
-    "office_export::zip::tests::corrupt_payload_is_detected_by_crc",
-    "office_export::zip::tests::truncated_or_garbage_bytes_are_rejected",
-    "office_export::zip::tests::missing_required_part_is_reported",
-    "office_export::xml::tests::escape_expands_all_predefined_entities",
-    "office_export::xml::tests::escape_replaces_illegal_control_characters",
-    "office_export::xml::tests::column_letters_and_cell_ref_follow_spreadsheet_rules",
-    "office_export::xml::tests::number_and_points_to_emu_are_deterministic_and_safe",
-    "office_export::docx::tests::docx_has_required_parts_and_valid_zip",
-    "office_export::docx::tests::docx_page_text_round_trips",
-    "office_export::docx::tests::docx_renders_headings_lists_and_tables",
-    "office_export::docx::tests::docx_escapes_text_and_controls",
-    "office_export::docx::tests::docx_reports_unsupported_content",
-    "office_export::docx::tests::docx_is_deterministic",
-    "office_export::docx::tests::docx_rejects_invalid_models_with_typed_errors",
-    "office_export::docx::tests::docx_error_type_is_distinct_and_transparent",
+    "export_adapters::office_export_is_deterministic_and_structure_ordered",
+    "export_adapters::office_export_rejects_empty_and_malformed_models",
+    "office_export::xml::tests::xml_serialization_primitives_are_stable_and_escaped",
 ]
 title = "Export PDF to editable Word"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/office_export/xlsx.rs",
-    "crates/pdfxi-convert/src/office_export/mod.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0117.md",
+    "crates/pdfxi-convert/tests/export_adapters.rs",
+    "docs/evidence/convert/T-0151.md",
 ]
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 8 xlsx::tests pass, including sheet-per-page and per-table models, typed A1 cells (inline string/number/boolean/empty), XML escaping, sheet-name bounding/dedup, unsupported reporting, determinism and typed XlsxExportError on non-finite numbers and duplicate pages. 205 unit + 12 integration + 0 doc passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0117.md."
+evidence = "cargo test -p pdfxi-convert: office_export_is_deterministic_and_structure_ordered asserts XlsxExporter output is byte-identical across runs, has a valid ZIP with ordered pages and both page texts; office_export_rejects_empty_and_malformed_models confirms a duplicate-page Xlsx model is a typed error; xml_serialization_primitives_are_stable_and_escaped pins cell_ref/declaration determinism used by the worksheet writer. 289 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0151.md."
 id = "EXPORT-002"
 notes = """
-XlsxExporter implements the OfficeExporter contract with a SheetMode option for
-one sheet per page or one sheet per table. Cells are typed and written as
-inlineStr, numeric, boolean or empty with correct A1 references. Sheets are
-bounded to 31 characters with illegal characters sanitised and duplicates
-deduplicated deterministically. The archive includes workbook, relationships,
-styles and one worksheet per sheet and is fully validated before return.
-Non-tabular text and positioned text boxes are flattened and reported rather
-than silently dropped. As with the DOCX adapter, the writer consumes a
-pre-extracted model and has no CLI/Converter dispatch or PDF parser, so the
-row remains in-progress.
+Cross-format library-level coverage for the existing XlsxExporter: determinism,
+sheet XML escaping, ascending page structure, and typed rejection of duplicate
+and malformed models. OfficeCell/CellValue/OfficePage/XlsxExportError are now
+re-exported at the crate root. No PDF parser, CLI dispatch, or real spreadsheet
+import is added, so the row stays in-progress.
 """
 priority = "P3"
 status = "in-progress"
 tests = [
-    "office_export::xlsx::tests::xlsx_has_required_parts_and_valid_zip",
-    "office_export::xlsx::tests::xlsx_sheet_per_page_and_per_table",
-    "office_export::xlsx::tests::xlsx_cell_types_and_references_are_correct",
-    "office_export::xlsx::tests::xlsx_escapes_xml_in_text_and_sheet_names",
-    "office_export::xlsx::tests::xlsx_reports_unsupported_content",
-    "office_export::xlsx::tests::xlsx_is_deterministic",
-    "office_export::xlsx::tests::xlsx_sheet_names_are_bounded_and_unique",
-    "office_export::xlsx::tests::xlsx_rejects_invalid_models_with_typed_errors",
+    "export_adapters::office_export_is_deterministic_and_structure_ordered",
+    "export_adapters::office_export_rejects_empty_and_malformed_models",
+    "office_export::xml::tests::xml_serialization_primitives_are_stable_and_escaped",
 ]
 title = "Export PDF to editable Excel"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/office_export/pptx.rs",
-    "crates/pdfxi-convert/src/office_export/mod.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0117.md",
+    "crates/pdfxi-convert/tests/export_adapters.rs",
+    "docs/evidence/convert/T-0151.md",
 ]
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 6 pptx::tests pass, including one slide per page with positioned EMU text boxes (asserted off/ext/sz values), required-parts validation, XML escaping, typed unsupported reporting (flattened text/table, omitted drawings), determinism and typed PptxExportError on non-finite/negative geometry. 205 unit + 12 integration + 0 doc passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0117.md."
+evidence = "cargo test -p pdfxi-convert: office_export_is_deterministic_and_structure_ordered asserts PptxExporter output is byte-identical, a valid >=3-part ZIP, with ascending slide order and escaped title; office_export_rejects_empty_and_malformed_models confirms a non-finite-geometry Pptx model is a typed error. 289 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0151.md."
 id = "EXPORT-003"
 notes = """
-PptxExporter implements the OfficeExporter contract and emits one slide per
-source page. Positioned text boxes become anchored shape text boxes with EMU
-offsets (PDF bottom-left coordinates inverted to slide top-left, 1 pt = 12700
-EMU) and point sizes converted to hundredths of a point. A minimal valid
-presentation graph (presentation, slide master, blank layout, theme and
-per-slide relationships) is generated. Non-positioned paragraphs, list items
-and tables are flattened into generated text boxes and reported, as are images,
-annotations and drawings. The writer is deterministic, consumes a pre-extracted
-model, and has no CLI/Converter dispatch or PDF parser, so the row stays
-in-progress.
+Cross-format library-level coverage for the existing PptxExporter plus root
+re-exports of Office model/error types. No PDF parser, CLI dispatch, or real
+presentation import is added, so the row stays in-progress.
 """
 priority = "P3"
 status = "in-progress"
 tests = [
-    "office_export::pptx::tests::pptx_has_required_parts_and_valid_zip",
-    "office_export::pptx::tests::pptx_slide_per_page_with_positioned_text_box",
-    "office_export::pptx::tests::pptx_escapes_text_and_reports_flattened_content",
-    "office_export::pptx::tests::pptx_is_deterministic",
-    "office_export::pptx::tests::pptx_rejects_invalid_models_with_typed_errors",
-    "office_export::pptx::tests::pptx_error_type_is_distinct_and_transparent",
-    "office_export::tests::contract_dispatches_to_all_three_formats",
-    "office_export::tests::validation_rejects_empty_duplicate_and_bad_geometry",
-    "office_export::tests::validation_checks_numeric_and_structural_fields",
-    "office_export::tests::archive_reports_are_typed_and_populated",
+    "export_adapters::office_export_is_deterministic_and_structure_ordered",
+    "export_adapters::office_export_rejects_empty_and_malformed_models",
 ]
 title = "Export PDF to editable PowerPoint"
 
@@ -1609,28 +1560,28 @@ title = "Export PDF to HTML"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/rtf.rs",
-    "crates/pdfxi-convert/src/export_options.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0066.md",
+    "crates/pdfxi-convert/src/html_export.rs",
+    "crates/pdfxi-convert/tests/export_adapters.rs",
+    "docs/evidence/convert/T-0151.md",
 ]
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 111 unit + 5 integration passed, 0 failed; 10 new rtf::tests cover tables, Unicode escapes, escaping, paragraph/page breaks, determinism, options, empty input and typed errors. fmt/clippy(--no-deps)/doc EXIT=0. See docs/evidence/convert/T-0066.md."
+evidence = "cargo test -p pdfxi-convert: rtf_export_is_deterministic_escaped_and_valid_when_empty asserts byte-stable RTF, ascending page order, correct RTF escaping, ASCII byte output and a valid empty document; text_and_json_export_are_structured_and_deterministic asserts export_text page-order independence and JSON schema structure; html_escaping_and_structure_survive_shuffled_input and html_export_empty_and_malformed_models_are_typed_errors cover HTML escaping, ordering, empty and malformed inputs. 289 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0151.md."
 id = "EXPORT-005"
-notes = 'RTF writer added alongside the existing deterministic plain-text export: fixed header/font/colour tables, \par paragraphs, \page separators, signed \uN? escapes, special-character escaping, page range, optional page headers and line endings. No UI/CLI ExportKind::Rtf dispatch yet, so the row stays in-progress.'
+notes = """
+Adds library-level regression coverage spanning the plain-text, RTF and HTML
+writers: determinism under shuffled input, structural ordering, escaping of all
+HTML entities, and typed errors for empty/duplicate/unsafe models. No CLI or UI
+ExportKind dispatch and no PDF text extraction are added, so the row stays
+in-progress.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
-    "rtf::tests::rtf_header_font_and_colour_tables_are_present_and_stable",
-    "rtf::tests::rtf_orders_pages_ascending_and_writes_page_breaks",
-    "rtf::tests::rtf_unicode_uses_signed_utf16_escapes",
-    "rtf::tests::rtf_escapes_special_characters_and_tabs",
-    "rtf::tests::rtf_paragraph_breaks_are_emitted_for_mixed_newlines",
-    "rtf::tests::rtf_page_headers_and_crlf_line_endings_are_honoured",
-    "rtf::tests::rtf_duplicate_pages_use_the_last_text",
-    "rtf::tests::rtf_page_selection_filters_pages",
-    "rtf::tests::rtf_empty_document_is_still_valid",
-    "rtf::tests::rtf_invalid_page_range_is_a_typed_error",
+    "export_adapters::rtf_export_is_deterministic_escaped_and_valid_when_empty",
+    "export_adapters::text_and_json_export_are_structured_and_deterministic",
+    "export_adapters::html_export_escapes_text_and_orders_structure",
+    "html_export::tests::html_escaping_and_structure_survive_shuffled_input",
+    "html_export::tests::html_export_empty_and_malformed_models_are_typed_errors",
 ]
 title = "Export PDF to RTF and plain text"
 
@@ -1738,47 +1689,32 @@ title = "Export to PDF/A PDF/X and PDF/E"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/postscript.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0110.md",
+    "crates/pdfxi-convert/src/image.rs",
+    "crates/pdfxi-convert/tests/export_adapters.rs",
+    "docs/evidence/convert/T-0151.md",
 ]
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 11/11 new postscript tests pass (162 unit + 12 integration total, 0 failed); fmt --check, clippy --all-targets --no-deps -D warnings, and rustdoc -D warnings all EXIT=0. See docs/evidence/convert/T-0110.md."
+evidence = "cargo test -p pdfxi-convert: postscript_export_is_deterministic_and_structure_ordered asserts byte-stable DSC output, %%Page ordering, showpage count and parenthesised-title escaping; postscript_export_rejects_empty_and_malformed_documents asserts typed EmptyDocument/DuplicatePage/InvalidPageGeometry errors; image_export_is_bounded_deterministic_and_typed plus 8 image::tests cover PNG header/CRC round-trip, BMP/TIFF headers, dimension/byte bounds, invalid pixel buffers and determinism. 289 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0151.md."
 id = "EXPORT-009"
-notes = '''
-T-0110 adds a dependency-free PostScript writer in crates/pdfxi-convert/src/postscript.rs.
-It emits a deterministic, DSC-conformant PostScript program: %!PS-Adobe-3.0 header,
-%%Creator/%%Title/%%BoundingBox (ceiling of max page extent)/%%Pages/%%DocumentFonts,
-comment/prolog/setup sections, one %%Page block with a single showpage per page, and a
-%%Trailer/%%EOF. Text is drawn with standard fonts (Helvetica, Helvetica-Bold, Courier,
-Times-Roman, Times-Bold); rectangles use closed fill/stroke paths and lines use
-moveto/lineto/setlinewidth/stroke. PostScript literal strings escape \, (, ), control
-characters and encode Latin-1 bytes as octal escapes. Code points outside Latin-1 and
-PsContent::Image are skipped and enumerated in PsExportReport (per page, with reasons)
-via export_postscript_with_report, so unsupported content is documented honestly rather
-than silently faked. Typed PsExportError variants cover empty/oversized input, duplicate
-pages, bad geometry, non-finite coordinates and non-positive font sizes. Bounded
-constants prevent unbounded allocation; no new dependencies, no unsafe, and no
-unwrap/expect/panic in non-test code.
-
-Honest caveat: the writer consumes a caller-supplied page/content model; there is no
-ExportKind::PostScript variant or CLI dispatch and no real PDF content pipeline wired
-in this task, so EXPORT-009 remains in-progress.
-'''
+notes = """
+Adds cross-adapter PostScript regression coverage and, in image.rs, bounded
+PNG/BMP/TIFF RGBA encoders with documented limits and typed errors. The baseline
+JPEG encoder remains in the verified pdfxi-render export path (EXPORT-006) and
+is deliberately not reimplemented here. No ExportKind::PostScript CLI dispatch
+or PDF content pipeline is wired, so the row stays in-progress.
+"""
 priority = "P3"
 status = "in-progress"
 tests = [
-    "postscript::tests::header_has_dsc_version_boundingbox_pages_and_fonts",
-    "postscript::tests::page_sections_and_showpage_count_match_page_count",
-    "postscript::tests::text_uses_standard_font_and_is_positioned",
-    "postscript::tests::text_string_escaping_handles_backslash_parens_and_controls",
-    "postscript::tests::rect_and_line_emit_path_operators",
-    "postscript::tests::unsupported_image_and_non_latin1_glyphs_are_reported",
-    "postscript::tests::postscript_bytes_are_deterministic",
-    "postscript::tests::boundingbox_uses_ceil_of_max_page_extent",
-    "postscript::tests::non_finite_coordinates_are_typed_errors",
-    "postscript::tests::invalid_geometry_font_size_and_duplicates_are_errors",
-    "postscript::tests::empty_document_is_rejected",
+    "export_adapters::postscript_export_is_deterministic_and_structure_ordered",
+    "export_adapters::postscript_export_rejects_empty_and_malformed_documents",
+    "export_adapters::image_export_is_bounded_deterministic_and_typed",
+    "image::tests::png_header_and_crc_round_trip_parse",
+    "image::tests::raster_encoders_enforce_dimension_and_size_bounds",
+    "image::tests::every_encoder_rejects_a_short_or_overlong_pixel_buffer",
+    "image::tests::all_image_formats_are_byte_deterministic",
+    "image::tests::bmp_header_fields_and_bottom_up_bgra_rows",
+    "image::tests::tiff_header_ifd_tags_and_rgba_payload",
 ]
 title = "Export to PostScript"
 

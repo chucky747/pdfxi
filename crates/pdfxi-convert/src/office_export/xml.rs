@@ -135,4 +135,21 @@ mod tests {
         assert_eq!(points_to_emu(-1.0), 0);
         assert_eq!(points_to_emu(f64::INFINITY), 0);
     }
+
+    #[test]
+    fn xml_serialization_primitives_are_stable_and_escaped() {
+        // A fixed declaration keeps every generated part byte-stable.
+        assert_eq!(
+            declaration(),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        );
+        let hostile = "<a & 'b' \"c\">\0</a>";
+        let expected = "&lt;a &amp; &apos;b&apos; &quot;c&quot;&gt;\u{fffd}&lt;/a&gt;";
+        let once = escape(hostile);
+        assert_eq!(once, expected);
+        assert_eq!(escape(hostile), once, "escaping must be deterministic");
+        // Column/row formatting is pure and stable for the same coordinates.
+        assert_eq!(cell_ref(701, 9), "ZZ10");
+        assert_eq!(cell_ref(701, 9), cell_ref(701, 9));
+    }
 }

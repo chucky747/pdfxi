@@ -915,4 +915,56 @@ mod tests {
             Err(HtmlExportError::EmptyDocument)
         ));
     }
+
+    #[test]
+    fn html_escaping_and_structure_survive_shuffled_input() {
+        // Page and link order in the input must not affect the emitted bytes.
+        let shuffled = HtmlDocument::new(
+            "A & <B>",
+            vec![sample_page(1), sample_page(0)],
+            vec![
+                HtmlLink::new(0, "https://example.test/?a=1&b=2", 1.0, 2.0, 3.0, 4.0),
+                HtmlLink::new(1, "mailto:a@example.test", 1.0, 2.0, 3.0, 4.0),
+            ],
+        );
+        let ordered = HtmlDocument::new(
+            "A & <B>",
+            vec![sample_page(0), sample_page(1)],
+            vec![
+                HtmlLink::new(1, "mailto:a@example.test", 1.0, 2.0, 3.0, 4.0),
+                HtmlLink::new(0, "https://example.test/?a=1&b=2", 1.0, 2.0, 3.0, 4.0),
+            ],
+        );
+        let a = export_html_string(&shuffled).expect("shuffled export");
+        let b = export_html_string(&ordered).expect("ordered export");
+        assert_eq!(
+            a, b,
+            "structure ordering must be independent of input order"
+        );
+
+        assert!(a.contains("<title>A &amp; &lt;B&gt;</title>"));
+        assert!(a.contains("a=1&amp;b=2"));
+        assert!(
+            a.find("id=\"page-1\"").expect("page 1") < a.find("id=\"page-2\"").expect("page 2")
+        );
+        assert!(a.find("class=\"pdfxi-nav\"").expect("nav") < a.find("<main>").expect("main"));
+    }
+
+    #[test]
+    fn html_export_empty_and_malformed_models_are_typed_errors() {
+        assert_eq!(
+            export_html_string(&HtmlDocument::new("T", Vec::new(), Vec::new())),
+            Err(HtmlExportError::EmptyDocument)
+        );
+        let duplicate = HtmlDocument::new("T", vec![sample_page(0), sample_page(0)], Vec::new());
+        assert_eq!(
+            export_html_string(&duplicate),
+            Err(HtmlExportError::DuplicatePage { page: 0 })
+        );
+        let malformed = HtmlDocument::new("T", vec![HtmlPage::new(0, 0.0, 300.0)], Vec::new());
+        assert_eq!(
+            export_html_string(&malformed),
+            Err(HtmlExportError::InvalidPageGeometry { page: 0 })
+        );
+    }
 }

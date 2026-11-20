@@ -11,9 +11,11 @@
 //!   actionable messages.
 //! - [`Converter`] is the trait implemented by optional external adapters;
 //!   [`MockConverter`] is a deterministic in-memory implementation for tests.
-//! - [`encode_png`], [`encode_ppm`], and [`encode`] are pure-Rust image encoders
-//!   that need no image crate. They are always available, even with
-//!   `--no-default-features`.
+//! - [`encode_png`], [`encode_ppm`], [`encode_bmp`], [`encode_tiff`], and
+//!   [`encode`] are pure-Rust image encoders that need no image crate. They turn
+//!   caller-supplied RGBA pixels into bounded, deterministic bytes and are
+//!   always available, even with `--no-default-features`. A baseline JPEG
+//!   encoder remains in the verified `pdfxi-render` export module.
 //! - [`export_pages`], [`ImageExportPlan`], [`PageSelection`], and
 //!   [`ExportedImage`] export selected pages through any renderer. They are
 //!   gated behind the default `renderer` feature so the crate can be used
@@ -174,11 +176,15 @@ pub use html_export::{
     HtmlDocument, HtmlExportError, HtmlLink, HtmlOptions as HtmlExportOptions, HtmlOutputMode,
     HtmlPage, HtmlSpan, MAX_PAGES as HTML_MAX_PAGES, NamedHtml, export_html, export_html_string,
 };
-pub use image::{ImageFormat, encode, encode_png, encode_ppm};
+pub use image::{
+    ImageFormat, MAX_IMAGE_BYTES, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS, encode, encode_bmp,
+    encode_png, encode_ppm, encode_tiff,
+};
 pub use json::{DocumentJson, DocumentMetadata, JSON_SCHEMA_VERSION, JsonPage, JsonSpan};
 pub use office_export::{
-    DocxExporter, OfficeDocument, OfficeExport, OfficeExportError, OfficeExportReport,
-    OfficeExporter, OfficeFormat, PptxExporter, ReportedUnsupported, SheetMode, XlsxExporter,
+    CellValue, DocxExportError, DocxExporter, ModelError, OfficeBlock, OfficeCell, OfficeDocument,
+    OfficeExport, OfficeExportError, OfficeExportReport, OfficeExporter, OfficeFormat, OfficePage,
+    PptxExportError, PptxExporter, ReportedUnsupported, SheetMode, XlsxExportError, XlsxExporter,
 };
 pub use office_import::{
     OFFICE_BUNDLE_MAX_BYTES, OFFICE_BUNDLE_PAGE_HEIGHT, OFFICE_BUNDLE_PAGE_WIDTH, OfficeBundle,

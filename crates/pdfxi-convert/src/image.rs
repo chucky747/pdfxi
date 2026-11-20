@@ -24,6 +24,24 @@
 //! alpha channel is discarded, so four input channels become three output
 //! channels.
 //!
+//! # BMP and TIFF strategy
+//!
+//! [`ImageFormat::Bmp`] writes a little-endian 32-bit `BITMAPINFOHEADER` file
+//! with bottom-up BGRA rows and `BI_RGB` compression (row stride is `width *
+//! 4`, always four-byte aligned). [`ImageFormat::Tiff`] writes a little-endian
+//! classic TIFF with one uncompressed RGBA strip, a baseline 11-tag IFD in
+//! ascending tag order, and an unassociated-alpha `ExtraSamples` tag. Both
+//! formats carry no timestamp, so their bytes are deterministic.
+//!
+//! # Bounds and JPEG scope
+//!
+//! Every encoder rejects rasters whose dimensions, pixel count, or byte length
+//! exceed documented constants before allocating. A full baseline JPEG
+//! entropy encoder is intentionally *not* duplicated here: the already-verified
+//! `pdfxi-render` export module (EXPORT-006) provides PNG/JPEG/TIFF from a real
+//! renderer, while this dependency-free module covers the pure-RGBA encoders
+//! that need no native or compression dependency.
+//!
 //! # Relationship to the CLI encoder
 //!
 //! `pdfxi-cli` contains an equivalent pair of encoders in
@@ -37,19 +55,27 @@ use crate::ConversionError;
 
 /// A raster file format supported by page-image export.
 ///
-/// [`ImageFormat::Png`] keeps the alpha channel; [`ImageFormat::Ppm`] drops it
-/// because the binary P6 subformat stores exactly three samples per pixel.
+/// [`ImageFormat::Png`], [`ImageFormat::Bmp`], and [`ImageFormat::Tiff`] keep
+/// the alpha channel; [`ImageFormat::Ppm`] drops it because the binary P6
+/// subformat stores exactly three samples per pixel. A lossless baseline JPEG
+/// encoder is intentionally not part of this dependency-free module; callers
+/// needing JPEG can use the verified renderer-backed encoder in
+/// `pdfxi-render`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageFormat {
     /// An 8-bit RGBA Portable Network Graphics file.
     Png,
     /// A binary P6 Portable Pixmap file (RGB, alpha discarded).
     Ppm,
+    /// A 32-bit BGRA Windows bitmap with bottom-up rows.
+    Bmp,
+    /// A little-endian, uncompressed classic TIFF with one RGBA strip.
+    Tiff,
 }
 
 impl ImageFormat {
     /// Every supported raster format, in a stable order.
-    pub const ALL: &'static [Self] = &[Self::Png, Self::Ppm];
+    pub const ALL: &'static [Self] = &[Self::Png, Self::Ppm, Self::Bmp, Self::Tiff];
 
     /// Return every supported raster format in a stable order.
     #[must_use]
@@ -60,14 +86,19 @@ impl ImageFormat {
     /// Classify a file-name extension, ignoring an optional leading dot and
     /// ASCII case.
     ///
-    /// `png` selects [`ImageFormat::Png`]; `ppm` (and the synonymous `pnm`)
-    /// selects [`ImageFormat::Ppm`]. Any other extension yields `None`.
+    /// `png` selects [`ImageFormat::Png`], `ppm`/`pnm` select
+    /// [`ImageFormat::Ppm`], `bmp` selects [`ImageFormat::Bmp`], and
+    /// `tif`/`tiff` select [`ImageFormat::Tiff`]. Any other extension (including
+    /// `jpg`/`jpeg`, which are served by the renderer-backed encoder) yields
+    /// `None`.
     #[must_use]
     pub fn from_extension(extension: &str) -> Option<Self> {
         let extension = extension.strip_prefix('.').unwrap_or(extension);
         match extension.to_ascii_lowercase().as_str() {
             "png" => Some(Self::Png),
             "ppm" | "pnm" => Some(Self::Ppm),
+            "bmp" => Some(Self::Bmp),
+            "tif" | "tiff" => Some(Self::Tiff),
             _ => None,
         }
     }
@@ -78,6 +109,8 @@ impl ImageFormat {
         match self {
             Self::Png => "png",
             Self::Ppm => "ppm",
+            Self::Bmp => "bmp",
+            Self::Tiff => "tiff",
         }
     }
 
@@ -96,6 +129,13 @@ impl std::fmt::Display for ImageFormat {
 
 /// The fixed eight-byte signature at the start of every PNG file.
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// Largest accepted width or height for a caller-supplied raster.
+pub const MAX_IMAGE_DIMENSION: u32 = 16_384;
+/// Largest accepted number of pixels in a caller-supplied raster.
+pub const MAX_IMAGE_PIXELS: usize = 268_435_456;
+/// Largest accepted RGBA byte length of a caller-supplied raster (1 GiB).
+pub const MAX_IMAGE_BYTES: usize = 1_073_741_824;
 
 /// Largest number of raw bytes a single deflate stored block can carry.
 const MAX_STORED_BLOCK: usize = u16::MAX as usize;
@@ -185,8 +225,16 @@ fn zlib_stored(raw: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Compute the byte length of an RGBA raster, rejecting overflowing sizes.
+/// Compute the byte length of an RGBA raster, rejecting oversized or
+/// overflowing sizes before any allocation happens.
 fn pixel_len(width: u32, height: u32) -> Result<usize, ConversionError> {
+    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return Err(ConversionError::InvalidInput {
+            message: format!(
+                "image dimension {width}x{height} exceeds the {MAX_IMAGE_DIMENSION} pixel limit"
+            ),
+        });
+    }
     let width = usize::try_from(width).map_err(|_| ConversionError::InvalidInput {
         message: "image width does not fit in usize".to_owned(),
     })?;
@@ -198,10 +246,26 @@ fn pixel_len(width: u32, height: u32) -> Result<usize, ConversionError> {
         .ok_or_else(|| ConversionError::InvalidInput {
             message: "image dimensions overflow the platform size".to_owned(),
         })?;
-    area.checked_mul(4)
+    if area > MAX_IMAGE_PIXELS {
+        return Err(ConversionError::InvalidInput {
+            message: format!(
+                "image has {area} pixels, exceeding the {MAX_IMAGE_PIXELS} pixel limit"
+            ),
+        });
+    }
+    let bytes = area
+        .checked_mul(4)
         .ok_or_else(|| ConversionError::InvalidInput {
             message: "image pixel buffer size overflows the platform size".to_owned(),
-        })
+        })?;
+    if bytes > MAX_IMAGE_BYTES {
+        return Err(ConversionError::InvalidInput {
+            message: format!(
+                "image pixel buffer is {bytes} bytes, exceeding the {MAX_IMAGE_BYTES} byte limit"
+            ),
+        });
+    }
+    Ok(bytes)
 }
 
 /// Encode tightly packed 8-bit RGBA pixels as a valid PNG file.
@@ -285,15 +349,165 @@ pub fn encode_ppm(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Conve
     Ok(out)
 }
 
+/// Append one little-endian TIFF IFD entry.
+///
+/// `value` is the four-byte value field: for a `SHORT` with count one the value
+/// occupies the low two bytes, and for a `LONG` it occupies all four. Multi-value
+/// fields store an offset in this slot instead.
+fn push_tiff_entry(out: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: u32) {
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(&kind.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Encode tightly packed 8-bit RGBA pixels as a 32-bit bottom-up BMP file.
+///
+/// The file has a 14-byte `BITMAPFILEHEADER` followed by a 40-byte
+/// `BITMAPINFOHEADER` with `BI_RGB` compression and 32 bits per pixel. Rows are
+/// stored bottom-up and each pixel is written as BGRA, so the alpha byte is
+/// preserved. No timestamp or palette is emitted, making the bytes
+/// deterministic. Input validation matches [`encode_png`].
+///
+/// # Errors
+///
+/// Returns [`ConversionError::InvalidInput`] when the dimensions exceed the
+/// documented bounds or the buffer length is not `width * height * 4`.
+pub fn encode_bmp(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, ConversionError> {
+    let expected = pixel_len(width, height)?;
+    if rgba.len() != expected {
+        return Err(ConversionError::InvalidInput {
+            message: format!("RGBA buffer has {} bytes, expected {expected}", rgba.len()),
+        });
+    }
+    let pixel_bytes = u32::try_from(expected).map_err(|_| ConversionError::InvalidInput {
+        message: "BMP pixel data exceeds the 4 GiB header limit".to_owned(),
+    })?;
+    let file_size =
+        54u32
+            .checked_add(pixel_bytes)
+            .ok_or_else(|| ConversionError::InvalidInput {
+                message: "BMP file size exceeds the 4 GiB header limit".to_owned(),
+            })?;
+    let width_usize = usize::try_from(width).map_err(|_| ConversionError::InvalidInput {
+        message: "image width does not fit in usize".to_owned(),
+    })?;
+    let row_len = width_usize
+        .checked_mul(4)
+        .ok_or_else(|| ConversionError::InvalidInput {
+            message: "BMP row length overflows".to_owned(),
+        })?;
+
+    let mut out = Vec::with_capacity(54usize.saturating_add(expected));
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&file_size.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // bfReserved1
+    out.extend_from_slice(&0u16.to_le_bytes()); // bfReserved2
+    out.extend_from_slice(&54u32.to_le_bytes()); // pixel-data offset
+
+    out.extend_from_slice(&40u32.to_le_bytes()); // biSize
+    out.extend_from_slice(&(width as i32).to_le_bytes()); // biWidth
+    out.extend_from_slice(&(height as i32).to_le_bytes()); // biHeight (positive = bottom-up)
+    out.extend_from_slice(&1u16.to_le_bytes()); // biPlanes
+    out.extend_from_slice(&32u16.to_le_bytes()); // biBitCount
+    out.extend_from_slice(&0u32.to_le_bytes()); // biCompression = BI_RGB
+    out.extend_from_slice(&pixel_bytes.to_le_bytes()); // biSizeImage
+    out.extend_from_slice(&0i32.to_le_bytes()); // biXPelsPerMeter
+    out.extend_from_slice(&0i32.to_le_bytes()); // biYPelsPerMeter
+    out.extend_from_slice(&0u32.to_le_bytes()); // biClrUsed
+    out.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
+
+    if row_len > 0 {
+        for row in rgba.chunks_exact(row_len).rev() {
+            for pixel in row.as_chunks::<4>().0 {
+                out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Encode tightly packed 8-bit RGBA pixels as an uncompressed classic TIFF.
+///
+/// The output is little-endian (`II`, magic 42) with the IFD at byte 8. The IFD
+/// carries the eleven baseline tags in ascending order, `BitsPerSample` points
+/// at four 16-bit `8` values, and `StripOffsets`/`StripByteCounts` describe one
+/// RGBA strip. `ExtraSamples = 2` marks the fourth channel as unassociated
+/// alpha. There are no timestamps, so repeated calls are byte-identical. Input
+/// validation matches [`encode_png`].
+///
+/// # Errors
+///
+/// Returns [`ConversionError::InvalidInput`] when the dimensions exceed the
+/// documented bounds or the buffer length is not `width * height * 4`.
+pub fn encode_tiff(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, ConversionError> {
+    let expected = pixel_len(width, height)?;
+    if rgba.len() != expected {
+        return Err(ConversionError::InvalidInput {
+            message: format!("RGBA buffer has {} bytes, expected {expected}", rgba.len()),
+        });
+    }
+    let pixel_bytes = u32::try_from(expected).map_err(|_| ConversionError::InvalidInput {
+        message: "TIFF strip exceeds the 4 GiB field limit".to_owned(),
+    })?;
+
+    // 8-byte header + 2-byte count + 11 * 12-byte entries + 4-byte next-IFD.
+    const ENTRY_COUNT: u16 = 11;
+    let ifd_end = 8u32
+        .checked_add(2)
+        .and_then(|value| value.checked_add(u32::from(ENTRY_COUNT) * 12))
+        .and_then(|value| value.checked_add(4))
+        .ok_or_else(|| ConversionError::InvalidInput {
+            message: "TIFF IFD size overflows".to_owned(),
+        })?;
+    let bits_offset = ifd_end;
+    let strip_offset = bits_offset
+        .checked_add(8)
+        .ok_or_else(|| ConversionError::InvalidInput {
+            message: "TIFF strip offset overflows".to_owned(),
+        })?;
+    let total =
+        strip_offset
+            .checked_add(pixel_bytes)
+            .ok_or_else(|| ConversionError::InvalidInput {
+                message: "TIFF total size overflows the 4 GiB field limit".to_owned(),
+            })?;
+
+    let mut out = Vec::with_capacity(usize::try_from(total).unwrap_or(expected + 154));
+    out.extend_from_slice(b"II");
+    out.extend_from_slice(&42u16.to_le_bytes());
+    out.extend_from_slice(&8u32.to_le_bytes());
+    out.extend_from_slice(&ENTRY_COUNT.to_le_bytes());
+
+    push_tiff_entry(&mut out, 256, 4, 1, width); // ImageWidth
+    push_tiff_entry(&mut out, 257, 4, 1, height); // ImageLength
+    push_tiff_entry(&mut out, 258, 3, 4, bits_offset); // BitsPerSample -> offset
+    push_tiff_entry(&mut out, 259, 3, 1, 1); // Compression = none
+    push_tiff_entry(&mut out, 262, 3, 1, 2); // PhotometricInterpretation = RGB
+    push_tiff_entry(&mut out, 273, 4, 1, strip_offset); // StripOffsets
+    push_tiff_entry(&mut out, 277, 3, 1, 4); // SamplesPerPixel
+    push_tiff_entry(&mut out, 278, 4, 1, height); // RowsPerStrip
+    push_tiff_entry(&mut out, 279, 4, 1, pixel_bytes); // StripByteCounts
+    push_tiff_entry(&mut out, 284, 3, 1, 1); // PlanarConfiguration = chunky
+    push_tiff_entry(&mut out, 338, 3, 1, 2); // ExtraSamples = unassociated alpha
+    out.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+    for _ in 0..4 {
+        out.extend_from_slice(&8u16.to_le_bytes());
+    }
+    out.extend_from_slice(rgba);
+    Ok(out)
+}
+
 /// Encode an RGBA raster in the requested `format`.
 ///
 /// This is the single dispatch point used by page-image export. It forwards to
-/// [`encode_png`] or [`encode_ppm`] with identical input validation.
+/// the matching encoder with identical input validation.
 ///
 /// # Errors
 ///
 /// Returns [`ConversionError::InvalidInput`] from the selected encoder when the
-/// dimensions overflow or the pixel buffer length is wrong.
+/// dimensions are out of bounds or the pixel buffer length is wrong.
 pub fn encode(
     width: u32,
     height: u32,
@@ -303,6 +517,8 @@ pub fn encode(
     match format {
         ImageFormat::Png => encode_png(width, height, rgba),
         ImageFormat::Ppm => encode_ppm(width, height, rgba),
+        ImageFormat::Bmp => encode_bmp(width, height, rgba),
+        ImageFormat::Tiff => encode_tiff(width, height, rgba),
     }
 }
 
@@ -493,23 +709,192 @@ mod tests {
         assert_eq!(ImageFormat::from_extension(".PNG"), Some(ImageFormat::Png));
         assert_eq!(ImageFormat::from_extension("ppm"), Some(ImageFormat::Ppm));
         assert_eq!(ImageFormat::from_extension("pnm"), Some(ImageFormat::Ppm));
+        assert_eq!(ImageFormat::from_extension("BMP"), Some(ImageFormat::Bmp));
+        assert_eq!(ImageFormat::from_extension(".tif"), Some(ImageFormat::Tiff));
+        assert_eq!(ImageFormat::from_extension("TIFF"), Some(ImageFormat::Tiff));
+        // JPEG is served by the verified renderer-backed encoder, not here.
         assert_eq!(ImageFormat::from_extension("jpg"), None);
         assert_eq!(ImageFormat::Png.extension(), "png");
         assert_eq!(ImageFormat::Ppm.label(), "ppm");
+        assert_eq!(ImageFormat::Bmp.extension(), "bmp");
+        assert_eq!(ImageFormat::Tiff.extension(), "tiff");
         assert_eq!(ImageFormat::Png.to_string(), "png");
-        assert_eq!(ImageFormat::all().len(), 2);
+        assert_eq!(ImageFormat::all().len(), 4);
     }
 
     #[test]
     fn encode_dispatch_matches_each_format() {
         let pixels = red_green();
-        let png = encode(2, 1, &pixels, ImageFormat::Png).expect("PNG dispatch");
-        let ppm = encode(2, 1, &pixels, ImageFormat::Ppm).expect("PPM dispatch");
-        assert_eq!(png, encode_png(2, 1, &pixels).expect("direct PNG"));
-        assert_eq!(ppm, encode_ppm(2, 1, &pixels).expect("direct PPM"));
+        for &format in ImageFormat::all() {
+            let dispatched = encode(2, 1, &pixels, format).expect("format dispatch");
+            assert_eq!(
+                dispatched,
+                match format {
+                    ImageFormat::Png => encode_png(2, 1, &pixels),
+                    ImageFormat::Ppm => encode_ppm(2, 1, &pixels),
+                    ImageFormat::Bmp => encode_bmp(2, 1, &pixels),
+                    ImageFormat::Tiff => encode_tiff(2, 1, &pixels),
+                }
+                .expect("direct encoder")
+            );
+            assert!(matches!(
+                encode(2, 1, &[0u8; 3], format),
+                Err(ConversionError::InvalidInput { .. })
+            ));
+        }
+    }
+
+    /// Read a little-endian `u16` at `offset` with explicit bounds checking.
+    fn le_u16(bytes: &[u8], offset: usize) -> u16 {
+        let slice = bytes.get(offset..offset + 2).expect("u16 in range");
+        u16::from_le_bytes([slice[0], slice[1]])
+    }
+
+    /// Read a little-endian `u32` at `offset` with explicit bounds checking.
+    fn le_u32(bytes: &[u8], offset: usize) -> u32 {
+        let slice = bytes.get(offset..offset + 4).expect("u32 in range");
+        u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]])
+    }
+
+    #[test]
+    fn png_header_and_crc_round_trip_parse() {
+        let pixels = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
+        let bytes = encode_png(2, 1, &pixels).expect("encode PNG");
+        // `png_chunks` verifies each chunk's CRC-32 as it walks the file.
+        let chunks = png_chunks(&bytes);
+        assert_eq!(chunks.len(), 3);
+        let ihdr = &chunks[0].1;
+        assert_eq!(&ihdr[..4], &2u32.to_be_bytes());
+        assert_eq!(&ihdr[4..8], &1u32.to_be_bytes());
+        assert_eq!(&ihdr[8..10], &[8, 6]);
+        let (raw, _) = stored_payload(&chunks[1].1);
+        assert_eq!(raw, [&[0u8][..], pixels.as_slice()].concat());
+        // Re-encoding the same pixels must reproduce every byte, CRC included.
+        assert_eq!(bytes, encode_png(2, 1, &pixels).expect("re-encode PNG"));
+    }
+
+    #[test]
+    fn raster_encoders_enforce_dimension_and_size_bounds() {
+        for &format in ImageFormat::all() {
+            // A dimension above the per-axis limit is rejected before allocation.
+            assert!(
+                matches!(
+                    encode(MAX_IMAGE_DIMENSION + 1, 1, &[], format),
+                    Err(ConversionError::InvalidInput { .. })
+                ),
+                "dimension bound for {format}"
+            );
+            // An area above the pixel limit is rejected even though each axis fits.
+            assert!(
+                matches!(
+                    encode(200_000, 200_000, &[], format),
+                    Err(ConversionError::InvalidInput { .. })
+                ),
+                "pixel-count bound for {format}"
+            );
+        }
+        // A hostile u32::MAX pair is rejected, never multiplied into a buffer.
         assert!(matches!(
-            encode(2, 1, &[0u8; 3], ImageFormat::Png),
+            encode(u32::MAX, u32::MAX, &[], ImageFormat::Png),
             Err(ConversionError::InvalidInput { .. })
         ));
+    }
+
+    #[test]
+    fn every_encoder_rejects_a_short_or_overlong_pixel_buffer() {
+        for &format in ImageFormat::all() {
+            assert!(matches!(
+                encode(2, 2, &[0u8; 15], format),
+                Err(ConversionError::InvalidInput { .. })
+            ));
+            assert!(matches!(
+                encode(1, 1, &[0u8; 5], format),
+                Err(ConversionError::InvalidInput { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn all_image_formats_are_byte_deterministic() {
+        let pixels: Vec<u8> = (0..(4 * 4 * 4)).map(|index| index as u8).collect();
+        for &format in ImageFormat::all() {
+            let first = encode(4, 4, &pixels, format).expect("first encoding");
+            let second = encode(4, 4, &pixels, format).expect("second encoding");
+            assert_eq!(first, second, "determinism for {format}");
+            assert!(!first.is_empty());
+        }
+    }
+
+    #[test]
+    fn bmp_header_fields_and_bottom_up_bgra_rows() {
+        // Two rows: top = opaque red then green, bottom = opaque blue then white.
+        let pixels = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, // top row
+            0, 0, 255, 255, 255, 255, 255, 255, // bottom row
+        ];
+        let bytes = encode_bmp(2, 2, &pixels).expect("encode BMP");
+        assert_eq!(&bytes[..2], b"BM");
+        assert_eq!(le_u32(&bytes, 2) as usize, bytes.len());
+        assert_eq!(le_u32(&bytes, 10), 54, "pixel data offset");
+        assert_eq!(le_u32(&bytes, 14), 40, "BITMAPINFOHEADER size");
+        assert_eq!(le_u32(&bytes, 18), 2, "width");
+        assert_eq!(le_u32(&bytes, 22), 2, "height (top-down declaration)");
+        assert_eq!(le_u16(&bytes, 26), 1, "planes");
+        assert_eq!(le_u16(&bytes, 28), 32, "bits per pixel");
+        assert_eq!(le_u32(&bytes, 30), 0, "BI_RGB compression");
+        assert_eq!(le_u32(&bytes, 34), 16, "pixel byte count");
+        // Rows are stored bottom-up; within a row pixels are B,G,R,A. The
+        // bottom row (blue, white) therefore precedes the top row (red, green).
+        assert_eq!(
+            &bytes[54..],
+            &[
+                255, 0, 0, 255, 255, 255, 255, 255, 0, 0, 255, 255, 0, 255, 0, 255
+            ]
+        );
+    }
+
+    #[test]
+    fn tiff_header_ifd_tags_and_rgba_payload() {
+        let pixels = red_green();
+        let bytes = encode_tiff(2, 1, &pixels).expect("encode TIFF");
+        assert_eq!(&bytes[..2], b"II", "little-endian marker");
+        assert_eq!(le_u16(&bytes, 2), 42, "TIFF magic");
+        assert_eq!(le_u32(&bytes, 4), 8, "IFD offset");
+        assert_eq!(le_u16(&bytes, 8), 11, "baseline tag count");
+
+        // Entries are 12 bytes each starting at 10; collect (tag, type, value).
+        let mut tags = Vec::new();
+        for index in 0..11 {
+            let base = 10 + index * 12;
+            tags.push((
+                le_u16(&bytes, base),
+                le_u16(&bytes, base + 2),
+                le_u32(&bytes, base + 8),
+            ));
+        }
+        let ordered: Vec<u16> = tags.iter().map(|entry| entry.0).collect();
+        assert_eq!(
+            ordered,
+            vec![256, 257, 258, 259, 262, 273, 277, 278, 279, 284, 338]
+        );
+        let entry = |tag: u16| tags.iter().find(|item| item.0 == tag).expect("tag exists");
+        assert_eq!(entry(256).2, 2, "ImageWidth");
+        assert_eq!(entry(257).2, 1, "ImageLength");
+        assert_eq!(entry(259).2, 1, "Compression = none");
+        assert_eq!(entry(262).2, 2, "Photometric = RGB");
+        assert_eq!(entry(277).2, 4, "SamplesPerPixel");
+        assert_eq!(entry(338).2, 2, "ExtraSamples = unassociated alpha");
+        assert_eq!(entry(278).2, 1, "RowsPerStrip");
+        assert_eq!(entry(279).2, 8, "StripByteCounts");
+
+        // BitsPerSample is an out-of-line array of four 16-bit 8s at byte 146.
+        let bits_offset = entry(258).2 as usize;
+        assert_eq!(bits_offset, 146);
+        for index in 0..4 {
+            assert_eq!(le_u16(&bytes, bits_offset + index * 2), 8);
+        }
+        let strip_offset = entry(273).2 as usize;
+        assert_eq!(strip_offset, 154);
+        assert_eq!(&bytes[strip_offset..], &pixels[..]);
     }
 }
