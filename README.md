@@ -55,8 +55,8 @@ document tabs, a compact icon rail, a pages panel with thumbnails, a rich
 document canvas, a tools panel with AI Assistant and Export cards, and a
 page/zoom bar. Light and dark themes are built in.
 
-![PDFXI viewer, light](docs/evidence/ui/light-v9.png)
-![PDFXI viewer, dark](docs/evidence/ui/dark-v9.png)
+![PDFXI viewer, light](docs/evidence/ui/light-v10.png)
+![PDFXI viewer, dark](docs/evidence/ui/dark-v10.png)
 
 The visual review checklist and findings are in
 [`docs/design/UI_REVIEW.md`](docs/design/UI_REVIEW.md).

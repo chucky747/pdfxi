@@ -94,7 +94,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::design::{self, Icon, Palette, PaperPalette, ThemeMode, icon, metrics};
+use crate::design::{self, Icon, Palette, PaperPalette, ThemeMode, TitlePalette, icon, metrics};
 use crate::{
     OpenError, PaperSize, PrintContext, PrintDialogState, PrintModelError, PrintPageRange,
     PrintPlan,
@@ -3211,17 +3211,18 @@ fn shell_icon_button(
 
 /// A window control in the custom title bar.
 ///
-/// The close button turns accent red on hover; the others use the normal
-/// surface hover. All three are 30 pt squares so the control cluster reads as
+/// The close button turns accent red on hover; the others use the title-bar
+/// hover surface. All three are 30 pt squares so the control cluster reads as
 /// one unit.
-fn window_button(ui: &mut egui::Ui, palette: Palette, glyph: Icon, close: bool) -> egui::Response {
+fn title_window_button(
+    ui: &mut egui::Ui,
+    palette: TitlePalette,
+    glyph: Icon,
+    close: bool,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
     if response.hovered() {
-        let fill = if close {
-            palette.accent
-        } else {
-            palette.surface
-        };
+        let fill = if close { palette.accent } else { palette.hover };
         ui.painter().rect_filled(rect, 6.0, fill);
     }
     let color = if response.hovered() && close {
@@ -3231,6 +3232,82 @@ fn window_button(ui: &mut egui::Ui, palette: Palette, glyph: Icon, close: bool) 
     };
     icon(ui.painter(), rect.shrink(8.0), glyph, color);
     response
+}
+
+/// A borderless icon button on the dark title bar.
+fn title_icon_button(
+    ui: &mut egui::Ui,
+    palette: TitlePalette,
+    glyph: Icon,
+    size: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 7.0, palette.hover);
+    }
+    let color = if response.hovered() {
+        palette.text
+    } else {
+        palette.text_muted
+    };
+    icon(ui.painter(), rect.shrink(size * 0.27), glyph, color);
+    response
+}
+
+/// A rounded, outlined button on the dark title bar.
+fn title_pill_button(
+    ui: &mut egui::Ui,
+    palette: TitlePalette,
+    glyph: Icon,
+    label: &str,
+) -> egui::Response {
+    let font = egui::FontId::proportional(11.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), palette.text);
+    let width = galley.size().x + 38.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
+    let background = if response.hovered() {
+        palette.hover
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 15.0, background);
+    ui.painter().rect_stroke(
+        rect,
+        15.0,
+        egui::Stroke::new(1.0_f32, palette.border),
+        egui::StrokeKind::Inside,
+    );
+    icon(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 16.0, rect.center().y),
+            egui::Vec2::splat(13.0),
+        ),
+        glyph,
+        palette.text_muted,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 26.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        palette.text,
+    );
+    response
+}
+
+/// Thin vertical separator on the dark title bar.
+fn title_divider(ui: &mut egui::Ui, palette: TitlePalette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 22.0), egui::Sense::hover());
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.center().x, rect.top()),
+            egui::pos2(rect.center().x, rect.bottom()),
+        ],
+        egui::Stroke::new(1.0_f32, palette.border),
+    );
 }
 
 /// Toolbar button with an icon and label.
@@ -3271,50 +3348,6 @@ fn shell_tool_button(
         label,
         font,
         color,
-    );
-    response
-}
-
-/// A rounded, outlined button used in the title bar.
-fn shell_pill_button(
-    ui: &mut egui::Ui,
-    palette: Palette,
-    glyph: Icon,
-    label: &str,
-) -> egui::Response {
-    let font = egui::FontId::proportional(11.0);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), palette.text);
-    let width = galley.size().x + 38.0;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
-    let background = if response.hovered() {
-        palette.surface
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, 15.0, background);
-    ui.painter().rect_stroke(
-        rect,
-        15.0,
-        egui::Stroke::new(1.0_f32, palette.border),
-        egui::StrokeKind::Inside,
-    );
-    icon(
-        ui.painter(),
-        egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 16.0, rect.center().y),
-            egui::Vec2::splat(13.0),
-        ),
-        glyph,
-        palette.text_muted,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + 26.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font,
-        palette.text,
     );
     response
 }
@@ -3473,11 +3506,21 @@ impl PdfxiApp {
             self.applied_theme = Some(self.theme);
         }
         let palette = Palette::for_mode(self.theme);
+        let title_palette = TitlePalette::for_mode(self.theme);
 
         egui::TopBottomPanel::top("shell_title")
             .exact_height(metrics::TITLE_BAR)
-            .frame(shell_panel_frame(palette, 12))
-            .show(ctx, |ui| self.title_bar_ui(ui, palette));
+            .frame(
+                egui::Frame::new()
+                    .fill(title_palette.background)
+                    .inner_margin(egui::Margin {
+                        left: 12,
+                        right: 12,
+                        top: 0,
+                        bottom: 0,
+                    }),
+            )
+            .show(ctx, |ui| self.title_bar_ui(ui, title_palette));
 
         egui::TopBottomPanel::top("shell_command")
             .exact_height(metrics::TOOL_BAR)
@@ -3536,7 +3579,7 @@ impl PdfxiApp {
             .show(ctx, |ui| self.canvas_ui(ui));
     }
 
-    fn title_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+    fn title_bar_ui(&mut self, ui: &mut egui::Ui, palette: TitlePalette) {
         let panel = ui.max_rect();
         ui.painter().line_segment(
             [
@@ -3578,7 +3621,7 @@ impl PdfxiApp {
                     .color(palette.text),
             );
             ui.add_space(12.0);
-            shell_divider(ui, palette);
+            title_divider(ui, palette);
             ui.add_space(4.0);
 
             let tabs = self.tab_strip_snapshot();
@@ -3591,7 +3634,7 @@ impl PdfxiApp {
                     TabAction::Close => close = Some(*id),
                 }
             }
-            if shell_icon_button(ui, palette, Icon::Plus, 28.0)
+            if title_icon_button(ui, palette, Icon::Plus, 28.0)
                 .on_hover_text("New demo document")
                 .clicked()
             {
@@ -3605,7 +3648,7 @@ impl PdfxiApp {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if window_button(ui, palette, Icon::Close, true)
+                if title_window_button(ui, palette, Icon::Close, true)
                     .on_hover_text("Close")
                     .clicked()
                 {
@@ -3614,21 +3657,21 @@ impl PdfxiApp {
                 let maximized = ui
                     .ctx()
                     .input(|input| input.viewport().maximized.unwrap_or(false));
-                if window_button(ui, palette, Icon::Maximize, false)
+                if title_window_button(ui, palette, Icon::Maximize, false)
                     .on_hover_text(if maximized { "Restore" } else { "Maximize" })
                     .clicked()
                 {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                 }
-                if window_button(ui, palette, Icon::Minimize, false)
+                if title_window_button(ui, palette, Icon::Minimize, false)
                     .on_hover_text("Minimize")
                     .clicked()
                 {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 }
-                shell_divider(ui, palette);
+                title_divider(ui, palette);
                 let (avatar, _) =
                     ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
                 ui.painter()
@@ -3640,7 +3683,7 @@ impl PdfxiApp {
                     egui::FontId::proportional(12.0),
                     palette.accent,
                 );
-                if shell_icon_button(ui, palette, Icon::Help, 28.0)
+                if title_icon_button(ui, palette, Icon::Help, 28.0)
                     .on_hover_text("Help")
                     .clicked()
                 {
@@ -3648,7 +3691,7 @@ impl PdfxiApp {
                         "Open a PDF, press Ctrl+F to find, and use the rail for pages and tools."
                             .to_owned();
                 }
-                if shell_icon_button(ui, palette, Icon::Bell, 28.0)
+                if title_icon_button(ui, palette, Icon::Bell, 28.0)
                     .on_hover_text("Notifications")
                     .clicked()
                 {
@@ -3658,13 +3701,13 @@ impl PdfxiApp {
                     ThemeMode::Light => Icon::Moon,
                     ThemeMode::Dark => Icon::Sun,
                 };
-                if shell_icon_button(ui, palette, theme_glyph, 28.0)
+                if title_icon_button(ui, palette, theme_glyph, 28.0)
                     .on_hover_text("Switch light/dark")
                     .clicked()
                 {
                     self.theme = self.theme.toggled();
                 }
-                if shell_pill_button(ui, palette, Icon::Share, "Share").clicked() {
+                if title_pill_button(ui, palette, Icon::Share, "Share").clicked() {
                     self.status =
                         "Sharing is local-only in this build; export or print to hand off a copy."
                             .to_owned();
@@ -3684,7 +3727,7 @@ impl PdfxiApp {
     fn title_tab(
         &mut self,
         ui: &mut egui::Ui,
-        palette: Palette,
+        palette: TitlePalette,
         index: usize,
         _id: TabId,
         title: &str,
@@ -3718,7 +3761,7 @@ impl PdfxiApp {
                 palette.accent,
             );
         } else if response.hovered() {
-            ui.painter().rect_filled(rect, 8.0, palette.surface);
+            ui.painter().rect_filled(rect, 8.0, palette.hover);
         }
         icon(
             ui.painter(),
@@ -3755,7 +3798,7 @@ impl PdfxiApp {
         );
         if close_response.hovered() {
             ui.painter()
-                .circle_filled(close_rect.center(), 7.0, palette.surface_hover);
+                .circle_filled(close_rect.center(), 7.0, palette.hover);
         }
         icon(
             ui.painter(),

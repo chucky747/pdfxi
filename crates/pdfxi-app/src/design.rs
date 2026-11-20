@@ -121,6 +121,63 @@ impl Palette {
     }
 }
 
+/// Colors for the product title bar.
+///
+/// The title bar stays dark in both themes, like a professional desktop
+/// application, so its contrast is independent of the body palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TitlePalette {
+    /// Bar background.
+    pub background: Color32,
+    /// Active tab and raised control surface.
+    pub surface: Color32,
+    /// Hover surface.
+    pub hover: Color32,
+    /// Hairline borders.
+    pub border: Color32,
+    /// Primary title text.
+    pub text: Color32,
+    /// Secondary title text.
+    pub text_muted: Color32,
+    /// Accent for the logo, active tab and close hover.
+    pub accent: Color32,
+    /// Soft accent for the avatar.
+    pub accent_soft: Color32,
+    /// Saved-state green.
+    pub success: Color32,
+}
+
+impl TitlePalette {
+    /// Title-bar colors for a shell theme.
+    #[must_use]
+    pub fn for_mode(mode: ThemeMode) -> Self {
+        match mode {
+            ThemeMode::Light => Self {
+                background: Color32::from_rgb(0x1e, 0x1c, 0x1a),
+                surface: Color32::from_rgb(0x2c, 0x29, 0x26),
+                hover: Color32::from_rgb(0x3a, 0x36, 0x32),
+                border: Color32::from_rgb(0x3a, 0x36, 0x32),
+                text: Color32::from_rgb(0xf7, 0xf3, 0xef),
+                text_muted: Color32::from_rgb(0xb8, 0xb0, 0xa8),
+                accent: Color32::from_rgb(0xe8, 0x4a, 0x3f),
+                accent_soft: Color32::from_rgb(0x4a, 0x2a, 0x26),
+                success: Color32::from_rgb(0x4a, 0xd1, 0x8a),
+            },
+            ThemeMode::Dark => Self {
+                background: Color32::from_rgb(0x14, 0x16, 0x1a),
+                surface: Color32::from_rgb(0x25, 0x29, 0x30),
+                hover: Color32::from_rgb(0x30, 0x35, 0x3e),
+                border: Color32::from_rgb(0x31, 0x36, 0x3f),
+                text: Color32::from_rgb(0xf3, 0xf1, 0xee),
+                text_muted: Color32::from_rgb(0xa3, 0x9d, 0x96),
+                accent: Color32::from_rgb(0xf2, 0x55, 0x4a),
+                accent_soft: Color32::from_rgb(0x3a, 0x22, 0x21),
+                success: Color32::from_rgb(0x45, 0xc0, 0x7a),
+            },
+        }
+    }
+}
+
 /// Colors used inside the document page.
 ///
 /// A page is paper, not chrome: its ink and highlights must stay readable in
@@ -978,6 +1035,20 @@ mod tests {
             );
             assert!(contrast_ratio(paper.muted, paper.paper) >= 4.5);
             assert!(contrast_ratio(paper.accent, paper.paper) >= 3.0);
+        }
+    }
+
+    #[test]
+    fn title_bar_text_is_readable_on_the_dark_bar() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let palette = TitlePalette::for_mode(mode);
+            assert!(
+                contrast_ratio(palette.text, palette.background) >= 7.0,
+                "title text contrast {} in {mode:?}",
+                contrast_ratio(palette.text, palette.background)
+            );
+            assert!(contrast_ratio(palette.text_muted, palette.background) >= 4.5);
+            assert!(contrast_ratio(palette.accent, palette.background) >= 3.0);
         }
     }
 

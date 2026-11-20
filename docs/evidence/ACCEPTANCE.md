@@ -43,8 +43,8 @@ review is recorded.
 
 | Evidence | Path |
 |---|---|
-| Light acceptance screenshot | `docs/evidence/ui/light-v9.png` |
-| Dark acceptance screenshot | `docs/evidence/ui/dark-v9.png` |
+| Light acceptance screenshot | `docs/evidence/ui/light-v10.png` |
+| Dark acceptance screenshot | `docs/evidence/ui/dark-v10.png` |
 | Review process, checklist, findings, sign-off | `docs/design/UI_REVIEW.md` |
 | App tests | `cargo test -p pdfxi-app --features ui,pdfium` -> 490 passed |
 | Lint/format | `cargo clippy ... -D warnings`, `cargo fmt --all --check` -> clean |
