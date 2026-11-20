@@ -1036,42 +1036,55 @@ tests = [
 title = "Find and replace text across a document"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-edit/src/image_edit.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0138.md",
-]
+docs = "docs/evidence/hardening/T-0265.md"
 domain = "Edit"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 10 new image_edit tests passed, full suite 268 passed / 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0138.md."
+evidence = "docs/evidence/hardening/T-0265.md"
 id = "EDIT-004"
 notes = """
-Adds a dependency-free image edit model in pdfxi-edit. `PlacedImage` carries a
-stable `ImageId`, page, validated `Rect`, rotation (0/90/180/270), opacity in
-0.0..=1.0 and caller-supplied intrinsic size (no image decoding). `PlacementMode`
-Fit/Fill/Stretch and `place_image` provide centered aspect-preserving fit/fill
-plus exact stretch; a 90/270 rotation swaps the effective intrinsic dimensions.
-`ImageOperation` Replace/Remove/Move/Resize are applied in order by
-`ImageEdit::build_plan`, which validates page bounds, finite geometry, opacity,
-rotation, intrinsic size, known/duplicate ids and same-page replacement, then
-emits an `ImageEditPlan` sorted by (page, id) for a host writer. Ten unit tests
-cover the placement math, validation and determinism. This is verified at the
-library-model level: this crate does not decode images or serialize content
-streams / image XObjects, so host writing and UI integration remain future work.
-No new dependency and no source-byte mutation.
+`list_objects` enumerates text blocks from the T-0233 text model and image
+XObjects drawn directly by the page content stream, with stable
+`text:<block>` and `image:<resource>:<occurrence>` identifiers. `move_object`
+translates a block's Tm/Td placement or an image's placement cm; `resize_object`
+scales an image's cm axes about its origin or scales a text block through its
+Tf sizes, Tm horizontal term and Td spacing while keeping the text extractable;
+`replace_object` rebuilds a text block through the T-0233 reflow/font path or
+swaps an image XObject's stream and dictionary in place; `delete_object` removes
+the block's BT..ET text objects or the image Do usage and unlinks only an
+unshared single-use XObject. Shared text objects, shared placements, shared
+image resources, image draws in text objects and unsupported transforms fail
+closed. Every operation is copy-on-write through the core Document (callers use
+a pdfxi-document session for undo/redo) and is proven by PDFium: resized text
+kept a 1.505 x 1.500 ink ratio about its origin, shrunk images vacated the old
+band (0 red), replacement images painted blue with 0 old red pixels, and
+replacement text extracted instead of the original. Full suite 355 passed;
+fmt/clippy/doc clean. Round B limits: images in Form XObjects and inline images
+are out of scope; text resize refuses rotated or Td-only objects; image replace
+refuses shared resources.
 """
 priority = "P1"
-status = "model"
+status = "library"
 tests = [
-    "image_edit::tests::fit_fill_and_stretch_math_is_correct",
-    "image_edit::tests::opacity_is_validated",
-    "image_edit::tests::out_of_bounds_placements_are_rejected",
-    "image_edit::tests::resize_preserves_aspect_ratio",
-    "image_edit::tests::plan_is_deterministic_and_ordered_by_page_then_id",
-    "image_edit::tests::move_replace_and_remove_operations_apply_in_order",
-    "image_edit::tests::move_outside_bounds_and_non_finite_deltas_are_rejected",
-    "image_edit::tests::invalid_rotation_natural_size_and_unknown_id_are_rejected",
-    "image_edit::tests::rotation_swaps_effective_natural_size",
-    "image_edit::tests::duplicate_ids_are_rejected",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::list_objects_reports_added_text_and_image",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::move_text_block_updates_geometry_and_extraction",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::move_existing_fixture_heading_keeps_other_text",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::move_image_changes_only_the_selected_usage",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::delete_text_block_keeps_the_rest_of_the_page",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::delete_unshared_image_removes_resource_and_object",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::delete_shared_image_keeps_object_and_other_usage",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::object_identifiers_are_validated",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::session_undo_restores_text_object_geometry",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::resize_text_block_scales_geometry_and_extraction",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::resize_image_scales_placement_only",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::resize_rejects_invalid_scales_and_shared_placement",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::replace_text_block_rewrites_content_and_extracts",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::replace_image_swaps_stream_and_keeps_placement",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::replace_image_rejects_shared_resource",
+    "crates/pdfxi-edit/src/content_edit.rs::tests::session_undo_restores_resized_and_replaced_objects",
+    "crates/pdfxi-edit/tests/object_render.rs::moved_text_extracts_and_renders_at_its_new_position",
+    "crates/pdfxi-edit/tests/object_render.rs::moved_image_renders_at_its_new_position",
+    "crates/pdfxi-edit/tests/object_render.rs::deleted_text_and_image_leave_no_content",
+    "crates/pdfxi-edit/tests/object_render.rs::resized_text_and_image_render_at_scaled_bounds",
+    "crates/pdfxi-edit/tests/object_render.rs::replaced_text_and_image_extract_and_render",
 ]
 title = "Add move resize and replace images"
 

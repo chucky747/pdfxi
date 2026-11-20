@@ -55,7 +55,9 @@
 //! `Do` references, plus a dry-run mode. [`content_edit`] reads a real page's
 //! content stream into geometry-aware text blocks and writes text replacement
 //! with reflow, inserted text boxes and image XObjects through the core object
-//! model; the replacement path embeds a bundled SIL Open Font License fallback
+//! model; it also lists, moves, resizes, replaces and deletes existing text
+//! blocks and image XObjects with fail-closed shared-object checks. The
+//! replacement path embeds a bundled SIL Open Font License fallback
 //! font when the source font is subset or otherwise cannot encode the new text.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
@@ -100,9 +102,11 @@ pub use compare::{
     TextPage, compare_documents,
 };
 pub use content_edit::{
-    FALLBACK_BASE_FONT, FontChoice, ImageFormat, ImagePlacement, PageTextModel, ReplaceOutcome,
-    TextAlign, TextBlock, TextEditError, TextLine, TextPlacement, TextRun, add_image, add_text_box,
-    replace_run_text, text_blocks,
+    FALLBACK_BASE_FONT, FontChoice, ImageFormat, ImagePlacement, ObjectEditError, ObjectKind,
+    ObjectReplaceOutcome, ObjectReplacement, PageObject, PageTextModel, ReplaceOutcome, TextAlign,
+    TextBlock, TextEditError, TextLine, TextPlacement, TextRun, add_image, add_text_box,
+    delete_object, list_objects, move_object, replace_object, replace_run_text, resize_object,
+    text_blocks,
 };
 pub use document_annotations::{
     AnnotationEditError, AnnotationRef, AnnotationState, AnnotationSubtype, AnnotationView,
