@@ -1,4 +1,5 @@
 /target/
+/crates/*/target/
 /target/lanes/
 /artifacts/
 /out/
