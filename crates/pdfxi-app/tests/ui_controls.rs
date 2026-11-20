@@ -30,7 +30,7 @@
 #![cfg(all(feature = "ui", feature = "pdfium"))]
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pdfxi_app::find::FindOptions;
 use pdfxi_app::ui::{AppCommand, CaptionAction, PdfxiApp, RailItem, UiClosePolicy};
@@ -125,6 +125,8 @@ struct Snapshot {
     errors: usize,
     close_policy: UiClosePolicy,
     selection: String,
+    display_name: String,
+    dirty: Option<bool>,
     thumbnail_page: usize,
     tools_open: bool,
     grid_view: bool,
@@ -169,6 +171,8 @@ fn snapshot(app: &PdfxiApp) -> Snapshot {
         errors: app.open_errors().len(),
         close_policy: app.close_policy(),
         selection: app.selected_text(),
+        display_name: app.display_name().to_owned(),
+        dirty: tab.map(|tab| tab.is_dirty()),
         thumbnail_page: app.thumbnail_state().active_page(),
         tools_open: app.tools_open(),
         grid_view: app.grid_view(),
@@ -337,6 +341,15 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
         ("CloseHelp", AppCommand::CloseHelp),
         ("Undo", AppCommand::Undo),
         ("Redo", AppCommand::Redo),
+        (
+            "SetDisplayName",
+            AppCommand::SetDisplayName("QA Reviewer".to_owned()),
+        ),
+        (
+            "SetDocumentTitle",
+            AppCommand::SetDocumentTitle("QA Title".to_owned()),
+        ),
+        ("Save", AppCommand::Save),
         // T-0242 comments and markup commands.
         (
             "AddNote",
@@ -466,6 +479,9 @@ const PROVEN_LABELS: &[&str] = &[
     "close-help",
     "undo",
     "redo",
+    "set-display-name",
+    "set-document-title",
+    "save",
 ];
 
 /// Enum variants that exist but are deliberately not covered by this harness
@@ -476,10 +492,6 @@ const PROVEN_LABELS: &[&str] = &[
 /// variant still breaks the build until someone records why it has no proof.
 /// Each entry names the owning task and the concrete missing piece.
 const PENDING_COVERAGE: &[(&str, &str)] = &[
-    (
-        "SetDisplayName",
-        "T-0221 local identity; needs an identity accessor in Snapshot",
-    ),
     (
         "ToggleStar",
         "T-0221 library state; mutates persisted library state, needs an isolated library root",
@@ -505,16 +517,8 @@ const PENDING_COVERAGE: &[(&str, &str)] = &[
         "T-0221 storage refresh; filesystem-dependent and needs an isolated library root",
     ),
     (
-        "Save",
-        "T-0222 session write; would overwrite a repository fixture, needs a temporary copy",
-    ),
-    (
         "SaveAs",
         "T-0222 native save dialog; blocking/modal, cannot run headlessly",
-    ),
-    (
-        "SetDocumentTitle",
-        "T-0222 session metadata; needs a document-title accessor in Snapshot",
     ),
     (
         "SubmitPassword",
@@ -641,6 +645,9 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("close-help", "close-help"),
         ("undo", "undo"),
         ("redo", "redo"),
+        ("set-display-name", "set-display-name"),
+        ("set-document-title", "set-document-title"),
+        ("save", "save"),
         ("add-note", "add-note"),
         ("cancel-note-draft", "cancel-note-draft"),
         ("save-note-draft", "save-note-draft"),
@@ -1046,6 +1053,36 @@ fn dispatched_find_commands_act() {
     );
 }
 
+/// Copy the Excel fixture to a per-process temp path under the test temp dir.
+///
+/// Tests never write to `fixtures/**`; the caller owns the returned file and
+/// must remove it.
+fn temp_fixture_copy(label: &str) -> PathBuf {
+    let source = fixture("fixtures/realworld/microsoft-excel-2019-sample.pdf");
+    let directory = std::env::temp_dir();
+    std::fs::create_dir_all(&directory).expect("create the test temp directory");
+    let path = directory.join(format!("pdfxi-t0212-{label}-{}.pdf", std::process::id()));
+    std::fs::copy(&source, &path).expect("copy the fixture to the temp path");
+    path
+}
+
+/// Open a temp fixture copy and assert it produced a real page.
+fn open_temp_copy(path: &Path) -> PdfxiApp {
+    let mut app = PdfxiApp::new();
+    assert!(
+        app.open_path_text(path.to_string_lossy().as_ref()),
+        "temp copy {} did not open",
+        path.display()
+    );
+    assert!(
+        app.state()
+            .active_tab()
+            .is_some_and(|tab| tab.page_count() > 0),
+        "temp copy must have at least one page"
+    );
+    app
+}
+
 /// Open the real-world Excel fixture used for annotation proofs.
 ///
 /// It has no pre-existing `/Annots`, so annotation counts start at zero and a
@@ -1261,6 +1298,112 @@ fn undo_redo_and_help_commands_act() {
     assert!(app.help_open());
     assert_dispatch_acts("close-help", &mut app, AppCommand::CloseHelp);
     assert!(!app.help_open());
+}
+
+#[test]
+fn set_display_name_and_document_title_act() {
+    let mut app = with_excel_document();
+
+    // Display name: public accessor plus the annotation author path.
+    let prior = app.display_name().to_owned();
+    assert_ne!(prior, "QA Reviewer");
+    assert_dispatch_acts(
+        "set-display-name",
+        &mut app,
+        AppCommand::SetDisplayName("QA Reviewer".to_owned()),
+    );
+    assert_eq!(app.display_name(), "QA Reviewer");
+    app.dispatch(
+        AppCommand::AddNote {
+            page: 0,
+            x: 72.0,
+            y: 720.0,
+            contents: "Authored note".to_owned(),
+        },
+        None,
+    );
+    assert_eq!(app.annotations()[0].view.author, "QA Reviewer");
+
+    // Restore the previous value so the test leaves no identity behind.
+    assert_dispatch_acts(
+        "set-display-name",
+        &mut app,
+        AppCommand::SetDisplayName(prior.clone()),
+    );
+    assert_eq!(app.display_name(), prior);
+
+    // Document title: use a temp copy; no repository fixture is written.
+    let temp = temp_fixture_copy("title");
+    let mut titled = open_temp_copy(&temp);
+    assert!(
+        !titled
+            .state()
+            .active_tab()
+            .is_some_and(|tab| tab.is_dirty())
+    );
+    assert_dispatch_acts(
+        "set-document-title",
+        &mut titled,
+        AppCommand::SetDocumentTitle("QA Title".to_owned()),
+    );
+    assert!(
+        titled
+            .state()
+            .active_tab()
+            .is_some_and(|tab| tab.is_dirty()),
+        "a title edit must mark the tab dirty"
+    );
+    // There is no public in-memory Info-title getter; the saved file is read
+    // back in `save_writes_a_temp_copy_and_clears_dirty`.
+    drop(titled);
+    std::fs::remove_file(&temp).expect("remove the title temp copy");
+}
+
+#[test]
+fn save_writes_a_temp_copy_and_clears_dirty() {
+    let temp = temp_fixture_copy("save");
+    let mut app = open_temp_copy(&temp);
+    let before = std::fs::read(&temp).expect("read the original temp copy");
+
+    app.dispatch(AppCommand::SetDocumentTitle("Saved Title".to_owned()), None);
+    app.dispatch(
+        AppCommand::AddNote {
+            page: 0,
+            x: 72.0,
+            y: 720.0,
+            contents: "Saved note".to_owned(),
+        },
+        None,
+    );
+    assert_eq!(app.annotation_count(), 1);
+    assert!(
+        app.state().active_tab().is_some_and(|tab| tab.is_dirty()),
+        "edits must mark the tab dirty before Save"
+    );
+
+    assert_dispatch_acts("save", &mut app, AppCommand::Save);
+    assert_eq!(app.status(), "Saved");
+    assert!(
+        !app.state().active_tab().is_some_and(|tab| tab.is_dirty()),
+        "Save must clear the dirty flag"
+    );
+
+    let after = std::fs::read(&temp).expect("read the saved temp copy");
+    assert_ne!(before, after, "Save must rewrite the saved file");
+
+    // The Info title is only readable through the saved bytes (no public app
+    // accessor), which also proves SetDocumentTitle persisted.
+    let saved = pdfxi_core::Document::from_bytes(after).expect("parse the saved PDF");
+    let info = saved.info().expect("read saved Info").expect("saved Info");
+    assert_eq!(info.title.as_deref(), Some("Saved Title"));
+
+    drop(app);
+
+    let reopened = open_temp_copy(&temp);
+    assert_eq!(reopened.annotation_count(), 1);
+    assert_eq!(reopened.annotations()[0].view.contents, "Saved note");
+    drop(reopened);
+    std::fs::remove_file(&temp).expect("remove the save temp copy");
 }
 
 #[test]

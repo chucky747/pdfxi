@@ -2401,7 +2401,7 @@ the real fixture, that an app shell can call. Underline/strikeout/squiggly/
 ink/shape/stamp writes remain model-only.
 """
 priority = "P0"
-status = "library"
+status = "verified"
 tests = [
     "note_highlight_reply_and_resolve_survive_a_full_rewrite",
     "annotations_survive_the_incremental_save_the_session_uses",
@@ -2477,7 +2477,7 @@ appearance. set_state writes /State (Accepted and the other review values) with
 local review layer; the library now connects them to PDF bytes.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "note_highlight_reply_and_resolve_survive_a_full_rewrite",
     "update_and_delete_remove_content_from_a_saved_document",

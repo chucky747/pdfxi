@@ -1,4 +1,4 @@
-﻿//! Document canvas, page pill, and raster/texture helpers.
+//! Document canvas, page pill, and raster/texture helpers.
 
 use crate::design::Palette;
 #[cfg(feature = "pdfium")]
@@ -99,12 +99,17 @@ impl PdfxiApp {
         let image = || egui::ColorImage::from_rgba_unmultiplied([width, height], pixels);
         let scale_bits = key.scale_bits();
         let rotation_degrees = key.rotation_degrees();
+        let generation = self.render_generation;
         match self.textures.get_mut(&page) {
-            Some(live) if live.scale_bits == scale_bits && live.rotation == rotation_degrees => {}
+            Some(live)
+                if live.scale_bits == scale_bits
+                    && live.rotation == rotation_degrees
+                    && live.generation == generation => {}
             Some(live) => {
                 live.handle.set(image(), egui::TextureOptions::LINEAR);
                 live.scale_bits = scale_bits;
                 live.rotation = rotation_degrees;
+                live.generation = generation;
             }
             None => {
                 let handle = ctx.load_texture(
@@ -118,6 +123,7 @@ impl PdfxiApp {
                         handle,
                         scale_bits,
                         rotation: rotation_degrees,
+                        generation,
                     },
                 );
             }
@@ -214,6 +220,22 @@ impl PdfxiApp {
                     }
                 }
 
+                // Comment tool: one click places a note and opens its draft.
+                if self.note_tool_active()
+                    && pressed
+                    && let Some(pos) = hover
+                {
+                    let point = screen_to_canvas(pos, origin, self.scroll_x - pad_x, self.scroll_y);
+                    if let Some((page, x, y_down)) = layout.page_point(point) {
+                        let height = self
+                            .page_sizes
+                            .get(page)
+                            .map_or(792.0, |size| size.height_pt);
+                        let note = super::comments::note_point(height, x, y_down);
+                        self.begin_note_draft_at(page, note.x, note.y);
+                    }
+                }
+
                 // Report the page under the cursor in canvas coordinates.
 
                 #[cfg(feature = "pdfium")]
@@ -291,6 +313,9 @@ impl PdfxiApp {
                         );
                     }
                 }
+
+                // Thread popup anchored beside the selected annotation.
+                self.annotation_popup_ui(ui, &layout, origin, pad_x);
 
                 // Persist the active tab's final scroll position so a later tab
                 // switch can restore exactly where the user left this document.

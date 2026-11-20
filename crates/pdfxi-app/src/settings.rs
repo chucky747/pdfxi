@@ -166,18 +166,13 @@ impl Settings {
     }
 }
 
-/// The platform account name, or `Reader` when the environment exposes none.
+/// The neutral default display name.
+///
+/// Comments and signatures must not leak the platform account name by default,
+/// so a fresh install starts as `Reader`; the name stays editable in the
+/// identity popover. Existing settings that already contain a name keep it.
 #[must_use]
 pub fn default_display_name() -> String {
-    for key in ["USERNAME", "USER", "LOGNAME"] {
-        if let Some(value) = std::env::var_os(key) {
-            let value = value.to_string_lossy();
-            let value = value.trim();
-            if !value.is_empty() {
-                return value.to_owned();
-            }
-        }
-    }
     "Reader".to_owned()
 }
 
@@ -516,6 +511,17 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create the temporary test directory");
         dir
+    }
+
+    #[test]
+    fn a_saved_display_name_survives_and_missing_uses_reader() {
+        let dir = temp_dir("display-name");
+        let path = dir.join("settings.toml");
+        fs::write(&path, "display_name = \"Ada\"\ntheme = \"dark\"\n").expect("write settings");
+        assert_eq!(load(&path).display_name, "Ada");
+        fs::write(&path, "theme = \"light\"\n").expect("write settings without a name");
+        assert_eq!(load(&path).display_name, "Reader");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

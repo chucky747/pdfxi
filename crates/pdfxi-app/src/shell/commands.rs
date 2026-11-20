@@ -196,6 +196,66 @@ pub enum AppCommand {
     ConfirmPrint,
     /// Cancel the running print job between pages.
     CancelPrint,
+    /// Add a text-note annotation at a PDF user-space point.
+    AddNote {
+        /// Zero-based page.
+        page: usize,
+        /// PDF user-space x (points).
+        x: f32,
+        /// PDF user-space y (points, bottom-left origin).
+        y: f32,
+        /// Comment text.
+        contents: String,
+    },
+    /// Save the open note draft.
+    SaveNoteDraft,
+    /// Discard the open note draft.
+    CancelNoteDraft,
+    /// Add a highlight over the current text selection.
+    AddHighlight,
+    /// Open an annotation's thread popup and scroll to its page.
+    OpenAnnotation {
+        /// Zero-based page.
+        page: usize,
+        /// Annotation `/NM` identifier.
+        id: String,
+    },
+    /// Close the annotation thread popup.
+    CloseAnnotationPopup,
+    /// Reply in an annotation thread.
+    ReplyToAnnotation {
+        /// Zero-based page.
+        page: usize,
+        /// Parent annotation `/NM` identifier.
+        id: String,
+        /// Reply text.
+        contents: String,
+    },
+    /// Resolve or reopen an annotation.
+    SetAnnotationResolved {
+        /// Zero-based page.
+        page: usize,
+        /// Annotation `/NM` identifier.
+        id: String,
+        /// New resolved state.
+        resolved: bool,
+    },
+    /// Replace an annotation's contents.
+    UpdateAnnotation {
+        /// Zero-based page.
+        page: usize,
+        /// Annotation `/NM` identifier.
+        id: String,
+        /// New text.
+        contents: String,
+    },
+    /// Delete an annotation and its replies.
+    DeleteAnnotation {
+        /// Zero-based page.
+        page: usize,
+        /// Annotation `/NM` identifier.
+        id: String,
+    },
 }
 
 impl AppCommand {
@@ -289,6 +349,16 @@ impl AppCommand {
             Self::Print => "print",
             Self::ConfirmPrint => "confirm-print",
             Self::CancelPrint => "cancel-print",
+            Self::AddNote { .. } => "add-note",
+            Self::SaveNoteDraft => "save-note-draft",
+            Self::CancelNoteDraft => "cancel-note-draft",
+            Self::AddHighlight => "add-highlight",
+            Self::OpenAnnotation { .. } => "open-annotation",
+            Self::CloseAnnotationPopup => "close-annotation-popup",
+            Self::ReplyToAnnotation { .. } => "reply-to-annotation",
+            Self::SetAnnotationResolved { .. } => "set-annotation-resolved",
+            Self::UpdateAnnotation { .. } => "update-annotation",
+            Self::DeleteAnnotation { .. } => "delete-annotation",
         }
     }
 }
@@ -395,8 +465,8 @@ impl crate::ui::PdfxiApp {
             }
             AppCommand::SetClosePolicy(policy) => self.set_close_policy(policy),
             AppCommand::EditDocument => self.not_available("Edit PDF"),
-            AppCommand::Comment => self.not_available("Comment"),
-            AppCommand::Highlight => self.not_available("Highlight"),
+            AppCommand::Comment => self.start_note_tool(),
+            AppCommand::Highlight => self.highlight_selection(),
             AppCommand::FillAndSign => self.not_available("Fill & Sign"),
             AppCommand::Sign => self.not_available("Sign"),
             AppCommand::Organize => self.not_available("Organize Pages"),
@@ -481,6 +551,34 @@ impl crate::ui::PdfxiApp {
             AppCommand::Print => self.open_print_panel(),
             AppCommand::ConfirmPrint => self.start_print_job(),
             AppCommand::CancelPrint => self.cancel_print_job(),
+            AppCommand::AddNote {
+                page,
+                x,
+                y,
+                contents,
+            } => match self.add_note(page, x, y, &contents) {
+                Ok(()) => {
+                    self.comments.error = None;
+                    self.comments.hint = None;
+                    self.status = "Comment added".to_owned();
+                }
+                Err(error) => self.comments.error = Some(error),
+            },
+            AppCommand::SaveNoteDraft => self.save_note_draft(),
+            AppCommand::CancelNoteDraft => self.cancel_note_draft(),
+            AppCommand::AddHighlight => self.highlight_selection(),
+            AppCommand::OpenAnnotation { page, id } => self.open_annotation_popup(page, &id),
+            AppCommand::CloseAnnotationPopup => self.close_annotation_popup(),
+            AppCommand::ReplyToAnnotation { page, id, contents } => {
+                self.reply_to_annotation(page, &id, &contents)
+            }
+            AppCommand::SetAnnotationResolved { page, id, resolved } => {
+                self.set_annotation_resolved(page, &id, resolved)
+            }
+            AppCommand::UpdateAnnotation { page, id, contents } => {
+                self.update_annotation_contents(page, &id, &contents)
+            }
+            AppCommand::DeleteAnnotation { page, id } => self.delete_annotation(page, &id),
         }
     }
 }

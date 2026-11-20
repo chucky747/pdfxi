@@ -136,6 +136,7 @@ impl PdfxiApp {
                 self.sessions.insert(id, session);
                 self.finish_new_tab(id);
                 self.sync_tab_dirty(id);
+                self.refresh_annotations();
                 self.refresh_renderer_for_active_tab();
                 let title = self.state.tab_title(id).unwrap_or_default();
                 self.library.record_open(path, &title, 0);
@@ -332,8 +333,7 @@ impl PdfxiApp {
             session.undo()
         };
         result?;
-        self.sync_tab_dirty(id);
-        self.refresh_renderer_for_active_tab();
+        self.after_session_edit(id);
         self.status = "Undo".to_owned();
         Ok(())
     }
@@ -354,8 +354,7 @@ impl PdfxiApp {
             session.redo()
         };
         result?;
-        self.sync_tab_dirty(id);
-        self.refresh_renderer_for_active_tab();
+        self.after_session_edit(id);
         self.status = "Redo".to_owned();
         Ok(())
     }
@@ -484,6 +483,17 @@ impl PdfxiApp {
                 Err(error)
             }
         }
+    }
+
+    /// Sync a tab after any session edit and rebuild everything derived from it.
+    ///
+    /// This is the single post-edit hook: dirty marker, canvas renderer and
+    /// raster textures, thumbnails and the annotation list. A caller must not
+    /// patch only one of them.
+    pub(crate) fn after_session_edit(&mut self, id: crate::TabId) {
+        self.sync_tab_dirty(id);
+        self.force_canvas_reload();
+        self.refresh_annotations();
     }
 
     /// Sync a tab's dirty marker with its session.

@@ -91,6 +91,7 @@ pub mod library;
 
 pub use shell::capabilities::{Capabilities, Capability, RailItem};
 pub use shell::commands::AppCommand;
+pub use shell::comments::AnnotationEntry;
 use shell::preferences::{self as shell_preferences, ShellPreferences};
 pub use shell::session::{CloseChoice, ClosePlan, plan_close, save_conflict_offers_save_as};
 use shell::widgets::shell_panel_frame;
@@ -107,6 +108,8 @@ struct LiveTexture {
     handle: egui::TextureHandle,
     scale_bits: u32,
     rotation: u16,
+    /// Renderer generation the pixels came from.
+    generation: u64,
 }
 
 /// Amount by which each zoom-in / zoom-out step changes a custom zoom scale.
@@ -361,7 +364,13 @@ pub fn scroll_offset_for_page(layout: &CanvasLayout, page: usize) -> f32 {
         return 0.0;
     };
     let viewport_height = layout.viewport().height;
-    let desired = geometry.rect.y - (viewport_height - geometry.rect.height) * 0.5;
+    // A page taller than the viewport cannot be centred; align its top so the
+    // first line is visible instead of cutting it off.
+    let desired = if geometry.rect.height >= viewport_height {
+        geometry.rect.y
+    } else {
+        geometry.rect.y - (viewport_height - geometry.rect.height) * 0.5
+    };
     layout.clamp_scroll(0.0, desired).y
 }
 
@@ -468,6 +477,12 @@ pub fn run() -> Result<(), String> {
         Box::new(|_creation_context| {
             let arguments: Vec<String> = std::env::args().skip(1).collect();
             let print_requested = arguments.iter().any(|argument| argument == "--print");
+            // View-only deep link: open the Nth annotation's thread at startup.
+            let open_annotation = arguments.iter().find_map(|argument| {
+                argument
+                    .strip_prefix("--open-annotation=")
+                    .and_then(|value| value.parse::<usize>().ok())
+            });
             let launch = settings::parse_launch_arguments(&arguments);
             let mut app = PdfxiApp::new_for_window();
             app.apply_launch_options(&launch);
@@ -476,6 +491,17 @@ pub fn run() -> Result<(), String> {
             app.apply_launch_panel(launch.panel);
             if print_requested {
                 app.dispatch(AppCommand::Print, None);
+            }
+            if let Some(index) = open_annotation
+                && let Some(entry) = app.annotations().get(index.saturating_sub(1))
+            {
+                app.dispatch(
+                    AppCommand::OpenAnnotation {
+                        page: entry.page,
+                        id: entry.view.id.clone(),
+                    },
+                    None,
+                );
             }
             Ok(Box::new(app))
         }),
@@ -559,6 +585,8 @@ pub struct PdfxiApp {
     pub(super) pending_close: Option<shell::session::PendingClose>,
     /// Open external-modification dialog, if any.
     pub(super) save_conflict: Option<shell::session::SaveConflict>,
+    /// Comments list, rail badge, note draft and thread popup.
+    comments: shell::comments::CommentsUiState,
     /// Pre-print panel, progress and worker state.
     print_ui: shell::print_dialog::PrintUiState,
     /// Revision of the active session bound to the renderer.
@@ -566,6 +594,9 @@ pub struct PdfxiApp {
     /// Alongside `renderer_path` this key notices edits, undo and redo so the
     /// canvas is re-rasterized from the session's current bytes.
     renderer_revision: usize,
+    /// Monotonic count of renderer loads; a change means the canvas source is
+    /// newer than any raster or texture built from the previous document state.
+    render_generation: u64,
     /// Path currently bound to the PDFium renderer.
     #[cfg(feature = "pdfium")]
     renderer_path: Option<PathBuf>,
@@ -921,6 +952,7 @@ impl PdfxiApp {
         {
             self.save_conflict = None;
         }
+        self.refresh_annotations();
     }
 
     /// Make the tab with the given id active, if it exists.
@@ -1196,6 +1228,7 @@ impl PdfxiApp {
         self.pending_scroll = false;
         self.pending_page_scroll = None;
         self.refresh_renderer_for_active_tab();
+        self.refresh_annotations();
     }
 
     /// Bind the PDFium renderer to the active tab's document.
@@ -1254,6 +1287,7 @@ impl PdfxiApp {
                     }
                 }
                 self.pdfium_renderer = Some(renderer);
+                self.render_generation = self.render_generation.wrapping_add(1);
                 if let Some(tab) = self.state.active_tab_mut() {
                     tab.set_page_count(count);
                 }
@@ -1285,6 +1319,20 @@ impl PdfxiApp {
             }
         }
     }
+
+    /// Force the canvas to rebuild from the active session's current bytes.
+    ///
+    /// Clearing the path defeats the `(path, revision)` early-return, and the
+    /// reload drops the raster cache and every GPU texture the canvas holds.
+    #[cfg(feature = "pdfium")]
+    pub(crate) fn force_canvas_reload(&mut self) {
+        self.renderer_path = None;
+        self.refresh_renderer_for_active_tab();
+    }
+
+    /// Without PDFium the canvas has no document renderer to reload.
+    #[cfg(not(feature = "pdfium"))]
+    pub(crate) fn force_canvas_reload(&mut self) {}
 
     /// No-op without the `pdfium` feature.
     #[cfg(not(feature = "pdfium"))]
@@ -1703,6 +1751,7 @@ impl eframe::App for PdfxiApp {
         self.open_dialog_ui(ctx);
         self.shell_ui(ctx);
         self.print_ui_ui(ctx);
+        self.note_draft_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);
@@ -1735,6 +1784,13 @@ impl PdfxiApp {
         let extracted = renderer
             .extract_page(page, &cancellation, &mut |_| {})
             .ok()?;
+        // `pdfxi_text` reports a baseline in PDF user space (origin bottom-left).
+        // The shell's `OwnedSpan` is top-down, so convert through the real page
+        // height here; find overlays and highlight quads share this frame.
+        let page_height = renderer
+            .page_size(PageIndex::new(page))
+            .map(|size| size.height_pt)
+            .unwrap_or(792.0);
         let spans = extracted
             .spans()
             .iter()
@@ -1742,7 +1798,7 @@ impl PdfxiApp {
                 OwnedSpan::new(
                     span.text.clone(),
                     span.x,
-                    span.y - span.height,
+                    page_height - (span.y + span.height),
                     span.width,
                     span.height,
                 )
@@ -2409,9 +2465,11 @@ mod tests {
             assert!(!hidden.contains(&command), "{command} must be hidden");
         }
         let comments = labels(Capabilities::none().with(Capability::Comments));
-        assert!(comments.contains(&"edit-document"));
+        assert!(!comments.contains(&"edit-document"));
         assert!(comments.contains(&"comment"));
         assert!(comments.contains(&"highlight"));
+        let edit = labels(Capabilities::none().with(Capability::Edit));
+        assert!(edit.contains(&"edit-document"));
         let signing = labels(Capabilities::none().with(Capability::Signing));
         assert!(signing.contains(&"sign"));
         let export = labels(Capabilities::none().with(Capability::Export));
@@ -2436,9 +2494,11 @@ mod tests {
         );
         assert!(rows.iter().any(|row| row.label == "Fill & Sign"));
         assert!(shell::capabilities::tool_rows_for(all, "zzz").is_empty());
+        let available = shell::capabilities::tool_rows_for(Capabilities::available(), "");
+        assert!(available.iter().any(|row| row.label == "Comment"));
         assert!(
-            shell::capabilities::tool_rows_for(Capabilities::available(), "").is_empty(),
-            "no tools are enabled today"
+            !available.iter().any(|row| row.label == "Edit PDF"),
+            "Edit PDF stays gated behind its own capability"
         );
     }
 
@@ -2509,6 +2569,11 @@ mod tests {
         assert_eq!(library::initials("Ada Lovelace"), "AL");
         assert_eq!(library::initials("prince"), "P");
         assert_eq!(library::initials("   "), "P");
+        // A fresh install uses the neutral author, not the OS account name.
+        assert_eq!(settings::default_display_name(), "Reader");
+        let app = PdfxiApp::new();
+        assert_eq!(app.display_name(), "Reader");
+        assert_eq!(app.initials(), "R");
     }
 
     #[test]

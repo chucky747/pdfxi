@@ -28,12 +28,7 @@ impl PdfxiApp {
             RailItem::Files => self.files_panel_ui(ui, palette),
             RailItem::Starred => self.starred_panel_ui(ui, palette),
             RailItem::Shared => self.shared_panel_ui(ui, palette),
-            RailItem::Comments => self.future_panel(
-                ui,
-                palette,
-                "Comments",
-                "Comments appear when commenting is enabled",
-            ),
+            RailItem::Comments => self.comments_panel_ui(ui, palette),
             RailItem::AiAssistant => self.future_panel(
                 ui,
                 palette,

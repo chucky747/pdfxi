@@ -21,6 +21,8 @@ pub enum Capability {
     Documents,
     /// Comments, highlights and review markup.
     Comments,
+    /// Edit PDF text and images (A-17/A-23; not available yet).
+    Edit,
     /// AcroForm filling.
     Forms,
     /// Certificate and e-signature workflows.
@@ -73,6 +75,7 @@ impl Capabilities {
             .with(Capability::Bookmarks)
             .with(Capability::Files)
             .with(Capability::Starred)
+            .with(Capability::Comments)
     }
 
     /// No capabilities at all, for tests and for a deliberately bare shell.
@@ -199,7 +202,7 @@ pub struct FeatureButton {
 pub fn command_bar_features(capabilities: Capabilities) -> Vec<FeatureButton> {
     [
         FeatureButton {
-            capability: Capability::Comments,
+            capability: Capability::Edit,
             label: "Edit",
             icon: Icon::Edit,
             command: AppCommand::EditDocument,
@@ -265,7 +268,7 @@ pub fn tool_rows() -> Vec<ToolRow> {
     vec![
         ToolRow {
             label: "Edit PDF",
-            capability: Capability::Comments,
+            capability: Capability::Edit,
             icon: Icon::Edit,
             command: AppCommand::EditDocument,
         },

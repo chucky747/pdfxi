@@ -26,7 +26,17 @@ pdfium = ["pdfxi-render/pdfium"]
 pdfxi-render = { workspace = true }
 pdfxi-text = { workspace = true }
 pdfxi-document = { workspace = true }
+pdfxi-core = { workspace = true }
 pdfxi-security = { workspace = true }
+pdfxi-edit = { path = "../pdfxi-edit", version = "0.1.0" }
+# Calendar formatting and local offsets for annotation dates. MIT OR Apache-2.0.
+# `chrono` was removed after RUSTSEC-2026-0543 (unmaintained).
+time = { version = "0.3", default-features = false, features = [
+    "std",
+    "formatting",
+    "macros",
+    "local-offset",
+] }
 thiserror.workspace = true
 # Native file picker for Open (MIT). Only the `ui` shell calls it, so it is
 # optional: a build without `ui` links no picker and emits no unused-dependency
