@@ -105,6 +105,13 @@ pub enum PdfValue {
     Bool(bool),
     /// A numeric object. Integers and reals share this variant.
     Number(f64),
+    /// An integer object carried exactly, without an `f64` round-trip.
+    ///
+    /// Large PDF byte offsets (for example a signature `/ByteRange`) must
+    /// serialize as an exact decimal integer. Routing them through
+    /// [`PdfValue::Number`] would round values above 2^53 and could emit
+    /// scientific notation, so this variant preserves the original integer.
+    Integer(u64),
     /// A PDF string decoded to text (UTF-16 with BOM, or lossy UTF-8).
     Text(String),
     /// A PDF name, stored without its leading slash and with `#xx` decoded.

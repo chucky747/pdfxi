@@ -55,6 +55,14 @@ pub enum ByteRangeError {
         /// The `[a b c d]` supplied by the caller.
         actual: [u64; 4],
     },
+    /// One of the two intervals had zero length.
+    #[error("byte range contains an empty interval")]
+    EmptyRange,
+    /// The two intervals were inverted or overlapped.
+    ///
+    /// A valid plan has `first_start <= first_end <= second_start <= second_end`.
+    #[error("byte range intervals are inverted or overlap")]
+    InvalidRangeOrder,
     /// A range index fell outside the document or the first range did not start
     /// at offset zero.
     #[error("byte range is outside the document bounds")]
@@ -162,8 +170,14 @@ pub fn validate_byte_range(
 ///
 /// # Errors
 ///
-/// Returns [`ByteRangeError`] for an incomplete plan, an out-of-bounds range or
-/// an offset that cannot be represented as a `usize`.
+/// Returns [`ByteRangeError`] for an incomplete plan, an empty or inverted
+/// interval, a range outside the document or an offset that cannot be
+/// represented as a `usize`.
+///
+/// The two intervals must satisfy
+/// `first_start < first_end <= second_start < second_end <= total`, with
+/// `first_start == 0`. The ordering and emptiness checks are deliberately
+/// separate from the bounds check so callers receive a precise typed error.
 pub fn signed_bytes(document: &[u8], plan: &ByteRangePlan) -> Result<Vec<u8>, ByteRangeError> {
     let [first_start, first_length, second_start, second_length] =
         plan.as_array().ok_or(ByteRangeError::IncompleteRange)?;
@@ -174,7 +188,17 @@ pub fn signed_bytes(document: &[u8], plan: &ByteRangePlan) -> Result<Vec<u8>, By
     let first_end = first_start
         .checked_add(first_length)
         .ok_or(ByteRangeError::OutOfBounds)?;
-    if first_start != 0 || first_end > total || second_end > total || second_start > second_end {
+    // Inversion / overlap. The `first_start > first_end` and
+    // `second_start > second_end` arms are defensive: `as_array` derives both
+    // ends with unsigned addition, but a caller-supplied plan is still checked
+    // explicitly so the invariant is enforced in one place.
+    if first_start > first_end || second_start > second_end || second_start < first_end {
+        return Err(ByteRangeError::InvalidRangeOrder);
+    }
+    if first_start == first_end || second_start == second_end {
+        return Err(ByteRangeError::EmptyRange);
+    }
+    if first_start != 0 || first_end > total || second_end > total {
         return Err(ByteRangeError::OutOfBounds);
     }
     let from = usize::try_from(first_start).map_err(|_| ByteRangeError::Overflow)?;
@@ -245,19 +269,74 @@ impl<'a> VerificationRequest<'a> {
     }
 }
 
+/// The cryptographic authenticity level of a verification result.
+///
+/// A verifier that only checks structure can honestly return
+/// [`Authenticity::StructureOnly`], but a caller must never present the
+/// resulting [`SignatureStatus::Valid`] to a user as an authentic, validated
+/// signature. Only [`Authenticity::Cryptographic`] — produced by a caller that
+/// actually verified the signature bytes and key material — may be shown as
+/// cryptographically authentic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Authenticity {
+    /// Only the signature package structure was inspected; no cryptographic
+    /// claim is made.
+    ///
+    /// This is the safe default: an outcome constructed without an explicit
+    /// level can never be mistaken for a cryptographic verification.
+    #[default]
+    StructureOnly,
+    /// A caller-supplied cryptographic verifier validated the signature.
+    Cryptographic,
+}
+
+impl Authenticity {
+    /// Returns the stable token emitted in [`LifecycleReport`] lines.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::StructureOnly => "structure-only",
+            Self::Cryptographic => "cryptographic",
+        }
+    }
+}
+
+impl fmt::Display for Authenticity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The deterministic outcome of a verification attempt.
+///
+/// Every outcome carries an explicit [`Authenticity`] level. A `valid` outcome
+/// with [`Authenticity::StructureOnly`] is *not* a cryptographic validation and
+/// must not be displayed as an authentic signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationOutcome {
     valid: bool,
     detail: String,
+    authenticity: Authenticity,
 }
 
 impl VerificationOutcome {
-    /// Creates an outcome with `valid` and a caller-supplied detail string.
+    /// Creates an outcome with the safe [`Authenticity::StructureOnly`] level.
+    ///
+    /// Cryptographic verifiers should use [`Self::with_authenticity`] instead
+    /// so the result cannot be mistaken for a structure-only check.
     pub fn new(valid: bool, detail: impl Into<String>) -> Self {
+        Self::with_authenticity(valid, detail, Authenticity::StructureOnly)
+    }
+
+    /// Creates an outcome with an explicit authenticity level.
+    pub fn with_authenticity(
+        valid: bool,
+        detail: impl Into<String>,
+        authenticity: Authenticity,
+    ) -> Self {
         Self {
             valid,
             detail: detail.into(),
+            authenticity,
         }
     }
 
@@ -269,6 +348,11 @@ impl VerificationOutcome {
     /// Returns the verifier's deterministic detail string.
     pub fn detail(&self) -> &str {
         &self.detail
+    }
+
+    /// Returns the cryptographic authenticity level of this outcome.
+    pub const fn authenticity(&self) -> Authenticity {
+        self.authenticity
     }
 }
 
@@ -298,10 +382,13 @@ pub trait SignatureVerifier {
 /// The default structure-only verifier.
 ///
 /// It checks that the filter, subfilter, signed byte sequence and `/Contents`
-/// bytes are all non-empty and returns a stable `structure-ok` outcome. It
-/// performs **no cryptographic validation** and must not be used to claim that
-/// a signature is authentic; it exists so a caller can exercise the full
-/// lifecycle without importing the security crate.
+/// bytes are all non-empty and returns a stable `structure-ok` outcome with
+/// [`Authenticity::StructureOnly`]. It performs **no cryptographic validation**:
+/// a [`VerificationOutcome::is_valid`] of `true` from this verifier must never
+/// be displayed to a user as an authentic signature. It exists so a caller can
+/// exercise the full lifecycle without importing the security crate; real
+/// cryptographic verification belongs to `pdfxi-security` and must report
+/// [`Authenticity::Cryptographic`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StructureOnlyVerifier;
 
@@ -376,6 +463,14 @@ pub enum LifecycleError {
     MalformedDictionary,
 }
 
+/// Converts a complete `[a b c d]` byte range into exact integer PDF objects.
+///
+/// Each `u64` offset is carried by [`PdfValue::Integer`], so offsets above 2^53
+/// are never rounded through `f64` and never serialize in scientific notation.
+fn byte_range_values(range: [u64; 4]) -> [PdfValue; 4] {
+    range.map(PdfValue::Integer)
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(bytes.len().saturating_mul(2));
@@ -401,6 +496,13 @@ pub struct LifecycleReport {
     pub verification: Option<VerificationOutcome>,
     /// The verifier error detail, when verification failed.
     pub failure: Option<String>,
+    /// The authenticity level recorded for this lifecycle.
+    ///
+    /// Defaults to [`Authenticity::StructureOnly`] before verification and
+    /// updates only when a verifier reports a cryptographic result. A report
+    /// that shows `status=valid` with `authenticity=structure-only` must not be
+    /// presented to a user as an authentic signature.
+    pub authenticity: Authenticity,
     transitions: Vec<Transition>,
 }
 
@@ -433,6 +535,7 @@ impl LifecycleReport {
                 "lifecycle.failure={}",
                 self.failure.as_deref().unwrap_or("absent")
             ),
+            format!("lifecycle.authenticity={}", self.authenticity.as_str()),
         ];
         for (index, transition) in self.transitions.iter().enumerate() {
             let note = transition.note().unwrap_or("-");
@@ -489,6 +592,9 @@ pub struct SignatureLifecycle {
     workflow: SignatureWorkflow,
     dictionary: SignatureDictionary,
     byte_range: Option<ByteRangePlan>,
+    /// The placeholder hex the plan was computed against, retained so
+    /// [`Self::verify`] can re-derive and validate the plan.
+    placeholder_hex: Vec<u8>,
     contents: Option<Vec<u8>>,
     verification: Option<VerificationOutcome>,
     failure: Option<VerificationError>,
@@ -509,6 +615,7 @@ impl SignatureLifecycle {
             workflow: SignatureWorkflow::new(field)?,
             dictionary,
             byte_range: None,
+            placeholder_hex: Vec::new(),
             contents: None,
             verification: None,
             failure: None,
@@ -516,6 +623,11 @@ impl SignatureLifecycle {
     }
 
     /// Starts a sign request (`unsigned -> pending`) with a byte-range plan.
+    ///
+    /// `placeholder_hex` is the raw `/Contents` placeholder token the plan was
+    /// computed against. It is retained so [`Self::verify`] can re-derive the
+    /// plan from the document and reject a caller-supplied plan that does not
+    /// match it.
     ///
     /// # Errors
     ///
@@ -526,6 +638,7 @@ impl SignatureLifecycle {
         participant: Participant,
         timestamp: &str,
         byte_range: ByteRangePlan,
+        placeholder_hex: &[u8],
     ) -> Result<(), LifecycleError> {
         if self.workflow.state() != SignatureStatus::Unsigned {
             return Err(LifecycleError::NotUnsigned {
@@ -534,6 +647,7 @@ impl SignatureLifecycle {
         }
         self.workflow.invite(participant, timestamp)?;
         self.byte_range = Some(byte_range);
+        self.placeholder_hex = placeholder_hex.to_vec();
         Ok(())
     }
 
@@ -572,9 +686,15 @@ impl SignatureLifecycle {
     /// The `document` slice must be the serialized bytes from which the planned
     /// byte range was computed; [`signed_bytes`] reconstructs the covered bytes
     /// and they are passed to `verifier` together with the placeholder filter,
-    /// subfilter and attached contents. On acceptance the state becomes `valid`
-    /// and the outcome is recorded; on rejection the state becomes `invalid`
-    /// and the typed error is recorded.
+    /// subfilter and attached contents. Before reconstructing bytes the plan is
+    /// validated against `document` with [`validate_byte_range`]; a plan that
+    /// does not match the document is rejected with a typed byte-range error
+    /// and does not change state. On acceptance the state becomes `valid` and
+    /// the outcome is recorded; on rejection the state becomes `invalid` and
+    /// the typed error is recorded.
+    ///
+    /// A `valid` state produced here is only as trustworthy as the verifier's
+    /// authenticity level; see [`VerificationOutcome::authenticity`].
     ///
     /// # Errors
     ///
@@ -598,6 +718,12 @@ impl SignatureLifecycle {
             .contents
             .clone()
             .ok_or(LifecycleError::MissingContents)?;
+        // Re-derive the plan from the document before trusting it. A
+        // caller-supplied plan can be structurally complete yet describe ranges
+        // that do not belong to `document`; `validate_byte_range` returns a
+        // typed `ByteRangeError` in that case (wrapped as `LifecycleError::ByteRange`).
+        let placeholder = self.placeholder_hex.clone();
+        validate_byte_range(document, &plan, &placeholder)?;
         let covered = signed_bytes(document, &plan)?;
         let filter = self.dictionary.filter().as_str();
         let subfilter = self.dictionary.subfilter().as_str();
@@ -620,10 +746,11 @@ impl SignatureLifecycle {
     /// Emits the completed `/V` dictionary with caller-supplied `/Contents`.
     ///
     /// The `/Contents` value is the hex encoding of the attached bytes and
-    /// `/ByteRange` is the complete `[a b c d]` array from the plan. This is
-    /// *serialization*, not signing: no byte is hashed or transformed except
-    /// hex encoding. The placeholder metadata (`/Name`, `/Reason`, `/Lock`,
-    /// `/Reference`, …) is preserved.
+    /// `/ByteRange` is the complete `[a b c d]` array from the plan, emitted as
+    /// exact [`PdfValue::Integer`] objects so large offsets never lose precision
+    /// or become scientific notation. This is *serialization*, not signing: no
+    /// byte is hashed or transformed except hex encoding. The placeholder
+    /// metadata (`/Name`, `/Reason`, `/Lock`, `/Reference`, …) is preserved.
     ///
     /// # Errors
     ///
@@ -649,12 +776,7 @@ impl SignatureLifecycle {
         dict.insert("Contents".to_owned(), PdfValue::Text(hex_encode(contents)));
         dict.insert(
             "ByteRange".to_owned(),
-            PdfValue::Array(
-                range
-                    .iter()
-                    .map(|value| PdfValue::Number(*value as f64))
-                    .collect(),
-            ),
+            PdfValue::Array(byte_range_values(range).to_vec()),
         );
         Ok(PdfValue::Dictionary(dict))
     }
@@ -708,6 +830,10 @@ impl SignatureLifecycle {
             contents_len: self.contents.as_ref().map_or(0, Vec::len),
             verification: self.verification.clone(),
             failure: self.failure.as_ref().map(VerificationError::to_string),
+            authenticity: self.verification.as_ref().map_or(
+                Authenticity::StructureOnly,
+                VerificationOutcome::authenticity,
+            ),
             transitions: self.workflow.history().to_vec(),
         }
     }
@@ -722,6 +848,7 @@ mod tests {
     use crate::fillworkflow::{FillDocument, FillWorkflow, FillWorkflowError};
     use crate::signature::{CertPermission, LockScope, ParticipantRole, SignatureGuard};
     use std::cell::Cell;
+    use std::collections::BTreeMap;
 
     fn rect() -> WidgetRect {
         WidgetRect::new(10.0, 20.0, 180.0, 40.0)
@@ -857,6 +984,10 @@ mod tests {
         assert!(good.as_array().is_some());
     }
 
+    fn hex_placeholder() -> Vec<u8> {
+        vec![b'0'; 16]
+    }
+
     fn signed_lifecycle(field: &str) -> SignatureLifecycle {
         let mut lifecycle = SignatureLifecycle::new(
             field,
@@ -867,7 +998,25 @@ mod tests {
         .unwrap();
         let plan = planned_range(100, 18, 200);
         lifecycle
-            .request_sign(signer(), "2026-11-19T09:00:00Z", plan)
+            .request_sign(signer(), "2026-11-19T09:00:00Z", plan, &hex_placeholder())
+            .unwrap();
+        lifecycle
+            .attach_signature_bytes(signer(), "2026-11-19T10:00:00Z", vec![0x30, 0x45])
+            .unwrap();
+        lifecycle
+    }
+
+    /// A signed lifecycle whose plan is derived from a real document so that
+    /// `verify` can re-derive and validate the plan against the same bytes.
+    fn signed_lifecycle_for(
+        document: &[u8],
+        placeholder: &[u8],
+        field: &str,
+    ) -> SignatureLifecycle {
+        let plan = plan_byte_range(document, placeholder).unwrap();
+        let mut lifecycle = SignatureLifecycle::new(field, SignatureDictionary::new()).unwrap();
+        lifecycle
+            .request_sign(signer(), "2026-11-19T09:00:00Z", plan, placeholder)
             .unwrap();
         lifecycle
             .attach_signature_bytes(signer(), "2026-11-19T10:00:00Z", vec![0x30, 0x45])
@@ -887,10 +1036,10 @@ mod tests {
         assert_eq!(
             range,
             &vec![
-                PdfValue::Number(0.0),
-                PdfValue::Number(100.0),
-                PdfValue::Number(118.0),
-                PdfValue::Number(82.0),
+                PdfValue::Integer(0),
+                PdfValue::Integer(100),
+                PdfValue::Integer(118),
+                PdfValue::Integer(82),
             ]
         );
         assert_eq!(dict.get("Name").unwrap().as_text(), Some("Ada"));
@@ -923,10 +1072,27 @@ mod tests {
         }
     }
 
+    /// A stand-in for a real cryptographic verifier from the security lane.
+    struct CryptographicVerifier;
+
+    impl SignatureVerifier for CryptographicVerifier {
+        fn verify(
+            &self,
+            _request: &VerificationRequest<'_>,
+        ) -> Result<VerificationOutcome, VerificationError> {
+            Ok(VerificationOutcome::with_authenticity(
+                true,
+                "crypto-ok",
+                Authenticity::Cryptographic,
+            ))
+        }
+    }
+
     #[test]
     fn verifier_is_invoked_and_outcome_is_recorded() {
-        let mut lifecycle = signed_lifecycle("sig");
-        let document = vec![b'x'; 200];
+        let placeholder = hex_placeholder();
+        let document = document_with_placeholder(&placeholder);
+        let mut lifecycle = signed_lifecycle_for(&document, &placeholder, "sig");
         let verifier = CountingVerifier::default();
         let outcome = lifecycle
             .verify(&verifier, &document, "2026-11-19T11:00:00Z")
@@ -940,8 +1106,9 @@ mod tests {
 
     #[test]
     fn verification_failure_is_a_typed_error_and_marks_invalid() {
-        let mut lifecycle = signed_lifecycle("sig");
-        let document = vec![b'x'; 200];
+        let placeholder = hex_placeholder();
+        let document = document_with_placeholder(&placeholder);
+        let mut lifecycle = signed_lifecycle_for(&document, &placeholder, "sig");
         let error = lifecycle
             .verify(&FailingVerifier, &document, "2026-11-19T11:00:00Z")
             .unwrap_err();
@@ -1015,18 +1182,21 @@ mod tests {
 
     #[test]
     fn workflow_transitions_cover_all_states() {
+        let placeholder = hex_placeholder();
+        let document = document_with_placeholder(&placeholder);
         let mut lifecycle = SignatureLifecycle::new("sig", SignatureDictionary::new()).unwrap();
         assert_eq!(lifecycle.state(), SignatureStatus::Unsigned);
+        let plan = plan_byte_range(&document, &placeholder).unwrap();
         lifecycle
-            .request_sign(signer(), "2026-11-19T09:00:00Z", planned_range(10, 18, 100))
+            .request_sign(signer(), "2026-11-19T09:00:00Z", plan, &placeholder)
             .unwrap();
         assert_eq!(lifecycle.state(), SignatureStatus::Pending);
         lifecycle
-            .attach_signature_bytes(signer(), "2026-11-19T10:00:00Z", vec![1, 2, 3])
+            .attach_signature_bytes(signer(), "2026-11-19T10:00:00Z", vec![0x30, 0x45])
             .unwrap();
         assert_eq!(lifecycle.state(), SignatureStatus::Signed);
         lifecycle
-            .verify(&StructureOnlyVerifier, &[b'z'; 100], "2026-11-19T11:00:00Z")
+            .verify(&StructureOnlyVerifier, &document, "2026-11-19T11:00:00Z")
             .unwrap();
         assert_eq!(lifecycle.state(), SignatureStatus::Valid);
 
@@ -1038,7 +1208,7 @@ mod tests {
         assert_eq!(transitions[2].to(), SignatureStatus::Valid);
         assert_eq!(
             workflow_transition_lines(lifecycle.workflow()),
-            lifecycle.report().to_lines()[6..].to_vec()
+            lifecycle.report().to_lines()[7..].to_vec()
         );
     }
 
@@ -1081,6 +1251,263 @@ mod tests {
         assert_eq!(
             lifecycle.completed_v(),
             Err(LifecycleError::MissingContents)
+        );
+    }
+
+    // --- Regression tests: signed_bytes range validation (T-0185) ---
+
+    #[test]
+    fn signed_bytes_rejects_overlapping_ranges() {
+        let document = vec![b'x'; 200];
+        let plan = ByteRangePlan {
+            first_start: 0,
+            first_length: 100,
+            second_start: 50, // begins before the first range ends
+            total_length: Some(200),
+        };
+        assert_eq!(
+            signed_bytes(&document, &plan),
+            Err(ByteRangeError::InvalidRangeOrder)
+        );
+    }
+
+    #[test]
+    fn signed_bytes_rejects_empty_first_range() {
+        let document = vec![b'x'; 100];
+        let plan = ByteRangePlan {
+            first_start: 0,
+            first_length: 0,
+            second_start: 10,
+            total_length: Some(100),
+        };
+        assert_eq!(
+            signed_bytes(&document, &plan),
+            Err(ByteRangeError::EmptyRange)
+        );
+    }
+
+    #[test]
+    fn signed_bytes_rejects_empty_second_range() {
+        let document = vec![b'x'; 100];
+        let plan = ByteRangePlan {
+            first_start: 0,
+            first_length: 10,
+            second_start: 20,
+            total_length: Some(20), // second length saturates to zero
+        };
+        assert_eq!(
+            signed_bytes(&document, &plan),
+            Err(ByteRangeError::EmptyRange)
+        );
+    }
+
+    #[test]
+    fn signed_bytes_rejects_ranges_beyond_the_document() {
+        let document = vec![b'x'; 50];
+        let beyond_second = ByteRangePlan {
+            first_start: 0,
+            first_length: 10,
+            second_start: 20,
+            total_length: Some(100),
+        };
+        assert_eq!(
+            signed_bytes(&document, &beyond_second),
+            Err(ByteRangeError::OutOfBounds)
+        );
+        let beyond_first = ByteRangePlan {
+            first_start: 0,
+            first_length: 60,
+            second_start: 70,
+            total_length: Some(100),
+        };
+        assert_eq!(
+            signed_bytes(&document, &beyond_first),
+            Err(ByteRangeError::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn signed_bytes_rejects_nonzero_first_start() {
+        let document = vec![b'x'; 100];
+        let plan = ByteRangePlan {
+            first_start: 5,
+            first_length: 10,
+            second_start: 20,
+            total_length: Some(100),
+        };
+        assert_eq!(
+            signed_bytes(&document, &plan),
+            Err(ByteRangeError::OutOfBounds)
+        );
+    }
+
+    // --- Regression tests: verify validates the caller-supplied plan (T-0185) ---
+
+    #[test]
+    fn verify_rejects_a_plan_that_does_not_match_the_document() {
+        let placeholder = hex_placeholder();
+        let document = document_with_placeholder(&placeholder);
+        let mut lifecycle = signed_lifecycle_for(&document, &placeholder, "sig");
+
+        // Prepending bytes moves the placeholder, so the stored plan no longer
+        // describes this document even though it is structurally complete.
+        let mut other = b"%PDF-1.7\n% appended header\n".to_vec();
+        other.extend_from_slice(&document);
+        let error = lifecycle
+            .verify(&StructureOnlyVerifier, &other, "2026-11-19T11:00:00Z")
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LifecycleError::ByteRange(ByteRangeError::InvalidRange { .. })
+        ));
+        assert_eq!(lifecycle.state(), SignatureStatus::Signed);
+    }
+
+    #[test]
+    fn verify_rejects_a_document_without_the_placeholder() {
+        let placeholder = hex_placeholder();
+        let document = document_with_placeholder(&placeholder);
+        let mut lifecycle = signed_lifecycle_for(&document, &placeholder, "sig");
+        let error = lifecycle
+            .verify(&StructureOnlyVerifier, b"no placeholder here", "t")
+            .unwrap_err();
+        assert_eq!(
+            error,
+            LifecycleError::ByteRange(ByteRangeError::PlaceholderNotFound)
+        );
+        assert_eq!(lifecycle.state(), SignatureStatus::Signed);
+    }
+
+    // --- Regression tests: explicit authenticity level (T-0185) ---
+
+    #[test]
+    fn authenticity_defaults_to_structure_only() {
+        let lifecycle = SignatureLifecycle::new("sig", SignatureDictionary::new()).unwrap();
+        assert_eq!(Authenticity::default(), Authenticity::StructureOnly);
+        assert_eq!(lifecycle.report().authenticity, Authenticity::StructureOnly);
+        assert!(
+            lifecycle
+                .report()
+                .to_lines()
+                .contains(&"lifecycle.authenticity=structure-only".to_owned())
+        );
+    }
+
+    #[test]
+    fn structure_only_verifier_reports_structure_only_authenticity() {
+        let placeholder = hex_placeholder();
+        let document = document_with_placeholder(&placeholder);
+        let mut lifecycle = signed_lifecycle_for(&document, &placeholder, "sig");
+        let outcome = lifecycle
+            .verify(&StructureOnlyVerifier, &document, "t")
+            .unwrap();
+        assert!(outcome.is_valid());
+        // A valid structure-only result must not be presented as authentic.
+        assert_eq!(outcome.authenticity(), Authenticity::StructureOnly);
+        let report = lifecycle.report();
+        assert_eq!(report.status, SignatureStatus::Valid);
+        assert_eq!(report.authenticity, Authenticity::StructureOnly);
+        assert!(
+            report
+                .to_lines()
+                .contains(&"lifecycle.authenticity=structure-only".to_owned())
+        );
+    }
+
+    #[test]
+    fn authenticity_transitions_deterministically_to_cryptographic() {
+        let placeholder = hex_placeholder();
+        let document = document_with_placeholder(&placeholder);
+        let before = signed_lifecycle_for(&document, &placeholder, "sig");
+        assert_eq!(before.report().authenticity, Authenticity::StructureOnly);
+
+        let mut lifecycle = signed_lifecycle_for(&document, &placeholder, "sig");
+        let outcome = lifecycle
+            .verify(&CryptographicVerifier, &document, "t")
+            .unwrap();
+        assert_eq!(outcome.authenticity(), Authenticity::Cryptographic);
+        let report = lifecycle.report();
+        assert_eq!(report.authenticity, Authenticity::Cryptographic);
+        assert!(
+            report
+                .to_lines()
+                .contains(&"lifecycle.authenticity=cryptographic".to_owned())
+        );
+
+        // Repeated runs produce the same report (deterministic transition).
+        let mut again = signed_lifecycle_for(&document, &placeholder, "sig");
+        again
+            .verify(&CryptographicVerifier, &document, "t")
+            .unwrap();
+        assert_eq!(again.report(), report);
+    }
+
+    // --- Regression test: exact integer byte-range emission (T-0185) ---
+
+    #[test]
+    fn byte_range_offsets_beyond_f64_exact_limit_are_exact_integers() {
+        // 2^53 + 1 is the first integer a `u64 as f64` cast cannot represent.
+        let huge = 9_007_199_254_740_993u64;
+        let plan = ByteRangePlan {
+            first_start: 0,
+            first_length: 10,
+            second_start: 10 + huge,
+            total_length: Some(10 + huge + huge),
+        };
+        let mut lifecycle = SignatureLifecycle::new("sig", SignatureDictionary::new()).unwrap();
+        lifecycle
+            .request_sign(signer(), "t", plan, &hex_placeholder())
+            .unwrap();
+        lifecycle
+            .attach_signature_bytes(signer(), "t", vec![0x30, 0x45])
+            .unwrap();
+        let v = lifecycle.completed_v().unwrap();
+        let range = v
+            .as_dict()
+            .unwrap()
+            .get("ByteRange")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            range,
+            &vec![
+                PdfValue::Integer(0),
+                PdfValue::Integer(10),
+                PdfValue::Integer(10 + huge),
+                PdfValue::Integer(huge),
+            ]
+        );
+
+        // End-to-end: the emitted PDF carries the exact decimal integers and
+        // neither a rounded value nor scientific notation.
+        let mut field = BTreeMap::new();
+        field.insert("T".to_owned(), PdfValue::Text("sig".to_owned()));
+        field.insert("FT".to_owned(), PdfValue::Name("Sig".to_owned()));
+        field.insert("V".to_owned(), v);
+        let mut widget = BTreeMap::new();
+        widget.insert("T".to_owned(), PdfValue::Text("sig".to_owned()));
+        widget.insert("FT".to_owned(), PdfValue::Name("Sig".to_owned()));
+        widget.insert("Subtype".to_owned(), PdfValue::Name("Widget".to_owned()));
+        let bytes = crate::serialize_form_pdf(
+            &[PdfValue::Dictionary(field)],
+            &[PdfValue::Dictionary(widget)],
+            Some(ObjectRef::new(1, 0)),
+        )
+        .unwrap();
+        // The PDF header contains a binary marker, so decode lossily.
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("/ByteRange [0 10 9007199254741003 9007199254740993]"),
+            "expected exact integer emission, got: {text}"
+        );
+        assert!(
+            !text.contains("9007199254740992"),
+            "rounded f64 value leaked into output: {text}"
+        );
+        assert!(
+            !text.contains("e15"),
+            "scientific notation leaked into output: {text}"
         );
     }
 }

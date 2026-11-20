@@ -3,7 +3,7 @@
   "lane": "forms",
   "title": "Signature verification hardening from review findings",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0168"],
   "owns": [
     "crates/pdfxi-forms/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0185.toml"
   ],
   "acceptance": "cargo test -p pdfxi-forms",
-  "evidence": ""
+  "evidence": "docs/evidence/forms/T-0185.md"
 }

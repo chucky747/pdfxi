@@ -2130,41 +2130,40 @@ title = "Distribute and collect forms locally"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/signature.rs",
-    "crates/pdfxi-forms/src/signatureplan.rs",
     "crates/pdfxi-forms/src/signing.rs",
-    "crates/pdfxi-forms/src/fillworkflow.rs",
-    "docs/evidence/forms/T-0168.md",
+    "crates/pdfxi-forms/src/acroform.rs",
+    "crates/pdfxi-forms/src/serialize.rs",
+    "crates/pdfxi-forms/src/lib.rs",
+    "docs/evidence/forms/T-0185.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 301 passed, 0 failed. signing::tests::byte_range_round_trip_excludes_placeholder, attach_bytes_updates_completed_v, verifier_is_invoked_and_outcome_is_recorded, verification_failure_is_a_typed_error_and_marks_invalid, lock_enforcement_covers_fill_and_attach_paths, certification_enforcement_covers_every_mutation_path, workflow_transitions_cover_all_states, lifecycle_report_is_deterministic, missing_field_and_stage_errors_are_typed all ok; fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0168.md."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 313 passed, 0 failed; 12 new hardening tests green. cargo fmt -p pdfxi-forms -- --check EXIT=0; cargo clippy -p pdfxi-forms --all-targets --no-deps -- -D warnings EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps EXIT=0. Full output in docs/evidence/forms/T-0185.md."
 id = "FORMS-010"
 notes = """
-Library-level electronic-signature workflow is complete: deterministic /ByteRange
-planning from serialized bytes with a /Contents placeholder, a caller-supplied
-SignatureVerifier seam with a structure-only default stub (no cryptography in this
-crate), a create -> sign-request -> attach caller-supplied bytes -> verify -> report
-lifecycle that writes /V, lock/certification enforcement on all fill/edit paths,
-and deterministic reports over every state and transition. Crypto implementation
-stays with the security lane and the workflow UI with the app lane; the boundary
-is documented in signing.rs and lib.rs.
+FORMS-010 stays verified; the T-0168 signature work is hardened, not reopened.
+verify now validates the caller-supplied byte-range plan against the document
+before use; signed_bytes rejects overlapping/inverted, empty and out-of-bounds
+ranges with typed errors; VerificationOutcome/LifecycleReport carry an explicit
+Authenticity level with the structure-only authenticity warning documented; and
+/ByteRange uses exact integer serialization (PdfValue::Integer) so large offsets
+never lose precision or become scientific notation. Crypto remains with the
+security lane and the workflow UI with the app lane.
 """
 priority = "P2"
 status = "verified"
 tests = [
-    "signing::tests::byte_range_math_is_computed_from_serialized_document",
-    "signing::tests::byte_range_round_trip_excludes_placeholder",
-    "signing::tests::placeholder_sizing_drives_byte_range_offsets",
-    "signing::tests::malformed_or_ambiguous_placeholder_is_a_typed_error",
-    "signing::tests::inconsistent_byte_range_is_rejected",
-    "signing::tests::attach_bytes_updates_completed_v",
-    "signing::tests::verifier_is_invoked_and_outcome_is_recorded",
-    "signing::tests::verification_failure_is_a_typed_error_and_marks_invalid",
-    "signing::tests::lock_enforcement_covers_fill_and_attach_paths",
-    "signing::tests::certification_enforcement_covers_every_mutation_path",
-    "signing::tests::workflow_transitions_cover_all_states",
-    "signing::tests::lifecycle_report_is_deterministic",
-    "signing::tests::missing_field_and_stage_errors_are_typed",
+    "signing::tests::signed_bytes_rejects_overlapping_ranges",
+    "signing::tests::signed_bytes_rejects_empty_first_range",
+    "signing::tests::signed_bytes_rejects_empty_second_range",
+    "signing::tests::signed_bytes_rejects_ranges_beyond_the_document",
+    "signing::tests::signed_bytes_rejects_nonzero_first_start",
+    "signing::tests::verify_rejects_a_plan_that_does_not_match_the_document",
+    "signing::tests::verify_rejects_a_document_without_the_placeholder",
+    "signing::tests::authenticity_defaults_to_structure_only",
+    "signing::tests::structure_only_verifier_reports_structure_only_authenticity",
+    "signing::tests::authenticity_transitions_deterministically_to_cryptographic",
+    "signing::tests::byte_range_offsets_beyond_f64_exact_limit_are_exact_integers",
+    "serialize::tests::integer_value_serializes_exactly_without_scientific_notation",
 ]
 title = "Electronic signature fields and workflows"
 

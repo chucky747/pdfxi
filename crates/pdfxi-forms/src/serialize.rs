@@ -464,6 +464,10 @@ fn write_value(out: &mut Vec<u8>, value: &PdfValue, depth: usize) -> Result<(), 
             out.extend_from_slice(if *flag { b"true" } else { b"false" });
         }
         PdfValue::Number(number) => out.extend_from_slice(format_number(*number)?.as_bytes()),
+        // Integers are serialized directly from their `u64` value so large byte
+        // offsets are never rounded through `f64` nor printed in scientific
+        // notation (see the `/ByteRange` emission in `signing.rs`).
+        PdfValue::Integer(number) => out.extend_from_slice(number.to_string().as_bytes()),
         PdfValue::Text(text) => write_string(out, text),
         PdfValue::Name(name) => write_name(out, name),
         PdfValue::Reference(id) => {
@@ -1188,6 +1192,28 @@ mod tests {
         assert_eq!(
             parse_pdf(b"%PDF-1.7\nno xref here"),
             Err(ParseError::MissingStartXref)
+        );
+    }
+
+    #[test]
+    fn integer_value_serializes_exactly_without_scientific_notation() {
+        // 2^53 + 1 is the first integer that a `u64 as f64` cast cannot hold.
+        // A `PdfValue::Number` would emit 9007199254740992 (rounded) here.
+        let huge = 9_007_199_254_740_993u64;
+        let mut out = Vec::new();
+        write_value(&mut out, &PdfValue::Integer(huge), 0).unwrap();
+        assert_eq!(out, b"9007199254740993");
+
+        let array = PdfValue::Array(vec![
+            PdfValue::Integer(0),
+            PdfValue::Integer(huge),
+            PdfValue::Integer(u64::MAX),
+        ]);
+        let mut out = Vec::new();
+        write_value(&mut out, &array, 0).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "[0 9007199254740993 18446744073709551615]"
         );
     }
 }

@@ -218,9 +218,10 @@ pub use signatureplan::{
     SignaturePlanReport, workflow_report_lines,
 };
 pub use signing::{
-    ByteRangeError, LifecycleError, LifecycleReport, SignatureLifecycle, SignatureVerifier,
-    StructureOnlyVerifier, VerificationError, VerificationOutcome, VerificationRequest,
-    plan_byte_range, signed_bytes, validate_byte_range, workflow_transition_lines,
+    Authenticity, ByteRangeError, LifecycleError, LifecycleReport, SignatureLifecycle,
+    SignatureVerifier, StructureOnlyVerifier, VerificationError, VerificationOutcome,
+    VerificationRequest, plan_byte_range, signed_bytes, validate_byte_range,
+    workflow_transition_lines,
 };
 pub use taborder::{
     NavPolicy, TabNavigator, TabOrder, TabPolicy, TabWidget, parse_tabs, tabs_from_acroform,
