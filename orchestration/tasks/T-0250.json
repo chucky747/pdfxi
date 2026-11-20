@@ -3,7 +3,7 @@
   "lane": "automation",
   "title": "OpenCode connection spike and ADR 0011 confirmation",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [],
   "owns": [
     "docs/decisions/0011-ai-assistant-through-opencode.md",

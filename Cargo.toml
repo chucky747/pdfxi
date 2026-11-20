@@ -14,6 +14,7 @@ members = [
     "crates/pdfxi-accessibility",
     "crates/pdfxi-cli",
     "crates/pdfxi-app",
+    "crates/pdfxi-assistant",
     "crates/pdfxi-testkit",
     "xtask",
 ]
@@ -41,6 +42,7 @@ toml = "0.8"
 # `pdfxi-cli`) plus crates nobody uses yet (`pdfxi-edit`) would trip it. Add the
 # entry with the first dependent.
 pdfxi-accessibility = { path = "crates/pdfxi-accessibility", version = "0.1.0" }
+pdfxi-assistant = { path = "crates/pdfxi-assistant", version = "0.1.0" }
 pdfxi-automation = { path = "crates/pdfxi-automation", version = "0.1.0" }
 pdfxi-convert = { path = "crates/pdfxi-convert", version = "0.1.0", default-features = false }
 pdfxi-core = { path = "crates/pdfxi-core", version = "0.1.0" }

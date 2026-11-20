@@ -1,0 +1,18 @@
+{
+  "id": "T-0251",
+  "lane": "automation",
+  "title": "OpenCode client crate: discovery, auth, models, sessions, events and MCP attach",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0250"
+  ],
+  "owns": [
+    "crates/pdfxi-assistant/**",
+    "docs/evidence/hardening/T-0251.md",
+    "orchestration/feature-updates/T-0251.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-assistant; discovery, Basic auth, provider/model list, session create, one prompt, model switch, event stream and client-MCP attach are exercised against the pinned service shapes with secrets redacted",
+  "notes": "Implements ADR 0011 (docs/decisions/0011-ai-assistant-through-opencode.md) and the T-0250 transcript, service 2.3.2. Discovery: read the service registration at %USERPROFILE%\\\\.local\\\\state\\\\opencode\\\\service.json at runtime (fields id, version, url, pid, password), authenticate with HTTP Basic, username opencode, password from that file, and never copy the password elsewhere or log it; redact Authorization headers and password fields in every error and test output. Support an explicit override with a user-supplied URL and password for a remote service. Pin the 2.3.2 request/response shapes recorded in ADR 0011 and fail with a typed error when a shape drifts. HTTP is blocking with per-request timeouts and cooperative cancellation; no tokio and no async runtime. The scaffold has no HTTP dependency yet: the registry cache on this host has neither ureq nor reqwest, so the lane chooses a small licence-clean blocking client (ureq or reqwest blocking+rustls), adds it to crates/pdfxi-assistant/Cargo.toml, records its licence, and asks the integrator for the matching [workspace.dependencies] entry if it should be shared. This crate is a client only: it never hosts a model, never enables a paid provider for bulk testing, and sends at most a short prompt on opencode-go/hy4-flash-free in tests.",
+  "evidence": "docs/evidence/hardening/T-0251.md"
+}

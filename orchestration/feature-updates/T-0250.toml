@@ -1,0 +1,38 @@
+# T-0250 - OpenCode connection spike and ADR 0011 confirmation
+#
+# Spike task, not a feature row. It proposes no docs/features.toml status
+# change: the assistant has no feature row yet, and the acceptance items are
+# docs/design/FEATURE_ACCEPTANCE.md A-06 and A-16, which only the orchestrator
+# ticks. This fragment records the confirmed contract for the integrator.
+
+task = "T-0250"
+lane = "automation"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0250.md"
+docs = [
+    "docs/decisions/0011-ai-assistant-through-opencode.md",
+    "docs/evidence/hardening/T-0250.md",
+]
+pinned_opencode_version = "2.3.2"
+acceptance_items = ["A-06", "A-16"]
+notes = """
+ADR 0011 is accepted against a running OpenCode 2.3.2 (OpenAPI 3.1.0, 142
+paths). Discovery: the registration file is
+%USERPROFILE%/.local/state/opencode/service.json ({id, version, url, pid,
+password}); `opencode-cli.exe service status` prints the URL. Auth is HTTP
+Basic, username `opencode`, password from that file; Bearer is rejected.
+Confirmed live: /api/info, /api/provider (3 providers), /api/model (57
+models, opencode-go/hy4-flash-free present and enabled), session create,
+one prompt whose assistant text was `pong`, message read, model switch
+(204, variant reflected on the session), and the SSE /api/event stream
+(`server.connected` plus heartbeat). Client-MCP is viable and is the primary
+design: a native WebSocket to /api/experimental/client-mcp with Basic auth
+opens and receives the MCP initialize request (protocolVersion 2025-11-25,
+clientInfo opencode 2.3.2); the browser ticket route also works
+(x-opencode-ticket: 1 required, 60 s single-use ticket) but is not needed by
+the desktop app. /api/rpc/{rpcID}/{method} is {input}->{output} and returns
+400 without an installed plugin, so the bridge stays a fallback. Unverified:
+pairing endpoints, tools/list after initialize, tool invocation, live event
+correlation, interrupt, and the Permission.Ruleset shape. No source code was
+changed in this spike; it unblocks the pdfxi-assistant crate work.
+"""
