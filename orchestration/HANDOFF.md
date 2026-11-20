@@ -114,3 +114,61 @@ Captures from the installed build:
       -Exe "$env:LOCALAPPDATA\Programs\PDFXI\pdfxi-ui.exe" `
       -Out docs/evidence/ui/final-doc-light-windows.png `
       -Arguments '"<repo>\fixtures\realworld\microsoft-excel-2019-sample.pdf" --light --controls=windows'
+
+## Campaign checkpoint (2026-11-20, feature acceptance)
+
+Durable resume point for the feature-acceptance campaign. The live state is
+`orchestration/BOARD.md` and `orchestration/claims/`; this section is a summary,
+not a replacement.
+
+### Verified in this campaign
+
+Phase 1-3 tasks T-0210..T-0256 as shown on the board, plus T-0269 (docs). Key
+commits: `8c1f43b` T-0242 comments UI, `a7f75fa` T-0212 harness coverage,
+`e3f665e` T-0237 redaction, `b61322e` T-0254 assistant lockdown, `a5801c3` +
+`b1e3ed0` T-0269 security/privacy docs, `390443f` Word COM/signing fallbacks,
+`b34abd3` T-0242 status fix. Do not re-derive from chat; use the board.
+
+### In flight right now
+
+- T-0243 forms UI (app lane), T-0265 edit transforms (author lane), T-0249 PFX
+  identity (security lane) hold claims. T-0212 form-command coverage is being
+  extended by QA.
+- T-0242, T-0237, T-0254 and T-0269 claims are released and their work is
+  committed.
+
+### Remaining queue
+
+- App: T-0243, T-0244, T-0245, T-0246, T-0231, T-0252, T-0253, T-0255, T-0263,
+  T-0264, T-0266. T-0263 needs T-0257; T-0264 needs T-0265.
+- Security: T-0257 (depends T-0237).
+- Follow-ups: T-0267 (signature trust/store/timestamps/revocation), T-0268
+  (redaction form XObject and inline images).
+- Final: T-0260 (acceptance scenario/fuzz/perf), T-0261 (docs/notices),
+  T-0262 (package/install/captures/handoff/archive).
+
+### Acceptance gates
+
+`cargo xtask verify` and `cargo deny check` are the final gates. Full-workspace
+clippy is currently blocked only by the in-flight T-0249
+`crates/pdfxi-security/src/pkcs12/decrypt.rs` lint; app and library crates are
+clean with `--no-deps`. `cargo xtask goal-verify --all` exits 1 with **113
+unfinished rows outside the campaign's acceptance surface**; the covered A-/O-
+rows must be verified and the output pasted verbatim, not all 145 rows.
+
+### Open blockers
+
+- T-0202 code signing: no certificate, installer unsigned; never claim signed
+  binaries.
+- T-0215 Word COM save/export: unavailable on this host; the scenario route and
+  any A-27 Word check must state what was actually exercised.
+- T-0241 RSA advisory: scoped `deny.toml` ignore plus the `rsa_usage_scope`
+  guard; revisit if RSA decryption is added or `rsa` is fixed.
+- chrono: resolved; remains transitive through `pdfium-render` only, no ignore.
+
+### Next action
+
+Finish T-0243 rounds A/B, then T-0252/T-0253 assistant work, then the remaining
+app tasks. Check each lane's output yourself (tests plus a real-fixture or
+installed-build check) before checkpointing; do not trust a summary alone.
+
