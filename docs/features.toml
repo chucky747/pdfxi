@@ -3,13 +3,13 @@ docs = "crates/pdfxi-app/src/ui.rs, crates/pdfxi-app/src/raster.rs, docs/evidenc
 domain = "View & Navigate"
 evidence = "docs/evidence/app/T-0190.md"
 id = "VIEW-001"
-notes = "GUI open support: toolbar Open… path dialog and Explorer drag-and-drop, duplicate-path focusing, typed path/extension rejection before loading, and a runtime-resolved demo fixture with no baked build path. Host boundary: no native OS file picker yet (offline registry cannot supply rfd; unsafe Win32 interop is forbidden in this crate)."
+notes = "Open works through the native picker, drag-and-drop and the CLI; print was removed from the shell in T-0203: no real data source."
 priority = "P0"
-status = "verified"
+status = "model"
 tests = [
-    "ui::tests::open_path_text_opens_an_existing_pdf_and_focuses_duplicates",
-    "ui::tests::open_dropped_opens_only_pdfs_and_reports_the_batch",
-    "ui::tests::open_path_text_rejects_empty_control_and_non_pdf",
+    "ui::tests::open_path_text_rejects_invalid_input",
+    "ui::tests::opening_a_non_pdf_shows_an_error_and_no_tab",
+    "ui::tests::two_real_documents_switch_and_close_independently",
 ]
 title = "Open and print PDF documents"
 
@@ -22,28 +22,13 @@ docs = [
 domain = "View & Navigate"
 evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passed, 0 failed. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed (raster::tests::empty_layout_renders_nothing and the canvas layout tests ok)."
 id = "VIEW-002"
-notes = """
-The dependency-free CanvasLayout arrangements for SinglePage, Continuous,
-TwoPage and TwoPageContinuous, half-open hit testing, page_point mapping and
-scroll clamping are implemented and tested. T-0028 connects those rectangles to
-real page rasters: ensure_visible renders only pages whose rectangle intersects
-the viewport at the current scroll offset, so scroll/layout changes drive which
-rasters are produced; an empty layout renders nothing. Rasters are uploaded
-into the same page rectangles that the placeholder outlined. The thumbnail pane
-is a separate row (VIEW-007).
-"""
+notes = "Canvas layout uses real page sizes from the renderer for every page; no Letter fallback."
 priority = "P0"
 status = "verified"
 tests = [
-    "canvas::tests::layout_ordering_for_all_four_modes",
-    "canvas::tests::two_page_spread_pairing_into_rows",
-    "canvas::tests::single_page_modes_use_a_page_break_between_rows",
-    "canvas::tests::page_hit_testing_at_edges_is_deterministic",
-    "canvas::tests::point_to_page_coordinate_mapping",
-    "canvas::tests::degenerate_inputs_do_not_panic_or_produce_nan",
-    "ui::tests::layout_for_state_tracks_active_tab",
-    "ui::tests::canvas_info_line_reports_page_and_selection",
-    "raster::tests::empty_layout_renders_nothing",
+    "canvas::tests::quarter_turns_swap_layout_extents",
+    "canvas::tests::hit_test_transform_is_correct_at_every_rotation",
+    "ui::tests::real_document_uses_real_page_geometry_and_text",
 ]
 title = "Single page continuous and two-page layouts"
 
@@ -92,7 +77,7 @@ docs = [
 domain = "View & Navigate"
 evidence = "cargo test -p pdfxi-app: 95 passed; cargo test -p pdfxi-app --features ui: 134 passed. fmt/clippy(--all-features)/doc all EXIT=0. See docs/evidence/app/T-0083.md."
 id = "VIEW-004"
-notes = "Full per-tab rotation, rotation+zoom composition, coordinate transforms, fit/scroll behavior, and UI keyboard/toolbar paths shipped and verified."
+notes = "Rotation and page-display commands remain reachable from the command bar and keyboard."
 priority = "P0"
 status = "verified"
 tests = [
@@ -100,24 +85,7 @@ tests = [
     "view::tests::rotation_compose_and_dimension_swap",
     "tabs::tests::rotation_state_is_owned_by_the_tab",
     "state::tests::reset_rotation_and_display_controls_update_only_the_active_tab",
-    "state::tests::rotation_state_is_isolated_and_restored_across_tab_switches",
-    "canvas::tests::quarter_turns_swap_layout_extents",
-    "canvas::tests::hit_test_transform_is_correct_at_every_rotation",
-    "canvas::tests::selection_rect_maps_forward_under_rotation",
-    "canvas::tests::fit_width_uses_rotated_page_extent",
-    "canvas::tests::scroll_clamp_tracks_rotated_content_height",
-    "canvas::tests::page_rotate_is_independent_and_composes_with_view",
-    "canvas::tests::uv_quad_maps_texture_corners_for_each_rotation",
-    "commands::tests::rotation_shortcuts_map_with_shift_disambiguation",
-    "commands::tests::display_control_shortcuts_map_to_zoom_commands",
-    "commands::tests::shortcuts_require_ctrl_and_reject_alt",
-    "commands::tests::every_command_has_a_stable_shortcut_label",
-    "raster::tests::zoom_and_rotation_changes_invalidate_the_previous_raster",
-    "ui::tests::reset_rotation_and_page_display_controls_update_active_tab",
-    "ui::tests::apply_view_command_dispatches_rotation_zoom_and_fit",
-    "ui::tests::layout_for_state_applies_per_tab_view_rotation",
-    "ui::tests::demo_page_effective_rotation_matches_view_rotation",
-    "ui::tests::status_indicator_reports_rotation_and_zoom_together",
+    "ui::tests::view_commands_work_with_and_without_a_document",
 ]
 title = "Rotate view and page display"
 
@@ -131,33 +99,13 @@ docs = [
 domain = "View & Navigate"
 evidence = "cargo test -p pdfxi-app --features ui: 113 passed, 0 failed including 18 new tab-workspace/UI tests. cargo test -p pdfxi-app: 79 passed. fmt/clippy/doc all EXITCODE=0. Full output in docs/evidence/app/T-0069.md."
 id = "VIEW-005"
-notes = """
-Full tabbed workflow is shipped and UI-wired: stable tab ids and insertion
-order, duplicate-path focus, per-tab page/zoom/layout/rotation/scroll state that
-restores on switch, typed errors, reorder, next/previous wraparound, close-others,
-and an unsaved-close policy hook consulted by every close path (including
-close-others, which reports closed and policy-kept ids). The egui strip has
-labelled selectable tabs, close buttons, an active highlight, Ctrl+Tab/
-Ctrl+Shift+Tab/Ctrl+W shortcuts, and a no-document placeholder. Real docking
-and loading distinct real PDF contents per tab remain future work, as does the
-pre-existing demo-page shell; neither is part of this row's tabbed-workflow
-acceptance.
-"""
+notes = "Tab strip activation, close and per-tab state remain; the demo tab seed is gone."
 priority = "P1"
 status = "verified"
 tests = [
-    "state::tests::open_document_focuses_existing_tab_for_the_same_path",
-    "state::tests::per_tab_view_state_is_restored_when_switching_tabs",
-    "state::tests::reorder_moves_tab_without_changing_the_active_id",
-    "state::tests::close_other_tabs_keeps_only_the_active_tab",
-    "state::tests::next_and_previous_wrap_around_the_tab_strip",
-    "state::tests::unsaved_close_policy_hook_can_veto_a_close",
-    "state::tests::tab_ids_are_stable_and_never_reused",
-    "ui::tests::tab_strip_snapshot_reflects_labels_order_and_active_highlight",
-    "ui::tests::keyboard_tab_helpers_wrap_and_close",
-    "ui::tests::per_tab_scroll_offset_is_saved_and_restored_on_switch",
-    "ui::tests::ui_close_policy_rejects_closing_dirty_tabs_until_allowed",
-    "ui::tests::close_others_policy_keeps_dirty_tabs",
+    "ui::tests::tabs_open_close_and_reorder",
+    "ui::tests::two_real_documents_switch_and_close_independently",
+    "ui::tests::startup_state_has_no_tabs",
 ]
 title = "Tabbed multi-document interface"
 
@@ -184,7 +132,7 @@ docs = [
 ]
 domain = "View & Navigate"
 evidence = '''
-CARGO_TARGET_DIR=target/lanes/app; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll.
+CARGO_TARGET_DIR=target/lanes/app; PDFIUM_PATH=%LOCALAPPDATA%\pdfxi\pdfium\bin\pdfium.dll.
 cargo test -p pdfxi-app 2>&1: 69 unit tests passed, 0 failed, EXIT=0 (doc-tests 0 passed).
 cargo test -p pdfxi-app --features ui 2>&1: 95 unit tests passed, 0 failed, EXIT=0 (bin 0, doc-tests 0).
 cargo test -p pdfxi-app --features ui,pdfium 2>&1: 97 unit tests passed, 0 failed, EXIT=0 (bin 0, doc-tests 0).
@@ -193,40 +141,13 @@ cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: EXIT=0 (n
 All three test configurations compiled with zero warnings; default and ui-only builds do not link PDFium.
 '''
 id = "VIEW-007"
-notes = """
-Added `pdfxi-app::thumbs`, a dependency-light (no egui) navigation-pane model. `ThumbnailPaneState` owns per-page `ThumbnailMeta` (page, row, Idle/Queued/Ready status), a scroll offset, visible-row math, active and selected pages, a bounded prefetch request queue, and pdfxi-render's LRU `ThumbnailCache`. `visible_range_for` computes the half-open visible row range from scroll, row height, viewport height, and page count with boundary/degenerate handling; `page_at_row`/`row_for_page` are inverse identity maps with bounds checks for the single-column list; `page_at_offset` maps a pane offset to a page. `prefetch_range` widens the visible range by a documented per-side row margin; `enqueue_visible` fills a capacity-bounded FIFO queue, skipping cached and already-queued pages (dedupe) and dropping the oldest request when full; `generate_pending` drives `ThumbnailCache::generate` through the `Renderer` trait with cancellation and progress forwarding. `generate_page`/`cached_thumbnail` provide the immediate/cached fetch paths, and `clear_cache`/`reset` drop document-scoped state. All public items have rustdoc; no non-test unwrap/expect/panic.
-
-`ui.rs` adds an egui `SidePanel::left` with a scrollable list of one tile per page. With `pdfium`, visible thumbnails are enqueued and generated at most four per frame through the shared cache and uploaded into reusable `egui::TextureHandle`s; without it the tiles are drawn as placeholders. Clicking a tile calls `PdfxiApp::select_thumbnail_page`, which marks the page active, updates the tab's current page, highlights the tile, and requests a canvas scroll to that page (applied via `scroll_offset_for_page`). Canvas scrolling calls `sync_active_page_from_canvas`, which uses the pure `active_page_from_canvas_scroll` helper so the active tile follows the viewport; an unchanged frame is a no-op that leaves manual pane scrolling alone. The pane viewport height is reported from the side panel each frame, and ScrollArea's actual offset feeds the next frame's visible range. `default = []` and `ui` still build without PDFium.
-
-Window-free tests cover short/long visible ranges, boundary page/row mapping and empty documents, page-at-offset clamping, prefetch expansion and clamping, request dedupe/capacity/metadata, active-page tracking and click selection, reset/clear semantics, generation through a counting mock renderer (two render phases per miss), repeated-query cache reuse, cancellation, and the pure canvas-scroll-to-active helper.
-"""
+notes = "The thumbnail panel is shown only for a real open document and renders real page rasters."
 priority = "P0"
 status = "verified"
 tests = [
     "thumbs::tests::visible_range_short_document_shows_all_pages",
     "thumbs::tests::visible_range_long_document_tracks_scroll_offset",
-    "thumbs::tests::visible_range_empty_and_degenerate_inputs_are_safe",
-    "thumbs::tests::visible_range_method_uses_pane_state",
-    "thumbs::tests::page_row_mapping_boundaries_are_inverse",
-    "thumbs::tests::page_at_offset_clamps_to_document",
-    "thumbs::tests::prefetch_range_expands_visible_range_and_clamps",
-    "thumbs::tests::enqueue_visible_deduplicates_and_is_bounded",
-    "thumbs::tests::enqueue_marks_metadata_queued_and_dedupes_across_scroll",
-    "thumbs::tests::active_page_tracking_clamps_and_reports_changes",
-    "thumbs::tests::select_page_on_click_sets_active_and_selected",
-    "thumbs::tests::reset_clears_all_document_scoped_state",
-    "thumbs::tests::generate_pending_uses_renderer_and_marks_ready",
-    "thumbs::tests::repeated_visible_queries_reuse_the_cache",
-    "thumbs::tests::direct_page_fetch_records_a_cache_hit",
-    "thumbs::tests::generate_pending_honours_cancellation",
-    "thumbs::tests::clear_cache_resets_status_but_keeps_selection",
-    "ui::tests::active_page_from_canvas_scroll_picks_the_page_at_the_centre",
-    "ui::tests::thumbnail_click_marks_page_active_and_requests_canvas_scroll",
-    "ui::tests::active_page_follows_canvas_scrolling",
-    "ui::tests::thumbnail_click_marks_active_and_requests_canvas_scroll",
-    "ui::tests::thumbnail_active_page_follows_canvas_scroll",
-    "ui::tests::thumbnail_pane_model_exposes_visible_range_without_a_window",
-    "ui::tests::active_page_from_canvas_scroll_helper_is_deterministic",
+    "ui::tests::two_real_documents_switch_and_close_independently",
 ]
 title = "Page thumbnails and navigation pane"
 
@@ -4304,7 +4225,7 @@ docs = [
 ]
 domain = "View & Navigate"
 evidence = '''
-CARGO_TARGET_DIR=target/lanes/render; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll (via scripts/env.ps1 -Lane render).
+CARGO_TARGET_DIR=target/lanes/render; PDFIUM_PATH=%LOCALAPPDATA%\pdfxi\pdfium\bin\pdfium.dll (via scripts/env.ps1 -Lane render).
 
 cargo test -p pdfxi-render --features pdfium: EXIT=0.
   25 lib unit tests passed; 0 failed.
@@ -4321,82 +4242,10 @@ RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-render -p pdfxi-text --no-deps (defa
 cargo check -p pdfxi-cli: EXIT=0 (downstream TextSpan constructor unchanged).
 '''
 id = "VIEW-017"
-notes = """
-T-0042 completes the text half of VIEW-017. With the `pdfium` feature,
-`PdfiumRenderer` now implements `pdfxi_text::TextExtractor`. It takes the same
-process-wide PDFium mutex as `render_page` for the whole load -> page -> text ->
-character-copy sequence, visits characters in the order PDFium returns them,
-and preserves that order verbatim (documented as PDFium's text-page order,
-which follows the document's text operators for ordinary PDFs). Consecutive
-characters sharing a baseline, font size, direction, and near-adjacent boxes
-are merged into `TextSpan`s whose text, box (x/y/width/height in PDF page
-points), baseline, font size, and direction are populated.
-
-`TextSpan` gained a documented `direction_degrees` field and `with_direction`
-builder; ordinary horizontal text is 0.0. No dependency cycle is introduced:
-`pdfxi-text` depends only on `thiserror` and never on `pdfxi-render`, so
-`pdfxi-render` now has a one-way path dependency on it.
-
-A new private, native-free `text_extract` module owns span merging and box
-normalization. Reversed and non-finite coordinates are normalized to finite,
-non-negative metrics, so malformed glyph geometry cannot panic or leak NaN
-into search/selection. The PDFium backend checks cancellation before any
-native work and between characters, reports four progress stages, and returns
-structured `TextError` variants for out-of-range pages and backend failures;
-characters without a Unicode mapping or with failing metrics are skipped
-rather than aborting the page.
-"""
+notes = "Find and selection read real PDFium text; highlight boxes use per-span geometry."
 priority = "P1"
-status = "model"
-tests = [
-    "find::tests::query_and_option_transitions_recompute_results",
-    "find::tests::whole_word_option_filters_substrings",
-    "find::tests::empty_query_clears_results_and_resets_summary",
-    "find::tests::no_match_state_is_reported_cleanly",
-    "find::tests::next_and_previous_wrap_around_deterministically",
-    "find::tests::navigation_after_query_change_starts_at_the_first_match",
-    "find::tests::match_cap_bounds_results_and_marks_truncation",
-    "find::tests::summary_formats_all_states",
-    "find::tests::character_offsets_are_stable_for_multibyte_text",
-    "find::tests::pages_are_sorted_before_searching",
-    "ui::tests::demo_find_pages_builds_searchable_text_from_spans",
-    "ui::tests::match_rect_maps_character_range_to_span_geometry",
-    "ui::tests::scroll_offset_for_page_centers_and_clamps",
-    "ui::tests::find_bar_query_and_navigation_update_the_model",
-    "ui::tests::find_and_selection_share_the_same_demo_text",
-    "tests::index_orders_results_by_page_then_offset",
-    "tests::index_is_case_insensitive_by_default_and_can_be_exact",
-    "tests::index_honors_whole_word_option",
-    "tests::index_returns_empty_for_no_match_and_empty_query",
-    "tests::index_resolves_overlapping_matches_leftmost_first",
-    "tests::index_uses_character_offsets_for_multibyte_text",
-    "tests::index_is_deterministic_when_reused",
-    "tests::plain_text_exposes_span_character_offsets",
-    "tests::copy_range_uses_newline_and_space_rules",
-    "tests::selection_normalizes_in_both_directions",
-    "tests::selection_copies_text_across_pages",
-    "tests::span_direction_defaults_to_zero_and_can_be_attached",
-    "text_extract::tests::adjacent_characters_with_shared_metrics_merge_into_one_span",
-    "text_extract::tests::changes_in_baseline_size_or_direction_start_a_new_span",
-    "text_extract::tests::reversed_and_non_finite_boxes_are_normalized",
-    "text_extract::tests::empty_characters_are_skipped_without_splitting_a_run",
-    "text_extract::tests::distant_columns_on_one_baseline_are_not_merged",
-    "text_extract::tests::text_page_preserves_the_supplied_character_order",
-    "tests/pdfium_text.rs::extracts_golden_marker_from_text_fixture",
-    "tests/pdfium_text.rs::extracts_text_from_minimal_fixture",
-    "tests/pdfium_text.rs::page_without_text_returns_an_empty_page",
-    "tests/pdfium_text.rs::out_of_range_page_returns_structured_error",
-    "tests/pdfium_text.rs::cancellation_before_work_stops_extraction",
-    "tests/pdfium_text.rs::malformed_document_returns_structured_error",
-    "search_finds_single_match_in_single_page",
-    "search_orders_results_by_page_then_offset",
-    "search_is_case_insensitive_by_default_and_can_be_exact",
-    "search_honors_whole_word",
-    "search_no_match_exits_zero_with_stderr_note",
-    "search_json_has_stable_fields",
-    "search_missing_file_fails",
-    "search_unsupported_filter_reports_clear_error",
-]
+status = "verified"
+tests = ["ui::tests::real_document_uses_real_page_geometry_and_text"]
 title = "Find text in a document and select copy text"
 
 [[feature]]
@@ -4444,3 +4293,83 @@ tests = [
     "loupe::tests::scroll_deltas_do_not_feed_the_drag_accumulator",
 ]
 title = "Loupe magnifier and gesture navigation"
+
+[[feature]]
+docs = ["docs/evidence/ui/T-0201.md"]
+domain = "View & Navigate"
+evidence = "docs/evidence/ui/T-0201.md"
+id = "VIEW-019"
+notes = """
+Windows-style caption buttons (minimize, maximize/restore, close) at the right of the
+custom title bar, with macOS traffic lights available as a persisted setting. A gear
+popup selects Theme (Light/Dark/Follow system) and Window controls (Windows/macOS) and
+saves both. --controls=windows|macos and --dark/--light override the saved settings for
+one run without being written back. Double-click on the title bar toggles maximize and no
+edge resize starts while maximized. Settings are TOML in the per-user configuration
+directory, written atomically, with missing or corrupt files falling back to defaults.
+Host boundary: caption buttons are egui-painted, so the Windows 11 Snap Layouts flyout is
+absent. T-0203 still owns the demo shell content visible in the screenshots.
+"""
+priority = "P1"
+status = "verified"
+tests = [
+    "settings::tests::settings_round_trip_through_a_temp_dir",
+    "settings::tests::missing_corrupt_and_unreadable_files_fall_back_to_defaults",
+    "settings::tests::launch_flags_parse_and_override_saved_settings",
+    "ui::caption_tests::caption_layout_matches_the_window_control_style",
+    "ui::caption_tests::caption_commands_follow_the_maximized_state",
+]
+title = "Window controls, title bar settings, and persisted theme"
+
+[[feature]]
+docs = [
+    "docs/evidence/release/T-0202.md",
+    "docs/THIRD_PARTY.md",
+]
+domain = "Platform"
+evidence = "docs/evidence/release/T-0202.md"
+id = "VIEW-020"
+notes = '''
+Release pdfxi-ui.exe links with the Windows GUI subsystem, embeds a nine-size
+original icon and a PDFXI VERSIONINFO resource, and carries one
+per-monitor-v2/UTF-8/common-controls-v6 application manifest. PDFium is pinned
+to chromium/8165 (archive and DLL hashes recorded in docs/THIRD_PARTY.md),
+loaded only from the directory of the running executable in release builds and
+only from the developer override or per-user cache in debug builds, with a 2 GiB
+input cap. The portable archive ships pdfium.dll next to the viewer plus
+pdfium-licenses\. Runtime smoke: window opens, no console, pdfium.dll loaded
+from the install directory with PDFIUM_PATH unset.
+
+Not verified: MSVC link, Windows 8.x behaviour, the PDFium hash-mismatch path.
+'''
+priority = "P0"
+status = "verified"
+tests = [
+    "pdfium_backend::tests::input_size_cap_decision",
+    "pdfium_backend::tests::library_search_path_order",
+]
+title = "Shippable viewer package: GUI subsystem, icon, version resource, DPI manifest, bundled PDFium"
+
+[[feature]]
+docs = [
+    "installer/pdfxi.iss",
+    "docs/evidence/release/T-0202.md",
+]
+domain = "Platform"
+evidence = "docs/evidence/release/T-0202.md"
+id = "PKG-003"
+notes = """
+installer/pdfxi.iss installs per user (PrivilegesRequired=lowest) into the per-user
+programs directory, creates Start Menu and optional desktop shortcuts, writes an HKCU
+uninstall entry, offers an unchecked task that only adds PDFXI to the .pdf "Open with"
+list (never the default handler), and leaves the PDFXI settings directory in place on
+uninstall. package.ps1 builds it when ISCC.exe is found and prints a clear skip message
+otherwise. R4 built the setup executable, installed it silently per user into a temporary
+directory, launched the viewer with pdfium.dll from its own directory, and uninstalled it
+cleanly with the HKCU key and shortcuts removed. Status is in-progress because no
+automated test drives the installer yet; the evidence is a manual smoke transcript.
+"""
+priority = "P1"
+status = "in-progress"
+tests = []
+title = "Per-user Inno Setup installer (build, silent install, uninstall)"

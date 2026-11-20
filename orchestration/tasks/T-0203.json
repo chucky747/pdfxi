@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Honest shell: native open, real document text, no demo material",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0201"],
   "owns": [
     "crates/pdfxi-app/src/ui.rs",

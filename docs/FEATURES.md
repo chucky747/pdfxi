@@ -1,10 +1,10 @@
 # FEATURES
 
-`docs/features.toml` is the canonical parity matrix. It contains 140 feature
+`docs/features.toml` is the canonical parity matrix. It contains 143 feature
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 23 verified, 18 library, 96 model, 3 replaced (140 rows; see ADR 0009).
+Current status: 25 verified, 18 library, 96 model, 3 replaced, 1 in-progress (143 rows; see ADR 0009).
 
 ## Detailed feature pages
 
@@ -35,7 +35,7 @@ Task-oriented M2 chapters live in the [mdBook](book/src/README.md):
 
 | Domain | Rows | Primary milestones |
 |---|---:|---|
-| View & Navigate | 18 | M1, M2 |
+| View & Navigate | 19 | M1, M2 |
 | Create | 14 | M2, M5 |
 | Edit | 15 | M2, M3 |
 | Export | 9 | M2, M4, M5 |
@@ -47,7 +47,7 @@ Task-oriented M2 chapters live in the [mdBook](book/src/README.md):
 | Automation | 10 | M6 |
 | Document Management | 6 | M2, M5 |
 | Multimedia and 3D | 5 | M6 |
-| Platform | 7 | M0, M5, M7 |
+| Platform | 9 | M0, M5, M7 |
 | Standards | 12 | M1, M4 |
 
 ## Parity rules

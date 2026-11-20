@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Windows-style window controls toggle and persisted settings",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [],
   "owns": [
     "crates/pdfxi-app/src/ui.rs",

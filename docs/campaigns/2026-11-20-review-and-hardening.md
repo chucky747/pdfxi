@@ -1,6 +1,6 @@
 # PDFXI plan — review findings, window controls, packaging, hardening (2026-11-20)
 
-Workspace: `D:\Documents\opencode-work`, branch `main` (no branches; RULES §3). Base commit `ecd1033`.
+Workspace: the repository root, branch `main` (no branches; RULES §3). Base commit `ecd1033`.
 Workers: `opencode-go/deepseek-v4.1-flash` lane agents; orchestrator reviews every task and does the final visual review.
 
 ## Goal

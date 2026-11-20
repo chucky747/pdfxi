@@ -3,7 +3,7 @@
   "lane": "qa",
   "title": "GUI-subsystem exe, resources, bundled pinned PDFium, installer",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [],
   "owns": [
     "crates/pdfxi-app/src/bin/**",
