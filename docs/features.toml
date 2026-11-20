@@ -2109,41 +2109,19 @@ title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 [[feature]]
 docs = [
     "crates/pdfxi-render/src/color.rs",
-    "crates/pdfxi-render/src/lib.rs",
     "docs/evidence/render/T-0095.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-render: EXIT=0 (78 unit tests, incl. 16 color::tests; all other targets 0 tests); cargo fmt -p pdfxi-render -- --check: EXIT=0; cargo clippy -p pdfxi-render --all-targets --all-features -- -D warnings: EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-render --no-deps --all-features: EXIT=0. Full output in docs/evidence/render/T-0095.md."
+evidence = "CARGO_TARGET_DIR=target/lanes/render; cargo test -p pdfxi-render: EXIT=0 (80 unit tests, incl. 18 color::tests: T-0095 baseline 78/16 + 2 new); fmt --check, clippy (--all-targets --all-features -D warnings), and RUSTDOCFLAGS=-D warnings cargo doc --no-deps all EXIT=0. Full output in docs/evidence/render/T-0095.md."
 id = "PRINT-003"
-notes = """
-Added a dependency-free colour-management module in crates/pdfxi-render/src/color.rs.
-
-- Bounded IccProfile parser: 128-byte header (size, CMM, version, class, data
-  colour space, PCS, rendering intent, illuminant), 'acsp' signature check,
-  tag table with size/tag-count caps (16 MiB, 1024 tags), and bounds-checked
-  tag payloads. Typed ColorError for truncated/oversize/invalid-signature/
-  out-of-bounds/zero-length/hostile input; no panics.
-- desc/wtpt/rXYZ/gXYZ/bXYZ/rTRC/gTRC/bTRC/kTRC queries, including curv (identity,
-  gamma, sampled table) and simple parametric (Y=X^g) TRCs.
-- Output-intent model (RawOutputIntent -> OutputIntent -> OutputIntentSet) parsing
-  subtype, output condition identifier, info, registry name and /DestOutputProfile,
-  with issues() and validate() detecting missing, multiple and unsupported intents.
-- Rendering colour contract: DeviceColor pairs components with an explicit
-  DeviceColorSpace; ConversionPlan::from_profile derives deterministic RGB
-  matrix/TRC, gray-gamma, identity, or NeedsBackend plans. Full ICC/CMM rendering
-  (LUTs, complex parametric curves, chromatic adaptation) is explicitly delegated
-  to the renderer backend, so PRINT-003 remains in-progress.
-
-16 new tests cover all required cases plus description/whitepoint queries,
-needs-backend errors, and device-colour component validation. No image decoding,
-no unsafe, no new dependencies, no unwrap/expect/panic in non-test code.
-"""
+notes = "T-0122 reviewer-fix pass on T-0095: replaced the incorrect desc offset parsing with the real ICC textDescriptionType layout (desc signature, reserved, count at 8, string at 12, count validated against tag bounds, typed errors) and updated the test helper plus a realistic v2 payload test; changed Lab source data from Identity to NeedsBackend with updated rustdoc and tests; corrected the T-0095 evidence test count to 16 and noted the T-0095 fragment was integrator-consumed. PRINT-003 stays in-progress; no docs/features.toml or BOARD.md edits by this lane."
 priority = "P3"
 status = "in-progress"
 tests = [
     "color::tests::header_fields_are_parsed",
     "color::tests::tag_lookup_by_signature",
     "color::tests::description_and_whitepoint_queries",
+    "color::tests::description_reads_realistic_v2_text_description_type",
     "color::tests::truncated_profile_is_rejected",
     "color::tests::oversize_profile_is_rejected",
     "color::tests::invalid_signature_is_rejected",
@@ -2155,6 +2133,7 @@ tests = [
     "color::tests::unsupported_intent_subtype_is_detected",
     "color::tests::conversion_plan_is_deterministic",
     "color::tests::needs_backend_plan_returns_typed_error",
+    "color::tests::lab_profile_requires_backend",
     "color::tests::hostile_and_zero_length_tag_data_rejected",
     "color::tests::device_color_component_validation",
 ]

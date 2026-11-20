@@ -576,7 +576,9 @@ pub struct RgbMatrixTrc {
 /// can route them to a full CMM rather than silently approximating the result.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConversionPlan {
-    /// No transform is needed (for example an XYZ or Lab PCS profile).
+    /// No transform is needed (an XYZ PCS profile whose samples are already
+    /// in the XYZ connection space). Lab source data is deliberately reported
+    /// as [`Self::NeedsBackend`] instead of passing through unchanged.
     Identity,
     /// Apply RGB TRCs then a 3x3 matrix.
     RgbMatrixTrc(RgbMatrixTrc),
@@ -594,9 +596,11 @@ impl ConversionPlan {
     ///
     /// RGB profiles with a colourant matrix and `rTRC`/`gTRC`/`bTRC` tags yield
     /// [`Self::RgbMatrixTrc`]. Gray profiles with a gamma `kTRC` yield
-    /// [`Self::GrayGamma`]. XYZ/Lab profiles are [`Self::Identity`]; everything
-    /// else is [`Self::NeedsBackend`]. This function is deterministic and never
-    /// fails: unsupported profiles are reported as a plan, not an error.
+    /// [`Self::GrayGamma`]. An XYZ PCS profile is [`Self::Identity`]; Lab source
+    /// data and everything else is [`Self::NeedsBackend`] because a Lab-to-PCS
+    /// transform cannot be represented by an analytic pass-through plan. This
+    /// function is deterministic and never fails: unsupported profiles are
+    /// reported as a plan, not an error.
     pub fn from_profile(profile: &IccProfile) -> Self {
         match profile.header().data_color_space {
             IccColorSpace::Rgb => {
@@ -620,7 +624,10 @@ impl ConversionPlan {
                     reason: "gray profile lacks an analytic kTRC gamma".to_owned(),
                 },
             },
-            IccColorSpace::Xyz | IccColorSpace::Lab => Self::Identity,
+            IccColorSpace::Xyz => Self::Identity,
+            IccColorSpace::Lab => Self::NeedsBackend {
+                reason: "Lab source data requires a renderer backend colour transform".to_owned(),
+            },
             other => Self::NeedsBackend {
                 reason: format!("no analytic plan for colour space {}", other.name()),
             },
@@ -984,26 +991,55 @@ impl IccProfile {
     }
 
     /// Read the `desc` tag as a human-readable description.
+    ///
+    /// An ICC `textDescriptionType` begins with a four-byte `desc` signature,
+    /// four reserved bytes, a four-byte ASCII byte count (which includes the
+    /// terminating NUL), and then the ASCII string. Unicode and ScriptCode
+    /// sections may follow and are intentionally ignored — only the ASCII
+    /// portion is decoded. The signature is checked and the count is validated
+    /// against the tag payload so a hostile profile cannot force an out-of-bounds
+    /// read.
     pub fn description(&self) -> Result<String, ColorError> {
-        let data = self.tag_bytes(*b"desc")?;
-        let count = be_u32(data, 0)? as usize;
-        let end = 4usize
+        const TAG: [u8; 4] = *b"desc";
+        // signature (4) + reserved (4) + ASCII count (4).
+        const ASCII_OFFSET: usize = 12;
+        let data = self.tag_bytes(TAG)?;
+        let sig = signature(data, 0)?;
+        if sig != TAG {
+            return Err(ColorError::InvalidTagData {
+                tag: TAG,
+                reason: "expected 'desc' type signature",
+            });
+        }
+        // The reserved word occupies bytes 4..8; read it for bounds validation
+        // and to document the layout, but its value is not otherwise used.
+        let _reserved = be_u32(data, 4)?;
+        let count = be_u32(data, 8)? as usize;
+        let end = ASCII_OFFSET
             .checked_add(count)
             .ok_or(ColorError::InvalidTagData {
-                tag: *b"desc",
+                tag: TAG,
                 reason: "description length overflow",
             })?;
         if end > data.len() {
             return Err(ColorError::InvalidTagData {
-                tag: *b"desc",
+                tag: TAG,
                 reason: "description ASCII count exceeds tag size",
             });
         }
-        let ascii = data.get(4..end).ok_or(ColorError::InvalidTagData {
-            tag: *b"desc",
-            reason: "description ASCII slice unavailable",
-        })?;
-        Ok(String::from_utf8_lossy(ascii).into_owned())
+        let ascii = data
+            .get(ASCII_OFFSET..end)
+            .ok_or(ColorError::InvalidTagData {
+                tag: TAG,
+                reason: "description ASCII slice unavailable",
+            })?;
+        // The declared byte count includes a trailing NUL; drop any NUL padding
+        // so the returned value contains only the printable description.
+        let mut trimmed = ascii;
+        while trimmed.last() == Some(&0) {
+            trimmed = &trimmed[..trimmed.len() - 1];
+        }
+        Ok(String::from_utf8_lossy(trimmed).into_owned())
     }
 
     /// Read the `wtpt` (media white point) tag.
@@ -1282,12 +1318,52 @@ mod tests {
         data
     }
 
-    /// A `desc` tag payload carrying an ASCII description.
+    /// A `textDescriptionType` payload using the real ICC layout: a `desc`
+    /// signature, a reserved word, a four-byte ASCII count that includes the
+    /// terminating NUL, and the ASCII string. Unicode/ScriptCode sections are
+    /// omitted here because this crate only decodes the ASCII portion.
     fn desc_payload(text: &str) -> Vec<u8> {
         let bytes = text.as_bytes();
-        let mut data = vec![0u8; 4 + bytes.len()];
-        put_u32(&mut data, 0, bytes.len() as u32);
-        data[4..].copy_from_slice(bytes);
+        let ascii_len = bytes.len() + 1; // count includes the trailing NUL
+        let mut data = vec![0u8; 12 + ascii_len];
+        put_sig(&mut data, 0, b"desc");
+        put_u32(&mut data, 8, ascii_len as u32);
+        data[12..12 + bytes.len()].copy_from_slice(bytes);
+        data
+    }
+
+    /// A complete v2 `textDescriptionType` payload: the ASCII section plus the
+    /// Unicode language/count/string and ScriptCode code/count/string sections.
+    /// Only the ASCII section is decoded, but including the trailing sections
+    /// exercises bounds validation against the full tag payload.
+    fn desc_payload_v2(text: &str, unicode: &[u16]) -> Vec<u8> {
+        let ascii = text.as_bytes();
+        let ascii_len = ascii.len() + 1; // include the trailing NUL
+        let mac_len = ascii.len() + 1;
+        let mut len = 12 + ascii_len + 2 + 2 + unicode.len() * 2 + 2 + 1 + mac_len;
+        while !len.is_multiple_of(4) {
+            len += 1;
+        }
+        let mut data = vec![0u8; len];
+        put_sig(&mut data, 0, b"desc");
+        put_u32(&mut data, 8, ascii_len as u32);
+        let mut p = 12;
+        data[p..p + ascii.len()].copy_from_slice(ascii);
+        p += ascii_len;
+        put_u16(&mut data, p, 0); // Unicode language code
+        p += 2;
+        put_u16(&mut data, p, unicode.len() as u16);
+        p += 2;
+        for (i, ch) in unicode.iter().enumerate() {
+            put_u16(&mut data, p + i * 2, *ch);
+        }
+        p += unicode.len() * 2;
+        put_u16(&mut data, p, 0); // ScriptCode code
+        p += 2;
+        data[p] = mac_len as u8; // ScriptCode count
+        p += 1;
+        data[p..p + ascii.len()].copy_from_slice(ascii);
+        // The trailing NUL and word padding remain zero.
         data
     }
 
@@ -1316,6 +1392,20 @@ mod tests {
                 pcs: *b"XYZ ",
                 tags: Vec::new(),
             }
+        }
+
+        fn lab() -> Self {
+            Self {
+                class: *b"scnr",
+                space: *b"Lab ",
+                pcs: *b"Lab ",
+                tags: Vec::new(),
+            }
+        }
+
+        fn with_space(mut self, space: &[u8; 4]) -> Self {
+            self.space = *space;
+            self
         }
 
         fn tag(mut self, sig: &[u8; 4], data: Vec<u8>) -> Self {
@@ -1414,6 +1504,66 @@ mod tests {
         // s15Fixed16 has a resolution of 1/65536 ~= 1.5e-5.
         assert!((wtpt.x - 0.9642).abs() < 1e-4);
         assert!((wtpt.z - 0.8249).abs() < 1e-4);
+    }
+
+    #[test]
+    fn description_reads_realistic_v2_text_description_type() {
+        let text = "Synthetic v2 description";
+        let unicode = [0x0053, 0x0079, 0x006E, 0x0074, 0x0068, 0x0065, 0x0074];
+        let data = desc_payload_v2(text, &unicode);
+        // Confirm the helper encodes the documented real ICC layout.
+        assert_eq!(&data[0..4], b"desc");
+        assert_eq!(&data[4..8], &[0, 0, 0, 0]);
+        assert_eq!(be_u32(&data, 8).expect("count"), (text.len() + 1) as u32);
+
+        let profile = IccProfile::parse(&ProfileBuilder::rgb().tag(b"desc", data.clone()).build())
+            .expect("valid profile");
+        // The ASCII count includes a NUL; only the printable text is returned,
+        // and the trailing Unicode/ScriptCode sections are ignored.
+        assert_eq!(profile.description().as_deref(), Ok(text));
+
+        // A wrong type signature is a typed error rather than a silent misread.
+        let mut bad_sig = data.clone();
+        put_sig(&mut bad_sig, 0, b"mluc");
+        let bad_sig_profile =
+            IccProfile::parse(&ProfileBuilder::rgb().tag(b"desc", bad_sig).build())
+                .expect("valid profile");
+        assert_eq!(
+            bad_sig_profile.description(),
+            Err(ColorError::InvalidTagData {
+                tag: *b"desc",
+                reason: "expected 'desc' type signature",
+            })
+        );
+
+        // A count larger than the tag payload is rejected with a typed error.
+        let mut bad_count = data;
+        let count = (bad_count.len() + 1) as u32;
+        put_u32(&mut bad_count, 8, count);
+        let bad_count_profile =
+            IccProfile::parse(&ProfileBuilder::rgb().tag(b"desc", bad_count).build())
+                .expect("valid profile");
+        assert_eq!(
+            bad_count_profile.description(),
+            Err(ColorError::InvalidTagData {
+                tag: *b"desc",
+                reason: "description ASCII count exceeds tag size",
+            })
+        );
+
+        // A maximal count must stay in bounds arithmetic and never panic.
+        let mut huge = vec![0u8; 13];
+        put_sig(&mut huge, 0, b"desc");
+        put_u32(&mut huge, 8, u32::MAX);
+        let huge_profile = IccProfile::parse(&ProfileBuilder::rgb().tag(b"desc", huge).build())
+            .expect("valid profile");
+        assert_eq!(
+            huge_profile.description(),
+            Err(ColorError::InvalidTagData {
+                tag: *b"desc",
+                reason: "description ASCII count exceeds tag size",
+            })
+        );
     }
 
     #[test]
@@ -1587,6 +1737,35 @@ mod tests {
             .expect("profile"),
         );
         assert!(matches!(cmyk, ConversionPlan::NeedsBackend { .. }));
+    }
+
+    #[test]
+    fn lab_profile_requires_backend() {
+        let profile = IccProfile::parse(
+            &ProfileBuilder::lab()
+                .tag(b"desc", desc_payload("Lab source"))
+                .build(),
+        )
+        .expect("valid profile");
+        assert_eq!(profile.header().data_color_space, IccColorSpace::Lab);
+        let plan = profile.conversion_plan();
+        assert!(
+            matches!(&plan, ConversionPlan::NeedsBackend { reason } if reason.contains("Lab")),
+            "Lab source data must not yield an identity plan, got {plan:?}"
+        );
+        assert!(matches!(
+            plan.convert(&[50.0, 0.0, 0.0]),
+            Err(ColorError::BackendRequired(_))
+        ));
+        // By contrast, an XYZ PCS profile still legitimately passes through.
+        let xyz = IccProfile::parse(
+            &ProfileBuilder::rgb()
+                .with_space(b"XYZ ")
+                .tag(b"desc", desc_payload("XYZ source"))
+                .build(),
+        )
+        .expect("valid profile");
+        assert_eq!(xyz.conversion_plan(), ConversionPlan::Identity);
     }
 
     #[test]
