@@ -1,0 +1,16 @@
+{
+  "id": "T-0207",
+  "lane": "core",
+  "title": "Incremental save for cross-reference-stream sources",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "crates/pdfxi-core/src/**",
+    "crates/pdfxi-core/tests/realworld.rs",
+    "docs/evidence/hardening/T-0207.md",
+    "orchestration/feature-updates/T-0207.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core --test realworld",
+  "evidence": "docs/evidence/hardening/T-0207.md"
+}
