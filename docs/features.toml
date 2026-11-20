@@ -1707,14 +1707,44 @@ tests = [
 title = "RC4 and AES encryption handlers"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-security/src/certificate_encryption.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "docs/evidence/security/T-0129.md",
+]
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 214 passed, 0 failed, including 11 new certificate_encryption::tests cases (recipient round-trip, wrong recipient, permissions, malformed cert, no/duplicate recipients, bad selectors, tampered ciphertext, determinism, debug redaction, CMS-style DER OIDs); TEST_EXIT=0. fmt/clippy(-D warnings)/rustdoc(-D warnings) all EXIT=0. Full output in docs/evidence/security/T-0129.md."
 id = "SEC-003"
-notes = ""
+notes = """
+Clean-room certificate-based encryption model. Recipients are parsed X.509
+certificates (public material only); the caller supplies the content-encryption
+key and IV. Content is encrypted with the existing AES-CBC + PKCS#7 primitive;
+each recipient gets a wrapped key from a caller-provided KeyWrapProvider, and a
+SHA-256 commitment over the CEK makes a wrong-recipient failure distinguishable
+from tampered ciphertext. Envelopes carry sender-granted Permissions and expose
+a deterministic CMS/PKCS#7-style DER encoding. All byte fields are redacted from
+Debug and no private key, plaintext or secret is ever logged. The bundled
+InMemoryKeyWrapProvider is a documented deterministic XOR test double, not
+production public-key crypto. Honest remaining scope for full parity: a real
+RSA/ECDH key-wrap provider, PDF /Encrypt dictionary and certificate-recipient
+integration, and a UI/CLI recipient picker; those are follow-on work.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "certificate_encryption::tests::recipient_list_round_trips_by_label_and_index",
+    "certificate_encryption::tests::duplicate_recipient_is_a_typed_error",
+    "certificate_encryption::tests::envelope_round_trip_for_intended_recipient",
+    "certificate_encryption::tests::wrong_recipient_is_rejected",
+    "certificate_encryption::tests::permissions_are_enforced_and_typed",
+    "certificate_encryption::tests::malformed_certificate_is_rejected",
+    "certificate_encryption::tests::no_recipients_and_bad_inputs_are_typed_errors",
+    "certificate_encryption::tests::bad_recipient_selectors_are_typed_errors",
+    "certificate_encryption::tests::tampered_ciphertext_is_rejected",
+    "certificate_encryption::tests::envelope_is_deterministic_and_debug_redacts_secrets",
+    "certificate_encryption::tests::envelope_der_carries_cms_enveloped_data_oid",
+]
 title = "Certificate encryption"
 
 [[feature]]
@@ -1869,14 +1899,48 @@ tests = [
 title = "Timestamp and signature validation"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-security/src/trust_manager.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "docs/evidence/security/T-0129.md",
+]
 domain = "Security"
-evidence = ""
+evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 214 passed, 0 failed, including 13 new trust_manager::tests cases (trust anchor match, untrusted/wrong-issuer/empty-store chains, expired cert, CRL revoked/valid/unknown/stale, CRL DER round-trip, malformed CRL/window, deterministic report, intermediate evidence, bad signature); TEST_EXIT=0. fmt/clippy(-D warnings)/rustdoc(-D warnings) all EXIT=0. Full output in docs/evidence/security/T-0129.md."
 id = "SEC-007"
-notes = ""
+notes = """
+Local trust manager and CRL revocation model layered on the existing X.509
+verify_chain. A TrustManager owns a caller-supplied TrustStore, a ValidationPolicy,
+a RevocationPolicy, and a pinned evaluation clock (no host clock, no network).
+evaluate() returns a deterministic typed TrustReport carrying the decision,
+chain serials, the terminating anchor, and per-certificate revocation evidence;
+trust and revocation failures are report decisions (Trusted / Untrusted with a
+typed TrustFailureReason), while malformed CRLs are rejected at construction with
+typed CrlMalformed / CrlInvalidWindow errors. Revocation checking is
+conservative: a revoked entry wins across matching CRLs, the anchor is not
+revocation-checked, and strict mode reports unknown or stale CRL information as
+distinct typed reasons. Callers supply every CRL; no network fetch, no CRL
+signature verification, no trust-manager UI, and no wiring into the signature
+workflow are part of this task. Those remain follow-on work, so the row stays
+in-progress.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "trust_manager::tests::trust_anchor_match_yields_trusted_report",
+    "trust_manager::tests::untrusted_chain_yields_untrusted_report",
+    "trust_manager::tests::wrong_issuer_yields_issuer_unknown_reason",
+    "trust_manager::tests::expired_certificate_is_reported_untrusted",
+    "trust_manager::tests::crl_revoked_certificate_is_detected",
+    "trust_manager::tests::crl_valid_certificate_is_confirmed",
+    "trust_manager::tests::crl_unknown_and_stale_are_deterministic",
+    "trust_manager::tests::crl_der_round_trips_deterministically",
+    "trust_manager::tests::crl_malformed_and_bad_window_are_typed_errors",
+    "trust_manager::tests::trust_report_is_deterministic",
+    "trust_manager::tests::empty_store_yields_untrusted_no_anchor_report",
+    "trust_manager::tests::intermediate_chain_evidence_is_leaf_to_anchor",
+    "trust_manager::tests::bad_signature_maps_to_signature_invalid_reason",
+]
 title = "Trust manager and revocation checks"
 
 [[feature]]
@@ -2178,48 +2242,31 @@ title = "Measurement distance area and perimeter"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-standards/src/document_profile.rs",
     "crates/pdfxi-standards/src/fixup.rs",
-    "docs/evidence/core/T-0127.md",
+    "docs/evidence/core/T-0128.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-standards: 74 unit passed, 0 failed (6 new for T-0127); TEST_EXIT=0. clippy --all-targets --no-deps -D warnings and RUSTDOCFLAGS=-D warnings cargo doc --no-deps both EXIT=0. Full output in docs/evidence/core/T-0127.md."
+evidence = "No new PRINT-001 tests in T-0128. Existing snapshot-level coverage from T-0127 remains green: cargo test -p pdfxi-standards: 74 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/core/T-0128.md."
 id = "PRINT-001"
 notes = """
-Profiles continue to produce deterministic findings with stable IDs and order.
-T-0127 adds explicit module documentation that this is a deterministic subset
-preflight, not a certification: checks run over a caller-built PreflightInput
-snapshot, fixups edit a clone and add placeholders, and real ICC/font payloads
-plus an independent validator (veraPDF in CI) are still required. New tests
-cover PDF/A-3b and PDF/E-1 findings, PDF/X-4 page-box findings with page
-locations, canonical report stability, opt-in fixup application to a realistic
-snapshot, deterministic fixup reporting in request order, and the
-version-below-minimum typed error. Both crates are dependency-free so a
-byte-level fixup adapter cannot live in either without an integrator-owned
-manifest change; that adapter, ICC validation, the veraPDF oracle and UI/CLI
-exposure remain future work, so the row stays in-progress.
+T-0128 inspected the delivered preflight fixups and confirmed the remaining
+scope is a byte-application adapter, not more modelling. `apply_fixups` already
+edits a cloned PreflightInput with explicit FixupPolicy opt-in and a deterministic
+FixupReport, and `suggested_fixups` derives a conservative list. Applying those
+results to real PDF bytes needs either a pdfxi-standards -> pdfxi-core dependency
+(standards is deliberately dependency-free) or a downstream pdfxi-convert
+adapter; both a manifest change and an external crate are out of scope for this
+task (no new dependencies; shared manifests are integrator-owned), so no
+byte-level fixup code was added and no false claim is made. Exact remaining
+scope: (1) byte-level adapter that maps Fixup values onto PDF objects/bytes and
+re-preflights the result, (2) real ICC profile embedding and validation,
+(3) an independent veraPDF CI oracle, (4) UI/CLI exposure of profiles and
+fixups. The row stays in-progress with that scope. No new tests this task; the
+T-0127 fixup tests remain the authoritative coverage of the delivered subset.
 """
 priority = "P2"
 status = "in-progress"
-tests = [
-    "document_profile::tests::pdf_a_reports_unembedded_font",
-    "document_profile::tests::pdf_x_reports_missing_output_intent",
-    "document_profile::tests::version_mismatch_is_reported",
-    "document_profile::tests::transparency_is_reported",
-    "document_profile::tests::encryption_is_prohibited",
-    "document_profile::tests::clean_input_passes_all_named_profiles",
-    "document_profile::tests::severity_and_order_are_deterministic",
-    "fixup::tests::add_xmp_metadata_fixup_is_opt_in_and_reported",
-    "fixup::tests::remove_prohibited_entry_fixup_is_opt_in",
-    "fixup::tests::fixup_report_is_accurate",
-    "fixup::tests::suggested_fixups_resolve_only_mechanical_findings",
-    "document_profile::t0127_tests::t0127_pdfa3b_and_e1_profiles_report_deterministic_findings",
-    "document_profile::t0127_tests::t0127_missing_print_boxes_are_reported_with_page_location",
-    "document_profile::t0127_tests::t0127_report_is_stable_and_findings_are_canonical",
-    "fixup::t0127_tests::t0127_fixups_apply_to_realistic_snapshot_and_reduce_errors",
-    "fixup::t0127_tests::t0127_fixup_report_records_fixups_in_request_order",
-    "fixup::t0127_tests::t0127_version_fixup_is_blocked_when_below_the_profile_minimum",
-]
+tests = []
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
@@ -2304,54 +2351,42 @@ title = "Trapping presets and transparency flattening"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-core/src/boxes.rs",
     "crates/pdfxi-core/src/printer_marks.rs",
     "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0127.md",
+    "docs/evidence/core/T-0128.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-core: 211 unit + 6 integration passed, 0 failed (9 new for T-0127); TEST_EXIT=0. fmt/clippy(--all-targets --no-deps -D warnings)/doc(-D warnings) all EXIT=0. Full output in docs/evidence/core/T-0127.md."
+evidence = "cargo test -p pdfxi-core: 224 unit + 6 integration passed, 0 failed, including 13 new printer_marks::t0128_tests that assert form-XObject bytes and /BBox plus the `Do` invocation survive both save and save_incremental and reparse, with resources/contents preserved, deterministic output and typed errors (PageNotFound, InvalidPrinterMarkOptions, PrinterMarksOutOfSheet) staging nothing. TEST_EXIT=0. Full output in docs/evidence/core/T-0128.md."
 id = "PRINT-007"
 notes = """
-All five page boxes are parsed with ISO inheritance and fallback rules, are
-written deterministically through copy-on-write, and survive save/reparse.
-T-0127 adds public normalize_rectangle and rectangle_intersection helpers plus
-PageBoxes::normalized(), which clips a non-canonical hierarchy into a valid,
-idempotent set that passes validate() while preserving explicitness flags;
-reversed, non-finite, zero-area, disjoint and edge-touching inputs are handled
-without panics. Printer marks keep typed options, deterministic geometry and a
-Form XObject whose BBox and stream bytes survive a save/reparse round-trip.
-The row stays in-progress: no UI/CLI box editing or mark placement surface, no
-print-dialog/imposition consumer, no user-configurable mark styles beyond
-PrinterMarkOptions, no mdBook print-production page and no reviewer sign-off.
+T-0127 delivered the page-box writer, ISO inheritance/fallbacks, normalisation
+helpers and deterministic printer-mark geometry/form XObject, but marks existed
+only as modelled streams; there was no way to apply them to a real page. T-0128
+closes that core-lane gap: Document::apply_printer_marks(index, options) writes a
+self-contained Form XObject into real document bytes, appends its invocation to
+the page content stream and preserves existing/inherited resources and contents.
+The caller's bytes are untouched until save; both save paths and reparse are
+covered. The row stays in-progress because these remain outside this lane: a
+UI/CLI mark-placement and box-editing surface, a print-dialog/imposition
+consumer, mark styles beyond PrinterMarkOptions, an mdBook print-production page
+and reviewer sign-off. Those belong to the app/CLI, docs and reviewer lanes.
 """
 priority = "P2"
 status = "in-progress"
 tests = [
-    "boxes::tests::defaults_fall_back_to_media_box",
-    "boxes::tests::containment_validation_rejects_out_of_order_boxes",
-    "boxes::tests::read_write_round_trip_preserves_boxes",
-    "boxes::tests::writing_boxes_preserves_unknown_dictionary_keys",
-    "boxes::tests::unchanged_page_object_bytes_are_stable_after_saving",
-    "boxes::tests::inherited_media_box_is_used_when_page_has_none",
-    "printer_marks::tests::crop_mark_geometry_matches_trim_corners",
-    "printer_marks::tests::registration_mark_geometry_uses_media_corners",
-    "printer_marks::tests::stream_bytes_are_deterministic",
-    "printer_marks::tests::crop_marks_lie_outside_trim_but_inside_bleed",
-    "printer_marks::tests::invalid_options_and_boxes_are_rejected",
-    "printer_marks::tests::page_info_label_escapes_literal_string_specials",
-    "printer_marks::tests::marks_stay_on_sheet_at_the_documented_minimum_margin",
-    "printer_marks::tests::tight_trim_margins_are_rejected_with_a_typed_error",
-    "printer_marks::tests::sub_precision_options_are_rejected",
-    "boxes::tests::normalize_rectangle_orders_swapped_coordinates",
-    "boxes::tests::normalize_rectangle_rejects_non_finite_and_zero_area",
-    "boxes::tests::rectangle_intersection_clips_and_reports_disjoint",
-    "boxes::tests::normalized_boxes_are_canonical_and_idempotent",
-    "boxes::tests::inherited_crop_box_is_used_when_page_has_none",
-    "boxes::tests::malformed_box_array_is_a_typed_error",
-    "printer_marks::tests::marks_form_xobject_survives_save_and_reparse",
-    "printer_marks::tests::color_bar_has_four_ordered_cmyk_swatches",
-    "printer_marks::tests::disabled_mark_families_produce_empty_geometry",
+    "printer_marks::t0128_tests::apply_writes_form_and_invocation_that_survive_save",
+    "printer_marks::t0128_tests::applied_marks_survive_incremental_save",
+    "printer_marks::t0128_tests::apply_appends_to_array_contents",
+    "printer_marks::t0128_tests::apply_creates_contents_when_page_has_none",
+    "printer_marks::t0128_tests::apply_preserves_existing_page_resources",
+    "printer_marks::t0128_tests::apply_materialises_inherited_resources",
+    "printer_marks::t0128_tests::apply_avoids_existing_resource_name_collision",
+    "printer_marks::t0128_tests::apply_is_deterministic",
+    "printer_marks::t0128_tests::apply_rejects_out_of_range_index_without_staging",
+    "printer_marks::t0128_tests::apply_rejects_invalid_options_without_staging",
+    "printer_marks::t0128_tests::apply_rejects_marks_that_do_not_fit_the_sheet",
+    "printer_marks::t0128_tests::original_bytes_are_unchanged_until_save",
+    "printer_marks::t0128_tests::apply_twice_allocates_distinct_objects",
 ]
 title = "Page boxes bleed crop and printer marks"
 

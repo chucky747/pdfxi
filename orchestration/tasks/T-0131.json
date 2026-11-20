@@ -1,0 +1,16 @@
+{
+  "id": "T-0131",
+  "lane": "convert",
+  "title": "Byte-level preflight and print mark CLI closure",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0117"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "crates/pdfxi-cli/**",
+    "docs/evidence/convert/T-0131.md",
+    "orchestration/feature-updates/T-0131.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert -p pdfxi-cli",
+  "evidence": ""
+}

@@ -41,14 +41,21 @@
 //! - [`timestamp`] — RFC 3161 `TSTInfo` parsing, token signature and imprint
 //!   checks, caller-clocked chain validation at `genTime`, a replay/skew guard,
 //!   nonce verification, and a conservative mapping onto [`SignatureStatus`].
+//! - [`certificate_encryption`] — certificate-based enveloped encryption with a
+//!   recipient list, per-recipient wrapped keys behind a caller-supplied
+//!   [`KeyWrapProvider`], a SHA-256 key commitment, and sender permissions.
+//! - [`trust_manager`] — a local trust manager, CRL model, and deterministic
+//!   trust/revocation reports with typed failure reasons. Callers supply every
+//!   CRL; there is no network access and no host-clock read.
 //!
-//! All operations are deterministic and allocate only as needed. Trust and
-//! revocation management (SEC-007) remain layered on by the caller; no operation
+//! All operations are deterministic and allocate only as needed. No operation
 //! here logs secrets or document contents.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+/// Certificate-based enveloped encryption (SEC-003).
+pub mod certificate_encryption;
 pub mod cms;
 pub mod crypto;
 pub mod der;
@@ -63,8 +70,15 @@ mod scrub;
 mod signature;
 pub mod standard_handler;
 pub mod timestamp;
+/// Local trust manager, CRLs, and deterministic trust/revocation reports (SEC-007).
+pub mod trust_manager;
 pub mod x509;
 
+pub use certificate_encryption::{
+    ContentCipher, EnvelopedData, InMemoryKeyWrapProvider, KeyWrapProvider, OpenedEnvelope,
+    Recipient, RecipientEnvelopeKey, RecipientList, RecipientSelector, build_envelope,
+    open_envelope,
+};
 pub use cms::{
     InMemorySignatureProvider, SignatureProvider, SignedDataParams, SignerIdentifier,
     build_signed_data, digest, modpow_u128, verify_signed_data, verify_signed_data_detached,
@@ -100,6 +114,10 @@ pub use timestamp::{
     Accuracy, MessageImprint, TimestampPolicy, TimestampStatus, TimestampTokenParams,
     TimestampValidation, TimestampValidationContext, TstInfo, build_timestamp_token,
     encode_tst_info, parse_tst_info, validate_timestamp_token,
+};
+pub use trust_manager::{
+    Crl, RevocationEvidence, RevocationPolicy, RevocationReason, RevocationStatus,
+    RevokedCertificate, TrustDecision, TrustFailureReason, TrustManager, TrustReport,
 };
 pub use x509::{
     BasicConstraints, Certificate, CertificateVerifier, ChainReport, Clock, DigitalId,

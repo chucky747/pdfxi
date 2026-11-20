@@ -167,6 +167,42 @@ pub enum SecurityError {
     TimestampVersionUnsupported(u64),
     /// A required `TSTInfo` field was absent from an otherwise well-formed value.
     TimestampFieldMissing(&'static str),
+    /// A certificate-encryption envelope was built with no recipients.
+    CertificateEncryptionNoRecipients,
+    /// Two recipients in a certificate-encryption envelope shared a label or
+    /// certificate identity.
+    CertificateEncryptionDuplicateRecipient,
+    /// No recipient in the envelope matched the requested label.
+    CertificateEncryptionRecipientNotFound,
+    /// A recipient index was outside the envelope's recipient list.
+    CertificateEncryptionRecipientIndexOutOfRange {
+        /// The requested zero-based index.
+        index: usize,
+    },
+    /// A recipient certificate was not valid for key encapsulation.
+    CertificateEncryptionInvalidCertificate,
+    /// The caller's key-wrap provider failed to wrap a content-encryption key.
+    CertificateEncryptionKeyWrapFailed,
+    /// The caller's key-wrap provider failed to unwrap a content-encryption key.
+    CertificateEncryptionKeyUnwrapFailed,
+    /// The unwrapped key did not match the envelope's recipient commitment; the
+    /// envelope was opened with the wrong recipient's key.
+    CertificateEncryptionWrongRecipient,
+    /// The envelope's ciphertext or key commitment was structurally invalid.
+    CertificateEncryptionInvalidEnvelope,
+    /// The envelope's ciphertext failed content decryption or integrity checks.
+    CertificateEncryptionTamperedContent,
+    /// The plaintext supplied for certificate encryption was empty.
+    CertificateEncryptionEmptyPlaintext,
+    /// The content-encryption key length did not match the selected cipher.
+    CertificateEncryptionInvalidKeyLength,
+    /// The caller was not granted a permission required for this operation.
+    CertificateEncryptionPermissionDenied(&'static str),
+    /// A supplied certificate revocation list could not be parsed or was
+    /// internally inconsistent.
+    CrlMalformed,
+    /// The CRL's `thisUpdate` was later than its `nextUpdate`.
+    CrlInvalidWindow,
 }
 
 impl fmt::Display for SecurityError {
@@ -297,6 +333,65 @@ impl fmt::Display for SecurityError {
             Self::TimestampFieldMissing(name) => {
                 write!(f, "required TSTInfo field missing: {name}")
             }
+            Self::CertificateEncryptionNoRecipients => {
+                write!(f, "certificate encryption requires at least one recipient")
+            }
+            Self::CertificateEncryptionDuplicateRecipient => {
+                write!(
+                    f,
+                    "a recipient label or certificate was listed more than once"
+                )
+            }
+            Self::CertificateEncryptionRecipientNotFound => {
+                write!(f, "no envelope recipient matched the requested label")
+            }
+            Self::CertificateEncryptionRecipientIndexOutOfRange { index } => {
+                write!(f, "recipient index {index} is outside the envelope")
+            }
+            Self::CertificateEncryptionInvalidCertificate => {
+                write!(
+                    f,
+                    "recipient certificate is not valid for key encapsulation"
+                )
+            }
+            Self::CertificateEncryptionKeyWrapFailed => {
+                write!(
+                    f,
+                    "key-wrap provider failed to wrap the content-encryption key"
+                )
+            }
+            Self::CertificateEncryptionKeyUnwrapFailed => {
+                write!(
+                    f,
+                    "key-wrap provider failed to unwrap the content-encryption key"
+                )
+            }
+            Self::CertificateEncryptionWrongRecipient => {
+                write!(
+                    f,
+                    "envelope key commitment failed: wrong recipient or wrong key"
+                )
+            }
+            Self::CertificateEncryptionInvalidEnvelope => {
+                write!(f, "certificate-encryption envelope is malformed")
+            }
+            Self::CertificateEncryptionTamperedContent => {
+                write!(
+                    f,
+                    "certificate-encryption envelope content failed integrity checks"
+                )
+            }
+            Self::CertificateEncryptionEmptyPlaintext => {
+                write!(f, "certificate encryption requires non-empty plaintext")
+            }
+            Self::CertificateEncryptionInvalidKeyLength => {
+                write!(f, "content-encryption key length does not match the cipher")
+            }
+            Self::CertificateEncryptionPermissionDenied(operation) => {
+                write!(f, "permission denied for operation: {operation}")
+            }
+            Self::CrlMalformed => write!(f, "certificate revocation list is malformed"),
+            Self::CrlInvalidWindow => write!(f, "CRL thisUpdate is later than nextUpdate"),
         }
     }
 }
