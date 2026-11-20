@@ -134,6 +134,57 @@ impl ConformanceTarget {
             Self::PdfA1b | Self::PdfA2b | Self::PdfA3b | Self::PdfX4
         )
     }
+
+    /// Returns the catalog/document entries this target forbids.
+    ///
+    /// This is the documented subset the local normalizer can detect from a
+    /// classic-xref catalog. It is deliberately conservative: an entry is
+    /// listed when at least one clause of the target profile forbids it.
+    /// Detection is either reported or rejected according to the request's
+    /// [`ForbiddenEntryPolicy`]; the normalizer never silently strips content.
+    #[must_use]
+    pub const fn forbidden_entries(self) -> &'static [&'static str] {
+        match self {
+            Self::PdfA1b => &[
+                "/AA",
+                "/EmbeddedFiles",
+                "/JavaScript",
+                "/Launch",
+                "/Movie",
+                "/RichMedia",
+                "/Sound",
+            ],
+            Self::PdfA2b | Self::PdfA3b => {
+                &["/JavaScript", "/Launch", "/Movie", "/RichMedia", "/Sound"]
+            }
+            Self::PdfX1a => &[
+                "/AA",
+                "/AcroForm",
+                "/EmbeddedFiles",
+                "/JavaScript",
+                "/Movie",
+                "/RichMedia",
+                "/Sound",
+            ],
+            Self::PdfX4 => &[
+                "/AA",
+                "/EmbeddedFiles",
+                "/JavaScript",
+                "/Movie",
+                "/RichMedia",
+                "/Sound",
+            ],
+            Self::PdfE1 => &[
+                "/AA",
+                "/EmbeddedFiles",
+                "/JavaScript",
+                "/Launch",
+                "/Movie",
+                "/RichMedia",
+                "/Sound",
+            ],
+        }
+    }
 }
 
 impl fmt::Display for ConformanceTarget {
@@ -175,6 +226,54 @@ pub enum ConformanceExportError {
         /// The requested target label.
         label: String,
     },
+    /// A forbidden catalog entry was present and strict policy rejected it.
+    #[error("'{label}' forbids catalog entry {key}; remove it before export")]
+    ForbiddenEntry {
+        /// The requested target label.
+        label: String,
+        /// The forbidden entry that was found.
+        key: String,
+    },
+}
+
+/// How a conformance export treats catalog entries forbidden by the target.
+///
+/// [`Self::Report`] (the default) records each present entry as a warning
+/// finding so the caller can remove it; [`Self::Reject`] fails the export with
+/// [`ConformanceExportError::ForbiddenEntry`] before any bytes are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ForbiddenEntryPolicy {
+    /// Report present forbidden entries without changing the output.
+    #[default]
+    Report,
+    /// Reject the export when a forbidden entry is present.
+    Reject,
+}
+
+impl ForbiddenEntryPolicy {
+    /// Every policy, in a stable order.
+    pub const ALL: &'static [Self] = &[Self::Report, Self::Reject];
+
+    /// Return every policy in a stable order.
+    #[must_use]
+    pub fn all() -> &'static [Self] {
+        Self::ALL
+    }
+
+    /// Return a stable lowercase label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Report => "report",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+impl std::fmt::Display for ForbiddenEntryPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
 }
 
 /// A caller-supplied conformance export request.
@@ -187,6 +286,7 @@ pub enum ConformanceExportError {
 pub struct ConformanceRequest {
     target_label: String,
     output_intent_subtype: Option<String>,
+    forbidden_entry_policy: ForbiddenEntryPolicy,
 }
 
 impl ConformanceRequest {
@@ -196,6 +296,7 @@ impl ConformanceRequest {
         Self {
             target_label: target_label.into(),
             output_intent_subtype: None,
+            forbidden_entry_policy: ForbiddenEntryPolicy::default(),
         }
     }
 
@@ -203,6 +304,13 @@ impl ConformanceRequest {
     #[must_use]
     pub fn with_output_intent_subtype(mut self, subtype: impl Into<String>) -> Self {
         self.output_intent_subtype = Some(subtype.into());
+        self
+    }
+
+    /// Selects how present forbidden catalog entries are handled.
+    #[must_use]
+    pub const fn with_forbidden_entry_policy(mut self, policy: ForbiddenEntryPolicy) -> Self {
+        self.forbidden_entry_policy = policy;
         self
     }
 
@@ -216,6 +324,12 @@ impl ConformanceRequest {
     #[must_use]
     pub fn output_intent_subtype(&self) -> Option<&str> {
         self.output_intent_subtype.as_deref()
+    }
+
+    /// Returns the configured forbidden-entry policy.
+    #[must_use]
+    pub const fn forbidden_entry_policy(&self) -> ForbiddenEntryPolicy {
+        self.forbidden_entry_policy
     }
 
     /// Resolves and validates the request against the supported targets.
@@ -403,6 +517,7 @@ pub struct ConformanceExportReport {
     applied: Vec<ConformanceFinding>,
     source_version: String,
     output_version: String,
+    present_forbidden_entries: Vec<String>,
 }
 
 impl ConformanceExportReport {
@@ -422,6 +537,7 @@ impl ConformanceExportReport {
             applied: Vec::new(),
             source_version: format!("{}.{}", source_version.0, source_version.1),
             output_version: format!("{}.{}", output_version.0, output_version.1),
+            present_forbidden_entries: Vec::new(),
         }
     }
 
@@ -459,6 +575,12 @@ impl ConformanceExportReport {
     #[must_use]
     pub fn output_version(&self) -> &str {
         &self.output_version
+    }
+
+    /// Returns the forbidden catalog entries detected in the source, sorted.
+    #[must_use]
+    pub fn present_forbidden_entries(&self) -> &[String] {
+        &self.present_forbidden_entries
     }
 
     /// Always `false`: this exporter does not certify conformance.
@@ -616,6 +738,12 @@ impl ConformancePlan {
                 false,
             ));
         }
+        let forbidden = target.forbidden_entries().join(", ");
+        steps.push(PlanRequirement::new(
+            "PLAN.FORBIDDEN_ENTRIES",
+            format!("remove forbidden catalog entries: {forbidden}"),
+            false,
+        ));
         Self {
             target,
             minimum_version: format!("{major}.{minor}"),
@@ -633,7 +761,20 @@ impl ConformancePlan {
     /// output-intent subtype that does not match the target.
     pub fn for_request(request: &ConformanceRequest) -> Result<Self, ConformanceExportError> {
         let target = request.resolve()?;
-        Ok(Self::for_target(target))
+        let mut plan = Self::for_target(target);
+        if request.forbidden_entry_policy() == ForbiddenEntryPolicy::Reject {
+            let forbidden = target.forbidden_entries().join(", ");
+            for step in &mut plan.steps {
+                if step.code == "PLAN.FORBIDDEN_ENTRIES" {
+                    *step = PlanRequirement::new(
+                        "PLAN.FORBIDDEN_ENTRIES",
+                        format!("reject forbidden catalog entries: {forbidden}"),
+                        true,
+                    );
+                }
+            }
+        }
+        Ok(plan)
     }
 
     /// Returns the target this plan was built for.
@@ -995,6 +1136,67 @@ fn dict_has_key(dict: &[u8], key: &str) -> bool {
         }
     }
     false
+}
+
+/// Returns the byte index where the value of a top-level key starts.
+fn dict_value_start(dict: &[u8], key: &str) -> Option<usize> {
+    let mut pos = 2usize;
+    let mut depth = 1usize;
+    while pos < dict.len() {
+        match dict[pos] {
+            b'<' if dict.get(pos + 1) == Some(&b'<') => {
+                depth += 1;
+                pos += 2;
+            }
+            b'<' => {
+                pos += 1;
+                while pos < dict.len() && dict[pos] != b'>' {
+                    pos += 1;
+                }
+                pos = pos.saturating_add(1).min(dict.len());
+            }
+            b'>' if dict.get(pos + 1) == Some(&b'>') => {
+                depth -= 1;
+                pos += 2;
+            }
+            b'>' => pos += 1,
+            b'(' => pos = skip_literal_string(dict, pos),
+            b'/' if depth == 1 => {
+                if let Some((name, end)) = name_at(dict, pos) {
+                    if name == key {
+                        return Some(skip_ws(dict, end));
+                    }
+                    pos = end;
+                    continue;
+                }
+                pos += 1;
+            }
+            _ => pos += 1,
+        }
+    }
+    None
+}
+
+/// Collect the forbidden catalog keys present in `catalog`, in stable order.
+///
+/// Both direct entries and `/Names << /EmbeddedFiles ... >>` are considered.
+/// Every returned key carries a leading slash.
+fn catalog_forbidden_entries(catalog: &[u8], forbidden: &[&str]) -> Vec<String> {
+    let mut found: Vec<String> = forbidden
+        .iter()
+        .filter(|key| dict_has_key(catalog, &key[1..]))
+        .map(|key| (*key).to_owned())
+        .collect();
+    if let Some(start) = dict_value_start(catalog, "Names")
+        && let Some(end) = find_dict_end(catalog, start)
+        && dict_has_key(&catalog[start..end], "EmbeddedFiles")
+        && !found.iter().any(|key| key == "/EmbeddedFiles")
+    {
+        found.push("/EmbeddedFiles".to_owned());
+    }
+    found.sort();
+    found.dedup();
+    found
 }
 
 /// Inserts `entry` just before the dictionary's closing `>>`.
@@ -1451,6 +1653,31 @@ pub fn export_conformance_pdf(
     };
 
     let mut report = ConformanceExportReport::new(target, parsed.version, output_version);
+
+    // Forbidden-entry handling: detect from the parsed catalog, then either
+    // reject before writing anything or record an actionable warning. The
+    // normalizer never strips caller content silently.
+    let present = catalog_forbidden_entries(&parsed.catalog_dict, target.forbidden_entries());
+    if request.forbidden_entry_policy() == ForbiddenEntryPolicy::Reject
+        && let Some(key) = present.first()
+    {
+        return Err(ConformanceExportError::ForbiddenEntry {
+            label: target.label().to_owned(),
+            key: key.clone(),
+        });
+    }
+    report.present_forbidden_entries = present.clone();
+    for key in &present {
+        report.applied.push(ConformanceFinding::new(
+            ExportSeverity::Warning,
+            "EXPORT.FORBIDDEN_ENTRY_PRESENT",
+            format!(
+                "forbidden catalog entry {key} is present; remove it before asserting conformance"
+            ),
+            "catalog",
+        ));
+    }
+
     let mut catalog = parsed.catalog_dict.clone();
     let mut new_objects: Vec<Vec<u8>> = Vec::new();
     let first_appended = parsed.max_object.checked_add(1).ok_or_else(|| {
@@ -1930,7 +2157,8 @@ mod tests {
         let pdf_e = ConformancePlan::for_target(ConformanceTarget::PdfE1);
         assert!(pdf_e.required_metadata().is_empty());
         assert!(pdf_e.required_output_intent().is_none());
-        assert_eq!(pdf_e.steps().len(), 1);
+        // One version step plus the always-present forbidden-entry step.
+        assert_eq!(pdf_e.steps().len(), 2);
         assert_eq!(pdf_e.minimum_version(), "1.6");
     }
 
@@ -1988,6 +2216,159 @@ mod tests {
         assert!(plan.steps().iter().all(|step| !step.code().is_empty()));
         for line in plan.to_lines() {
             assert!(!line.is_empty());
+        }
+    }
+
+    #[test]
+    fn t0180_forbidden_entry_tables_cover_all_required_profiles() {
+        let required = [
+            (ConformanceTarget::PdfA1b, "/JavaScript"),
+            (ConformanceTarget::PdfA2b, "/JavaScript"),
+            (ConformanceTarget::PdfX1a, "/AcroForm"),
+            (ConformanceTarget::PdfX4, "/EmbeddedFiles"),
+            (ConformanceTarget::PdfE1, "/AA"),
+        ];
+        for (target, expected) in required {
+            assert!(
+                target.forbidden_entries().contains(&expected),
+                "{target} must forbid {expected}"
+            );
+            let mut sorted = target.forbidden_entries().to_vec();
+            sorted.sort_unstable();
+            assert_eq!(target.forbidden_entries(), sorted.as_slice());
+        }
+        assert_eq!(
+            ConformanceTarget::from_label("pdf/x-1a"),
+            Some(ConformanceTarget::PdfX1a)
+        );
+        assert_eq!(ForbiddenEntryPolicy::all().len(), 2);
+        assert_eq!(ForbiddenEntryPolicy::Reject.label(), "reject");
+    }
+
+    #[test]
+    fn t0180_plan_lists_forbidden_entries_in_stable_order() {
+        for &target in ConformanceTarget::all() {
+            let plan = ConformancePlan::for_target(target);
+            let step = plan
+                .steps()
+                .iter()
+                .find(|step| step.code() == "PLAN.FORBIDDEN_ENTRIES")
+                .unwrap_or_else(|| panic!("test: missing forbidden step for {target}"));
+            assert!(step.is_reported_only());
+            assert!(step.detail().contains("/JavaScript"));
+            assert!(!step.detail().is_empty());
+        }
+        let codes: Vec<&str> = ConformancePlan::for_target(ConformanceTarget::PdfX4)
+            .steps()
+            .iter()
+            .map(|step| step.code())
+            .collect();
+        assert_eq!(
+            codes,
+            vec![
+                "PLAN.VERSION_MINIMUM",
+                "PLAN.XMP_PRESENCE",
+                "PLAN.XMP_REAL_CONTENT",
+                "PLAN.OUTPUT_INTENT_PRESENCE",
+                "PLAN.OUTPUT_INTENT_SUBTYPE",
+                "PLAN.DEST_OUTPUT_PROFILE",
+                "PLAN.FORBIDDEN_ENTRIES",
+            ]
+        );
+    }
+
+    #[test]
+    fn t0180_export_reports_forbidden_catalog_entries() {
+        let source = fixture("1.7", "/JavaScript 9 0 R /AA << >> ", "");
+        // PDF/A-1b forbids both keys; PDF/A-2b permits /AA by design.
+        let result = export(&source, "PDF/A-1b")
+            .unwrap_or_else(|error| panic!("test: export failed: {error}"));
+        assert_eq!(
+            result.report.present_forbidden_entries(),
+            &["/AA".to_owned(), "/JavaScript".to_owned()]
+        );
+        let codes: Vec<&str> = result
+            .report
+            .applied()
+            .iter()
+            .map(ConformanceFinding::code)
+            .collect();
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "EXPORT.FORBIDDEN_ENTRY_PRESENT")
+                .count(),
+            2
+        );
+        assert!(!result.report.certification_claimed());
+    }
+
+    #[test]
+    fn t0180_nested_embedded_files_is_detected() {
+        let source = fixture("1.7", "/Names << /EmbeddedFiles 9 0 R >> ", "");
+        let result = export(&source, "PDF/X-4")
+            .unwrap_or_else(|error| panic!("test: export failed: {error}"));
+        assert_eq!(
+            result.report.present_forbidden_entries(),
+            &["/EmbeddedFiles".to_owned()]
+        );
+    }
+
+    #[test]
+    fn t0180_strict_forbidden_policy_is_a_typed_error() {
+        let source = fixture("1.7", "/JavaScript 9 0 R ", "");
+        let request = ConformanceRequest::new("PDF/A-2b")
+            .with_forbidden_entry_policy(ForbiddenEntryPolicy::Reject);
+        let error = export_conformance_pdf(&source, &request, &NormalizationOptions::all())
+            .expect_err("strict policy must reject");
+        assert_eq!(
+            error,
+            ConformanceExportError::ForbiddenEntry {
+                label: "PDF/A-2b".to_owned(),
+                key: "/JavaScript".to_owned()
+            }
+        );
+        assert!(error.to_string().contains("/JavaScript"));
+        assert_eq!(
+            request.forbidden_entry_policy(),
+            ForbiddenEntryPolicy::Reject
+        );
+    }
+
+    #[test]
+    fn t0180_strict_policy_marks_the_plan_step_enforced() {
+        let strict = ConformancePlan::for_request(
+            &ConformanceRequest::new("PDF/X-1a")
+                .with_forbidden_entry_policy(ForbiddenEntryPolicy::Reject),
+        )
+        .unwrap_or_else(|error| panic!("test: plan failed: {error}"));
+        let step = strict
+            .steps()
+            .iter()
+            .find(|step| step.code() == "PLAN.FORBIDDEN_ENTRIES")
+            .expect("test: forbidden step");
+        assert!(step.is_enforced());
+        assert!(step.detail().contains("reject"));
+        let report = strict.validation_report();
+        assert!(!report.certification_claimed());
+        assert!(report.findings().iter().any(|finding| {
+            finding.code() == "PLAN.FORBIDDEN_ENTRIES" && finding.severity() == ExportSeverity::Info
+        }));
+    }
+
+    #[test]
+    fn t0180_all_required_profiles_are_selectable_and_never_certify() {
+        for label in ["PDF/A-1b", "PDF/A-2b", "PDF/X-1a", "PDF/X-4", "PDF/E-1"] {
+            let request = ConformanceRequest::new(label);
+            let plan = ConformancePlan::for_request(&request)
+                .unwrap_or_else(|error| panic!("test: plan failed for {label}: {error}"));
+            assert_eq!(plan.target().label(), label);
+            assert!(!plan.validation_report().certification_claimed());
+            assert!(!plan.summary().contains("certification=true"));
+            let result = export(&fixture("1.7", "", ""), label)
+                .unwrap_or_else(|error| panic!("test: export failed for {label}: {error}"));
+            assert!(!result.report.certification_claimed());
+            assert_eq!(result.report.target().label(), label);
         }
     }
 }

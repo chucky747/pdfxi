@@ -127,6 +127,20 @@
 //! - [`portfolio_builder`] adds deterministic creation/customization of a
 //!   [`PortfolioManifest`] (CREATE-010): case-insensitive add/remove/edit of
 //!   named entries followed by validation and stable XML serialization.
+//! - [`portfolio_package`] closes the CREATE-010 package gap: caller-supplied
+//!   bytes become embedded-file streams, a byte-sorted `/EmbeddedFiles` name
+//!   tree, a `/Collection` dictionary, and deterministic catalog wiring in a
+//!   serializable [`PortfolioPackage`] object graph. No timestamps, file reads,
+//!   or random IDs enter the byte-stable classic-xref output.
+//! - [`extract_model`] supplies the shared extraction bridge used by the
+//!   export mappers: validated pages/runs/tables/text boxes, deterministic
+//!   reading order, typed unsupported constructs, and end-to-end plain-text
+//!   and RTF byte emitters with escaping and encoding.
+//! - [`office_export_plan`] maps an [`ExtractedDocument`] into a validated
+//!   [`office_export_plan::OfficeExportEnvelope`] for Word/Excel/PowerPoint
+//!   (EXPORT-001/002/003): deterministic ordering, paragraph/page numbering,
+//!   typed unsupported constructs, and a merged typed report. The in-process
+//!   ZIP writer in [`office_export`] is reused; no Office process is spawned.
 //! - [`postscript_contract`] turns the bounded DSC reader (CREATE-013) into a
 //!   deterministic page layout plan with supported-construct counts and typed
 //!   unsupported constructs; it is not a PostScript interpreter.
@@ -172,6 +186,7 @@ pub mod email;
 mod error;
 mod export;
 mod export_options;
+pub mod extract_model;
 pub mod html_export;
 pub mod image;
 mod json;
@@ -179,12 +194,14 @@ mod mime;
 pub mod ocr_pipeline;
 pub mod office_contract;
 pub mod office_export;
+pub mod office_export_plan;
 pub mod office_import;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
 pub mod portfolio;
 pub mod portfolio_builder;
+pub mod portfolio_package;
 pub mod postscript;
 pub mod postscript_contract;
 pub mod postscript_ingest;
@@ -206,8 +223,9 @@ pub use capture::{
 pub use conformance::{
     ConformanceExport, ConformanceExportError, ConformanceExportReport, ConformanceFinding,
     ConformancePlan, ConformancePlanReport, ConformanceRequest, ConformanceTarget, ExportSeverity,
-    NormalizationOptions, OutputIntentPlan, PlanRequirement, REPORTED_ONLY_CONSTRAINTS, SCOPE_NOTE,
-    export_conformance_pdf, looks_like_normalized_pdf, plan_conformance_export,
+    ForbiddenEntryPolicy, NormalizationOptions, OutputIntentPlan, PlanRequirement,
+    REPORTED_ONLY_CONSTRAINTS, SCOPE_NOTE, export_conformance_pdf, looks_like_normalized_pdf,
+    plan_conformance_export,
 };
 pub use converter::{Converter, MockConverter};
 pub use create::{
@@ -228,6 +246,11 @@ pub use email::{
 pub use error::ConversionError;
 pub use export::ExportKind;
 pub use export_options::{ExportOptionError, ExportPageSelection, LineEnding};
+pub use extract_model::{
+    EXTRACT_MAX_PAGES, EXTRACT_MAX_RUNS_PER_PAGE, EXTRACT_MAX_TEXT_LEN, ExtractModelError,
+    ExtractedDocument, ExtractedPage, ExtractedRun, ExtractedTable, ExtractedTextBox,
+    ExtractedUnsupported, TextModelExportError, emit_rtf_bytes, emit_text_bytes,
+};
 pub use html_export::{
     HtmlDocument, HtmlExportError, HtmlExportReport, HtmlFinding, HtmlLink,
     HtmlOptions as HtmlExportOptions, HtmlOutputMode, HtmlPage, HtmlSpan, HtmlStyle,
@@ -257,6 +280,10 @@ pub use office_export::{
     OfficeExport, OfficeExportError, OfficeExportReport, OfficeExporter, OfficeFormat, OfficePage,
     PptxExportError, PptxExporter, ReportedUnsupported, SheetMode, XlsxExportError, XlsxExporter,
 };
+pub use office_export_plan::{
+    OFFICE_PLAN_MAX_UNSUPPORTED, OfficeExportEnvelope, OfficePlanError, OfficePlanFormat,
+    OfficePlanOptions, OfficePlanUnsupported, build_office_export_plan,
+};
 pub use office_import::{
     OFFICE_BUNDLE_MAX_BYTES, OFFICE_BUNDLE_PAGE_HEIGHT, OFFICE_BUNDLE_PAGE_WIDTH, OfficeBundle,
     OfficeBundleKind, OfficeImport, OfficeImportError, OfficeImportFinding, OfficeImportReport,
@@ -276,6 +303,11 @@ pub use portfolio::{
     serialize_portfolio,
 };
 pub use portfolio_builder::{PortfolioBuildError, PortfolioBuilder};
+pub use portfolio_package::{
+    PACKAGE_MAX_FILE_BYTES, PACKAGE_MAX_TOTAL_BYTES, PACKAGE_PDF_VERSION, PackageFile, PdfObject,
+    PdfValue, PortfolioPackage, PortfolioPackageBuilder, PortfolioPackageError,
+    build_portfolio_package, serialize_portfolio_package,
+};
 pub use postscript::{
     MAX_PAGES as POSTSCRIPT_MAX_PAGES, MAX_TITLE_BYTES as POSTSCRIPT_MAX_TITLE_BYTES,
     MAX_TOTAL_CONTENT as POSTSCRIPT_MAX_TOTAL_CONTENT, PsContent, PsDocument, PsExportError,
