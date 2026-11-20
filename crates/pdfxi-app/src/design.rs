@@ -69,45 +69,45 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// Warm, paper-like light theme.
+    /// Neutral, paper-like light theme.
     #[must_use]
     pub fn light() -> Self {
         Self {
-            app_bg: Color32::from_rgb(0xf6, 0xf3, 0xef),
+            app_bg: Color32::from_rgb(0xf5, 0xf5, 0xf5),
             panel: Color32::from_rgb(0xff, 0xff, 0xff),
-            surface: Color32::from_rgb(0xf5, 0xf1, 0xed),
-            surface_hover: Color32::from_rgb(0xec, 0xe6, 0xe0),
-            canvas: Color32::from_rgb(0xec, 0xe7, 0xe1),
-            border: Color32::from_rgb(0xe5, 0xde, 0xd7),
-            text: Color32::from_rgb(0x20, 0x1c, 0x19),
-            text_muted: Color32::from_rgb(0x6f, 0x68, 0x62),
-            accent: Color32::from_rgb(0xc8, 0x34, 0x2b),
-            accent_soft: Color32::from_rgb(0xfb, 0xea, 0xe7),
-            accent_border: Color32::from_rgb(0xf0, 0xc9, 0xc4),
-            success: Color32::from_rgb(0x1f, 0x8a, 0x54),
+            surface: Color32::from_rgb(0xf2, 0xf2, 0xf2),
+            surface_hover: Color32::from_rgb(0xe8, 0xe8, 0xe8),
+            canvas: Color32::from_rgb(0xf0, 0xf0, 0xf0),
+            border: Color32::from_rgb(0xe0, 0xe0, 0xe0),
+            text: Color32::from_rgb(0x1a, 0x1a, 0x1a),
+            text_muted: Color32::from_rgb(0x6e, 0x6e, 0x6e),
+            accent: Color32::from_rgb(0xe4, 0x00, 0x2b),
+            accent_soft: Color32::from_rgb(0xfc, 0xe8, 0xe8),
+            accent_border: Color32::from_rgb(0xf5, 0xc2, 0xc7),
+            success: Color32::from_rgb(0x2e, 0x7d, 0x32),
             paper: Color32::from_rgb(0xff, 0xff, 0xff),
-            shadow: Color32::from_black_alpha(26),
+            shadow: Color32::from_black_alpha(24),
         }
     }
 
-    /// Deep charcoal dark theme.
+    /// Neutral charcoal dark theme.
     #[must_use]
     pub fn dark() -> Self {
         Self {
-            app_bg: Color32::from_rgb(0x14, 0x16, 0x1a),
-            panel: Color32::from_rgb(0x1c, 0x1f, 0x24),
-            surface: Color32::from_rgb(0x25, 0x29, 0x30),
-            surface_hover: Color32::from_rgb(0x30, 0x35, 0x3e),
-            canvas: Color32::from_rgb(0x0e, 0x10, 0x13),
-            border: Color32::from_rgb(0x31, 0x36, 0x3f),
-            text: Color32::from_rgb(0xf3, 0xf1, 0xee),
-            text_muted: Color32::from_rgb(0xa3, 0x9d, 0x96),
-            accent: Color32::from_rgb(0xf2, 0x55, 0x4a),
-            accent_soft: Color32::from_rgb(0x3a, 0x22, 0x21),
-            accent_border: Color32::from_rgb(0x5c, 0x33, 0x2f),
-            success: Color32::from_rgb(0x45, 0xc0, 0x7a),
-            paper: Color32::from_rgb(0xfb, 0xf9, 0xf6),
-            shadow: Color32::from_black_alpha(110),
+            app_bg: Color32::from_rgb(0x12, 0x12, 0x12),
+            panel: Color32::from_rgb(0x1e, 0x1e, 0x1e),
+            surface: Color32::from_rgb(0x26, 0x26, 0x26),
+            surface_hover: Color32::from_rgb(0x30, 0x30, 0x30),
+            canvas: Color32::from_rgb(0x0e, 0x0e, 0x0e),
+            border: Color32::from_rgb(0x33, 0x33, 0x33),
+            text: Color32::from_rgb(0xf5, 0xf5, 0xf5),
+            text_muted: Color32::from_rgb(0xa0, 0xa0, 0xa0),
+            accent: Color32::from_rgb(0xff, 0x4b, 0x4b),
+            accent_soft: Color32::from_rgb(0x3a, 0x1f, 0x24),
+            accent_border: Color32::from_rgb(0x5c, 0x2a, 0x30),
+            success: Color32::from_rgb(0x4c, 0xaf, 0x50),
+            paper: Color32::from_rgb(0xfa, 0xfa, 0xfa),
+            shadow: Color32::from_black_alpha(120),
         }
     }
 
@@ -123,8 +123,8 @@ impl Palette {
 
 /// Colors for the product title bar.
 ///
-/// The title bar stays dark in both themes, like a professional desktop
-/// application, so its contrast is independent of the body palette.
+/// The title bar follows the shell theme: light in light mode, charcoal in dark
+/// mode, so its contrast is independent of the body palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TitlePalette {
     /// Bar background.
@@ -153,15 +153,15 @@ impl TitlePalette {
     pub fn for_mode(mode: ThemeMode) -> Self {
         match mode {
             ThemeMode::Light => Self {
-                background: Color32::from_rgb(0x1e, 0x1c, 0x1a),
-                surface: Color32::from_rgb(0x2c, 0x29, 0x26),
-                hover: Color32::from_rgb(0x3a, 0x36, 0x32),
-                border: Color32::from_rgb(0x3a, 0x36, 0x32),
-                text: Color32::from_rgb(0xf7, 0xf3, 0xef),
-                text_muted: Color32::from_rgb(0xb8, 0xb0, 0xa8),
-                accent: Color32::from_rgb(0xe8, 0x4a, 0x3f),
-                accent_soft: Color32::from_rgb(0x4a, 0x2a, 0x26),
-                success: Color32::from_rgb(0x4a, 0xd1, 0x8a),
+                background: Color32::from_rgb(0xf5, 0xf5, 0xf5),
+                surface: Color32::from_rgb(0xff, 0xff, 0xff),
+                hover: Color32::from_rgb(0xe9, 0xe9, 0xe9),
+                border: Color32::from_rgb(0xe0, 0xe0, 0xe0),
+                text: Color32::from_rgb(0x1a, 0x1a, 0x1a),
+                text_muted: Color32::from_rgb(0x6e, 0x6e, 0x6e),
+                accent: Color32::from_rgb(0xe4, 0x00, 0x2b),
+                accent_soft: Color32::from_rgb(0xfc, 0xe8, 0xe8),
+                success: Color32::from_rgb(0x2e, 0x7d, 0x32),
             },
             ThemeMode::Dark => Self {
                 background: Color32::from_rgb(0x14, 0x16, 0x1a),
@@ -205,6 +205,8 @@ pub struct PaperPalette {
     pub cover_top: Color32,
     /// Bottom of the cover gradient.
     pub cover_bottom: Color32,
+    /// Raised card printed on the page.
+    pub card: Color32,
     /// Border around cards printed on the page.
     pub card_border: Color32,
     /// Shadow under cards printed on the page.
@@ -227,22 +229,24 @@ impl PaperPalette {
                 accent: Color32::from_rgb(0xc8, 0x34, 0x2b),
                 cover_top: Color32::from_rgb(0xc9, 0x2f, 0x27),
                 cover_bottom: Color32::from_rgb(0xf0, 0x8a, 0x7c),
+                card: Color32::from_rgb(0xff, 0xff, 0xff),
                 card_border: Color32::from_rgb(0xea, 0xdf, 0xd7),
                 shadow: Color32::from_black_alpha(20),
             },
             ThemeMode::Dark => Self {
-                paper: Color32::from_rgb(0xfa, 0xf7, 0xf3),
-                ink: Color32::from_rgb(0x24, 0x1f, 0x1c),
-                muted: Color32::from_rgb(0x6f, 0x68, 0x62),
-                rule: Color32::from_rgb(0xe4, 0xdd, 0xd6),
-                highlight: Color32::from_rgb(0xfb, 0xe3, 0xdf),
-                success: Color32::from_rgb(0x1f, 0x8a, 0x54),
-                success_bg: Color32::from_rgb(0xe6, 0xf4, 0xec),
-                accent: Color32::from_rgb(0xc8, 0x34, 0x2b),
-                cover_top: Color32::from_rgb(0xc9, 0x2f, 0x27),
-                cover_bottom: Color32::from_rgb(0xf0, 0x8a, 0x7c),
-                card_border: Color32::from_rgb(0xea, 0xdf, 0xd7),
-                shadow: Color32::from_black_alpha(20),
+                paper: Color32::from_rgb(0x1c, 0x1c, 0x1c),
+                ink: Color32::from_rgb(0xf5, 0xf5, 0xf5),
+                muted: Color32::from_rgb(0xa8, 0xa8, 0xa8),
+                rule: Color32::from_rgb(0x33, 0x33, 0x33),
+                highlight: Color32::from_rgb(0x4a, 0x20, 0x24),
+                success: Color32::from_rgb(0x66, 0xd6, 0x8a),
+                success_bg: Color32::from_rgb(0x1d, 0x3a, 0x28),
+                accent: Color32::from_rgb(0xff, 0x5c, 0x5c),
+                cover_top: Color32::from_rgb(0xb8, 0x24, 0x2a),
+                cover_bottom: Color32::from_rgb(0x5e, 0x12, 0x18),
+                card: Color32::from_rgb(0x26, 0x26, 0x26),
+                card_border: Color32::from_rgb(0x36, 0x36, 0x36),
+                shadow: Color32::from_black_alpha(90),
             },
         }
     }
@@ -340,6 +344,8 @@ pub enum Icon {
     Sparkle,
     /// Pen nib.
     Edit,
+    /// Highlighter marker.
+    Highlight,
     /// Signature swoosh.
     Sign,
     /// Stacked squares (organize).
@@ -511,6 +517,17 @@ pub fn icon(painter: &egui::Painter, rect: Rect, glyph: Icon, color: Color32) {
                 vec![p(-0.34, 0.34), p(-0.12, 0.30)],
                 thin,
             ));
+        }
+        Icon::Highlight => {
+            painter.add(egui::Shape::line(
+                vec![p(-0.30, 0.12), p(0.06, -0.26)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(-0.10, 0.30), p(0.26, -0.08)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(vec![p(-0.34, 0.34), p(0.30, 0.34)], thin));
         }
         Icon::Sign => {
             let mut points = Vec::new();
@@ -843,17 +860,17 @@ pub fn icon(painter: &egui::Painter, rect: Rect, glyph: Icon, color: Color32) {
 /// Fixed chrome sizes shared by the layout and the widgets.
 pub mod metrics {
     /// Title bar height.
-    pub const TITLE_BAR: f32 = 48.0;
+    pub const TITLE_BAR: f32 = 46.0;
     /// Command toolbar height.
-    pub const TOOL_BAR: f32 = 50.0;
+    pub const TOOL_BAR: f32 = 56.0;
     /// Left icon rail width.
-    pub const RAIL: f32 = 68.0;
+    pub const RAIL: f32 = 78.0;
     /// Pages panel width.
-    pub const PAGES: f32 = 218.0;
+    pub const PAGES: f32 = 206.0;
     /// Tools panel width.
-    pub const TOOLS: f32 = 300.0;
-    /// Bottom status/control bar height.
-    pub const STATUS_BAR: f32 = 46.0;
+    pub const TOOLS: f32 = 248.0;
+    /// Reserved bottom inset; the page controls float over the canvas.
+    pub const STATUS_BAR: f32 = 0.0;
     /// Minimum canvas width before panels collapse.
     pub const MIN_CANVAS: f32 = 320.0;
 }

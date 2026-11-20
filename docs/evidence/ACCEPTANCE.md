@@ -35,18 +35,21 @@ installed viewer and survives `cargo clean`.
 
 ## Product shell (UI) — 2026-11-20
 
-The default egui shell was replaced with a modern Acrobat-style product shell:
-custom title bar with tabs and window controls, compact icon rail, pages panel
-with thumbnails, rich document page, right tools panel with AI Assistant and
-Export cards, and a bottom page/zoom bar. Both themes are captured and the
-review is recorded.
+The default egui shell was replaced with a modern Acrobat-style product shell
+matched to the recovered acceptance image (image 2): theme-following title bar
+with traffic lights and two named tabs, rounded command pill, compact icon rail,
+pages panel with thumbnails and cloud storage, rich document page, right tools
+panel with AI Assistant and Export cards, and a floating page/zoom pill. Light
+and dark themes are captured, including a dark document page in dark mode, and
+the review is recorded.
 
 | Evidence | Path |
 |---|---|
-| Light acceptance screenshot | `docs/evidence/ui/light-v10.png` |
-| Dark acceptance screenshot | `docs/evidence/ui/dark-v10.png` |
+| Acceptance target (image 2) | `docs/evidence/ui/acceptance-b.png` |
+| Light acceptance screenshot | `docs/evidence/ui/light-v16.png` |
+| Dark acceptance screenshot | `docs/evidence/ui/dark-v16.png` |
 | Review process, checklist, findings, sign-off | `docs/design/UI_REVIEW.md` |
-| App tests | `cargo test -p pdfxi-app --features ui,pdfium` -> 490 passed |
+| App tests | `cargo test -p pdfxi-app --features ui,pdfium` -> 493 passed |
 | Lint/format | `cargo clippy ... -D warnings`, `cargo fmt --all --check` -> clean |
 
 The shell is the product surface for the verified library/CLI features; it is

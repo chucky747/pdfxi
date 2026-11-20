@@ -233,7 +233,7 @@ impl RailTab {
 }
 
 /// Placeholder page count assigned to a demo tab (no real document is loaded).
-pub const DEMO_PAGE_COUNT: usize = 3;
+pub const DEMO_PAGE_COUNT: usize = 12;
 
 /// How the shell handles a close request for a tab with unsaved changes.
 ///
@@ -814,8 +814,6 @@ pub struct PdfxiApp {
     assistant_query: String,
     /// Latest local assistant answer.
     assistant_answer: String,
-    /// Query typed into the command-bar tool search.
-    tool_search: String,
     /// Selected export format index in the export card.
     export_format: usize,
     /// Path currently bound to the PDFium renderer.
@@ -892,7 +890,14 @@ impl PdfxiApp {
     /// tabs explicitly.
     pub fn new_for_window() -> Self {
         let mut app = Self::new();
-        app.open_demo_tab();
+        // The reference opens with two named documents; use the same labels
+        // for the window demo while keeping the generic demo tab API intact.
+        let first = app.state.open_tab("Proposal_Final.pdf");
+        app.finish_new_tab(first);
+        let second = app.state.open_tab("Quarterly Report.pdf");
+        app.finish_new_tab(second);
+        app.activate_tab(first);
+        app.status = format!("Proposal_Final.pdf · {DEMO_PAGE_COUNT} pages · local preview");
         app
     }
 
@@ -968,17 +973,6 @@ impl PdfxiApp {
     }
 
     /// The page count used for demo tabs.
-    #[cfg(feature = "pdfium")]
-    fn demo_page_count(&self) -> usize {
-        self.pdfium_renderer
-            .as_ref()
-            .map_or(DEMO_PAGE_COUNT, |renderer| {
-                renderer.page_count().unwrap_or(DEMO_PAGE_COUNT)
-            })
-    }
-
-    /// The page count used for demo tabs (fixed placeholder without PDFium).
-    #[cfg(not(feature = "pdfium"))]
     fn demo_page_count(&self) -> usize {
         DEMO_PAGE_COUNT
     }
@@ -2657,6 +2651,7 @@ impl PdfxiApp {
     /// Render the status header and the placeholder canvas area.
     fn canvas_ui(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::for_mode(self.theme);
+        let canvas_rect = ui.max_rect();
         egui::Frame::new()
             .fill(palette.canvas)
             .inner_margin(egui::Margin::same(18))
@@ -2818,6 +2813,7 @@ impl PdfxiApp {
                 let copy_text = self.selection.selected_text(&self.demo_text);
                 ui.label(canvas_info_line(hit, &copy_text));
             });
+        self.floating_page_bar_ui(ui, canvas_rect, palette);
     }
 
     /// Apply keyboard shortcuts for the main find, copy, and view commands.
@@ -3209,29 +3205,33 @@ fn shell_icon_button(
     response
 }
 
-/// A window control in the custom title bar.
+/// A macOS-style traffic light in the custom title bar.
 ///
-/// The close button turns accent red on hover; the others use the title-bar
-/// hover surface. All three are 30 pt squares so the control cluster reads as
-/// one unit.
-fn title_window_button(
+/// The three lights are the window controls: red closes, amber minimizes and
+/// green toggles maximize. The glyph appears on hover so the bar stays quiet.
+fn traffic_light(
     ui: &mut egui::Ui,
-    palette: TitlePalette,
+    fill: egui::Color32,
     glyph: Icon,
-    close: bool,
+    hover_text: &str,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
-    if response.hovered() {
-        let fill = if close { palette.accent } else { palette.hover };
-        ui.painter().rect_filled(rect, 6.0, fill);
-    }
-    let color = if response.hovered() && close {
-        egui::Color32::WHITE
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    let center = rect.center();
+    let lit = if response.hovered() {
+        fill.gamma_multiply(1.08)
     } else {
-        palette.text_muted
+        fill
     };
-    icon(ui.painter(), rect.shrink(8.0), glyph, color);
-    response
+    ui.painter().circle_filled(center, 6.0, lit);
+    if response.hovered() {
+        icon(
+            ui.painter(),
+            egui::Rect::from_center_size(center, egui::Vec2::splat(7.0)),
+            glyph,
+            egui::Color32::from_black_alpha(160),
+        );
+    }
+    response.on_hover_text(hover_text)
 }
 
 /// A borderless icon button on the dark title bar.
@@ -3252,62 +3252,6 @@ fn title_icon_button(
     };
     icon(ui.painter(), rect.shrink(size * 0.27), glyph, color);
     response
-}
-
-/// A rounded, outlined button on the dark title bar.
-fn title_pill_button(
-    ui: &mut egui::Ui,
-    palette: TitlePalette,
-    glyph: Icon,
-    label: &str,
-) -> egui::Response {
-    let font = egui::FontId::proportional(11.0);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), palette.text);
-    let width = galley.size().x + 38.0;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
-    let background = if response.hovered() {
-        palette.hover
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, 15.0, background);
-    ui.painter().rect_stroke(
-        rect,
-        15.0,
-        egui::Stroke::new(1.0_f32, palette.border),
-        egui::StrokeKind::Inside,
-    );
-    icon(
-        ui.painter(),
-        egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 16.0, rect.center().y),
-            egui::Vec2::splat(13.0),
-        ),
-        glyph,
-        palette.text_muted,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + 26.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font,
-        palette.text,
-    );
-    response
-}
-
-/// Thin vertical separator on the dark title bar.
-fn title_divider(ui: &mut egui::Ui, palette: TitlePalette) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 22.0), egui::Sense::hover());
-    ui.painter().line_segment(
-        [
-            egui::pos2(rect.center().x, rect.top()),
-            egui::pos2(rect.center().x, rect.bottom()),
-        ],
-        egui::Stroke::new(1.0_f32, palette.border),
-    );
 }
 
 /// Toolbar button with an icon and label.
@@ -3352,19 +3296,12 @@ fn shell_tool_button(
     response
 }
 
-/// Per-tool icon tint, echoing the color-coded tools in Acrobat.
-fn tool_icon_color(glyph: Icon, palette: Palette) -> egui::Color32 {
-    match glyph {
-        Icon::Edit => palette.accent,
-        Icon::Comment => egui::Color32::from_rgb(0xd9, 0x8a, 0x2b),
-        Icon::Sign => egui::Color32::from_rgb(0x8b, 0x5c, 0xf6),
-        Icon::Organize => egui::Color32::from_rgb(0x3b, 0x82, 0xf6),
-        Icon::Export => egui::Color32::from_rgb(0x14, 0xb8, 0xa6),
-        Icon::Convert => egui::Color32::from_rgb(0x22, 0xc5, 0x5e),
-        Icon::Combine => egui::Color32::from_rgb(0xf9, 0x73, 0x16),
-        Icon::Protect => egui::Color32::from_rgb(0x63, 0x66, 0xf1),
-        _ => palette.text_muted,
-    }
+/// Per-tool icon tint.
+///
+/// The reference keeps the tool list monochrome so the active row is the only
+/// red element. Colour is reserved for selection, status and the AI accent.
+fn tool_icon_color(_glyph: Icon, palette: Palette) -> egui::Color32 {
+    palette.text
 }
 
 /// One tool row in the right panel.
@@ -3533,11 +3470,6 @@ impl PdfxiApp {
                 .show(ctx, |ui| self.find_ui(ui));
         }
 
-        egui::TopBottomPanel::bottom("shell_status")
-            .exact_height(metrics::STATUS_BAR)
-            .frame(shell_panel_frame(palette, 16))
-            .show(ctx, |ui| self.status_bar_ui(ui, palette));
-
         egui::SidePanel::left("shell_rail")
             .exact_width(metrics::RAIL)
             .resizable(false)
@@ -3605,36 +3537,69 @@ impl PdfxiApp {
         }
 
         ui.horizontal_centered(|ui| {
-            let (logo, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
-            ui.painter().rect_filled(logo, 8.0, palette.accent);
+            // macOS-style window controls on the left, like the reference.
+            let close = traffic_light(
+                ui,
+                egui::Color32::from_rgb(0xff, 0x5f, 0x57),
+                Icon::Close,
+                "Close",
+            );
+            let minimize = traffic_light(
+                ui,
+                egui::Color32::from_rgb(0xfe, 0xbc, 0x2e),
+                Icon::Minimize,
+                "Minimize",
+            );
+            let maximize = traffic_light(
+                ui,
+                egui::Color32::from_rgb(0x28, 0xc8, 0x40),
+                Icon::Maximize,
+                "Maximize",
+            );
+            if close.clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if minimize.clicked() {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            if maximize.clicked() {
+                let maximized = ui
+                    .ctx()
+                    .input(|input| input.viewport().maximized.unwrap_or(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            ui.add_space(10.0);
+
+            let (logo, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+            ui.painter().rect_filled(logo, 6.0, palette.accent);
             icon(
                 ui.painter(),
-                logo.shrink(7.0),
+                logo.shrink(5.5),
                 Icon::File,
                 egui::Color32::WHITE,
             );
-            ui.add_space(8.0);
+            ui.add_space(7.0);
             ui.label(
                 egui::RichText::new("PDFXI")
-                    .size(15.0)
+                    .size(13.5)
                     .strong()
                     .color(palette.text),
             );
-            ui.add_space(12.0);
-            title_divider(ui, palette);
-            ui.add_space(4.0);
+            ui.add_space(14.0);
 
             let tabs = self.tab_strip_snapshot();
             let mut activate = None;
-            let mut close = None;
+            let mut close_tab = None;
             for (index, (id, title, active)) in tabs.iter().enumerate() {
                 match self.title_tab(ui, palette, index, *id, title, *active) {
                     TabAction::None => {}
                     TabAction::Activate => activate = Some(*id),
-                    TabAction::Close => close = Some(*id),
+                    TabAction::Close => close_tab = Some(*id),
                 }
             }
-            if title_icon_button(ui, palette, Icon::Plus, 28.0)
+            if title_icon_button(ui, palette, Icon::Plus, 26.0)
                 .on_hover_text("New demo document")
                 .clicked()
             {
@@ -3643,47 +3608,23 @@ impl PdfxiApp {
             if let Some(id) = activate {
                 self.activate_tab(id);
             }
-            if let Some(id) = close {
+            if let Some(id) = close_tab {
                 self.close_tab_by_id(id);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if title_window_button(ui, palette, Icon::Close, true)
-                    .on_hover_text("Close")
-                    .clicked()
-                {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                let maximized = ui
-                    .ctx()
-                    .input(|input| input.viewport().maximized.unwrap_or(false));
-                if title_window_button(ui, palette, Icon::Maximize, false)
-                    .on_hover_text(if maximized { "Restore" } else { "Maximize" })
-                    .clicked()
-                {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                }
-                if title_window_button(ui, palette, Icon::Minimize, false)
-                    .on_hover_text("Minimize")
-                    .clicked()
-                {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                }
-                title_divider(ui, palette);
                 let (avatar, _) =
-                    ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                    ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
                 ui.painter()
-                    .circle_filled(avatar.center(), 14.0, palette.accent_soft);
+                    .circle_filled(avatar.center(), 13.0, palette.accent_soft);
                 ui.painter().text(
                     avatar.center(),
                     egui::Align2::CENTER_CENTER,
                     "A",
-                    egui::FontId::proportional(12.0),
+                    egui::FontId::proportional(11.0),
                     palette.accent,
                 );
-                if title_icon_button(ui, palette, Icon::Help, 28.0)
+                if title_icon_button(ui, palette, Icon::Help, 26.0)
                     .on_hover_text("Help")
                     .clicked()
                 {
@@ -3691,7 +3632,7 @@ impl PdfxiApp {
                         "Open a PDF, press Ctrl+F to find, and use the rail for pages and tools."
                             .to_owned();
                 }
-                if title_icon_button(ui, palette, Icon::Bell, 28.0)
+                if title_icon_button(ui, palette, Icon::Bell, 26.0)
                     .on_hover_text("Notifications")
                     .clicked()
                 {
@@ -3701,25 +3642,12 @@ impl PdfxiApp {
                     ThemeMode::Light => Icon::Moon,
                     ThemeMode::Dark => Icon::Sun,
                 };
-                if title_icon_button(ui, palette, theme_glyph, 28.0)
+                if title_icon_button(ui, palette, theme_glyph, 26.0)
                     .on_hover_text("Switch light/dark")
                     .clicked()
                 {
                     self.theme = self.theme.toggled();
                 }
-                if title_pill_button(ui, palette, Icon::Share, "Share").clicked() {
-                    self.status =
-                        "Sharing is local-only in this build; export or print to hand off a copy."
-                            .to_owned();
-                }
-                ui.label(
-                    egui::RichText::new("Saved")
-                        .size(9.5)
-                        .color(palette.text_muted),
-                );
-                let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
-                ui.painter()
-                    .circle_filled(dot.center(), 3.0, palette.success);
             });
         });
     }
@@ -3737,11 +3665,11 @@ impl PdfxiApp {
         if title.chars().count() > 28 {
             label.push('…');
         }
-        let font = egui::FontId::proportional(12.0);
+        let font = egui::FontId::proportional(11.5);
         let galley = ui
             .painter()
             .layout_no_wrap(label.clone(), font.clone(), palette.text);
-        let width = (galley.size().x + 56.0).clamp(140.0, 250.0);
+        let width = (galley.size().x + 54.0).clamp(132.0, 232.0);
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
         if active {
@@ -3752,21 +3680,13 @@ impl PdfxiApp {
                 egui::Stroke::new(1.0_f32, palette.border),
                 egui::StrokeKind::Inside,
             );
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(
-                    egui::pos2(rect.left() + 12.0, rect.top() + 1.0),
-                    egui::vec2(rect.width() - 24.0, 2.0),
-                ),
-                1.0,
-                palette.accent,
-            );
         } else if response.hovered() {
             ui.painter().rect_filled(rect, 8.0, palette.hover);
         }
         icon(
             ui.painter(),
             egui::Rect::from_center_size(
-                egui::pos2(rect.left() + 16.0, rect.center().y),
+                egui::pos2(rect.left() + 15.0, rect.center().y),
                 egui::Vec2::splat(13.0),
             ),
             Icon::File,
@@ -3777,7 +3697,7 @@ impl PdfxiApp {
             },
         );
         ui.painter().text(
-            egui::pos2(rect.left() + 27.0, rect.center().y),
+            egui::pos2(rect.left() + 26.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
             font,
@@ -3787,27 +3707,29 @@ impl PdfxiApp {
                 palette.text_muted
             },
         );
-        let close_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.right() - 14.0, rect.center().y),
-            egui::Vec2::splat(16.0),
-        );
-        let close_response = ui.interact(
-            close_rect,
-            egui::Id::new(("tab-close", index)),
-            egui::Sense::click(),
-        );
-        if close_response.hovered() {
-            ui.painter()
-                .circle_filled(close_rect.center(), 7.0, palette.hover);
-        }
-        icon(
-            ui.painter(),
-            close_rect.shrink(4.0),
-            Icon::Close,
-            palette.text_muted,
-        );
-        if close_response.clicked() {
-            return TabAction::Close;
+        if active || response.hovered() {
+            let close_rect = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 13.0, rect.center().y),
+                egui::Vec2::splat(16.0),
+            );
+            let close_response = ui.interact(
+                close_rect,
+                egui::Id::new(("tab-close", index)),
+                egui::Sense::click(),
+            );
+            if close_response.hovered() {
+                ui.painter()
+                    .circle_filled(close_rect.center(), 7.0, palette.hover);
+            }
+            icon(
+                ui.painter(),
+                close_rect.shrink(4.5),
+                Icon::Close,
+                palette.text_muted,
+            );
+            if close_response.clicked() {
+                return TabAction::Close;
+            }
         }
         if response.clicked() {
             return TabAction::Activate;
@@ -3826,145 +3748,134 @@ impl PdfxiApp {
         );
 
         ui.horizontal_centered(|ui| {
-            if shell_icon_button(ui, palette, Icon::ArrowLeft, 30.0)
-                .on_hover_text("Previous page")
+            // Undo/redo sit outside the command pill, as in the reference.
+            if shell_icon_button(ui, palette, Icon::ArrowLeft, 28.0)
+                .on_hover_text("Undo")
                 .clicked()
             {
-                self.step_page(-1);
+                self.status = "Undo history is not available in this preview".to_owned();
             }
-            if shell_icon_button(ui, palette, Icon::ArrowRight, 30.0)
-                .on_hover_text("Next page")
+            if shell_icon_button(ui, palette, Icon::ArrowRight, 28.0)
+                .on_hover_text("Redo")
                 .clicked()
             {
-                self.step_page(1);
+                self.status = "Redo history is not available in this preview".to_owned();
             }
-            shell_divider(ui, palette);
-            let tool = self.state.active_tool();
-            if shell_tool_button(
-                ui,
-                palette,
-                Icon::Edit,
-                "Edit",
-                tool == Toolset::TextSelection,
-            )
-            .clicked()
-            {
-                self.select_tool(Toolset::TextSelection);
-            }
-            if shell_tool_button(
-                ui,
-                palette,
-                Icon::Comment,
-                "Comment",
-                tool == Toolset::Highlight,
-            )
-            .clicked()
-            {
-                self.select_tool(Toolset::Highlight);
-            }
-            if shell_tool_button(
-                ui,
-                palette,
-                Icon::Sign,
-                "Fill & Sign",
-                tool == Toolset::FormFill,
-            )
-            .clicked()
-            {
-                self.select_tool(Toolset::FormFill);
-            }
-            if shell_tool_button(
-                ui,
-                palette,
-                Icon::Organize,
-                "Organize",
-                tool == Toolset::Measure,
-            )
-            .clicked()
-            {
-                self.rail = RailTab::Pages;
-                self.select_tool(Toolset::Measure);
-            }
-            ui.menu_button(
-                egui::RichText::new("Export").size(12.0).color(palette.text),
-                |ui| {
-                    for (index, format) in EXPORT_FORMATS.iter().enumerate() {
-                        if ui
-                            .selectable_label(self.export_format == index, *format)
+            ui.add_space(8.0);
+
+            let pill_width = (ui.available_width() - 4.0).max(320.0);
+            egui::Frame::new()
+                .fill(palette.panel)
+                .stroke(egui::Stroke::new(1.0_f32, palette.border))
+                .corner_radius(22.0)
+                .inner_margin(egui::Margin {
+                    left: 6,
+                    right: 6,
+                    top: 3,
+                    bottom: 3,
+                })
+                .show(ui, |ui| {
+                    ui.set_width(pill_width);
+                    ui.horizontal_centered(|ui| {
+                        let tool = self.state.active_tool();
+                        if shell_tool_button(
+                            ui,
+                            palette,
+                            Icon::Edit,
+                            "Edit",
+                            tool == Toolset::TextSelection,
+                        )
+                        .clicked()
+                        {
+                            self.select_tool(Toolset::TextSelection);
+                        }
+                        if shell_tool_button(
+                            ui,
+                            palette,
+                            Icon::Comment,
+                            "Comment",
+                            self.rail == RailTab::Comments,
+                        )
+                        .clicked()
+                        {
+                            self.rail = RailTab::Comments;
+                        }
+                        if shell_tool_button(
+                            ui,
+                            palette,
+                            Icon::Highlight,
+                            "Highlight",
+                            tool == Toolset::Highlight,
+                        )
+                        .clicked()
+                        {
+                            self.select_tool(Toolset::Highlight);
+                        }
+                        if shell_tool_button(
+                            ui,
+                            palette,
+                            Icon::Sign,
+                            "Sign",
+                            tool == Toolset::FormFill,
+                        )
+                        .clicked()
+                        {
+                            self.select_tool(Toolset::FormFill);
+                        }
+                        if shell_tool_button(ui, palette, Icon::Organize, "Organize", false)
                             .clicked()
                         {
-                            self.export_format = index;
-                            self.status = format!("Export format set to {format}");
-                            ui.close();
+                            self.rail = RailTab::Pages;
                         }
-                    }
-                },
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (pill, pill_response) =
-                    ui.allocate_exact_size(egui::vec2(158.0, 32.0), egui::Sense::click());
-                ui.painter().rect_filled(pill, 16.0, palette.accent);
-                icon(
-                    ui.painter(),
-                    egui::Rect::from_center_size(
-                        egui::pos2(pill.left() + 20.0, pill.center().y),
-                        egui::Vec2::splat(14.0),
-                    ),
-                    Icon::Sparkle,
-                    egui::Color32::WHITE,
-                );
-                ui.painter().text(
-                    egui::pos2(pill.left() + 32.0, pill.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    "AI Assistant",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::WHITE,
-                );
-                if pill_response.clicked() {
-                    self.rail = RailTab::Assistant;
-                }
-                let search_response = egui::Frame::new()
-                    .fill(palette.surface)
-                    .corner_radius(15.0)
-                    .inner_margin(egui::Margin {
-                        left: 9,
-                        right: 6,
-                        top: 2,
-                        bottom: 2,
-                    })
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let (icon_rect, _) = ui
-                                .allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                            icon(ui.painter(), icon_rect, Icon::Search, palette.text_muted);
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.tool_search)
-                                    .frame(false)
-                                    .hint_text("Search tools")
-                                    .desired_width(150.0),
-                            )
-                        })
-                        .inner
-                    })
-                    .inner;
-                if search_response.lost_focus()
-                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                {
-                    self.status = format!("Search tools: {}", self.tool_search);
-                }
-                if shell_icon_button(ui, palette, Icon::Search, 30.0)
-                    .on_hover_text("Find (Ctrl+F)")
-                    .clicked()
-                {
-                    self.open_find();
-                }
-                if shell_icon_button(ui, palette, Icon::Print, 30.0)
-                    .on_hover_text("Print")
-                    .clicked()
-                {
-                    self.open_print_dialog();
-                }
-            });
+                        let (export_icon, _) =
+                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                        icon(ui.painter(), export_icon, Icon::Export, palette.text);
+                        ui.menu_button(
+                            egui::RichText::new("Export").size(12.0).color(palette.text),
+                            |ui| {
+                                for (index, format) in EXPORT_FORMATS.iter().enumerate() {
+                                    if ui
+                                        .selectable_label(self.export_format == index, *format)
+                                        .clicked()
+                                    {
+                                        self.export_format = index;
+                                        self.status = format!("Export format set to {format}");
+                                        ui.close();
+                                    }
+                                }
+                            },
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let (pill, pill_response) = ui
+                                .allocate_exact_size(egui::vec2(122.0, 30.0), egui::Sense::click());
+                            let fill = if pill_response.hovered() {
+                                palette.accent_border
+                            } else {
+                                palette.accent_soft
+                            };
+                            ui.painter().rect_filled(pill, 15.0, fill);
+                            icon(
+                                ui.painter(),
+                                egui::Rect::from_center_size(
+                                    egui::pos2(pill.left() + 17.0, pill.center().y),
+                                    egui::Vec2::splat(14.0),
+                                ),
+                                Icon::Sparkle,
+                                palette.accent,
+                            );
+                            ui.painter().text(
+                                egui::pos2(pill.left() + 29.0, pill.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                "AI Assistant",
+                                egui::FontId::proportional(11.0),
+                                palette.accent,
+                            );
+                            if pill_response.clicked() {
+                                self.rail = RailTab::Assistant;
+                            }
+                        });
+                    });
+                });
         });
     }
 
@@ -3978,21 +3889,22 @@ impl PdfxiApp {
             egui::Stroke::new(1.0_f32, palette.border),
         );
         ui.vertical_centered(|ui| {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
+            let (logo, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+            ui.painter().rect_filled(logo, 8.0, palette.accent);
+            icon(
+                ui.painter(),
+                logo.shrink(7.0),
+                Icon::File,
+                egui::Color32::WHITE,
+            );
+            ui.add_space(12.0);
             for tab in RailTab::ALL {
                 let selected = self.rail == tab;
                 let (item, response) =
-                    ui.allocate_exact_size(egui::vec2(54.0, 52.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(64.0, 54.0), egui::Sense::click());
                 if selected {
                     ui.painter().rect_filled(item, 10.0, palette.accent_soft);
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(
-                            egui::pos2(item.left() + 3.0, item.center().y - 11.0),
-                            egui::vec2(3.0, 22.0),
-                        ),
-                        2.0,
-                        palette.accent,
-                    );
                 } else if response.hovered() {
                     ui.painter().rect_filled(item, 10.0, palette.surface);
                 }
@@ -4016,10 +3928,10 @@ impl PdfxiApp {
                     tab.label()
                 };
                 ui.painter().text(
-                    egui::pos2(item.center().x, item.top() + 37.0),
+                    egui::pos2(item.center().x, item.top() + 39.0),
                     egui::Align2::CENTER_CENTER,
                     label,
-                    egui::FontId::proportional(9.5),
+                    egui::FontId::proportional(9.0),
                     color,
                 );
                 if tab == RailTab::Comments {
@@ -4040,7 +3952,7 @@ impl PdfxiApp {
                 if response.clicked() {
                     self.rail = tab;
                 }
-                ui.add_space(3.0);
+                ui.add_space(4.0);
             }
         });
     }
@@ -4067,20 +3979,11 @@ impl PdfxiApp {
     }
 
     fn pages_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let (count, current, zoom) = self
+        let (count, current) = self
             .state
             .active_tab()
-            .map(|tab| {
-                (
-                    tab.page_count(),
-                    tab.current_page(),
-                    match tab.zoom().scale() {
-                        Some(scale) => format!("{:.0}%", scale * 100.0),
-                        None => "Fit".to_owned(),
-                    },
-                )
-            })
-            .unwrap_or((0, 0, "—".to_owned()));
+            .map(|tab| (tab.page_count(), tab.current_page()))
+            .unwrap_or((0, 0));
 
         ui.horizontal(|ui| {
             ui.label(
@@ -4089,42 +3992,26 @@ impl PdfxiApp {
                     .strong()
                     .color(palette.text),
             );
-            let badge = format!("{count}");
-            let badge_font = egui::FontId::proportional(9.0);
-            let galley =
-                ui.painter()
-                    .layout_no_wrap(badge.clone(), badge_font.clone(), palette.text_muted);
-            let (badge_rect, _) = ui.allocate_exact_size(
-                egui::vec2(galley.size().x + 14.0, 18.0),
-                egui::Sense::hover(),
-            );
-            ui.painter().rect_filled(badge_rect, 9.0, palette.surface);
-            ui.painter().text(
-                badge_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                badge,
-                badge_font,
-                palette.text_muted,
+            ui.label(
+                egui::RichText::new(format!("({count})"))
+                    .size(10.0)
+                    .color(palette.text_muted),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let _ = shell_icon_button(ui, palette, Icon::More, 22.0);
-                if shell_icon_button(ui, palette, Icon::Plus, 22.0)
+                if shell_icon_button(ui, palette, Icon::Plus, 20.0)
                     .on_hover_text("Add page")
                     .clicked()
                 {
                     self.status =
                         "Page insertion is available through the pdfxi page plan".to_owned();
                 }
+                let _ = shell_icon_button(ui, palette, Icon::List, 20.0);
+                let _ = shell_icon_button(ui, palette, Icon::Grid, 20.0);
             });
         });
-        ui.label(
-            egui::RichText::new(format!("{count} pages · {zoom}"))
-                .size(10.0)
-                .color(palette.text_muted),
-        );
         ui.add_space(6.0);
 
-        let footer_height = 46.0;
+        let footer_height = 66.0;
         let scroll_height = (ui.available_height() - footer_height).max(150.0);
         egui::ScrollArea::vertical()
             .max_height(scroll_height)
@@ -4133,26 +4020,25 @@ impl PdfxiApp {
                 for page in 0..count {
                     let width = ui.available_width();
                     let (slot, response) =
-                        ui.allocate_exact_size(egui::vec2(width, 172.0), egui::Sense::click());
-                    if page == current {
-                        ui.painter().rect_filled(slot, 10.0, palette.accent_soft);
-                    } else if response.hovered() {
-                        ui.painter().rect_filled(slot, 10.0, palette.surface);
+                        ui.allocate_exact_size(egui::vec2(width, 158.0), egui::Sense::click());
+                    if response.hovered() {
+                        ui.painter().rect_filled(slot, 8.0, palette.surface);
                     }
                     let paper = egui::Rect::from_center_size(
-                        egui::pos2(slot.center().x, slot.top() + 74.0),
-                        egui::vec2(118.0, 152.0),
+                        egui::pos2(slot.center().x, slot.top() + 68.0),
+                        egui::vec2(104.0, 136.0),
                     );
                     ui.painter().rect_filled(
                         paper.translate(egui::vec2(0.0, 3.0)).expand(1.5),
-                        4.0,
+                        3.0,
                         palette.shadow,
                     );
-                    ui.painter().rect_filled(paper, 4.0, palette.paper);
+                    ui.painter()
+                        .rect_filled(paper, 3.0, PaperPalette::for_mode(self.theme).paper);
                     if page == current {
                         ui.painter().rect_stroke(
                             paper,
-                            4.0,
+                            3.0,
                             egui::Stroke::new(2.0_f32, palette.accent),
                             egui::StrokeKind::Outside,
                         );
@@ -4163,10 +4049,10 @@ impl PdfxiApp {
                         self.paint_generic_thumb(ui.painter(), paper.shrink(6.0), palette);
                     }
                     ui.painter().text(
-                        egui::pos2(slot.center().x, slot.bottom() - 10.0),
+                        egui::pos2(slot.center().x, slot.bottom() - 8.0),
                         egui::Align2::CENTER_CENTER,
                         format!("{}", page + 1),
-                        egui::FontId::proportional(9.5),
+                        egui::FontId::proportional(9.0),
                         if page == current {
                             palette.accent
                         } else {
@@ -4190,30 +4076,26 @@ impl PdfxiApp {
             });
 
         ui.add_space(4.0);
-        egui::Frame::new()
-            .fill(palette.surface)
-            .corner_radius(10.0)
-            .inner_margin(egui::Margin::same(10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let (lock, _) =
-                        ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                    icon(ui.painter(), lock, Icon::Lock, palette.text_muted);
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new("Local document")
-                                .size(10.0)
-                                .strong()
-                                .color(palette.text),
-                        );
-                        ui.label(
-                            egui::RichText::new("Nothing leaves this device")
-                                .size(9.0)
-                                .color(palette.text_muted),
-                        );
-                    });
-                });
-            });
+        ui.label(
+            egui::RichText::new("Cloud storage")
+                .size(10.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.label(
+            egui::RichText::new("12.4 GB of 100 GB")
+                .size(9.0)
+                .color(palette.text_muted),
+        );
+        ui.add_space(4.0);
+        let (bar, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.0), egui::Sense::hover());
+        ui.painter().rect_filled(bar, 2.0, palette.surface_hover);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * 0.124, 4.0)),
+            2.0,
+            palette.accent,
+        );
     }
 
     fn home_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
@@ -4312,7 +4194,7 @@ impl PdfxiApp {
         ui.painter().text(
             egui::pos2(recent.left() + 32.0, recent.center().y + 8.0),
             egui::Align2::LEFT_CENTER,
-            "3 pages · local preview",
+            format!("{DEMO_PAGE_COUNT} pages · local preview"),
             egui::FontId::proportional(9.0),
             palette.text_muted,
         );
@@ -4610,7 +4492,12 @@ impl PdfxiApp {
                     .color(palette.text),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let _ = shell_icon_button(ui, palette, Icon::Search, 22.0);
+                if shell_icon_button(ui, palette, Icon::Search, 22.0)
+                    .on_hover_text("Search tools")
+                    .clicked()
+                {
+                    self.open_find();
+                }
             });
         });
         ui.add_space(6.0);
@@ -4618,8 +4505,6 @@ impl PdfxiApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
-                shell_section_label(ui, palette, "ALL TOOLS");
-                ui.add_space(2.0);
                 if tool_row(ui, palette, Icon::Edit, "Edit PDF", true).clicked() {
                     self.select_tool(Toolset::TextSelection);
                 }
@@ -4685,119 +4570,118 @@ impl PdfxiApp {
         self.select_thumbnail_page(target);
     }
 
-    fn status_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let panel = ui.max_rect();
-        ui.painter().line_segment(
-            [
-                egui::pos2(panel.left(), panel.top()),
-                egui::pos2(panel.right(), panel.top()),
-            ],
-            egui::Stroke::new(1.0_f32, palette.border),
+    /// Floating page and zoom controls over the bottom of the canvas.
+    ///
+    /// The reference keeps the page controls in a compact pill instead of a
+    /// full-width status bar, so the canvas keeps its full height.
+    fn floating_page_bar_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        canvas_rect: egui::Rect,
+        palette: Palette,
+    ) {
+        let width = 386.0_f32;
+        let pos = egui::pos2(
+            canvas_rect.center().x - width / 2.0,
+            canvas_rect.bottom() - 54.0,
         );
-
-        ui.horizontal_centered(|ui| {
-            if shell_icon_button(ui, palette, Icon::ChevronLeft, 26.0)
-                .on_hover_text("Previous page")
-                .clicked()
-            {
-                self.step_page(-1);
-            }
-            let (current, count) = self
-                .state
-                .active_tab()
-                .map(|tab| (tab.current_page(), tab.page_count()))
-                .unwrap_or((0, 0));
-            let (page_pill, _) =
-                ui.allocate_exact_size(egui::vec2(58.0, 24.0), egui::Sense::hover());
-            ui.painter().rect_filled(page_pill, 6.0, palette.surface);
-            ui.painter().text(
-                page_pill.center(),
-                egui::Align2::CENTER_CENTER,
-                format!("{} / {}", current + 1, count.max(1)),
-                egui::FontId::proportional(10.0),
-                palette.text,
-            );
-            if shell_icon_button(ui, palette, Icon::ChevronRight, 26.0)
-                .on_hover_text("Next page")
-                .clicked()
-            {
-                self.step_page(1);
-            }
-            shell_divider(ui, palette);
-            if shell_icon_button(ui, palette, Icon::ZoomOut, 26.0)
-                .on_hover_text("Zoom out")
-                .clicked()
-            {
-                self.zoom_out();
-            }
-            let zoom_label = self
-                .state
-                .active_tab()
-                .map(|tab| match tab.zoom().scale() {
-                    Some(scale) => format!("{:.0}%", scale * 100.0),
-                    None => "Fit".to_owned(),
-                })
-                .unwrap_or_else(|| "—".to_owned());
-            let (zoom_pill, _) =
-                ui.allocate_exact_size(egui::vec2(54.0, 24.0), egui::Sense::hover());
-            ui.painter().rect_filled(zoom_pill, 6.0, palette.surface);
-            ui.painter().text(
-                zoom_pill.center(),
-                egui::Align2::CENTER_CENTER,
-                zoom_label,
-                egui::FontId::proportional(10.0),
-                palette.text,
-            );
-            if shell_icon_button(ui, palette, Icon::ZoomIn, 26.0)
-                .on_hover_text("Zoom in")
-                .clicked()
-            {
-                self.zoom_in();
-            }
-            if shell_icon_button(ui, palette, Icon::FitPage, 26.0)
-                .on_hover_text("Fit page")
-                .clicked()
-            {
-                self.fit_page();
-            }
-            if shell_icon_button(ui, palette, Icon::Fullscreen, 26.0)
-                .on_hover_text("Full screen")
-                .clicked()
-            {
-                let full = ui
-                    .ctx()
-                    .input(|input| input.viewport().fullscreen.unwrap_or(false));
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if shell_icon_button(ui, palette, Icon::Sparkle, 24.0)
-                    .on_hover_text("AI Assistant")
-                    .clicked()
-                {
-                    self.rail = RailTab::Assistant;
-                }
-                let status = if self.status.is_empty() {
-                    active_tab_status(&self.state).to_owned()
-                } else {
-                    self.status.clone()
-                };
-                let shortened: String = status.chars().take(80).collect();
-                ui.label(
-                    egui::RichText::new(shortened)
-                        .size(9.5)
-                        .color(palette.text_muted),
-                );
-                let (lock, _) =
-                    ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                icon(ui.painter(), lock, Icon::Lock, palette.text_muted);
-                ui.label(
-                    egui::RichText::new("On-device")
-                        .size(9.0)
-                        .color(palette.text_muted),
-                );
+        egui::Area::new(egui::Id::new("shell-page-bar"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(palette.panel)
+                    .stroke(egui::Stroke::new(1.0_f32, palette.border))
+                    .corner_radius(20.0)
+                    .inner_margin(egui::Margin {
+                        left: 8,
+                        right: 8,
+                        top: 4,
+                        bottom: 4,
+                    })
+                    .show(ui, |ui| {
+                        ui.set_width(width - 16.0);
+                        ui.horizontal_centered(|ui| {
+                            if shell_icon_button(ui, palette, Icon::ChevronLeft, 24.0)
+                                .on_hover_text("Previous page")
+                                .clicked()
+                            {
+                                self.step_page(-1);
+                            }
+                            let (current, count) = self
+                                .state
+                                .active_tab()
+                                .map(|tab| (tab.current_page(), tab.page_count()))
+                                .unwrap_or((0, 0));
+                            ui.label(
+                                egui::RichText::new(format!("{} of {}", current + 1, count.max(1)))
+                                    .size(10.5)
+                                    .color(palette.text),
+                            );
+                            if shell_icon_button(ui, palette, Icon::ChevronRight, 24.0)
+                                .on_hover_text("Next page")
+                                .clicked()
+                            {
+                                self.step_page(1);
+                            }
+                            shell_divider(ui, palette);
+                            let zoom_label = self
+                                .state
+                                .active_tab()
+                                .map(|tab| match tab.zoom().scale() {
+                                    Some(scale) => format!("{:.0}%", scale * 100.0),
+                                    None => "Fit".to_owned(),
+                                })
+                                .unwrap_or_else(|| "—".to_owned());
+                            ui.menu_button(
+                                egui::RichText::new(zoom_label)
+                                    .size(10.5)
+                                    .color(palette.text),
+                                |ui| {
+                                    if ui.button("Fit Page").clicked() {
+                                        self.fit_page();
+                                        ui.close();
+                                    }
+                                    if ui.button("Fit Width").clicked() {
+                                        self.fit_width();
+                                        ui.close();
+                                    }
+                                    if ui.button("Actual Size").clicked() {
+                                        self.actual_size();
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.button("Zoom In").clicked() {
+                                        self.zoom_in();
+                                        ui.close();
+                                    }
+                                    if ui.button("Zoom Out").clicked() {
+                                        self.zoom_out();
+                                        ui.close();
+                                    }
+                                },
+                            );
+                            if shell_icon_button(ui, palette, Icon::ZoomOut, 24.0)
+                                .on_hover_text("Zoom out")
+                                .clicked()
+                            {
+                                self.zoom_out();
+                            }
+                            if shell_icon_button(ui, palette, Icon::ZoomIn, 24.0)
+                                .on_hover_text("Zoom in")
+                                .clicked()
+                            {
+                                self.zoom_in();
+                            }
+                            if shell_icon_button(ui, palette, Icon::FitPage, 24.0)
+                                .on_hover_text("Fit page")
+                                .clicked()
+                            {
+                                self.fit_page();
+                            }
+                        });
+                    });
             });
-        });
     }
 
     #[allow(dead_code)]
@@ -4854,15 +4738,15 @@ impl PdfxiApp {
     }
 
     fn assistant_card_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let mut submit = false;
         egui::Frame::new()
             .fill(palette.accent_soft)
-            .stroke(egui::Stroke::new(1.0_f32, palette.accent_border))
-            .corner_radius(12.0)
+            .corner_radius(10.0)
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (spark, _) =
-                        ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                        ui.allocate_exact_size(egui::vec2(17.0, 17.0), egui::Sense::hover());
                     icon(ui.painter(), spark, Icon::Sparkle, palette.accent);
                     ui.label(
                         egui::RichText::new("AI Assistant")
@@ -4870,75 +4754,73 @@ impl PdfxiApp {
                             .strong()
                             .color(palette.text),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (dot, _) =
-                            ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
-                        ui.painter()
-                            .circle_filled(dot.center(), 3.0, palette.success);
-                        ui.label(
-                            egui::RichText::new("On-device")
-                                .size(8.5)
-                                .color(palette.text_muted),
-                        );
-                    });
                 });
                 ui.label(
                     egui::RichText::new("Ask about this document, summarize, or get key insights.")
                         .size(9.5)
                         .color(palette.text_muted),
                 );
-                ui.add_space(4.0);
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.assistant_query)
-                        .hint_text("Ask a question…")
-                        .desired_width(f32::INFINITY),
-                );
-                let submit =
-                    response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                ui.horizontal(|ui| {
-                    let send = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new("Ask")
-                                .size(10.5)
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(palette.accent)
-                        .corner_radius(7.0),
-                    );
-                    if send.clicked() || submit {
-                        self.ask_assistant();
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("Summarize")
-                                    .size(10.0)
-                                    .color(palette.accent),
-                            )
-                            .fill(egui::Color32::TRANSPARENT)
-                            .corner_radius(7.0),
-                        )
-                        .clicked()
-                    {
-                        self.assistant_query = "Summarize this document".to_owned();
-                        self.ask_assistant();
-                    }
-                });
+                ui.add_space(5.0);
+                egui::Frame::new()
+                    .fill(palette.panel)
+                    .stroke(egui::Stroke::new(1.0_f32, palette.border))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin {
+                        left: 8,
+                        right: 4,
+                        top: 3,
+                        bottom: 3,
+                    })
+                    .show(ui, |ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 24.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut self.assistant_query)
+                                        .frame(false)
+                                        .hint_text("Ask a question…")
+                                        .desired_width((ui.available_width() - 30.0).max(80.0)),
+                                );
+                                let (send, send_response) = ui.allocate_exact_size(
+                                    egui::vec2(22.0, 22.0),
+                                    egui::Sense::click(),
+                                );
+                                ui.painter()
+                                    .circle_filled(send.center(), 11.0, palette.accent);
+                                icon(
+                                    ui.painter(),
+                                    send.shrink(6.0),
+                                    Icon::Send,
+                                    egui::Color32::WHITE,
+                                );
+                                if send_response.clicked()
+                                    || (response.lost_focus()
+                                        && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                                {
+                                    submit = true;
+                                }
+                            },
+                        );
+                    });
                 if !self.assistant_answer.is_empty() {
-                    ui.add_space(4.0);
+                    ui.add_space(5.0);
                     egui::Frame::new()
                         .fill(palette.panel)
-                        .corner_radius(8.0)
-                        .inner_margin(egui::Margin::same(8))
+                        .corner_radius(7.0)
+                        .inner_margin(egui::Margin::same(7))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(&self.assistant_answer)
-                                    .size(9.0)
+                                    .size(8.5)
                                     .color(palette.text),
                             );
                         });
                 }
             });
+        if submit {
+            self.ask_assistant();
+        }
     }
 
     fn export_card_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
@@ -4948,26 +4830,12 @@ impl PdfxiApp {
             .corner_radius(12.0)
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("Export")
-                            .size(12.0)
-                            .strong()
-                            .color(palette.text),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (badge, _) =
-                            ui.allocate_exact_size(egui::vec2(30.0, 16.0), egui::Sense::hover());
-                        ui.painter().rect_filled(badge, 4.0, palette.accent_soft);
-                        ui.painter().text(
-                            badge.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "PDF",
-                            egui::FontId::proportional(7.5),
-                            palette.accent,
-                        );
-                    });
-                });
+                ui.label(
+                    egui::RichText::new("Export")
+                        .size(12.0)
+                        .strong()
+                        .color(palette.text),
+                );
                 ui.label(
                     egui::RichText::new("Convert this PDF to")
                         .size(9.5)
@@ -5001,11 +4869,6 @@ impl PdfxiApp {
                         EXPORT_FORMATS[self.export_format]
                     );
                 }
-                ui.label(
-                    egui::RichText::new("Runs locally · no upload")
-                        .size(8.5)
-                        .color(palette.text_muted),
-                );
             });
     }
 
@@ -5024,10 +4887,11 @@ impl PdfxiApp {
         mesh.add_triangle(base, base + 2, base + 3);
         painter.add(egui::Shape::mesh(mesh));
 
-        let margin = 26.0_f32;
-        let ratio = 0.7727_f32;
+        let margin = 18.0_f32;
+        let ratio = 0.67_f32;
         let max_w = (available.width() - margin * 2.0).max(160.0);
-        let max_h = (available.height() - margin * 2.0).max(220.0);
+        // Keep the floating page controls clear of the page.
+        let max_h = (available.height() - margin * 2.0 - 32.0).max(220.0);
         let mut width = max_w;
         let mut height = width / ratio;
         if height > max_h {
@@ -5035,7 +4899,7 @@ impl PdfxiApp {
             width = height * ratio;
         }
         let page = egui::Rect::from_center_size(
-            egui::pos2(available.center().x, available.center().y - 6.0),
+            egui::pos2(available.center().x, available.center().y - 14.0),
             egui::vec2(width, height),
         );
         let shadow_scale: u8 = if self.theme == ThemeMode::Dark { 2 } else { 1 };
@@ -5055,54 +4919,6 @@ impl PdfxiApp {
         );
         let clipped = painter.with_clip_rect(page);
         self.paint_demo_page(&clipped, page, palette);
-
-        let (current, count) = self
-            .state
-            .active_tab()
-            .map(|tab| (tab.current_page(), tab.page_count()))
-            .unwrap_or((0, 1));
-        let pill = egui::Rect::from_center_size(
-            egui::pos2(
-                page.center().x,
-                (available.bottom() - 22.0).min(page.bottom() + 26.0),
-            ),
-            egui::vec2(150.0, 30.0),
-        );
-        painter.rect_filled(pill.translate(egui::vec2(0.0, 2.0)), 15.0, palette.shadow);
-        painter.rect_filled(pill, 15.0, palette.panel);
-        painter.rect_stroke(
-            pill,
-            15.0,
-            egui::Stroke::new(1.0_f32, palette.border),
-            egui::StrokeKind::Inside,
-        );
-        let left_rect = egui::Rect::from_center_size(
-            egui::pos2(pill.left() + 18.0, pill.center().y),
-            egui::Vec2::splat(16.0),
-        );
-        let right_rect = egui::Rect::from_center_size(
-            egui::pos2(pill.right() - 18.0, pill.center().y),
-            egui::Vec2::splat(16.0),
-        );
-        icon(&painter, left_rect, Icon::ChevronLeft, palette.text_muted);
-        icon(&painter, right_rect, Icon::ChevronRight, palette.text_muted);
-        painter.text(
-            pill.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("{} / {}", current + 1, count.max(1)),
-            egui::FontId::proportional(10.5),
-            palette.text,
-        );
-        let left_response =
-            ui.interact(left_rect, egui::Id::new("demo-prev"), egui::Sense::click());
-        let right_response =
-            ui.interact(right_rect, egui::Id::new("demo-next"), egui::Sense::click());
-        if left_response.clicked() {
-            self.step_page(-1);
-        }
-        if right_response.clicked() {
-            self.step_page(1);
-        }
     }
 
     fn paint_demo_thumb(
@@ -5283,6 +5099,12 @@ impl PdfxiApp {
         let small = FontId::proportional(7.5 * k);
         let heading = FontId::proportional(15.0 * k);
         let title_font = FontId::proportional(30.0 * k);
+        // egui's default font has no bold face; a half-pixel second pass gives
+        // the printed page the weight of the reference without a font asset.
+        let bold = |pos: egui::Pos2, align: Align2, text: &str, font: FontId, color: Color32| {
+            painter.text(pos, align, text, font.clone(), color);
+            painter.text(pos + egui::vec2(0.7 * k, 0.0), align, text, font, color);
+        };
 
         // Brand row.
         painter.rect_filled(
@@ -5319,14 +5141,14 @@ impl PdfxiApp {
         );
 
         // Title block.
-        painter.text(
+        bold(
             pos2(x(0.07), y(0.105)),
             Align2::LEFT_TOP,
             "Modern Business",
             title_font.clone(),
             ink,
         );
-        painter.text(
+        bold(
             pos2(x(0.07), y(0.155)),
             Align2::LEFT_TOP,
             "Proposal",
@@ -5370,43 +5192,46 @@ impl PdfxiApp {
         mesh.add_triangle(base, base + 1, base + 2);
         mesh.add_triangle(base, base + 2, base + 3);
         painter.add(egui::Shape::mesh(mesh));
-        painter.circle_filled(
-            pos2(
-                cover.left() + cover.width() * 0.70,
-                cover.top() + cover.height() * 0.52,
-            ),
-            cover.width() * 0.20,
-            Color32::from_white_alpha(28),
+        // A diagonal architectural crop: a dark wedge, a pale blade and a
+        // hairline highlight, rather than a flat gradient swatch.
+        let cw = cover.width();
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(cover.left() + cw * 0.46, cover.top()),
+                pos2(cover.right(), cover.top()),
+                pos2(cover.right(), cover.bottom()),
+                pos2(cover.left() + cw * 0.08, cover.bottom()),
+            ],
+            Color32::from_black_alpha(52),
+            egui::Stroke::NONE,
+        ));
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(cover.left() + cw * 0.62, cover.top()),
+                pos2(cover.left() + cw * 0.72, cover.top()),
+                pos2(cover.left() + cw * 0.34, cover.bottom()),
+                pos2(cover.left() + cw * 0.24, cover.bottom()),
+            ],
+            Color32::from_white_alpha(22),
+            egui::Stroke::NONE,
+        ));
+        painter.line_segment(
+            [
+                pos2(cover.left() + cw * 0.72, cover.top()),
+                pos2(cover.left() + cw * 0.34, cover.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, Color32::from_white_alpha(90)),
         );
-        painter.circle_stroke(
-            pos2(
-                cover.left() + cover.width() * 0.70,
-                cover.top() + cover.height() * 0.52,
-            ),
-            cover.width() * 0.28,
-            egui::Stroke::new(0.8_f32, Color32::from_white_alpha(80)),
-        );
-        painter.text(
-            pos2(cover.left() + 14.0 * k, cover.top() + 14.0 * k),
-            Align2::LEFT_TOP,
-            "MODERN\nBUSINESS",
-            FontId::proportional(8.0 * k),
-            Color32::from_white_alpha(220),
-        );
-        painter.text(
-            pos2(cover.left() + 14.0 * k, cover.bottom() - 30.0 * k),
-            Align2::LEFT_TOP,
-            "2025",
-            FontId::proportional(18.0 * k),
-            Color32::from_white_alpha(230),
-        );
-        painter.text(
-            pos2(cover.left() + 14.0 * k, cover.bottom() - 12.0 * k),
-            Align2::LEFT_CENTER,
-            "STRATEGY & DELIVERY",
-            FontId::proportional(6.0 * k),
-            Color32::from_white_alpha(200),
-        );
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(cover.left() + cw * 0.86, cover.top()),
+                pos2(cover.right(), cover.top()),
+                pos2(cover.right(), cover.bottom()),
+                pos2(cover.left() + cw * 0.66, cover.bottom()),
+            ],
+            Color32::from_black_alpha(28),
+            egui::Stroke::NONE,
+        ));
 
         // Executive summary.
         painter.text(
@@ -5435,13 +5260,47 @@ impl PdfxiApp {
             base.clone(),
         );
         job.append("drive measurable productivity.", 0.0, highlighted);
-        job.append(
-            " Our approach combines secure local processing with an interface your team already understands.",
-            0.0,
-            base,
-        );
         let summary = painter.layout_job(job);
         painter.galley(pos2(x(0.07), y(0.385)), summary, ink);
+
+        // Selected-text frame and its comment marker, matching the review
+        // state shown in the reference page.
+        let selection =
+            egui::Rect::from_min_max(pos2(x(0.062), y(0.379)), pos2(x(0.508), y(0.421)));
+        let selection_blue = Color32::from_rgb(0x2f, 0x7c, 0xf6);
+        painter.rect_stroke(
+            selection,
+            1.0,
+            egui::Stroke::new(1.0_f32, selection_blue),
+            egui::StrokeKind::Inside,
+        );
+        for corner in [
+            selection.left_top(),
+            selection.right_top(),
+            selection.left_bottom(),
+            selection.right_bottom(),
+        ] {
+            painter.rect_filled(
+                egui::Rect::from_center_size(corner, egui::Vec2::splat(4.0 * k)),
+                0.0,
+                selection_blue,
+            );
+        }
+        let marker = egui::Rect::from_center_size(
+            pos2(selection.right() + 10.0 * k, selection.center().y),
+            egui::Vec2::splat(18.0 * k),
+        );
+        painter.circle_filled(
+            marker.center(),
+            9.0 * k,
+            Color32::from_rgb(0xf6, 0xc8, 0x45),
+        );
+        icon(
+            painter,
+            marker.shrink(5.5 * k),
+            Icon::Comment,
+            Color32::from_rgb(0x5c, 0x43, 0x00),
+        );
 
         // Comment card.
         let card = egui::Rect::from_min_max(pos2(x(0.53), y(0.355)), pos2(x(0.93), y(0.48)));
@@ -5450,7 +5309,7 @@ impl PdfxiApp {
             9.0 * k,
             paper.shadow,
         );
-        painter.rect_filled(card, 9.0 * k, Color32::WHITE);
+        painter.rect_filled(card, 9.0 * k, paper.card);
         painter.rect_stroke(
             card,
             9.0 * k,
@@ -5533,7 +5392,7 @@ impl PdfxiApp {
         .enumerate()
         {
             let top = y(0.565 + index as f32 * 0.038);
-            painter.circle_filled(pos2(x(0.085), top + 4.0 * k), 5.0 * k, paper.success_bg);
+            painter.circle_filled(pos2(x(0.085), top + 4.0 * k), 5.0 * k, paper.highlight);
             icon(
                 painter,
                 egui::Rect::from_center_size(
@@ -5541,7 +5400,7 @@ impl PdfxiApp {
                     egui::vec2(6.5 * k, 6.5 * k),
                 ),
                 Icon::Check,
-                paper.success,
+                paper.accent,
             );
             painter.text(
                 pos2(x(0.103), top + 4.0 * k),
@@ -5554,7 +5413,7 @@ impl PdfxiApp {
 
         // Stat card.
         let stat = egui::Rect::from_min_max(pos2(x(0.60), y(0.525)), pos2(x(0.93), y(0.65)));
-        painter.rect_filled(stat, 8.0 * k, Color32::from_rgb(0xfb, 0xf7, 0xf3));
+        painter.rect_filled(stat, 8.0 * k, paper.card);
         painter.rect_stroke(
             stat,
             8.0 * k,
@@ -5642,7 +5501,7 @@ impl PdfxiApp {
 
         // Signature card.
         let sign = egui::Rect::from_min_max(pos2(x(0.07), y(0.825)), pos2(x(0.51), y(0.925)));
-        painter.rect_filled(sign, 7.0 * k, Color32::WHITE);
+        painter.rect_filled(sign, 7.0 * k, paper.card);
         painter.rect_stroke(
             sign,
             7.0 * k,
@@ -5705,7 +5564,7 @@ impl PdfxiApp {
 
         // Investment card.
         let invest = egui::Rect::from_min_max(pos2(x(0.56), y(0.835)), pos2(x(0.93), y(0.915)));
-        painter.rect_filled(invest, 7.0 * k, Color32::WHITE);
+        painter.rect_filled(invest, 7.0 * k, paper.card);
         painter.rect_stroke(
             invest,
             7.0 * k,
@@ -5813,7 +5672,11 @@ mod tests {
         if let Some(tab) = state.active_tab_mut() {
             tab.set_page_count(DEMO_PAGE_COUNT);
         }
-        assert!(canvas_placeholder(&state).contains("Page 1 of 3"));
+        assert!(
+            canvas_placeholder(&state).contains(&format!("Page 1 of {DEMO_PAGE_COUNT}")),
+            "{}",
+            canvas_placeholder(&state)
+        );
     }
 
     #[test]
@@ -6329,10 +6192,12 @@ mod tests {
         let mut app = PdfxiApp::new();
         app.open_demo_tab();
         let count = app.thumbnail_state().page_count();
+        assert_eq!(count, DEMO_PAGE_COUNT);
         let mut state = crate::ThumbnailPaneState::new(count);
         state.set_row_height(THUMB_ROW_HEIGHT);
         state.set_viewport_height(600.0);
-        assert_eq!(state.visible_range().len(), count);
+        let expected_visible = (600.0_f32 / THUMB_ROW_HEIGHT).ceil() as usize;
+        assert_eq!(state.visible_range().len(), expected_visible);
         assert_eq!(state.active_page(), 0);
         assert_eq!(state.metadata().len(), count);
     }

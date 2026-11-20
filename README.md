@@ -50,13 +50,15 @@ placeholder pages and the CLI still works.
 
 ### Product shell
 
-The desktop viewer uses a modern Acrobat-style shell: a custom title bar with
-document tabs, a compact icon rail, a pages panel with thumbnails, a rich
-document canvas, a tools panel with AI Assistant and Export cards, and a
-page/zoom bar. Light and dark themes are built in.
+The desktop viewer uses a modern Acrobat-style shell: a light or charcoal title
+bar with traffic lights and two document tabs, a rounded command pill, a compact
+icon rail, a pages panel with thumbnails and cloud storage, a rich document
+canvas, a tools panel with AI Assistant and Export cards, and a floating
+page/zoom pill. Light and dark themes are built in, including a dark document
+page in dark mode.
 
-![PDFXI viewer, light](docs/evidence/ui/light-v10.png)
-![PDFXI viewer, dark](docs/evidence/ui/dark-v10.png)
+![PDFXI viewer, light](docs/evidence/ui/light-v16.png)
+![PDFXI viewer, dark](docs/evidence/ui/dark-v16.png)
 
 The visual review checklist and findings are in
 [`docs/design/UI_REVIEW.md`](docs/design/UI_REVIEW.md).
