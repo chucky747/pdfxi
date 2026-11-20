@@ -3011,25 +3011,43 @@ tests = [
 title = "Document properties and XMP metadata"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/home.rs, docs/evidence/app/T-0111.md"
 domain = "Document Management"
-evidence = ""
+evidence = "docs/evidence/app/T-0111.md"
 id = "MANAGE-002"
-notes = ""
+notes = "DocumentKey normalizes paths to a bounded identity key. HomeModel provides deduplicating, bounded recents (most-recent-first), favorites, and named collections, plus summary/badge helpers and a bounded, escaped, I/O-free text serialization with deterministic output and typed HomeError. Data is opaque to the model; the host performs all path I/O."
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "home::tests::document_key_normalizes_separators_case_and_trailing_slash",
+    "home::tests::recents_are_deduplicated_and_ordered_most_recent_first",
+    "home::tests::recents_are_bounded_and_evict_least_recent",
+    "home::tests::favorites_dedupe_toggle_and_are_bounded",
+    "home::tests::collections_are_validated_deduplicated_and_ordered",
+    "home::tests::serialization_round_trips_all_state_deterministically",
+    "home::tests::deserialization_enforces_line_cap",
+    "home::tests::deserialize_coalesces_duplicate_identities",
+]
 title = "Home recents favorites and collections"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/cross_file.rs, crates/pdfxi-app/src/page_text.rs, docs/evidence/app/T-0111.md"
 domain = "Document Management"
-evidence = ""
+evidence = "docs/evidence/app/T-0111.md"
 id = "MANAGE-003"
-notes = ""
+notes = "CrossFileSearch indexes caller-supplied per-file PageText, applies CrossFileQuery options (case, whole word, character offsets), ranks by match count with file-id tie-break, groups results by file then page, enforces bounded global/per-file result caps with a truncated flag, and reports typed CrossFileError. Implemented in pdfxi-app due to lane permission scope; pdfxi-text remains untouched."
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "cross_file::tests::ranks_files_by_match_count_and_groups_by_page",
+    "cross_file::tests::equal_counts_break_ties_by_file_id",
+    "cross_file::tests::case_and_whole_word_options_are_honored",
+    "cross_file::tests::global_cap_truncates_in_ranked_order",
+    "cross_file::tests::per_file_cap_truncates_within_a_file",
+    "cross_file::tests::results_are_deterministic_and_input_order_independent",
+    "cross_file::tests::invalid_input_returns_typed_errors",
+    "cross_file::tests::file_and_page_bounds_are_enforced",
+]
 title = "Cross-file search and index"
 
 [[feature]]
@@ -3044,14 +3062,22 @@ tests = []
 title = "PDF Portfolio management"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/compare.rs, docs/evidence/app/T-0111.md"
 domain = "Document Management"
-evidence = ""
+evidence = "docs/evidence/app/T-0111.md"
 id = "MANAGE-005"
-notes = ""
+notes = "TextSnapshot validates and sorts page-text snapshots. compare_snapshots produces deterministic Added/Removed/Changed hunks with page references and both texts, plus a CompareSummary and stable render_summary. No UI diff widget is required. Implemented in pdfxi-app due to lane permission scope."
 priority = "P3"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "compare::tests::compare_detects_all_change_kinds_with_page_references",
+    "compare::tests::compare_ignores_input_page_order",
+    "compare::tests::equal_snapshots_produce_empty_report",
+    "compare::tests::empty_snapshots_are_handled",
+    "compare::tests::comparison_is_exact_about_case_and_whitespace",
+    "compare::tests::snapshot_rejects_duplicate_pages_and_bounds",
+    "compare::tests::compare_is_repeatable_and_summary_counts_are_stable",
+]
 title = "Version compare and history"
 
 [[feature]]

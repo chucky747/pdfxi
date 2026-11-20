@@ -33,6 +33,13 @@
 //! module indexes link annotations per page, resolves internal/URI/named
 //! destinations, and provides a pure page-space hit-test helper. All three keep
 //! mutable state in per-tab registries so documents stay isolated.
+//! The [`home`] module holds the home-screen model: bounded, deduplicated
+//! recent/favorite/collection state over opaque document keys with deterministic
+//! ordering and a bounded, I/O-free text serialization format.
+//! The [`page_text`], [`cross_file`], and [`compare`] modules add I/O-free,
+//! deterministic workflows over caller-supplied page text: cross-file search
+//! with ranking/grouping/result caps and version compare with added/removed/
+//! changed hunks and a summary. They depend on no PDF or GUI backend.
 //! [`AppState`] is the tabbed document workspace: it owns an insertion-ordered
 //! set of stable-id tabs, each with its own path, dirty flag, and per-tab view
 //! state (page, zoom, layout, rotation, and scroll offset). Open, close,
@@ -50,10 +57,14 @@ pub mod attachments;
 pub mod bookmarks;
 pub mod canvas;
 pub mod commands;
+pub mod compare;
+pub mod cross_file;
 pub mod find;
+pub mod home;
 pub mod layers;
 pub mod links;
 pub mod open;
+pub mod page_text;
 pub mod print;
 pub mod raster;
 pub mod selection;
@@ -83,7 +94,21 @@ pub use canvas::{
     effective_page_size, rotate_point, unrotate_point, uv_quad_for_rotation,
 };
 pub use commands::{ShortcutKey, ShortcutModifiers, ViewCommand, map_shortcut};
+pub use compare::{
+    CompareError, CompareHunk, CompareReport, CompareSummary, HunkKind, MAX_SNAPSHOT_PAGES,
+    TextSnapshot, compare_snapshots,
+};
+pub use cross_file::{
+    CrossFileError, CrossFileHit, CrossFileQuery, CrossFileReport, CrossFileSearch, CrossMatch,
+    CrossPageGroup, DEFAULT_MAX_PER_FILE, DEFAULT_MAX_RESULTS, FileId, MAX_FILES,
+    MAX_PAGES_PER_FILE, SearchFile,
+};
 pub use find::{DEFAULT_MATCH_CAP, FindMatch, FindOptions, FindState};
+pub use home::{
+    Collection, DocumentKey, FavoriteEntry, HomeError, HomeModel, HomeSummary,
+    MAX_COLLECTION_MEMBERS, MAX_COLLECTIONS, MAX_FAVORITES, MAX_KEY_LEN, MAX_NAME_LEN, MAX_RECENTS,
+    MAX_SERIALIZED_LINES, MAX_TITLE_LEN, RecentEntry, escape_field,
+};
 pub use layers::{
     LayerError, LayerInfo, LayerModel, LayerRegistry, LayerState, OcPropertiesSummary, OcgId,
     OcgInfo, RadioGroup, VisibilityPlan,
@@ -97,6 +122,7 @@ pub use open::{
     OpenBackendKind, OpenError, OpenResult, OpenTabStates, OpenedDocument, RecentFiles,
     TabOpenState,
 };
+pub use page_text::PageText;
 pub use print::{
     DEFAULT_PRINT_DPI, PaperSize, PrintContext, PrintDialogState, PrintModel, PrintModelError,
     PrintPageRange, PrintPlan,
