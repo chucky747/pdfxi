@@ -57,7 +57,13 @@
 //! high-contrast color tokens, and bounded reflow layout metrics. The
 //! [`read_aloud`] module builds ordered speech chunks with word/sentence
 //! boundaries and drives them with a window-free play/pause/step state machine
-//! behind an explicit host speech-sink boundary. The [`a11y`] module derives a
+//! behind an explicit host speech-sink boundary. The [`reflow`] module builds a
+//! deterministic, width-bound column layout from caller-supplied text blocks,
+//! with page navigation, scroll clamping, and a read-aloud cursor that maps
+//! character offsets back to blocks by reusing the shared chunker. The
+//! [`compare_view`] module aligns two panes of caller-supplied extracted lines
+//! into a deterministic row plan with match/insert/delete markers and a scroll-
+//! sync mapping between panes. The [`a11y`] module derives a
 //! deterministic accessibility node tree, focus announcements, and a screen-
 //! reader host adapter from a caller-supplied state snapshot; with the `ui`
 //! feature it registers that tree through `egui`'s AccessKit re-export.
@@ -88,6 +94,7 @@ pub mod bookmarks;
 pub mod canvas;
 pub mod commands;
 pub mod compare;
+pub mod compare_view;
 pub mod cross_file;
 pub mod find;
 pub mod home;
@@ -103,6 +110,7 @@ pub mod presentation;
 pub mod print;
 pub mod raster;
 pub mod read_aloud;
+pub mod reflow;
 pub mod selection;
 pub mod shared_folder;
 pub mod split;
@@ -138,6 +146,10 @@ pub use commands::{ShortcutKey, ShortcutModifiers, ViewCommand, map_shortcut};
 pub use compare::{
     CompareError, CompareHunk, CompareReport, CompareSummary, HunkKind, MAX_SNAPSHOT_PAGES,
     TextSnapshot, compare_snapshots,
+};
+pub use compare_view::{
+    AlignedRow, ComparePage, ComparePaneInput, CompareViewError, CompareViewModel,
+    CompareViewSummary, MAX_ALIGN_CELLS, MAX_COMPARE_LINES, RowCell, RowKind, ScrollSync,
 };
 pub use cross_file::{
     CrossFileError, CrossFileHit, CrossFileQuery, CrossFileReport, CrossFileSearch, CrossMatch,
@@ -200,6 +212,10 @@ pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use read_aloud::{
     ChunkBoundary, ChunkMode, NullSpeechSink, PlaybackState, ReadAloudPlan, SpeechChunk,
     SpeechRequest, SpeechSink, VoiceSettings, build_chunks,
+};
+pub use reflow::{
+    FontMetric, MAX_REFLOW_BLOCKS, MAX_REFLOW_LINES, MAX_REFLOW_TEXT_LEN, ReadAloudCursor,
+    ReflowBlock, ReflowError, ReflowLayout, ReflowLine, TextBlock,
 };
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,

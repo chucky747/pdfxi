@@ -15,20 +15,25 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod association;
 pub mod boxes;
+pub mod browser_handoff;
 pub mod compatibility;
 pub mod content;
 pub mod filter;
 pub mod font;
 pub mod incremental;
+pub mod launch;
 pub mod linearization;
 pub mod linearize;
 pub mod metadata;
 pub mod object;
 pub mod objstm;
+pub mod office_drop;
 pub mod optimizer;
 pub mod page;
 pub mod pages;
+pub mod preferences;
 pub mod preservation;
 pub mod printer_marks;
 pub mod repair;
@@ -43,7 +48,15 @@ mod writer;
 #[cfg(test)]
 mod xref_tests;
 
+pub use association::{
+    AssociationEntry, AssociationError, AssociationManifest, DryRunPlan, HandlerCommand,
+    MAX_ASSOCIATIONS, MAX_EXTENSION_LEN, MAX_HANDLER_ARGS, MAX_PROGRAM_BYTES, dry_run_plan,
+};
 pub use boxes::{BoxKind, PageBoxes, normalize_rectangle, rectangle_intersection};
+pub use browser_handoff::{
+    BrowserHandoff, BrowserHandoffError, BrowserHandoffPlan, MAX_FRAGMENT_BYTES,
+    MAX_HANDOFF_PATH_BYTES, validate_rooted_path,
+};
 pub use compatibility::{
     CompatibilityReport, CompatibilityWarning, FeatureSupport, HEADER_SCAN_LIMIT, PdfFeature,
     PdfVersion, VersionSource, analyze_compatibility, feature_gate,
@@ -59,6 +72,10 @@ pub use font::{
     is_standard14, validate_metrics,
 };
 pub use incremental::{IncrementalSaveOptions, IncrementalSaveResult, PreservationReport};
+pub use launch::{
+    DpiAwareness, LaunchConfig, LaunchError, MAX_ARG_BYTES, MAX_LAUNCH_FILES, MAX_WINDOW_DIMENSION,
+    SingleInstanceMode, StartupPlan, WindowPreference, parse_launch_args, resolve_startup_plan,
+};
 pub use linearization::{HintStreamRange, Linearization, parse_linearization};
 pub use linearize::{
     HintStream, LinearizationOptions, LinearizedLayout, PageHint, SharedObjectHint,
@@ -74,10 +91,19 @@ pub use objstm::{
     is_packing_eligible, packing_exclusion_reason, write_object_stream_document,
     write_object_stream_increment,
 };
+pub use office_drop::{
+    BundleEntry, ContentHint, ConversionPlan, ConversionStep, MAX_BUNDLE_ENTRIES,
+    MAX_BUNDLE_NAME_BYTES, OfficeDropEnvelope, OfficeDropError, OfficeKind, plan_conversion,
+    validate_relative_name,
+};
 pub use optimizer::{CancellationToken, OptimizationReport, OptimizationResult, OptimizeOptions};
 pub use page::{Page, Rectangle};
 pub use pages::{PageOperation, PagePlan, RotationTarget};
 pub use parser::{XrefReport, XrefSectionKind, XrefSectionReport, inspect_xref};
+pub use preferences::{
+    MAX_LOCALE_BYTES, MAX_PREFERENCES_PATH_BYTES, Preferences, PreferencesError, PreferencesFile,
+    SCHEMA_VERSION, Theme, parse_preferences, serialize_preferences,
+};
 pub use preservation::{
     MAX_KEY_LEN, MAX_PRESERVED_KEYS, MAX_REVISIONS, PageTextSource, PreservationError,
     PreservationOperation, PreservationPolicy, PreservationValidationReport, RevisionInfo,

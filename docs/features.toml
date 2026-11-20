@@ -434,14 +434,53 @@ tests = [
 title = "Full screen and presentation mode"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/reflow.rs",
+    "crates/pdfxi-app/src/read_aloud.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0161.md",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "docs/evidence/app/T-0161.md: 11 new reflow::tests pass; cargo test -p pdfxi-app 343 passed/0 failed, cargo test -p pdfxi-app --features ui 406 passed/0 failed; fmt/clippy --all-targets --all-features --no-deps/doc EXIT=0."
 id = "VIEW-013"
-notes = ""
+notes = """
+Adds `pdfxi_app::reflow`, a window-free reflow view model. Caller-supplied
+`TextBlock`s (page, reading order, text) are wrapped into a deterministic
+`ReflowLayout` of `ReflowLine`s grouped into `ReflowBlock`s for a fixed-point
+`FontMetric` (integer hundredths of a point, so line breaks are byte-identical
+on every host). The layout exposes page navigation (`page_indices`,
+`first_line_for_page`, `next_page`, `previous_page`, `page_at_offset`), scroll
+clamping (`clamp_scroll`), and a `ReadAloudCursor` that maps canonical character
+offsets back to blocks by reusing the shared `read_aloud::build_chunks` word
+chunker; `read_aloud_plan` also delegates to the existing chunker. Validation
+returns typed `ReflowError`s (empty input, invalid metric, block/line/text
+budgets, out-of-range offset, unknown page/block). Determinism, width
+boundaries, empty input, cursor mapping, scroll clamp, and page navigation are
+covered by 11 tests.
+
+Honest scope: model + plan only. No egui widget, no font rasterizer, no OS
+speech call, and no host scroll view are wired. The host owns drawing the
+wrapped lines, driving scroll/page events, and forwarding the existing
+`SpeechRequest`s to a `SpeechSink`; rendered column fidelity against a real
+font engine is not measured here. Reported `in-progress` (not `verified`)
+because the user-visible reflow/read-aloud UI boundary remains, matching the
+sibling model-only VIEW-014 row.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "reflow::tests::layout_is_deterministic_and_order_independent",
+    "reflow::tests::width_boundaries_control_wrapping",
+    "reflow::tests::a_single_char_width_puts_every_word_on_its_own_line",
+    "reflow::tests::empty_and_all_blank_inputs_are_typed_errors",
+    "reflow::tests::invalid_metrics_are_rejected",
+    "reflow::tests::read_aloud_cursor_maps_offsets_to_blocks",
+    "reflow::tests::cursor_rejects_out_of_range_offsets_and_unknown_blocks",
+    "reflow::tests::scroll_position_is_clamped_to_content",
+    "reflow::tests::page_navigation_and_offset_lookup_are_consistent",
+    "reflow::tests::read_aloud_plan_reuses_shared_chunking",
+    "reflow::tests::block_spans_and_line_offsets_cover_the_canonical_text",
+]
 title = "Reflow and read aloud"
 
 [[feature]]
@@ -482,14 +521,53 @@ tests = [
 title = "PDF Portfolio browsing"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/compare_view.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0161.md",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "docs/evidence/app/T-0161.md: 11 new compare_view::tests pass; cargo test -p pdfxi-app 343 passed/0 failed, cargo test -p pdfxi-app --features ui 406 passed/0 failed; fmt/clippy --all-targets --all-features --no-deps/doc EXIT=0."
 id = "VIEW-015"
-notes = ""
+notes = """
+Adds `pdfxi_app::compare_view`, a window-free side-by-side compare view model.
+Two caller-supplied `ComparePaneInput`s (opaque label plus numbered pages of
+extracted lines) are flattened by page number and aligned with a bounded
+longest-common-subsequence diff into a deterministic `CompareViewModel` of
+`AlignedRow`s marked `Match`, `Insert`, or `Delete`, each carrying page/line/
+text cells plus a stable `CompareViewSummary`. A `ScrollSync` maps global line
+indices in either pane to shared rows and back (`sync_left_to_right`,
+`sync_right_to_left`, `row_for_*_line`, `*_line_at_row`) so a host can keep two
+scroll views in step. Deterministic tie-breaking, page sorting, and flat line
+indexing make the plan byte-for-byte reproducible. Hostile inputs return typed
+`CompareViewError`s (duplicate page numbers, per-pane line budget, alignment
+cell budget, out-of-range line/row indices). Coverage includes alignment,
+inserted/deleted lines, scroll sync (including multi-page global indices),
+mismatched duplicate-page error, and determinism across 11 tests.
+
+Honest scope: model + plan only. No egui diff widget, renderer, or filesystem
+access is present; the host owns rendering the row plan, coloring markers, and
+translating scroll events through `ScrollSync`. This complements (does not
+replace) the existing page-level `compare` module, which reports added/removed/
+changed page hunks rather than a line-aligned side-by-side row plan. Reported
+`in-progress` (not `verified`) because the user-visible compare UI boundary
+remains, matching the sibling model-only VIEW-014 row.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "compare_view::tests::identical_panes_produce_only_matches",
+    "compare_view::tests::alignment_detects_inserted_and_deleted_lines",
+    "compare_view::tests::row_cells_carry_page_and_line_metadata",
+    "compare_view::tests::scroll_sync_maps_lines_between_panes",
+    "compare_view::tests::scroll_sync_uses_global_line_indices_across_pages",
+    "compare_view::tests::scroll_sync_rejects_out_of_range_lines_and_rows",
+    "compare_view::tests::duplicate_pages_are_a_typed_mismatched_input_error",
+    "compare_view::tests::over_budget_lines_are_rejected",
+    "compare_view::tests::alignment_is_deterministic_regardless_of_page_input_order",
+    "compare_view::tests::repeated_build_is_byte_for_byte_stable",
+    "compare_view::tests::empty_panes_are_valid_and_produce_only_inserts_or_deletes",
+]
 title = "Side-by-side compare view"
 
 [[feature]]
@@ -3837,14 +3915,43 @@ tests = [
 title = "Interactive actions and triggers"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/launch.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0156.md",
+]
 domain = "Platform"
-evidence = ""
+evidence = "docs/evidence/core/T-0156.md: 7 new launch::tests pass, including startup_plan_is_deterministic, invalid_dpi_is_rejected, invalid_args_are_rejected, conflicting_window_modes_are_rejected and typed_error_variants_are_distinct; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy --all-targets --no-deps/doc EXIT=0."
 id = "PLAT-001"
-notes = ""
+notes = """
+Adds `pdfxi_core::launch`, a headless launch/configuration model. A documented
+argument grammar (`--dpi`, `--single-instance`/`--multi-instance`, `--window
+WxH`, `--maximized`, `--fullscreen`, `--file`, plus positional file paths)
+parses into a validated `LaunchConfig`; `resolve_startup_plan` emits a
+deterministic `StartupPlan` with a stable `summary`. `DpiAwareness`
+(unaware/system/per-monitor/per-monitor-v2), `SingleInstanceMode`, and a bounded
+`WindowPreference` model the preferences; typed `LaunchError` variants reject
+unknown flags, missing/duplicate values, bad DPI/window tokens, conflicting
+presentation modes, empty/oversized args and too many files. No GUI, process,
+window or OS call is made.
+
+Honest remaining scope: no eframe/wgpu window, event loop, real single-instance
+IPC/handoff, native DPI-API calls, installer, or CLI host entry point. The host
+must translate the plan into an actual Windows application. Reported
+`in-progress`, not `verified`/`replaced`, because the desktop application itself
+is not delivered by this core-only task.
+"""
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "launch::tests::startup_plan_is_deterministic",
+    "launch::tests::defaults_are_stable",
+    "launch::tests::invalid_dpi_is_rejected",
+    "launch::tests::invalid_args_are_rejected",
+    "launch::tests::conflicting_window_modes_are_rejected",
+    "launch::tests::window_dimensions_are_bounded",
+    "launch::tests::typed_error_variants_are_distinct",
+]
 title = "Windows desktop application"
 
 [[feature]]
@@ -3859,47 +3966,150 @@ tests = []
 title = "macOS and Linux desktop builds"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/office_drop.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0156.md",
+]
 domain = "Platform"
-evidence = ""
+evidence = "docs/evidence/core/T-0156.md: 6 new office_drop::tests pass, including office_envelope_validation_accepts_a_well_formed_bundle, office_envelope_validation_rejects_bad_titles_and_duplicates, conversion_plan_is_deterministic_and_ordered and traversal_and_absolute_entry_names_are_rejected; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "PLAT-003"
-notes = ""
+notes = """
+Adds `pdfxi_core::office_drop`, a local file-drop/conversion contract for
+Office-derived bundles (ADR 0008 Office integration equivalent). A caller-
+supplied `OfficeDropEnvelope` (OfficeKind Word/Excel/PowerPoint, title, bounded
+`BundleEntry` list with order key and ContentHint) is validated for empty/
+oversized fields, traversal-free relative names, case-insensitive duplicate
+names and active-content markers. `plan_conversion` emits a deterministic
+`ConversionPlan` whose steps are sorted by (order, name) and whose summary is a
+stable token sequence. No ZIP/OOXML parsing, COM, process, filesystem or network
+access; no new dependency.
+
+Honest remaining scope: this is an envelope/plan only. It does not read real
+DOCX/XLSX/PPTX archives or Office/LibreOffice processes, does not feed bytes to
+the existing pdfxi-convert adapters, does not receive a host file-drop event,
+and has no CLI/UI entry point. The row stays in-progress, not replaced.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "office_drop::tests::office_envelope_validation_accepts_a_well_formed_bundle",
+    "office_drop::tests::office_envelope_validation_rejects_bad_titles_and_duplicates",
+    "office_drop::tests::conversion_plan_is_deterministic_and_ordered",
+    "office_drop::tests::traversal_and_absolute_entry_names_are_rejected",
+    "office_drop::tests::office_kind_and_hint_tokens_are_stable",
+    "office_drop::tests::office_drop_typed_errors_are_distinct",
+]
 title = "Microsoft Office integration"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/browser_handoff.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0156.md",
+]
 domain = "Platform"
-evidence = ""
+evidence = "docs/evidence/core/T-0156.md: 7 new browser_handoff::tests pass, including browser_handoff_rejects_relative_paths, browser_handoff_rejects_parent_traversal, rooted_windows_path_builds_a_deterministic_file_url and fragments_are_validated_and_included; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "PLAT-004"
-notes = ""
+notes = """
+Adds `pdfxi_core::browser_handoff`, a local "open in browser" handoff for an
+exported HTML file. `validate_rooted_path` accepts only rooted paths (Unix `/`,
+Windows drive, or UNC) with no `.`/`..` component, control character or
+non-HTML extension; `BrowserHandoff::with_fragment` validates a bounded safe
+fragment. `resolve_plan` produces a deterministic `file:` URL and summary
+string. No browser is launched and no network is contacted (ADR 0008).
+
+Honest remaining scope: this is a validated URL/plan only. It does not spawn a
+browser, query the OS default-browser association, register a protocol handler,
+read the exported file, or expose a CLI/UI entry point. The row stays
+in-progress, not replaced.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "browser_handoff::tests::rooted_windows_path_builds_a_deterministic_file_url",
+    "browser_handoff::tests::unix_and_unc_roots_are_accepted",
+    "browser_handoff::tests::browser_handoff_rejects_relative_paths",
+    "browser_handoff::tests::browser_handoff_rejects_parent_traversal",
+    "browser_handoff::tests::browser_handoff_rejects_bad_extension_and_control_chars",
+    "browser_handoff::tests::fragments_are_validated_and_included",
+    "browser_handoff::tests::browser_handoff_typed_errors_are_distinct",
+]
 title = "Browser integration"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/association.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0156.md",
+]
 domain = "Platform"
-evidence = ""
+evidence = "docs/evidence/core/T-0156.md: 6 new association::tests pass, including association_manifest_validation_accepts_a_valid_manifest, association_manifest_rejects_invalid_extensions_and_duplicates, association_manifest_rejects_dangerous_handlers and dry_run_plan_is_deterministic_regardless_of_input_order; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "PLAT-005"
-notes = ""
+notes = """
+Adds `pdfxi_core::association`, a declarative extension-to-handler manifest
+model. `HandlerCommand` stores a program plus literal arguments and rejects
+empty/oversized strings, control characters and shell metacharacters;
+`AssociationEntry` normalizes an extension to lowercase without the dot;
+`AssociationManifest` enforces non-empty, bounded, case-insensitively unique
+extensions. `dry_run_plan` emits deterministic lines ordered by extension and a
+stable summary. No registry key, shell verb, filesystem entry or process is
+created (ADR 0008 declarative equivalent).
+
+Honest remaining scope: dry-run data only. No OS registry/shell association is
+written, no elevation/permission flow, no per-user vs machine scope, no
+icon/verb resource generation, and no CLI/UI entry point. The host must apply
+the plan explicitly; the row stays in-progress, not replaced.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "association::tests::association_manifest_validation_accepts_a_valid_manifest",
+    "association::tests::association_manifest_rejects_invalid_extensions_and_duplicates",
+    "association::tests::association_manifest_rejects_dangerous_handlers",
+    "association::tests::dry_run_plan_is_deterministic_regardless_of_input_order",
+    "association::tests::dry_run_plan_does_not_spawn_or_write",
+    "association::tests::association_typed_errors_are_distinct",
+]
 title = "Shell integration and file associations"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/preferences.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0156.md",
+]
 domain = "Platform"
-evidence = ""
+evidence = "docs/evidence/core/T-0156.md: 8 new preferences::tests pass, including preferences_round_trip_is_lossless, defaults_are_documented_and_valid, invalid_schema_is_rejected, serialization_ordering_is_deterministic and caller_supplied_path_is_validated_without_io; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "PLAT-006"
-notes = ""
+notes = """
+Adds `pdfxi_core::preferences`, a deterministic preferences-file model. A
+versioned `Preferences` set (theme, locale, recent count, toolbar, default zoom,
+autosave) has documented `Default`s, strict range/format validation and typed
+`PreferencesError`s. `serialize_preferences` emits a sorted `key=value`
+document; `parse_preferences` requires every key exactly once, rejects unknown/
+duplicate/malformed lines and unsupported schema versions, and round-trips
+byte-for-byte. `PreferencesFile` validates and stores a caller-supplied path
+only: no read, write, or filesystem access occurs (ADR 0008 local equivalent).
+
+Honest remaining scope: in-memory model only. No file is created or read, no
+deployment customization (MSI transforms, managed policy, registry/GPO), no
+settings UI, no migration from older schemas, and no CLI/UI entry point. The
+host owns persistence at the caller-supplied path; the row stays in-progress,
+not replaced.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "preferences::tests::defaults_are_documented_and_valid",
+    "preferences::tests::preferences_round_trip_is_lossless",
+    "preferences::tests::serialization_ordering_is_deterministic",
+    "preferences::tests::invalid_schema_is_rejected",
+    "preferences::tests::invalid_values_are_rejected",
+    "preferences::tests::malformed_documents_are_rejected",
+    "preferences::tests::caller_supplied_path_is_validated_without_io",
+    "preferences::tests::preferences_typed_errors_are_distinct",
+]
 title = "Deployment preferences and customization"
 
 [[feature]]
