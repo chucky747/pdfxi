@@ -1,0 +1,16 @@
+{
+  "id": "T-0269",
+  "lane": "docs",
+  "title": "Security and privacy notes for the shipped build",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "docs/book/**",
+    "docs/evidence/docs/T-0269.md",
+    "orchestration/feature-updates/T-0269.toml"
+  ],
+  "acceptance": "cargo xtask docs passes; the security and privacy pages state only shipped behaviour, each claim links its evidence file and ADR, and no placeholder or aspirational promise remains",
+  "notes": "Docs-only task, deliberately unblocked so it can run in parallel with the app work. Writes the security and privacy pages from evidence, not aspiration: assistant lockdown and exactly what is sent and when (T-0254 evidence, ADR 0011); signature digest integrity versus identity and trust, including that chain and revocation may be unverified (T-0241, T-0249, T-0267, ADR 0010); redaction removes content but fails closed on unsupported form and inline-image content and must be verified (T-0237, T-0268); encryption is AES-256 with advisory permissions (T-0238, T-0256); untrusted input, the JS sandbox and parser hardening; and the local-only storage and identity defaults (ADR 0009/0010 and the T-0221 library evidence). Every claim links the ADR and evidence file it comes from; no placeholder promises. This is a subtask of T-0261's scope; T-0261 can reference and extend these pages. `cargo xtask docs` must pass.",
+  "evidence": "docs/evidence/docs/T-0269.md"
+}
