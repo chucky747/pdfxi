@@ -1492,30 +1492,47 @@ title = "Electronic signature fields and workflows"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-security/src/standard_handler.rs",
-    "crates/pdfxi-security/src/crypto/mod.rs",
+    "crates/pdfxi-security/src/encryption_writer.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/Cargo.toml",
+    "docs/evidence/security/T-0109.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 42 passed; 0 failed; 0 ignored. cargo clippy -p pdfxi-security --all-targets --all-features -- -D warnings: clean. cargo fmt -p pdfxi-security: clean. docs/evidence/security/T-0036.md"
+evidence = "cargo test -p pdfxi-security -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/security): 398 passed, 0 failed, 0 ignored. cargo fmt -p pdfxi-security -- --check / clippy --all-targets --no-deps -D warnings / RUSTDOCFLAGS=-D warnings cargo doc --no-deps: all EXIT=0. docs/evidence/security/T-0109.md"
 id = "SEC-001"
 notes = """
-Implemented the PDF standard security handler for revisions 2-6, including
-Algorithm 2 MD5 key derivation, Algorithms 3-7 O/U computation and owner
-recovery, revision 5 SHA-256, and revision 6 Algorithm 2.B hardened hashing.
-User then owner passwords are tried with constant-time comparison; owner role
-bypasses permission bits. Per-object keys follow RC4 min(n+5,16), AESV2 with the
-sALt salt, and AESV3 file-key rules. The Decryptor implements the Protector
-trait. Document-open integration is still pending, so the row stays in-progress.
+Adds the missing encrypting-save half of the standard security handler: the
+writer produces RC4-40/R2, RC4-128/R3, AES-128/R4 and AES-256/R5-R6 /Encrypt
+dictionaries with owner/user passwords, /P permissions, /O /U /OE /UE /Perms
+and /ID, and encrypts every string and stream with the correct per-object key.
+A password-aware reopen path authenticates with the existing handler and
+returns a plaintext core Document; wrong and missing passwords are rejected with
+typed errors. The typed EncryptionReport carries algorithm, key length, revision,
+permissions, raw /P, owner-password flag, ID and encrypted-object count.
+Negative and tamper tests are included (wrong/missing password, tampered /Perms,
+unsupported signatures/linearization/xref streams). Remaining work: certificate
+encryption belongs to a separate feature row, so SEC-001 stays in-progress.
 """
 priority = "P1"
 status = "in-progress"
 tests = [
-    "standard_handler::tests::revision_2_user_and_owner_passwords_authenticate",
-    "standard_handler::tests::revision_4_rc4_and_aes_round_trip_with_object_isolation",
-    "standard_handler::tests::revision_5_authenticates_user_and_owner_and_extracts_permissions",
-    "standard_handler::tests::revision_6_hardened_hash_authenticates_user_and_owner",
-    "standard_handler::tests::wrong_password_is_rejected_with_specific_error",
-    "standard_handler::tests::protector_trait_is_implemented_by_decryptor",
+    "encryption_writer::tests::rc4_40_round_trip",
+    "encryption_writer::tests::aes_128_round_trip",
+    "encryption_writer::tests::aes_256_r6_round_trip",
+    "encryption_writer::tests::owner_password_round_trip_uses_owner_role",
+    "encryption_writer::tests::wrong_password_is_rejected",
+    "encryption_writer::tests::missing_password_is_rejected",
+    "encryption_writer::tests::permissions_values_are_preserved_and_enforced",
+    "encryption_writer::tests::encrypt_dictionary_has_expected_fields",
+    "encryption_writer::tests::strings_are_encrypted_and_recovered",
+    "encryption_writer::tests::streams_are_encrypted_and_recovered",
+    "encryption_writer::tests::deterministic_output",
+    "encryption_writer::tests::id_derivation_and_existing_id_are_respected",
+    "encryption_writer::tests::typed_unsupported_path_errors",
+    "encryption_writer::tests::tampered_encrypted_output_is_rejected",
+    "encryption_writer::tests::encrypt_metadata_false_is_recorded",
+    "encryption_writer::tests::invalid_options_are_rejected_with_typed_errors",
 ]
 title = "Open password and permissions password"
 

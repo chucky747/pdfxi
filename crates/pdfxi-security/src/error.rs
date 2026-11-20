@@ -27,6 +27,13 @@ pub enum SecurityError {
     EncryptionFailed,
     /// Decryption failed (for example, invalid key or padding).
     DecryptionFailed,
+    /// A document structure that the encrypting save path deliberately refuses.
+    ///
+    /// Signatures and linearized or cross-reference-stream layouts are out of
+    /// scope for the encryption writer; the static message names the reason.
+    UnsupportedDocumentStructure(&'static str),
+    /// An encrypted document or its `/Encrypt` dictionary was malformed.
+    EncryptedDocumentInvalid(String),
     /// A signature was structurally invalid or could not be parsed.
     SignatureInvalid,
     /// Signed content was modified after the signature was created.
@@ -178,6 +185,12 @@ impl fmt::Display for SecurityError {
             }
             Self::EncryptionFailed => write!(f, "encryption failed"),
             Self::DecryptionFailed => write!(f, "decryption failed"),
+            Self::UnsupportedDocumentStructure(reason) => {
+                write!(f, "document structure cannot be encrypted: {reason}")
+            }
+            Self::EncryptedDocumentInvalid(reason) => {
+                write!(f, "encrypted document is malformed: {reason}")
+            }
             Self::SignatureInvalid => write!(f, "signature is invalid"),
             Self::TamperedContent => write!(f, "signed content was tampered with"),
             Self::SignatureExpired => write!(f, "signature or certificate has expired"),

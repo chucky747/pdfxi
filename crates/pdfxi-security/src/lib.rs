@@ -19,6 +19,10 @@
 //! - [`standard_handler`] — real password authentication and per-object
 //!   decryption for PDF encryption revisions 2–6
 //!   ([`StandardSecurityHandler`], [`Decryptor`], [`SecurityParameters`]).
+//! - [`encryption_writer`] — an encrypting save path that reuses the standard
+//!   handler to write `/Encrypt` dictionaries and encrypted strings/streams,
+//!   plus a password-aware reopen path ([`encrypt_document`], [`open_encrypted`],
+//!   [`EncryptionReport`]).
 //! - [`RedactionPlan`] / [`RedactionReport`] — page-scoped rectangle and text
 //!   redaction with deterministic ordering and strict residual verification
 //!   against caller-supplied post-redaction text.
@@ -49,6 +53,7 @@ pub mod cms;
 pub mod crypto;
 pub mod der;
 mod encryption;
+pub mod encryption_writer;
 mod error;
 mod permissions;
 mod protector;
@@ -65,6 +70,10 @@ pub use cms::{
     build_signed_data, digest, modpow_u128, verify_signed_data, verify_signed_data_detached,
 };
 pub use encryption::EncryptionMethod;
+pub use encryption_writer::{
+    DecryptionReport, EncryptOptions, EncryptionReport, build_encrypt_dictionary, encrypt_document,
+    open_encrypted,
+};
 pub use error::{Result, SecurityError};
 pub use permissions::{PasswordRole, Permission, Permissions};
 pub use protector::{MockProtector, Protector};
