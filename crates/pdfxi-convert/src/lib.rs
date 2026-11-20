@@ -124,6 +124,13 @@
 //!   explicit envelope validation, a deterministic conversion plan with a
 //!   sanitized output part name, and typed unsupported constructs. No ZIP,
 //!   COM, or extractor process is added.
+//! - [`office_integration`] closes PLAT-003 at library level (ADR 0008): a
+//!   validated integration descriptor for the Word/Excel/PowerPoint families,
+//!   a deterministic compatibility matrix, per-family round-trip capability
+//!   reporting, and a single envelope-validation entry point that plans and
+//!   executes import-to-PDF or PDF-to-Office conversions by reusing the
+//!   existing Office adapters. No COM add-in, ribbon, or external Office
+//!   process is involved.
 //! - [`portfolio_builder`] adds deterministic creation/customization of a
 //!   [`PortfolioManifest`] (CREATE-010): case-insensitive add/remove/edit of
 //!   named entries followed by validation and stable XML serialization.
@@ -196,6 +203,7 @@ pub mod office_contract;
 pub mod office_export;
 pub mod office_export_plan;
 pub mod office_import;
+pub mod office_integration;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
@@ -289,6 +297,13 @@ pub use office_import::{
     OfficeBundleKind, OfficeImport, OfficeImportError, OfficeImportFinding, OfficeImportReport,
     PAGE_BREAK_MARKER, import_office_bundle, import_office_bundle_strict,
     import_office_bundle_with_report,
+};
+pub use office_integration::{
+    CompatibilityEntry, CompatibilityMatrix, ExtensionRule, IntegrationDescriptor, IntegrationStep,
+    IntegrationUnsupported, OFFICE_INTEGRATION_MAX_NAME_BYTES, OfficeEnvelopePayload, OfficeFamily,
+    OfficeFlow, OfficeIntegrationEnvelope, OfficeIntegrationError, OfficeIntegrationOutput,
+    OfficeIntegrationPlan, OfficeIntegrationReport, RoundTripCapability, SupportLevel,
+    integration_descriptor, parse_family, plan_office_integration,
 };
 pub use options::ConversionOptions;
 #[cfg(feature = "renderer")]

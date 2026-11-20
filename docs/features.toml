@@ -3739,38 +3739,68 @@ title = "macOS and Linux desktop builds"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-core/src/office_drop.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0156.md",
+    "crates/pdfxi-convert/src/office_integration.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0182.md",
 ]
 domain = "Platform"
-evidence = "docs/evidence/core/T-0156.md: 6 new office_drop::tests pass, including office_envelope_validation_accepts_a_well_formed_bundle, office_envelope_validation_rejects_bad_titles_and_duplicates, conversion_plan_is_deterministic_and_ordered and traversal_and_absolute_entry_names_are_rejected; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/convert/T-0182.md"
 id = "PLAT-003"
 notes = """
-Adds `pdfxi_core::office_drop`, a local file-drop/conversion contract for
-Office-derived bundles (ADR 0008 Office integration equivalent). A caller-
-supplied `OfficeDropEnvelope` (OfficeKind Word/Excel/PowerPoint, title, bounded
-`BundleEntry` list with order key and ContentHint) is validated for empty/
-oversized fields, traversal-free relative names, case-insensitive duplicate
-names and active-content markers. `plan_conversion` emits a deterministic
-`ConversionPlan` whose steps are sorted by (order, name) and whose summary is a
-stable token sequence. No ZIP/OOXML parsing, COM, process, filesystem or network
-access; no new dependency.
+Closes PLAT-003 at library level with `pdfxi_convert::office_integration`
+(ADR 0008 local file-level Office equivalent). This builds on the existing
+`office_contract`, `office_import`, `office_export_plan`, `office_export`,
+`extract_model` and `create_from_text` adapters; no new OOXML ZIP reader is
+introduced (the in-process writer in `office_export` is reused unchanged).
 
-Honest remaining scope: this is an envelope/plan only. It does not read real
-DOCX/XLSX/PPTX archives or Office/LibreOffice processes, does not feed bytes to
-the existing pdfxi-convert adapters, does not receive a host file-drop event,
-and has no CLI/UI entry point. The row stays in-progress, not replaced.
+Delivered:
+- A validated `IntegrationDescriptor` for the Word/Excel/PowerPoint families:
+  supported kinds, a sorted per-family input extension allowlist, and a
+  `RoundTripCapability` report per family (import-to-PDF and PDF-to-Office both
+  available, naming the concrete adapter chains used by each direction).
+- A deterministic `CompatibilityMatrix` (51 stable rows, 17 constructs x 3
+  families) recording, per construct, whether it survives import, whether it
+  survives export, and whether it is a typed unsupported finding or a typed
+  rejection. Fidelity loss is reported, never silently faked.
+- A single entry point, `plan_office_integration(&OfficeIntegrationEnvelope)`,
+  that validates a caller-supplied envelope and returns a typed
+  `OfficeIntegrationPlan` for `ImportToPdf` or `PdfToOffice`. `execute()`
+  reuses the existing adapters to produce PDF bytes (`create_from_text`) or a
+  validated OOXML archive (`office_export_plan` + `office_export`).
+- Typed rejection of path traversal, unsafe/reserved names, unexpected output
+  extensions, oversized markup/extracted envelopes, unknown families, payload/
+  flow mismatch, and content with no convertible text.
+
+Verified with 16 new tests: matrix and descriptor determinism, per-family
+round-trip capability, both execution directions producing %PDF/PK bytes for
+all three families, and negative validation/typed-unsupported cases.
+
+Honest remaining scope is host-only and NOT claimed here: COM add-in, an
+installed Office ribbon, and an external Office/LibreOffice process. There is
+also no host file-drop event, no CLI/UI menu wiring, no OOXML ZIP reader beyond
+what already exists, and no real DOCX/XLSX/PPTX archive parsing. Per
+docs/ASSUMPTIONS.md item 12 the row is `verified` because every library-level
+capability is complete and the listed remainder is host-only integration.
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "office_drop::tests::office_envelope_validation_accepts_a_well_formed_bundle",
-    "office_drop::tests::office_envelope_validation_rejects_bad_titles_and_duplicates",
-    "office_drop::tests::conversion_plan_is_deterministic_and_ordered",
-    "office_drop::tests::traversal_and_absolute_entry_names_are_rejected",
-    "office_drop::tests::office_kind_and_hint_tokens_are_stable",
-    "office_drop::tests::office_drop_typed_errors_are_distinct",
+    "office_integration::tests::descriptor_is_deterministic_and_covers_all_families",
+    "office_integration::tests::compatibility_matrix_is_deterministic_and_complete",
+    "office_integration::tests::matrix_reports_import_export_and_typed_unsupported_constructs",
+    "office_integration::tests::round_trip_capability_reporting_is_per_family",
+    "office_integration::tests::import_plan_reuses_existing_adapters_and_is_deterministic",
+    "office_integration::tests::export_plan_reuses_existing_adapters_for_every_family",
+    "office_integration::tests::execute_import_produces_pdf_bytes",
+    "office_integration::tests::execute_export_produces_valid_ooxml_for_every_family",
+    "office_integration::tests::path_traversal_and_unsafe_names_are_rejected",
+    "office_integration::tests::oversized_and_empty_fields_are_rejected_with_typed_errors",
+    "office_integration::tests::unknown_families_are_rejected_with_typed_errors",
+    "office_integration::tests::payload_flow_mismatch_and_extension_allowlist_are_enforced",
+    "office_integration::tests::oversized_extracted_envelope_is_rejected",
+    "office_integration::tests::typed_unsupported_constructs_flow_into_plans",
+    "office_integration::tests::media_only_markup_has_no_convertible_text",
+    "office_integration::tests::family_mapping_helpers_are_total_and_stable",
 ]
 title = "Microsoft Office integration"
 
