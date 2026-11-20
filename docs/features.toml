@@ -2735,132 +2735,151 @@ tests = [
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
-docs = "crates/pdfxi-standards/src/profile_request.rs, docs/evidence/convert/T-0093.md"
+docs = [
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0150.md",
+]
 domain = "Print Production"
-evidence = "docs/evidence/convert/T-0093.md"
+evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New duplex/paper-source tests: duplex_plan_maps_pages_to_sheets_and_sides, duplex_and_paper_source_inputs_are_validated, geometry_helpers_sanitize_negative_and_non_finite_inputs. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
 id = "PRINT-002"
-notes = "Deterministic rule IDs and ordering across PDF/A-1b, PDF/A-2b, PDF/X-4, and PDF/E-1; PDF/VT and independent veraPDF-style cross-validation remain open."
+notes = """
+T-0150 adds the missing app-level duplex/paper-source plan to pdfxi-app::print.
+PaperSource (Auto/Tray(1..=255)/ManualFeed/Envelope) is validated with a typed
+UnsupportedOption for tray zero. DuplexPlan::build maps already-expanded logical
+pages onto physical sheets: Duplex::None gives one front-only sheet per page;
+LongEdge and ShortEdge pair pages on front/back and record the binding edge.
+It rejects empty/oversized counts with EmptyPageSet/TooManyPages and exposes a
+deterministic sheet_count, sides_used, and summary.
+
+HOST BACKEND BOUNDARY: this is a pure collation plan; the platform driver must
+perform the physical two-sided feed and tray selection. The pre-existing
+pdfxi-standards profile-validation work on this id is unchanged.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "document_profile::t0093_tests::pdfa1b_missing_xmp_fails",
-    "document_profile::t0093_tests::findings_have_stable_ids_and_order",
+    "print::impose_tests::duplex_plan_maps_pages_to_sheets_and_sides",
+    "print::impose_tests::duplex_and_paper_source_inputs_are_validated",
+    "print::impose_tests::geometry_helpers_sanitize_negative_and_non_finite_inputs",
 ]
 title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-render/src/color.rs",
-    "docs/evidence/render/T-0095.md",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "CARGO_TARGET_DIR=target/lanes/render; cargo test -p pdfxi-render: EXIT=0 (80 unit tests, incl. 18 color::tests: T-0095 baseline 78/16 + 2 new); fmt --check, clippy (--all-targets --all-features -D warnings), and RUSTDOCFLAGS=-D warnings cargo doc --no-deps all EXIT=0. Full output in docs/evidence/render/T-0095.md."
+evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New booklet tests: booklet_spread_order_includes_blank_padding (4- and 5-page cases incl. blank padding), booklet_rejects_empty_and_oversized_page_counts. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
 id = "PRINT-003"
-notes = "T-0122 reviewer-fix pass on T-0095: replaced the incorrect desc offset parsing with the real ICC textDescriptionType layout (desc signature, reserved, count at 8, string at 12, count validated against tag bounds, typed errors) and updated the test helper plus a realistic v2 payload test; changed Lab source data from Identity to NeedsBackend with updated rustdoc and tests; corrected the T-0095 evidence test count to 16 and noted the T-0095 fragment was integrator-consumed. PRINT-003 stays in-progress; no docs/features.toml or BOARD.md edits by this lane."
+notes = """
+T-0150 adds booklet_imposition to pdfxi-app::print. For n source pages the count
+is padded to a multiple of four with blank cells; sheet one's front is
+[last, first] and its back is [second, penultimate], stepping inward on each
+sheet. The plan lists every placed page with its DestinationCell (sheet, side,
+row, column) and a validated PageTransform, sorted by cell for determinism.
+Empty and oversized counts, invalid geometry, and excessive cell budgets return
+typed ImposeError variants.
+
+HOST BACKEND BOUNDARY: the plan tells a host exactly which source pages to place
+in which half of which sheet side and at what scale/offset; folding, stapling,
+and printing are performed by the host backend. This is independent of the
+pre-existing ICC/output-intent parsing work recorded on this id.
+"""
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "color::tests::header_fields_are_parsed",
-    "color::tests::tag_lookup_by_signature",
-    "color::tests::description_and_whitepoint_queries",
-    "color::tests::description_reads_realistic_v2_text_description_type",
-    "color::tests::truncated_profile_is_rejected",
-    "color::tests::oversize_profile_is_rejected",
-    "color::tests::invalid_signature_is_rejected",
-    "color::tests::srgb_like_matrix_and_trc_are_decoded",
-    "color::tests::gray_trc_is_decoded",
-    "color::tests::output_intent_parse",
-    "color::tests::missing_output_intent_is_detected",
-    "color::tests::multiple_output_intents_are_detected",
-    "color::tests::unsupported_intent_subtype_is_detected",
-    "color::tests::conversion_plan_is_deterministic",
-    "color::tests::needs_backend_plan_returns_typed_error",
-    "color::tests::lab_profile_requires_backend",
-    "color::tests::hostile_and_zero_length_tag_data_rejected",
-    "color::tests::device_color_component_validation",
+    "print::impose_tests::booklet_spread_order_includes_blank_padding",
+    "print::impose_tests::booklet_rejects_empty_and_oversized_page_counts",
 ]
 title = "ICC color management and output intents"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-render/src/preview.rs",
-    "docs/evidence/render/T-0103.md",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-render: 97 passed, 0 failed; preview mode parsing, plate visibility toggles, soft-proof intent parsing/mapping from ICC rendering intent, deterministic plan, and honest unsupported-conversion warnings all covered by 17 preview::tests. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0103.md."
+evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New poster tests: poster_tile_grid_and_overlap_are_deterministic (3x3 grid, overlap strides, source-window rects), poster_rejects_bad_overlap_scale_geometry_and_huge_grids. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
 id = "PRINT-004"
-notes = "Adds the Output Preview model: PreviewMode (composite / single separation / all separations), per-plate visibility toggles, an overprint-simulation flag, and SoftProofIntent selection (with Auto derivation from the output profile's ICC rendering intent). PreviewPlan::build yields a deterministic, backend-consumable description with resolved intent, output condition label, visible inks, warnings, and needs_backend_cmm. Process-ink and soft-proof metadata derive from the existing color.rs ICC/OutputIntent structures. Status stays in-progress: real separation/soft-proof rasterization needs the native CMM backend, out of this lane's scope."
+notes = """
+T-0150 adds poster_tiles to pdfxi-app::print. Given a source page, sheet,
+percentage scale, and inter-tile overlap, the planner derives the tile grid from
+the stride (sheet - overlap), then emits each tile's row/column, window offset,
+exact source-page slice, and a PageTransform that a host applies before clipping
+to the sheet. It rejects non-finite/negative overlap, invalid scale or geometry,
+and tile grids above the bounded cell limit with typed errors.
+
+HOST BACKEND BOUNDARY: rasterising and compositing the overlapping tiles onto
+physical sheets is the host printer backend's job. This complements, and does
+not replace, the pre-existing Output Preview model on this id.
+"""
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "preview::tests::preview_mode_parsing",
-    "preview::tests::plate_list_and_toggles",
-    "preview::tests::soft_proof_intent_parsing_and_mapping",
-    "preview::tests::plan_is_deterministic",
-    "preview::tests::plan_resolves_soft_proof_and_reports_unsupported_conversion",
-    "preview::tests::plan_respects_mode_overprint_and_visibility",
-    "preview::tests::empty_inputs_produce_valid_plan",
-    "preview::tests::bad_destination_profile_is_reported_as_warning",
+    "print::impose_tests::poster_tile_grid_and_overlap_are_deterministic",
+    "print::impose_tests::poster_rejects_bad_overlap_scale_geometry_and_huge_grids",
 ]
 title = "Output preview and separations"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-render/src/preview.rs",
-    "docs/evidence/render/T-0103.md",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-render: 97 passed, 0 failed; ink ordering/totals, spot vs process, enable/disable, overprint policy flags/bits, typed errors, empty/bounded inputs covered by 17 preview::tests. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0103.md."
+evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New N-up tests: n_up_row_and_column_orders_are_both_deterministic (3x2 row-major vs column-major, trailing blanks), n_up_rejects_invalid_grids_and_counts. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
 id = "PRINT-005"
-notes = "Adds the InkManager: InkEntry records carry name, process-CMYK-vs-spot indicator, normalised coverage/density, and an enabled flag. Entries are kept in canonical order (C, M, Y, K, then spots by name); totals accumulate in f64 and round to f32 once for determinism. Supports enable/disable, coverage updates, process/spot queries, and derivation from an ICC colour space or OutputIntent. OverprintPolicy carries overprint-preview policy flags with a deterministic bit encoding. Unsupported colour spaces yield typed UnsupportedConversion errors. Status stays in-progress: true overprint simulation is applied only by the native backend, which consumes needs_backend_cmm and the policy bits."
+notes = """
+T-0150 adds n_up_imposition to pdfxi-app::print. A bounded NUpLayout (columns x
+rows, each <= 64) and an NUpOrder (RowMajor/ColumnMajor) assign logical pages to
+cells on each sheet; trailing cells are blank. Each placed page carries its
+DestinationCell and a cell_transform whose uniform scale fits the source page
+inside the margin-aware cell and whose translation places it at the cell origin.
+Zero/oversized grids, empty/oversized page counts, and invalid geometry are
+typed errors, and repeated builds are byte-identical.
+
+HOST BACKEND BOUNDARY: the host paints the N-up cells onto the sheet; the
+pre-existing ink-manager/overprint model on this id is unchanged.
+"""
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "preview::tests::ink_ordering_and_totals",
-    "preview::tests::spot_vs_process_and_enabling",
-    "preview::tests::coverage_updates_are_validated",
-    "preview::tests::overprint_policy_flags_and_bits",
-    "preview::tests::process_plate_derivation_from_icc_space",
-    "preview::tests::derive_from_output_intent",
-    "preview::tests::plan_honours_policy_and_disabled_inks",
-    "preview::tests::typed_errors",
-    "preview::tests::bounded_ink_and_visible_plate_counts",
+    "print::impose_tests::n_up_row_and_column_orders_are_both_deterministic",
+    "print::impose_tests::n_up_rejects_invalid_grids_and_counts",
 ]
 title = "Ink manager and overprint preview"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-render/src/trapping.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0113.md",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-render (CARGO_TARGET_DIR=target/lanes/render): 120 passed, 0 failed; 7 new trapping::tests cover preset defaults, validation of widths/names/colours/sliding/tokens/resolution/depth, deterministic policy-bit encoding, and honest backend-limit warnings. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0113.md."
+evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New scaling tests: fit_math_is_deterministic_for_actual_fit_and_custom (actual/fit/fit-width/fit-height/custom), fit_rejects_invalid_geometry_and_scale. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
 id = "PRINT-006"
 notes = """
-Adds `pdfxi_render::trapping`: TrappingPreset carries trap width, black trap
-width, black trap colour (Auto/Knockout/CustomCmyk), join style and a sliding
-policy; FlattenPolicy carries resolution (72..=2400 DPI), vector/raster balance,
-overprint handling and a bounded group depth. All values are validated for
-finiteness and documented bounds with typed TrapError variants. TrapPlan::build
-is pure and deterministic, encodes categorical choices in `policy_bits`, and
-reports backend-only features (custom CMYK transform, sliding geometry,
-simulated overprint, raster-biased flattening) through needs_backend_prepress
-and warnings. Backend limits are documented in the module rustdoc: this crate
-plans traps and flattening but never paints traps, flattens transparency, or
-touches page pixels -- a native prepress backend must do that work. Status stays
-in-progress because no such backend consumer or UI/CLI surface is wired here.
+T-0150 adds resolve_fit and FitMode to pdfxi-app::print. FitMode covers Actual,
+Fit, FitWidth, FitHeight, and Custom(percent) (and converts from the renderer's
+PageScaleMode). resolve_fit returns a centred FitTransform with the uniform
+scale, rendered size, and offsets, plus a fits(target) query. It rejects
+non-finite source/target geometry, non-finite/non-positive custom percentages,
+and non-finite results with typed ImposeError variants.
+
+HOST BACKEND BOUNDARY: this is pure scaling math used by the imposition planners;
+rasterising at the resolved scale is done by the host. The pre-existing
+trapping/flattening planner on this id is unchanged.
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "trapping::tests::default_preset_and_policy_are_valid",
-    "trapping::tests::preset_validation_rejects_bad_widths_and_names",
-    "trapping::tests::categorical_tokens_parse_and_display",
-    "trapping::tests::trap_colour_and_sliding_validation",
-    "trapping::tests::flatten_policy_validation",
-    "trapping::tests::plan_is_deterministic_and_encodes_policy",
-    "trapping::tests::plan_reports_backend_limits_honestly",
+    "print::impose_tests::fit_math_is_deterministic_for_actual_fit_and_custom",
+    "print::impose_tests::fit_rejects_invalid_geometry_and_scale",
 ]
 title = "Trapping presets and transparency flattening"
 
@@ -2880,39 +2899,36 @@ title = "Page boxes bleed crop and printer marks"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-render/src/droplet.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0113.md",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-render (CARGO_TARGET_DIR=target/lanes/render): 120 passed, 0 failed; 8 new droplet::tests cover rooted-path acceptance, rejection of relative/traversal/NUL/control/oversized paths, profile parsing, config validation, deterministic sorted batch plans with pass/fail/skip counts and FNV-1a digest, empty batches, duplicate/invalid logical names, and the file-count cap. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0113.md."
+evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New production tests: marks_placement_is_deterministic_and_bounded, bleed_bounds_expand_trim_and_validate_inputs, separations_plan_is_order_independent_and_validated, output_intent_reports_missing_single_and_multiple_intents, production_plan_combines_every_print_production_option. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
 id = "PRINT-008"
 notes = """
-Adds `pdfxi_render::droplet`: FolderWatchConfig validates a watch folder, an
-output folder, a PreflightProfile (built-ins or a validated custom name), a file
-pattern, recursion flag and a bounded poll interval. WatchedPath is a lexically
-validated newtype (rooted, no NUL/control bytes, no `..` component); only a
-trusted host boundary may resolve it into a real directory -- the crate does no
-filesystem I/O, symlink resolution or access checks. The host supplies
-FilePreflightInput facts (logical relative name, verdict, findings), and
-BatchPlan::build produces a deterministically sorted FileOutcomePlan list plus a
-BatchSummary with pass/fail/skip counts, all_passed and a canonical FNV-1a digest
-that is byte-identical across runs. Findings are sorted and duplicate logical
-names and oversized batches are typed errors. Status stays in-progress because
-actual folder watching and preflight execution belong to a host adapter; no
-watcher thread or CLI/UI is wired in this render-lane task.
+T-0150 adds the print-production planners to pdfxi-app::print. MarksPlan places
+crop/registration/color-bar/page-info rectangles deterministically around a
+centred trim box and rejects marks that fall outside the sheet. BleedBounds
+validates per-edge bleed against a bounded maximum and expands the trim box.
+SeparationsPlan canonicalises inks (process first by name, then spots by name),
+assigns stable ids, and rejects empty/duplicate/oversized inputs.
+OutputIntentReport validates zero or one intent, normalises the ICC rendering
+intent name, reports missing/PDF-X warnings, and rejects ambiguity.
+ProductionPlan composes all four and is deterministic.
+
+HOST BACKEND BOUNDARY: the host paints the marks, applies the bleed box, consumes
+the separation plates, and validates the output profile with a real CMM. The
+pre-existing droplet/hot-folder work on this id is unchanged.
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "droplet::tests::watched_path_accepts_rooted_paths",
-    "droplet::tests::watched_path_rejects_unsafe_inputs",
-    "droplet::tests::preflight_profiles_parse_and_custom",
-    "droplet::tests::folder_watch_config_validation",
-    "droplet::tests::batch_plan_is_sorted_deterministic_and_summarised",
-    "droplet::tests::empty_batch_is_a_deterministic_pass",
-    "droplet::tests::invalid_and_duplicate_logical_names_are_rejected",
-    "droplet::tests::oversized_batch_is_rejected_without_allocating",
+    "print::impose_tests::marks_placement_is_deterministic_and_bounded",
+    "print::impose_tests::bleed_bounds_expand_trim_and_validate_inputs",
+    "print::impose_tests::separations_plan_is_order_independent_and_validated",
+    "print::impose_tests::output_intent_reports_missing_single_and_multiple_intents",
+    "print::impose_tests::production_plan_combines_every_print_production_option",
 ]
 title = "Droplets hot folders and batch preflight"
 

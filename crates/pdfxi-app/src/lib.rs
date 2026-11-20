@@ -40,6 +40,11 @@
 //! bounded zoom, page/screen source-destination mapping, deterministic
 //! hit-testing, and clamped drag/scroll/pinch gesture accumulation. Neither
 //! module touches a GUI or OS gesture recognizer.
+//! The [`mod@print`] module also produces deterministic, window-free imposition
+//! and print-production plans (booklet, poster/tile, N-up, fit scaling, duplex
+//! and paper source, marks/bleed/separations/output intents). Every planner
+//! validates hostile inputs and returns typed errors; executing a plan on a
+//! platform printer remains an explicit host-backend boundary.
 //! The [`home`] module holds the home-screen model: bounded, deduplicated
 //! recent/favorite/collection state over opaque document keys with deterministic
 //! ordering and a bounded, I/O-free text serialization format.
@@ -163,8 +168,14 @@ pub use presentation::{
     PresentationOutcome, Slide, Transition, map_presentation_gesture, map_presentation_key,
 };
 pub use print::{
-    DEFAULT_PRINT_DPI, PaperSize, PrintContext, PrintDialogState, PrintModel, PrintModelError,
-    PrintPageRange, PrintPlan,
+    Bleed, BleedBounds, DEFAULT_PRINT_DPI, DestinationCell, DuplexPlan, FitMode as PrintFitMode,
+    FitTransform, ImposeError, ImposeOptions, ImposedPage, ImpositionPlan, MAX_BLEED_PT,
+    MAX_GRID_EXTENT, MAX_IMPOSE_CELLS, MAX_IMPOSE_PAGES, MAX_PRINT_NAME_LEN, MAX_SEPARATIONS, Mark,
+    MarkKind, MarkRect, MarksPlan, NUpLayout, NUpOrder, OutputIntent, OutputIntentReport,
+    OutputIntentSubtype, PageTransform, PaperSize, PaperSource, PosterPlan, PosterTile,
+    PrintContext, PrintDialogState, PrintModel, PrintModelError, PrintPageRange, PrintPlan,
+    PrinterMarks, ProductionOptions, ProductionPlan, Separation, SeparationInput, SeparationsPlan,
+    SheetEntry, SheetSide, SizePt, booklet_imposition, n_up_imposition, poster_tiles, resolve_fit,
 };
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use read_aloud::{
