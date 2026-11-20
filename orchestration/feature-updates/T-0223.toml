@@ -7,7 +7,7 @@
 
 task = "T-0223"
 lane = "app"
-status = "review"
+status = "verified"
 evidence = "docs/evidence/ui/T-0223.md"
 docs = [
     "crates/pdfxi-app/src/print.rs",
