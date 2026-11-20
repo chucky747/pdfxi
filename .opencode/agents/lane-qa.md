@@ -34,6 +34,9 @@ permissions:
   - action: edit
     resource: "orchestration/blockers/**"
     effect: allow
+  - action: edit
+    resource: "crates/pdfxi-app/tests/**"
+    effect: allow
   - action: shell
     resource: "*"
     effect: allow

@@ -49,6 +49,15 @@ permissions:
   - action: edit
     resource: "docs/evidence/**"
     effect: allow
+  - action: edit
+    resource: "docs/decisions/**"
+    effect: allow
+  - action: edit
+    resource: "fixtures/realworld/**"
+    effect: allow
+  - action: edit
+    resource: "crates/pdfxi-document/**"
+    effect: allow
   - action: shell
     resource: "*"
     effect: allow
