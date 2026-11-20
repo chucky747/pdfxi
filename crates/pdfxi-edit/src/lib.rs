@@ -22,7 +22,12 @@
 //! line-break reflow against caller-supplied glyph metrics (a model only: it
 //! never reads or writes content streams). [`text_style`] models text run styles
 //! (font, size, scaling, spacing, color) with validation and deterministic
-//! first-run-wins paragraph resolution. [`header_footer`]
+//! first-run-wins paragraph resolution. [`find_replace`] searches
+//! caller-supplied extracted text with literal, bounded matching and builds a
+//! deterministic, non-overlapping, capped replace-all plan, while
+//! [`image_edit`] models image placement (fit/fill/stretch), validated
+//! replace/remove/move/resize operations, and a deterministic host-writer plan.
+//! [`header_footer`]
 //! models six-slot headers, footers, and page numbering and renders them as
 //! additive content-stream overlays, including whole-page-set application with
 //! filename tokens and alternate page selection. [`watermark`] models text,
@@ -45,9 +50,11 @@
 
 pub mod annotation;
 pub mod compare;
+pub mod find_replace;
 pub mod flatten;
 pub mod geometry;
 pub mod header_footer;
+pub mod image_edit;
 pub mod markup;
 pub mod measurement;
 pub mod navigation;
@@ -65,6 +72,10 @@ pub use compare::{
     CompareError, CompareOptions, CompareResult, CompareSummary, Hunk, HunkKind, TextDocument,
     TextPage, compare_documents,
 };
+pub use find_replace::{
+    FindReplaceError, ReplaceAllPlan, ReplaceLimits, ReplaceStep, SearchDocument, SearchHit,
+    SearchLimits, SearchOptions, SearchPage, build_replace_all_plan, find_all,
+};
 pub use flatten::{
     Appearance, AppearanceResource, FlattenError, FlattenEvent, FlattenInput, FlattenOptions,
     FlattenReport, FlattenedDocument, FlattenedPage, PageBox, SkipReason, Widget, flatten,
@@ -75,6 +86,10 @@ pub use header_footer::{
     PageContext, PageFilter, PageNumbering, PageSelection, PageSetContext, Slot, SlotContent,
     StandardFont, TextColor, TextStyle, Token, compose_content, compose_page_set,
     display_dimensions, escape_literal, render_overlay, render_page_set, transform_for_page,
+};
+pub use image_edit::{
+    ImageAction, ImageEdit, ImageEditError, ImageEditPlan, ImageEditStep, ImageId, ImageOperation,
+    PageBounds, PlacedImage, PlacementMode, place_image,
 };
 pub use markup::{
     ArrowHead, ArrowOptions, AttachmentIcon, CalloutOptions, CloudOptions, DrawingKind,

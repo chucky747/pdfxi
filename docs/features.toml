@@ -850,25 +850,88 @@ tests = [
 title = "Edit fonts size spacing and color"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/find_replace.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "docs/evidence/author/T-0138.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 12 new find_replace tests passed, full suite 268 passed / 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0138.md."
 id = "EDIT-003"
-notes = ""
+notes = """
+Adds a dependency-free document-wide find/replace model in pdfxi-edit.
+`SearchOptions` carries case_sensitive, whole_word and diacritic_insensitive
+flags; matching is literal Unicode-scalar comparison with a bounded, one-to-one
+case fold and a documented diacritic fold (common precomposed Latin letters
+plus combining-mark ranges). There is no regex engine and no pattern syntax, so
+arbitrary regular expressions are never executed and work is bounded by
+query_len x text_len per line. `SearchDocument` / `SearchPage` take
+caller-supplied extracted text; `find_all` returns `SearchHit`s with page, line
+and half-open scalar offsets, sorted by (page, line, start) so results are
+deterministic even when input pages are out of order. `build_replace_all_plan`
+emits a `ReplaceAllPlan` of `ReplaceStep`s chosen leftmost-first with no
+overlaps, a configurable replacement cap, and typed `FindReplaceError` variants
+for empty query, oversized query/line/replacement, invalid options and cap
+exceeded. This is verified at the library-model level: this crate never reads
+or rewrites content streams, so host serialization of the plan and UI wiring
+remain future work. No new dependency and no source-byte mutation.
+"""
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "find_replace::tests::case_sensitivity_controls_matching",
+    "find_replace::tests::whole_word_rejects_substrings",
+    "find_replace::tests::diacritics_fold_precomposed_and_combining_forms",
+    "find_replace::tests::find_all_is_deterministically_ordered_regardless_of_input_order",
+    "find_replace::tests::empty_query_is_rejected",
+    "find_replace::tests::oversized_query_and_line_are_rejected",
+    "find_replace::tests::invalid_whole_word_query_and_zero_cap_are_rejected",
+    "find_replace::tests::replace_all_plan_is_non_overlapping",
+    "find_replace::tests::replace_all_respects_the_cap",
+    "find_replace::tests::replacement_size_is_validated",
+    "find_replace::tests::offsets_are_unicode_scalar_indices",
+    "find_replace::tests::duplicate_pages_are_rejected",
+]
 title = "Find and replace text across a document"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/image_edit.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "docs/evidence/author/T-0138.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 10 new image_edit tests passed, full suite 268 passed / 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0138.md."
 id = "EDIT-004"
-notes = ""
+notes = """
+Adds a dependency-free image edit model in pdfxi-edit. `PlacedImage` carries a
+stable `ImageId`, page, validated `Rect`, rotation (0/90/180/270), opacity in
+0.0..=1.0 and caller-supplied intrinsic size (no image decoding). `PlacementMode`
+Fit/Fill/Stretch and `place_image` provide centered aspect-preserving fit/fill
+plus exact stretch; a 90/270 rotation swaps the effective intrinsic dimensions.
+`ImageOperation` Replace/Remove/Move/Resize are applied in order by
+`ImageEdit::build_plan`, which validates page bounds, finite geometry, opacity,
+rotation, intrinsic size, known/duplicate ids and same-page replacement, then
+emits an `ImageEditPlan` sorted by (page, id) for a host writer. Ten unit tests
+cover the placement math, validation and determinism. This is verified at the
+library-model level: this crate does not decode images or serialize content
+streams / image XObjects, so host writing and UI integration remain future work.
+No new dependency and no source-byte mutation.
+"""
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "image_edit::tests::fit_fill_and_stretch_math_is_correct",
+    "image_edit::tests::opacity_is_validated",
+    "image_edit::tests::out_of_bounds_placements_are_rejected",
+    "image_edit::tests::resize_preserves_aspect_ratio",
+    "image_edit::tests::plan_is_deterministic_and_ordered_by_page_then_id",
+    "image_edit::tests::move_replace_and_remove_operations_apply_in_order",
+    "image_edit::tests::move_outside_bounds_and_non_finite_deltas_are_rejected",
+    "image_edit::tests::invalid_rotation_natural_size_and_unknown_id_are_rejected",
+    "image_edit::tests::rotation_swaps_effective_natural_size",
+    "image_edit::tests::duplicate_ids_are_rejected",
+]
 title = "Add move resize and replace images"
 
 [[feature]]

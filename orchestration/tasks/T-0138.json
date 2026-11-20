@@ -3,7 +3,7 @@
   "lane": "author",
   "title": "Find replace and image editing model",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0137"],
   "owns": [
     "crates/pdfxi-edit/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0138.toml"
   ],
   "acceptance": "cargo test -p pdfxi-edit",
-  "evidence": ""
+  "evidence": "docs/evidence/author/T-0138.md"
 }
