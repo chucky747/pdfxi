@@ -9,17 +9,26 @@
 //!
 //! # What this provides — and what it does not
 //!
-//! The envelope provides **integrity** (a tamper-evident digest over the whole
-//! container) and a **declarative access description** (who may open it and what
-//! each recipient may do). It deliberately does **not** provide confidentiality:
-//! the payload is stored verbatim. Confidentiality is the job of
-//! [`crate::certificate_encryption`] and the standard security handler; callers
-//! that need both should encrypt the payload first and then wrap the ciphertext.
-//! Enforcement of the declared permissions is a local reader policy; no rights
-//! management server is involved.
+//! Every envelope carries an unkeyed SHA-256 integrity tag over the whole
+//! container. An envelope built with a caller-supplied authentication key also
+//! carries a keyed HMAC-SHA256 tag; [`open_security_envelope_with_key`] verifies
+//! it and reports [`Integrity::Authenticated`]. An unkeyed envelope reports
+//! [`Integrity::Unkeyed`]: its digest is reproducible by anyone, so both the
+//! payload **and the declared permissions must be treated as untrusted** until
+//! the caller authenticates them by other means. The `Debug` implementations of
+//! [`SecurityEnvelope`] and [`OpenedSecurityEnvelope`] render the payload as a
+//! length only.
 //!
-//! No document contents or secrets are logged. Error messages carry only caller
-//! supplied labels and structural reasons.
+//! The envelope provides a **declarative access description** (who may open it
+//! and what each recipient may do). It deliberately does **not** provide
+//! confidentiality: the payload is stored verbatim. Confidentiality is the job
+//! of [`crate::certificate_encryption`] and the standard security handler;
+//! callers that need both should encrypt the payload first and then wrap the
+//! ciphertext. Enforcement of the declared permissions is a local reader
+//! policy; no rights management server is involved.
+//!
+//! No document contents or secrets are logged. Error messages and `Debug`
+//! output carry only caller supplied labels, lengths, and structural reasons.
 //!
 //! # Certificate envelopes (SEC-010 completion)
 //!
@@ -39,15 +48,18 @@ use crate::certificate_encryption::{
     ContentCipher, EnvelopedData, KeyWrapProvider, RecipientList,
     build_envelope as build_enveloped_data,
 };
-use crate::crypto::sha::sha256;
+use crate::crypto::constant_time_eq;
+use crate::crypto::sha::{hmac_sha256, sha256};
 use crate::error::{Result, SecurityError};
 use crate::permissions::{Permission, Permissions};
 
 /// Magic bytes prefixing every serialized local security envelope.
 const MAGIC: &[u8; 9] = b"PDFXI-ENV";
-/// The only envelope format version this implementation understands.
+/// Legacy, unkeyed envelope format version (still read for backward compatibility).
 const VERSION: u8 = 1;
-/// Length of the SHA-256 integrity tag.
+/// Authenticated envelope format version, carrying an HMAC-SHA256 tag.
+const VERSION_AUTHENTICATED: u8 = 2;
+/// Length of the SHA-256 integrity and authentication tags.
 const TAG_LEN: usize = 32;
 
 /// One recipient of a [`SecurityEnvelope`].
@@ -83,13 +95,35 @@ impl EnvelopeRecipient {
 }
 
 /// A local security envelope wrapping a payload and its access description.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is implemented manually: the payload is rendered as a byte length,
+/// never as document contents.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SecurityEnvelope {
     version: u8,
     payload: Vec<u8>,
     permissions: Permission,
     recipients: Vec<EnvelopeRecipient>,
     integrity_tag: [u8; TAG_LEN],
+    /// Keyed authentication tag; present only for authenticated (version 2)
+    /// envelopes and never rendered in `Debug`.
+    mac_tag: Option<[u8; TAG_LEN]>,
+}
+
+impl fmt::Debug for SecurityEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecurityEnvelope")
+            .field("version", &self.version)
+            .field("payload", &format_args!("<{} bytes>", self.payload.len()))
+            .field(
+                "permissions",
+                &format_args!("{:#x}", self.permissions.bits()),
+            )
+            .field("recipient_count", &self.recipients.len())
+            .field("integrity_tag", &"<redacted>")
+            .field("authenticated", &self.mac_tag.is_some())
+            .finish()
+    }
 }
 
 impl SecurityEnvelope {
@@ -118,6 +152,27 @@ impl SecurityEnvelope {
         &self.integrity_tag
     }
 
+    /// Whether this envelope carries a keyed HMAC-SHA256 authentication tag.
+    ///
+    /// Unauthenticated envelopes report [`Integrity::Unkeyed`] when opened and
+    /// their permissions must be treated as untrusted.
+    pub fn is_authenticated(&self) -> bool {
+        self.mac_tag.is_some()
+    }
+
+    /// Verify the keyed authentication tag with `key`, if this envelope has one.
+    ///
+    /// Returns `false` for unkeyed envelopes or an empty key. The comparison is
+    /// constant-time with respect to the tag bytes.
+    pub fn verify_authentication(&self, key: &[u8]) -> bool {
+        match &self.mac_tag {
+            Some(tag) if !key.is_empty() => {
+                constant_time_eq(tag, &hmac_sha256(key, &self.canonical_body()))
+            }
+            _ => false,
+        }
+    }
+
     /// Look up a recipient by label.
     pub fn recipient(&self, label: &str) -> Option<&EnvelopeRecipient> {
         self.recipients
@@ -125,7 +180,11 @@ impl SecurityEnvelope {
             .find(|recipient| recipient.label == label)
     }
 
-    /// Verify that the integrity tag still matches the envelope contents.
+    /// Verify the unkeyed SHA-256 digest over the canonical envelope body.
+    ///
+    /// This is a tamper-evidence check only: anyone can recompute the digest,
+    /// so it does not authenticate the payload or permissions. Call
+    /// [`Self::verify_authentication`] with a trusted key to authenticate them.
     pub fn verify_integrity(&self) -> bool {
         sha256(&self.canonical_body()) == self.integrity_tag
     }
@@ -148,16 +207,23 @@ impl SecurityEnvelope {
     }
 
     /// Serialize the envelope to the deterministic local file format.
+    ///
+    /// Authenticated envelopes append the HMAC-SHA256 tag after the unkeyed
+    /// integrity tag.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut body = self.canonical_body();
         body.extend_from_slice(&self.integrity_tag);
+        if let Some(tag) = &self.mac_tag {
+            body.extend_from_slice(tag);
+        }
         body
     }
 
-    /// Parse an envelope from bytes without verifying its integrity tag.
+    /// Parse an envelope from bytes without verifying its integrity tags.
     ///
-    /// Call [`Self::verify_integrity`] or [`open_security_envelope`] to detect
-    /// tampering.
+    /// Call [`Self::verify_integrity`] / [`Self::verify_authentication`], or
+    /// [`open_security_envelope`] / [`open_security_envelope_with_key`], to
+    /// detect tampering.
     ///
     /// # Errors
     ///
@@ -169,7 +235,7 @@ impl SecurityEnvelope {
             return Err(SecurityError::EnvelopeMalformed("bad magic".to_owned()));
         }
         let version = cursor.u8()?;
-        if version != VERSION {
+        if version != VERSION && version != VERSION_AUTHENTICATED {
             return Err(SecurityError::EnvelopeMalformed(format!(
                 "unsupported version {version}"
             )));
@@ -195,6 +261,13 @@ impl SecurityEnvelope {
         let integrity_tag: [u8; TAG_LEN] = cursor.take(TAG_LEN)?.try_into().map_err(|_| {
             SecurityError::EnvelopeMalformed("invalid integrity tag length".to_owned())
         })?;
+        let mac_tag = if version == VERSION_AUTHENTICATED {
+            Some(cursor.take(TAG_LEN)?.try_into().map_err(|_| {
+                SecurityError::EnvelopeMalformed("invalid authentication tag length".to_owned())
+            })?)
+        } else {
+            None
+        };
         if !cursor.is_empty() {
             return Err(SecurityError::EnvelopeMalformed(
                 "trailing bytes".to_owned(),
@@ -206,6 +279,7 @@ impl SecurityEnvelope {
             permissions,
             recipients,
             integrity_tag,
+            mac_tag,
         })
     }
 
@@ -265,9 +339,61 @@ pub fn build_security_envelope(
         permissions,
         recipients,
         integrity_tag: [0u8; TAG_LEN],
+        mac_tag: None,
     };
     envelope.integrity_tag = sha256(&envelope.canonical_body());
     Ok(envelope)
+}
+
+/// Build an authenticated local security envelope around a non-empty payload.
+///
+/// The caller supplies `auth_key`, which is used only to compute an HMAC-SHA256
+/// tag over the canonical envelope body; it is never stored in the envelope or
+/// written to diagnostics. The key must be non-empty. Empty payloads, empty or
+/// duplicate recipient lists, and empty labels are rejected exactly as in
+/// [`build_security_envelope`].
+///
+/// An authenticated envelope must be opened with
+/// [`open_security_envelope_with_key`] and the same key. Its permissions and
+/// payload are authenticated; an unkeyed envelope's are not.
+///
+/// # Errors
+///
+/// [`SecurityError::EnvelopeAuthenticationRequired`] for an empty key, plus the
+/// same typed errors as [`build_security_envelope`] for invalid payload or
+/// recipients.
+pub fn build_authenticated_security_envelope(
+    payload: &[u8],
+    permissions: Permission,
+    recipients: Vec<EnvelopeRecipient>,
+    auth_key: &[u8],
+) -> Result<SecurityEnvelope> {
+    if auth_key.is_empty() {
+        return Err(SecurityError::EnvelopeAuthenticationRequired);
+    }
+    let mut envelope = build_security_envelope(payload, permissions, recipients)?;
+    // The version byte is part of the canonical body, so switch it before
+    // recomputing both tags.
+    envelope.version = VERSION_AUTHENTICATED;
+    envelope.integrity_tag = sha256(&envelope.canonical_body());
+    envelope.mac_tag = Some(hmac_sha256(auth_key, &envelope.canonical_body()));
+    Ok(envelope)
+}
+
+/// How an opened envelope's integrity was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Integrity {
+    /// Only the unkeyed SHA-256 digest was checked.
+    ///
+    /// Anyone can recompute that digest, so the payload **and the declared
+    /// permissions are untrusted**. Callers must not rely on the permissions
+    /// for an authorization decision without authenticating them separately.
+    Unkeyed,
+    /// A keyed HMAC-SHA256 tag was verified with a caller-supplied key.
+    ///
+    /// The payload and permissions are authenticated to a party holding that
+    /// key. This does not add confidentiality; the payload is still verbatim.
+    Authenticated,
 }
 
 /// A deterministic report describing an opened envelope.
@@ -283,15 +409,37 @@ pub struct EnvelopeReport {
     pub payload_len: usize,
     /// Whether the integrity tag matched on open.
     pub integrity_ok: bool,
+    /// How integrity was established.
+    ///
+    /// With [`Integrity::Unkeyed`] the declared permissions are **untrusted**:
+    /// the unkeyed digest is reproducible by an attacker.
+    pub integrity: Integrity,
 }
 
 /// An envelope whose integrity tag has been verified.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented manually: the payload is rendered as a byte length,
+/// never as document contents.
+#[derive(Clone)]
 pub struct OpenedSecurityEnvelope {
     payload: Vec<u8>,
     permissions: Permission,
     recipients: Vec<EnvelopeRecipient>,
     report: EnvelopeReport,
+}
+
+impl fmt::Debug for OpenedSecurityEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenedSecurityEnvelope")
+            .field("payload", &format_args!("<{} bytes>", self.payload.len()))
+            .field(
+                "permissions",
+                &format_args!("{:#x}", self.permissions.bits()),
+            )
+            .field("recipient_count", &self.recipients.len())
+            .field("report", &self.report)
+            .finish()
+    }
 }
 
 impl OpenedSecurityEnvelope {
@@ -316,30 +464,81 @@ impl OpenedSecurityEnvelope {
     }
 }
 
-/// Parse and verify a local security envelope.
+/// Build the opened view of an envelope whose tags have already been checked.
+fn finalize_open(envelope: SecurityEnvelope, integrity: Integrity) -> OpenedSecurityEnvelope {
+    let report = EnvelopeReport {
+        version: envelope.version,
+        recipient_count: envelope.recipients.len(),
+        permission_bits: envelope.permissions.bits(),
+        payload_len: envelope.payload.len(),
+        integrity_ok: true,
+        integrity,
+    };
+    OpenedSecurityEnvelope {
+        payload: envelope.payload,
+        permissions: envelope.permissions,
+        recipients: envelope.recipients,
+        report,
+    }
+}
+
+/// Parse and verify an unkeyed local security envelope.
+///
+/// This opens legacy, integration-only envelopes (version 1) and reports
+/// [`Integrity::Unkeyed`]. Because the digest is unkeyed, the payload and the
+/// declared permissions are **untrusted**. An authenticated envelope is
+/// rejected here with [`SecurityError::EnvelopeAuthenticationRequired`]; use
+/// [`open_security_envelope_with_key`] for it.
 ///
 /// # Errors
 ///
-/// [`SecurityError::EnvelopeMalformed`] for a malformed container or
-/// [`SecurityError::EnvelopeIntegrityFailed`] when the integrity tag does not
-/// match (tampering).
+/// [`SecurityError::EnvelopeMalformed`] for a malformed container,
+/// [`SecurityError::EnvelopeAuthenticationRequired`] when a key is needed, or
+/// [`SecurityError::EnvelopeIntegrityFailed`] on tampering.
 pub fn open_security_envelope(bytes: &[u8]) -> Result<OpenedSecurityEnvelope> {
     let envelope = SecurityEnvelope::from_bytes(bytes)?;
+    if envelope.is_authenticated() {
+        return Err(SecurityError::EnvelopeAuthenticationRequired);
+    }
     if !envelope.verify_integrity() {
         return Err(SecurityError::EnvelopeIntegrityFailed);
     }
-    Ok(OpenedSecurityEnvelope {
-        payload: envelope.payload.clone(),
-        permissions: envelope.permissions,
-        recipients: envelope.recipients.clone(),
-        report: EnvelopeReport {
-            version: envelope.version,
-            recipient_count: envelope.recipients.len(),
-            permission_bits: envelope.permissions.bits(),
-            payload_len: envelope.payload.len(),
-            integrity_ok: true,
-        },
-    })
+    Ok(finalize_open(envelope, Integrity::Unkeyed))
+}
+
+/// Parse and verify an authenticated local security envelope with `auth_key`.
+///
+/// The key must be non-empty and the envelope must carry an HMAC-SHA256 tag.
+/// Both the unkeyed digest and the keyed tag must match; a caller-supplied key
+/// is therefore required and an unkeyed envelope is never accepted here.
+/// Permissions in the resulting report are authenticated to a key holder.
+///
+/// # Errors
+///
+/// [`SecurityError::EnvelopeAuthenticationRequired`] for an empty key, an
+/// unkeyed envelope, or an authenticated envelope opened without a key;
+/// [`SecurityError::EnvelopeMalformed`] for a malformed container;
+/// [`SecurityError::EnvelopeIntegrityFailed`] when the unkeyed digest fails;
+/// [`SecurityError::EnvelopeAuthenticationFailed`] for a wrong key or a
+/// recomputed unkeyed tag over modified contents.
+pub fn open_security_envelope_with_key(
+    bytes: &[u8],
+    auth_key: &[u8],
+) -> Result<OpenedSecurityEnvelope> {
+    if auth_key.is_empty() {
+        return Err(SecurityError::EnvelopeAuthenticationRequired);
+    }
+    let envelope = SecurityEnvelope::from_bytes(bytes)?;
+    if !envelope.is_authenticated() {
+        return Err(SecurityError::EnvelopeAuthenticationRequired);
+    }
+    if !envelope.verify_integrity() {
+        return Err(SecurityError::EnvelopeIntegrityFailed);
+    }
+    if !envelope.verify_authentication(auth_key) {
+        return Err(SecurityError::EnvelopeAuthenticationFailed);
+    }
+    Ok(finalize_open(envelope, Integrity::Authenticated))
 }
 
 /// A small bounds-checked byte cursor used by [`SecurityEnvelope::from_bytes`].
@@ -774,6 +973,169 @@ mod tests {
         assert_eq!(opened.report().version, 1);
         assert_eq!(opened.report().recipient_count, 2);
         assert!(opened.report().integrity_ok);
+        assert_eq!(opened.report().integrity, Integrity::Unkeyed);
+        assert!(!built.is_authenticated());
+    }
+
+    #[test]
+    fn envelope_debug_redacts_payload_bytes() {
+        let mut secret = b"TOP-SECRET-PAYLOAD-BYTES".to_vec();
+        secret.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let key = b"diagnostic-test-key";
+        let unkeyed =
+            build_security_envelope(&secret, Permission::PRINT, recipients()).expect("unkeyed");
+        let authenticated =
+            build_authenticated_security_envelope(&secret, Permission::PRINT, recipients(), key)
+                .expect("authenticated");
+        let opened = open_security_envelope(&unkeyed.to_bytes()).expect("open unkeyed");
+        let opened_auth = open_security_envelope_with_key(&authenticated.to_bytes(), key)
+            .expect("open authenticated");
+        let length_marker = format!("<{} bytes>", secret.len());
+
+        for rendered in [
+            format!("{unkeyed:?}"),
+            format!("{authenticated:?}"),
+            format!("{opened:?}"),
+            format!("{opened_auth:?}"),
+        ] {
+            assert!(
+                !rendered.contains("TOP-SECRET-PAYLOAD-BYTES"),
+                "payload text leaked into Debug: {rendered}"
+            );
+            assert!(
+                !rendered.contains("222, 173, 190, 239"),
+                "raw payload bytes leaked into Debug: {rendered}"
+            );
+            assert!(
+                rendered.contains(&length_marker),
+                "Debug must show payload length only: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_envelope_round_trip_is_reported_as_authenticated() {
+        let key = b"round-trip-key";
+        let payload = b"%PDF-1.7\nauthenticated-payload";
+        let built = build_authenticated_security_envelope(
+            payload,
+            Permission::PRINT.union(Permission::COPY),
+            recipients(),
+            key,
+        )
+        .expect("build");
+        assert!(built.is_authenticated());
+        assert!(built.verify_integrity());
+        assert!(built.verify_authentication(key));
+        assert!(!built.verify_authentication(b"wrong-key"));
+        assert!(!built.verify_authentication(b""));
+
+        let bytes = built.to_bytes();
+        let reparsed = SecurityEnvelope::from_bytes(&bytes).expect("reparse");
+        assert_eq!(reparsed.version(), 2);
+        assert!(reparsed.is_authenticated());
+        assert_eq!(reparsed.integrity_tag(), built.integrity_tag());
+
+        let opened = open_security_envelope_with_key(&bytes, key).expect("open");
+        assert_eq!(opened.payload(), payload);
+        assert_eq!(opened.recipients(), built.recipients());
+        assert_eq!(opened.permissions(), built.permissions());
+        assert!(opened.report().integrity_ok);
+        assert_eq!(opened.report().integrity, Integrity::Authenticated);
+    }
+
+    #[test]
+    fn tampered_payload_with_recomputed_unkeyed_tag_is_rejected_when_key_is_required() {
+        let key = b"required-auth-key";
+        let built = build_authenticated_security_envelope(
+            b"%PDF-1.7\nprotect-me",
+            Permission::PRINT,
+            recipients(),
+            key,
+        )
+        .expect("build");
+        let mut tampered = SecurityEnvelope::from_bytes(&built.to_bytes()).expect("parse");
+        tampered.payload[0] ^= 0x01;
+        // An attacker freely recomputes the unkeyed SHA-256 tag over the edited
+        // body, but cannot produce a valid HMAC without the key.
+        tampered.integrity_tag = sha256(&tampered.canonical_body());
+        assert!(tampered.verify_integrity(), "unkeyed tag was recomputed");
+        assert!(!tampered.verify_authentication(key));
+        let bytes = tampered.to_bytes();
+        assert!(matches!(
+            open_security_envelope_with_key(&bytes, key),
+            Err(SecurityError::EnvelopeAuthenticationFailed)
+        ));
+        // An authenticated envelope is never accepted by the unkeyed opener.
+        assert!(matches!(
+            open_security_envelope(&bytes),
+            Err(SecurityError::EnvelopeAuthenticationRequired)
+        ));
+
+        // The same attack against the declared permissions is rejected too.
+        let mut tampered_perms = SecurityEnvelope::from_bytes(&built.to_bytes()).expect("parse");
+        tampered_perms.permissions = Permission::COPY;
+        tampered_perms.integrity_tag = sha256(&tampered_perms.canonical_body());
+        assert!(tampered_perms.verify_integrity());
+        assert!(matches!(
+            open_security_envelope_with_key(&tampered_perms.to_bytes(), key),
+            Err(SecurityError::EnvelopeAuthenticationFailed)
+        ));
+    }
+
+    #[test]
+    fn wrong_key_is_rejected_and_empty_key_is_a_typed_error() {
+        let key = b"correct-key";
+        let bytes =
+            build_authenticated_security_envelope(b"payload", Permission::PRINT, recipients(), key)
+                .expect("build")
+                .to_bytes();
+        assert!(matches!(
+            open_security_envelope_with_key(&bytes, b"incorrect-key"),
+            Err(SecurityError::EnvelopeAuthenticationFailed)
+        ));
+        assert!(matches!(
+            open_security_envelope_with_key(&bytes, b""),
+            Err(SecurityError::EnvelopeAuthenticationRequired)
+        ));
+        assert!(matches!(
+            build_authenticated_security_envelope(b"payload", Permission::PRINT, recipients(), b""),
+            Err(SecurityError::EnvelopeAuthenticationRequired)
+        ));
+    }
+
+    #[test]
+    fn unkeyed_envelope_is_never_accepted_by_the_keyed_opener() {
+        let bytes = build_security_envelope(b"legacy payload", Permission::PRINT, recipients())
+            .expect("build")
+            .to_bytes();
+        assert!(matches!(
+            open_security_envelope_with_key(&bytes, b"any-key"),
+            Err(SecurityError::EnvelopeAuthenticationRequired)
+        ));
+        let opened = open_security_envelope(&bytes).expect("legacy open");
+        assert_eq!(opened.report().integrity, Integrity::Unkeyed);
+    }
+
+    #[test]
+    fn authenticated_envelope_without_a_mac_tag_is_malformed() {
+        let bytes = build_authenticated_security_envelope(
+            b"payload",
+            Permission::PRINT,
+            recipients(),
+            b"key",
+        )
+        .expect("build")
+        .to_bytes();
+        let missing_mac = &bytes[..bytes.len() - TAG_LEN];
+        assert!(matches!(
+            SecurityEnvelope::from_bytes(missing_mac),
+            Err(SecurityError::EnvelopeMalformed(_))
+        ));
+        assert!(matches!(
+            open_security_envelope_with_key(missing_mac, b"key"),
+            Err(SecurityError::EnvelopeMalformed(_))
+        ));
     }
 
     #[test]

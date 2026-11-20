@@ -30,7 +30,7 @@ use std::fmt;
 
 use crate::crypto::aes::{decrypt_cbc, encrypt_cbc};
 use crate::crypto::constant_time_eq;
-use crate::crypto::sha::{Sha256, sha256};
+use crate::crypto::sha::{Sha256, hmac_sha256, sha256};
 use crate::der::DerReader;
 use crate::error::{Result, SecurityError};
 use crate::x509::certificate::{Certificate, ValidityStatus};
@@ -41,36 +41,6 @@ const ENVELOPE_VERSION: u8 = 1;
 const TAG_LEN: usize = 32;
 const IV_LEN: usize = 16;
 const DERIVE_ROUNDS: u32 = 1024;
-
-/// HMAC-SHA256 (RFC 2104) built on the crate's existing SHA-256 primitive.
-///
-/// This is an internal helper, not a public cryptographic primitive; it exists
-/// so the store envelope gets a keyed integrity tag without a new dependency.
-fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
-    let mut key_block = [0u8; 64];
-    if key.len() > 64 {
-        let hashed = sha256(key);
-        key_block.copy_from_slice(&hashed[..]);
-    } else {
-        key_block[..key.len()].copy_from_slice(key);
-    }
-    let mut inner = [0u8; 64];
-    let mut outer = [0u8; 64];
-    for (index, byte) in key_block.iter().enumerate() {
-        inner[index] = byte ^ 0x36;
-        outer[index] = byte ^ 0x5c;
-    }
-
-    let mut inner_input = Vec::with_capacity(64 + message.len());
-    inner_input.extend_from_slice(&inner);
-    inner_input.extend_from_slice(message);
-    let inner_digest = sha256(&inner_input);
-
-    let mut outer_input = Vec::with_capacity(64 + 32);
-    outer_input.extend_from_slice(&outer);
-    outer_input.extend_from_slice(&inner_digest);
-    sha256(&outer_input)
-}
 
 /// Iterated, domain-separated key derivation producing an AES key and a MAC key.
 fn derive_keys(password: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 32]) {

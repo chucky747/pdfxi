@@ -72,8 +72,11 @@
 //! - [`security_envelope`] — both local, tamper-evident file envelopes carrying
 //!   a payload, recipient list, and permissions, and certificate envelopes that
 //!   wrap a content key per recipient through the [`KeyWrapProvider`] boundary
-//!   with an explicit attachment-encryption scope (SEC-010). No
-//!   rights-management server or network access is involved.
+//!   with an explicit attachment-encryption scope (SEC-010). File envelopes can
+//!   carry a caller-supplied HMAC-SHA256 authentication key; unkeyed envelopes
+//!   report [`crate::security_envelope::Integrity::Unkeyed`] and their
+//!   permissions are untrusted. No rights-management server or network access
+//!   is involved.
 //! - [`policy`] — named local protection policies with a handler, key length,
 //!   permissions and recipients, deterministic validation/apply plans/reports,
 //!   and caller-supplied time (SEC-011). No rights-management server is
@@ -179,8 +182,9 @@ pub use scrub::{
 };
 pub use security_envelope::{
     CertificateEnvelope, CertificateEnvelopeInput, EncryptionScope, EnvelopeDeliveryReport,
-    EnvelopeRecipient, EnvelopeReport, OpenedSecurityEnvelope, RecipientDelivery, SecurityEnvelope,
-    build_certificate_envelope, build_security_envelope, open_security_envelope,
+    EnvelopeRecipient, EnvelopeReport, Integrity, OpenedSecurityEnvelope, RecipientDelivery,
+    SecurityEnvelope, build_authenticated_security_envelope, build_certificate_envelope,
+    build_security_envelope, open_security_envelope, open_security_envelope_with_key,
 };
 pub use signature::{DigestAlgorithm, SignatureCoverage, SignatureInfo, SignatureStatus};
 pub use standard_handler::{

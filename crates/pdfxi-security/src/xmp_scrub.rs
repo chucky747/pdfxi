@@ -304,9 +304,14 @@ pub fn verify_xmp_scrub(xml: &str, spec: &XmpRemovalSpec) -> Result<XmpScrubVeri
             residuals.insert(XmpResidual::new(property.key().to_string()));
         }
     }
-    // A namespace URI may still be declared even if no property uses it.
+    // Inspect parsed namespace declarations rather than raw text. A selected
+    // URI can appear verbatim inside an unselected property's value without
+    // ever being declared, which must not be reported as a residual.
     for namespace in &spec.namespaces {
-        if xml.contains(namespace.as_str()) {
+        if packet
+            .namespace_uris()
+            .any(|present| present == namespace.as_str())
+        {
             residuals.insert(XmpResidual::new(namespace.clone()));
         }
     }
@@ -441,6 +446,36 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn uri_only_in_an_unselected_property_value_is_not_a_residual() {
+        let selected_uri = "http://purl.org/dc/elements/1.1/";
+        // The selected URI appears verbatim in the *value* of a property whose
+        // namespace is different and unselected. A raw substring scan of the
+        // serialized XML would report a false residual here.
+        let value = format!("reference: {selected_uri} (not a declaration)");
+        let xml =
+            XmpPacket::new([prop("custom", "http://example.com/kept-ns", "Note", &value)]).to_xml();
+        assert!(
+            xml.contains(selected_uri),
+            "fixture must contain the URI text"
+        );
+
+        let mut spec = XmpRemovalSpec::empty();
+        spec.remove_namespace(selected_uri);
+        let verification = verify_xmp_scrub(&xml, &spec).expect("parse");
+        assert!(
+            verification.is_clean(),
+            "a URI appearing only in an unselected value must not be a residual"
+        );
+        assert!(verification.check().is_ok());
+
+        // A packet that genuinely declares the namespace is still detected, so
+        // the verification keeps its teeth.
+        let declared = fixture_xml();
+        let verification = verify_xmp_scrub(&declared, &spec).expect("parse");
+        assert!(!verification.is_clean());
     }
 
     #[test]

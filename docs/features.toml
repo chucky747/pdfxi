@@ -2448,64 +2448,66 @@ title = "Metadata and XMP scrubbing"
 [[feature]]
 docs = [
     "crates/pdfxi-security/src/security_envelope.rs",
+    "crates/pdfxi-security/src/crypto/sha.rs",
+    "crates/pdfxi-security/src/digital_id_lifecycle.rs",
     "crates/pdfxi-security/src/error.rs",
     "crates/pdfxi-security/src/lib.rs",
-    "docs/evidence/security/T-0162.md",
+    "docs/evidence/security/T-0176.md",
 ]
 domain = "Security"
-evidence = "docs/evidence/security/T-0162.md"
+evidence = "cargo test -p pdfxi-security: 345 passed, 0 failed. New tests: security_envelope::tests::envelope_debug_redacts_payload_bytes, authenticated_envelope_round_trip_is_reported_as_authenticated, tampered_payload_with_recomputed_unkeyed_tag_is_rejected_when_key_is_required, wrong_key_is_rejected_and_empty_key_is_a_typed_error, unkeyed_envelope_is_never_accepted_by_the_keyed_opener, authenticated_envelope_without_a_mac_tag_is_malformed, crypto::sha::tests::hmac_sha256_matches_rfc_4231_vectors, xmp_scrub::tests::uri_only_in_an_unselected_property_value_is_not_a_residual (all ok). fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0176.md."
 id = "SEC-010"
 notes = """
-Library-level closure. CertificateEnvelope is built from a caller-supplied
-RecipientList (each Recipient holds a public Certificate), one content-encryption
-key wrapped once per recipient through the existing KeyWrapProvider boundary,
-and an EncryptionScope that records whole-document vs selected-attachments
-encryption. EnvelopeDeliveryReport is deterministic (recipients and attachment
-names sorted) and carries only labels, lengths and stable identifiers. Typed
-errors cover empty/duplicate recipients, empty/duplicate attachment names, wrong
-CEK length, and wrap failures. The existing integrity-only SecurityEnvelope is
-retained. Confidentiality comes from the existing AES-CBC + RFC 3394 AES-KW
-certificate_encryption implementation; the byte-level application of the scope
-decision is the caller's job because this crate never opens document files.
-Local/offline equivalent of retired server Rights Management; no network,
-no licence server, no new deps, no unsafe/panics.
+Hardened from the T-0162 state. The integrity-only SecurityEnvelope can now be
+built with a caller-supplied authentication key: an authenticated (version 2)
+envelope carries a keyed HMAC-SHA256 tag in addition to the unkeyed SHA-256
+digest, and open_security_envelope_with_key requires that key and verifies both
+tags before returning. A tampered payload or permission block with a recomputed
+unkeyed tag is rejected (EnvelopeAuthenticationFailed), as is a wrong key;
+an unkeyed envelope is never accepted by the keyed opener. Backward
+compatibility is preserved: version-1 integration-only envelopes still open via
+open_security_envelope and report Integrity::Unkeyed, with the explicit warning
+that their payload and permissions are untrusted. Both envelope `Debug` impls
+render the payload as a length only. The shared HMAC-SHA256 primitive gained an
+RFC 4231 known-answer test and replaced a private copy in digital_id_lifecycle;
+its long-key branch (32 bytes into a 64-byte block) was corrected. The adjacent
+XMP scrub residual check now uses parsed namespace declarations rather than a
+raw substring, so a selected URI occurring only in an unselected value is not
+reported. CertificateEnvelope, EncryptionScope and the protection-policy model
+are unchanged. Local/offline only; still no network, licence server, new deps
+or panics.
 """
 priority = "P3"
 status = "verified"
 tests = [
-    "security_envelope::tests::certificate_envelope_recipients_are_ordered_and_deduplicated",
-    "security_envelope::tests::wrap_provider_is_invoked_once_per_recipient",
-    "security_envelope::tests::attachment_scope_selects_only_named_attachments",
-    "security_envelope::tests::empty_recipients_is_a_typed_error",
-    "security_envelope::tests::empty_and_duplicate_attachment_selection_are_typed_errors",
-    "security_envelope::tests::invalid_cek_length_is_a_typed_error",
-    "security_envelope::tests::certificate_envelope_is_deterministic_and_redacts_secrets",
-    "security_envelope::tests::envelope_input_debug_redacts_plaintext_and_key",
+    "security_envelope::tests::envelope_debug_redacts_payload_bytes",
+    "security_envelope::tests::authenticated_envelope_round_trip_is_reported_as_authenticated",
+    "security_envelope::tests::tampered_payload_with_recomputed_unkeyed_tag_is_rejected_when_key_is_required",
+    "security_envelope::tests::wrong_key_is_rejected_and_empty_key_is_a_typed_error",
+    "security_envelope::tests::unkeyed_envelope_is_never_accepted_by_the_keyed_opener",
+    "security_envelope::tests::authenticated_envelope_without_a_mac_tag_is_malformed",
+    "security_envelope::tests::round_trip_preserves_payload_recipients_and_permissions",
+    "crypto::sha::tests::hmac_sha256_matches_rfc_4231_vectors",
+    "xmp_scrub::tests::uri_only_in_an_unselected_property_value_is_not_a_residual",
+    "xmp_scrub::tests::verify_scrub_detects_a_residual_as_a_typed_error",
 ]
 title = "Security envelopes and attachment encryption"
 
 [[feature]]
 docs = [
     "crates/pdfxi-security/src/policy.rs",
-    "crates/pdfxi-security/src/error.rs",
-    "crates/pdfxi-security/src/lib.rs",
-    "docs/evidence/security/T-0162.md",
+    "docs/evidence/security/T-0176.md",
 ]
 domain = "Security"
-evidence = "docs/evidence/security/T-0162.md"
+evidence = "cargo test -p pdfxi-security: 345 passed, 0 failed (policy suite unchanged and green, including protection_policy_validates_handler_key_length_and_recipients and protection_apply_rejects_expired_policy_with_typed_error); TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0176.md."
 id = "SEC-011"
 notes = """
-Library-level closure. ProtectionPolicy now carries a named security handler,
-key length, permissions, and recipients (with with_protection / with_protection_id
-constructors). validate_policy_spec checks handler/key-length/recipient invariants;
-build_protection_plan yields a deterministic, canonically ordered ProtectionPlan
-(validate, set permissions, wrap recipient keys, optional watermark, optional
-expiry check); apply_protection_policy returns a deterministic ProtectionApplyReport
-against a caller-supplied time. Typed errors cover unknown handler, invalid key
-length, empty/duplicate recipients, expiry, and missing policy. The caller-supplied
-clock keeps reports reproducible. Local/offline decision model only: no rights-
-management server, no network policy fetch, no host clock, no cryptography in the
-policy itself; enforcement remains a local-reader decision. No new deps or panics.
+No policy code was changed by T-0176. The row remains verified from T-0162:
+ProtectionPolicy, validate_policy_spec, build_protection_plan and
+apply_protection_policy are deterministic, typed and caller-clocked. The same
+full pdfxi-security suite was re-run after the envelope hardening and all policy
+tests still pass. Local/offline decision model only; no rights-management
+server, no network, no host clock, no new deps or panics.
 """
 priority = "P3"
 status = "verified"

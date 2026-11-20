@@ -415,9 +415,43 @@ pub fn sha512(data: &[u8]) -> Vec<u8> {
     hasher.finalize()
 }
 
+/// Compute a keyed HMAC-SHA256 tag over `message` (RFC 2104).
+///
+/// Keys longer than the 64-byte SHA-256 block size are first hashed with
+/// [`sha256`]; shorter keys are zero-padded. The result is a 32-byte tag. This
+/// primitive is shared by the digital-ID store envelope and the local security
+/// envelope so neither needs a new dependency nor a private copy of HMAC.
+///
+/// Neither the key nor the message is ever logged or stored by this function.
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    let mut key_block = [0u8; 64];
+    if key.len() > 64 {
+        let hashed = sha256(key);
+        key_block[..hashed.len()].copy_from_slice(&hashed);
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = [0u8; 64];
+    let mut outer = [0u8; 64];
+    for (index, byte) in key_block.iter().enumerate() {
+        inner[index] = byte ^ 0x36;
+        outer[index] = byte ^ 0x5c;
+    }
+
+    let mut inner_input = Vec::with_capacity(64 + message.len());
+    inner_input.extend_from_slice(&inner);
+    inner_input.extend_from_slice(message);
+    let inner_digest = sha256(&inner_input);
+
+    let mut outer_input = Vec::with_capacity(64 + 32);
+    outer_input.extend_from_slice(&outer);
+    outer_input.extend_from_slice(&inner_digest);
+    sha256(&outer_input)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Sha256, Sha512, sha256, sha384, sha512};
+    use super::{Sha256, Sha512, hmac_sha256, sha256, sha384, sha512};
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -466,6 +500,26 @@ mod tests {
             hex(&sha512(b"abc")),
             "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
              2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        );
+    }
+
+    #[test]
+    fn hmac_sha256_matches_rfc_4231_vectors() {
+        // RFC 4231 test case 1: 20-byte 0x0b key, "Hi There".
+        assert_eq!(
+            hex(&hmac_sha256(&[0x0b; 20], b"Hi There")),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        // RFC 4231 test case 2: key "Jefe", data "what do ya want for nothing?".
+        assert_eq!(
+            hex(&hmac_sha256(b"Jefe", b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        // A long key must be hashed down to the block size first.
+        let long_key = [0x61u8; 130];
+        assert_eq!(
+            hex(&hmac_sha256(&long_key, b"abc")),
+            hex(&hmac_sha256(&sha256(&long_key), b"abc"))
         );
     }
 

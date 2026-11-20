@@ -264,6 +264,17 @@ pub enum SecurityError {
     EnvelopeMalformed(String),
     /// The envelope integrity tag did not match its contents (tampering).
     EnvelopeIntegrityFailed,
+    /// This envelope operation requires a non-empty key and an authenticated
+    /// envelope.
+    ///
+    /// Returned when a build/open call is given an empty key, when an
+    /// authenticated envelope is opened without a key, or when an unkeyed
+    /// envelope is opened with a key. Permissions from an unkeyed envelope are
+    /// never trusted for an authenticated operation.
+    EnvelopeAuthenticationRequired,
+    /// The envelope keyed authentication tag did not match (wrong key or
+    /// tampering).
+    EnvelopeAuthenticationFailed,
     /// The caller was not granted a permission declared by the envelope.
     EnvelopePermissionDenied(&'static str),
     /// A selected-attachments envelope named no attachments.
@@ -554,6 +565,18 @@ impl fmt::Display for SecurityError {
                 write!(
                     f,
                     "security envelope integrity tag did not match its contents"
+                )
+            }
+            Self::EnvelopeAuthenticationRequired => {
+                write!(
+                    f,
+                    "security envelope authentication requires a key and an authenticated envelope"
+                )
+            }
+            Self::EnvelopeAuthenticationFailed => {
+                write!(
+                    f,
+                    "security envelope keyed authentication tag did not match"
                 )
             }
             Self::EnvelopePermissionDenied(operation) => {
