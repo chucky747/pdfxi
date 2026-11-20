@@ -16,6 +16,12 @@ permissions:
   - action: edit
     resource: "orchestration/feature-updates/**"
     effect: allow
+  - action: edit
+    resource: "docs/evidence/hardening/**"
+    effect: allow
+  - action: edit
+    resource: "orchestration/blockers/**"
+    effect: allow
   - action: shell
     resource: "*"
     effect: allow

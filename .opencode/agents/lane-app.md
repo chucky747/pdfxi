@@ -2,7 +2,7 @@
 description: "Desktop UI and canvas lane"
 mode: subagent
 model: opencode-go/hy4-flash-free
-steps: 80
+steps: 140
 permissions:
   - action: edit
     resource: "*"
@@ -18,6 +18,12 @@ permissions:
     effect: allow
   - action: edit
     resource: "orchestration/feature-updates/**"
+    effect: allow
+  - action: edit
+    resource: "docs/evidence/hardening/**"
+    effect: allow
+  - action: edit
+    resource: "orchestration/blockers/**"
     effect: allow
   - action: shell
     resource: "*"
