@@ -120,6 +120,8 @@ pub mod password_policy;
 /// (T-0241, acceptance item A-20).
 pub mod pdf_signature;
 mod permissions;
+/// PKCS#12 (`.pfx`/`.p12`) identity import (T-0249).
+pub mod pkcs12;
 pub mod policy;
 pub mod protect;
 mod protector;

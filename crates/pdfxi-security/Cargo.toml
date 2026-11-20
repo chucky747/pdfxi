@@ -23,6 +23,16 @@ sha2 = { version = "0.10", features = ["oid"] }
 spki = "0.7"
 x509-cert = { version = "0.2", features = ["builder", "pem"] }
 
+# PKCS#12 identity import (T-0249). No crate in the lock graph parses and
+# decrypts PKCS#12, so only the primitives that this crate does not already own
+# are added: SHA-1 (PBKDF2-HMAC-SHA1, the PKCS#12 MAC and the Windows
+# thumbprint), and 3DES plus the block-cipher traits for legacy PBES1 shrouded
+# key bags. All three are RustCrypto, MIT OR Apache-2.0, and already present in
+# the workspace lock graph through other tools.
+cipher = "0.4"
+des = "0.8"
+sha1 = "0.10"
+
 [dev-dependencies]
 rand = "0.8"
 

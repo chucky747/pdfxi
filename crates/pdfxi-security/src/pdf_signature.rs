@@ -21,6 +21,12 @@
 //! CMS and X.509 encoding. No key material is ever logged, and
 //! `SigningIdentity` has a redacting [`core::fmt::Debug`] implementation.
 //!
+//! An identity can be loaded from an unencrypted PEM key plus certificate
+//! chain ([`SigningIdentity::from_pem`]) or from a password-protected PKCS#12
+//! container ([`SigningIdentity::from_pfx`]). The PKCS#12 parser lives in
+//! [`crate::pkcs12`]; the password is passed straight through and is never
+//! stored, formatted, or included in an error value.
+//!
 //! # What this module proves, and what it does not
 //!
 //! [`verify_signature`] proves four things about the bytes it is given:
@@ -80,7 +86,8 @@ pub const MIN_CONTENTS_RESERVATION: usize = 4096;
 pub const DEFAULT_CONTENTS_RESERVATION: usize = 8192;
 /// Default signature field name used by [`SignOptions::default`].
 pub const DEFAULT_FIELD_NAME: &str = "Signature1";
-/// Minimum RSA key size accepted by [`SigningIdentity::from_pem`].
+/// Minimum RSA key size accepted by [`SigningIdentity::from_pem`] and
+/// [`SigningIdentity::from_pfx`].
 const MIN_RSA_BITS: usize = 2048;
 /// Width, in decimal digits, of each `/ByteRange` field written by this module.
 ///
@@ -181,8 +188,8 @@ impl SigningIdentity {
     /// - [`SecurityError::DigitalIdKeyAlgorithmMismatch`] when the first
     ///   certificate's public key does not match the private key.
     ///
-    /// Encrypted PEM private keys and PKCS#12 (`.pfx`) containers are not
-    /// accepted in this round; see the module documentation.
+    /// Encrypted PEM private keys are not accepted in this round; use
+    /// [`SigningIdentity::from_pfx`] for a password-protected container.
     pub fn from_pem(private_key_pem: &str, certificate_chain_pem: &str) -> Result<Self> {
         if private_key_pem.trim().is_empty() {
             return Err(SecurityError::SigningIdentityInvalid(
@@ -196,16 +203,80 @@ impl SigningIdentity {
                     "private key is not an unencrypted PKCS#8 or PKCS#1 RSA PEM",
                 )
             })?;
+        let chain =
+            X509Certificate::load_pem_chain(certificate_chain_pem.as_bytes()).map_err(|_| {
+                SecurityError::SigningIdentityInvalid("certificate chain is not valid PEM")
+            })?;
+        Self::assemble(key, chain)
+    }
+
+    /// Load an identity from a PKCS#12 (`.pfx` / `.p12`) container.
+    ///
+    /// The container is parsed by [`crate::pkcs12::import_pfx`]: the MAC (when
+    /// present) is verified, the shrouded private key is decrypted, and every
+    /// certificate is collected. The private key may be PKCS#8 or PKCS#1; the
+    /// certificate whose public key matches it becomes the leaf, and the
+    /// remaining certificates follow in container order.
+    ///
+    /// # Security
+    ///
+    /// The password is used only for the import call. It is never stored on the
+    /// identity, formatted, or included in an error value. Key bytes are not
+    /// logged; [`PfxContents`](crate::pkcs12::PfxContents) zeroes the decrypted
+    /// key when it is dropped.
+    ///
+    /// # Errors
+    ///
+    /// - [`SecurityError::PfxPasswordIncorrect`] when the MAC or the ciphertext
+    ///   does not match the password;
+    /// - [`SecurityError::PfxMalformed`] when the container or an embedded
+    ///   certificate is structurally invalid;
+    /// - [`SecurityError::PfxUnsupportedAlgorithm`] for an encryption or MAC
+    ///   algorithm this round does not implement;
+    /// - [`SecurityError::PfxMissingPrivateKey`] /
+    ///   [`SecurityError::PfxMissingCertificate`] when the container carries no
+    ///   usable key or certificate;
+    /// - [`SecurityError::SigningKeyUnsupported`] for a non-RSA or undersized
+    ///   key, and [`SecurityError::DigitalIdKeyAlgorithmMismatch`] when no
+    ///   certificate matches the private key.
+    pub fn from_pfx(bytes: &[u8], password: &str) -> Result<Self> {
+        let contents = crate::pkcs12::import_pfx(bytes, password)?;
+        let key = RsaPrivateKey::from_pkcs8_der(contents.private_key_der())
+            .or_else(|_| RsaPrivateKey::from_pkcs1_der(contents.private_key_der()))
+            .map_err(|_| {
+                SecurityError::SigningIdentityInvalid(
+                    "PKCS#12 private key is not a PKCS#8 or PKCS#1 RSA value",
+                )
+            })?;
+
+        let mut certificates = Vec::with_capacity(contents.certificates().len());
+        for encoded in contents.certificates() {
+            certificates.push(
+                X509Certificate::from_der(encoded).map_err(|_| {
+                    SecurityError::PfxMalformed("certificate is not valid X.509 DER")
+                })?,
+            );
+        }
+
+        let leaf_index = matching_leaf(&certificates, &key)?;
+        let mut chain = Vec::with_capacity(certificates.len());
+        chain.push(certificates.remove(leaf_index));
+        chain.extend(certificates);
+        Self::assemble(key, chain)
+    }
+
+    /// Validate a key and a leaf-first chain, then wrap them for signing.
+    ///
+    /// Shared by [`SigningIdentity::from_pem`] and
+    /// [`SigningIdentity::from_pfx`] so the key-size and key/certificate match
+    /// rules cannot drift between the two loading paths.
+    fn assemble(key: RsaPrivateKey, chain: Vec<X509Certificate>) -> Result<Self> {
         if key.size() * 8 < MIN_RSA_BITS {
             return Err(SecurityError::SigningKeyUnsupported(format!(
                 "RSA key is {} bits; at least {MIN_RSA_BITS} are required",
                 key.size() * 8
             )));
         }
-        let chain =
-            X509Certificate::load_pem_chain(certificate_chain_pem.as_bytes()).map_err(|_| {
-                SecurityError::SigningIdentityInvalid("certificate chain is not valid PEM")
-            })?;
         let signer = chain.first().ok_or(SecurityError::SigningIdentityInvalid(
             "certificate chain contains no certificate",
         ))?;
@@ -1336,6 +1407,27 @@ fn parse_cms(cms: &[u8]) -> Result<ParsedCms> {
     })
 }
 
+/// Index of the certificate whose RSA public key matches `key`.
+///
+/// PKCS#12 containers do not fix a certificate order. The signer is the one
+/// certificate that can validate a signature made by this private key; every
+/// other certificate is carried as an intermediate.
+fn matching_leaf(certificates: &[X509Certificate], key: &RsaPrivateKey) -> Result<usize> {
+    let private_public = RsaPublicKey::from(key);
+    certificates
+        .iter()
+        .position(|certificate| {
+            RsaPublicKey::try_from(
+                certificate
+                    .tbs_certificate
+                    .subject_public_key_info
+                    .owned_to_ref(),
+            )
+            .is_ok_and(|candidate| candidate == private_public)
+        })
+        .ok_or(SecurityError::DigitalIdKeyAlgorithmMismatch)
+}
+
 fn select_signer_certificate(
     signed_data: &SignedData,
     sid: &SignerIdentifier,
@@ -1410,8 +1502,25 @@ fn certificate_subject(certificate: &X509Certificate) -> String {
 }
 
 fn certificate_subject_from_der(der: &[u8]) -> String {
-    match crate::x509::Certificate::parse(der) {
-        Ok(parsed) => parsed.subject().display_rfc4514(),
+    if let Ok(parsed) = crate::x509::Certificate::parse(der) {
+        return parsed.subject().display_rfc4514();
+    }
+    // Some real certificates (including Windows self-signed identities) carry
+    // a serial number wider than u64, which the strict certificate parser
+    // rejects. The subject Name itself is still plain DER, so parse it
+    // directly rather than reporting an unreadable signer.
+    let Ok(certificate) = X509Certificate::from_der(der) else {
+        return "<unparsable subject>".to_owned();
+    };
+    let Ok(subject_der) = certificate.tbs_certificate.subject.to_der() else {
+        return "<unparsable subject>".to_owned();
+    };
+    let mut reader = crate::der::DerReader::new(&subject_der);
+    let Ok(tlv) = reader.read_tlv() else {
+        return "<unparsable subject>".to_owned();
+    };
+    match crate::x509::Name::parse(&tlv) {
+        Ok(name) => name.display_rfc4514(),
         Err(_) => "<unparsable subject>".to_owned(),
     }
 }

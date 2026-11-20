@@ -336,6 +336,29 @@ pub enum SecurityError {
     StoreEnvelopeIntegrityFailed,
     /// A password-protected store envelope used an unsupported version.
     StoreEnvelopeVersionUnsupported(u8),
+    /// A PKCS#12 (`.pfx`/`.p12`) container could not be parsed.
+    ///
+    /// The static label names the failing structure; no password, key, or
+    /// container bytes are carried in the value.
+    PfxMalformed(&'static str),
+    /// The PKCS#12 password did not decrypt the container or match its MAC.
+    ///
+    /// Deliberately indistinguishable from a corrupt container when no MAC is
+    /// present, so a guess cannot probe the password.
+    PfxPasswordIncorrect,
+    /// The PKCS#12 container carried no private key bag.
+    PfxMissingPrivateKey,
+    /// The PKCS#12 container carried no certificate bag.
+    PfxMissingCertificate,
+    /// A PKCS#12 encryption or MAC algorithm is not supported by this round.
+    PfxUnsupportedAlgorithm(String),
+    /// The Windows certificate store is unavailable on this platform or build.
+    WindowsStoreUnavailable,
+    /// A Windows certificate store call failed with an OS error code.
+    ///
+    /// Only the numeric code is carried; no certificate data, key material, or
+    /// store name is ever embedded in the value.
+    WindowsStoreFailed(u32),
     /// A timestamp-authority token model field was invalid.
     TsaTokenInvalid(&'static str),
     /// A detached signature's supplied certificate did not match its signer.
@@ -696,6 +719,27 @@ impl fmt::Display for SecurityError {
                     f,
                     "unsupported digital-ID store envelope version: {version}"
                 )
+            }
+            Self::PfxMalformed(reason) => {
+                write!(f, "PKCS#12 container is malformed: {reason}")
+            }
+            Self::PfxPasswordIncorrect => {
+                write!(f, "the PKCS#12 password is incorrect")
+            }
+            Self::PfxMissingPrivateKey => {
+                write!(f, "the PKCS#12 container carries no private key")
+            }
+            Self::PfxMissingCertificate => {
+                write!(f, "the PKCS#12 container carries no certificate")
+            }
+            Self::PfxUnsupportedAlgorithm(algorithm) => {
+                write!(f, "unsupported PKCS#12 algorithm: {algorithm}")
+            }
+            Self::WindowsStoreUnavailable => {
+                write!(f, "the Windows certificate store is unavailable")
+            }
+            Self::WindowsStoreFailed(code) => {
+                write!(f, "a Windows certificate store call failed (error {code})")
             }
             Self::TsaTokenInvalid(field) => {
                 write!(f, "timestamp-authority token field is invalid: {field}")
