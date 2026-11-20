@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Presentation portfolio and loupe closure",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0167"],
   "owns": [
     "crates/pdfxi-app/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0173.toml"
   ],
   "acceptance": "cargo test -p pdfxi-app --features ui",
-  "evidence": ""
+  "evidence": "docs/evidence/app/T-0173.md"
 }

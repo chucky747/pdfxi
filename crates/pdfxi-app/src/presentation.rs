@@ -335,6 +335,18 @@ impl PresentationModel {
         if slides.is_empty() {
             return Err(PresentationError::EmptyDocument);
         }
+        // `Slide` has public fields, so a host can bypass `Slide::new` with a
+        // struct literal. Re-validate every duration here: a NaN duration in
+        // particular would make the `tick` comparisons below always false and
+        // corrupt the deterministic remainder carry into a runaway advance.
+        for slide in &slides {
+            if !slide.duration.is_finite() || slide.duration < 0.0 {
+                return Err(PresentationError::InvalidDuration(
+                    slide.page,
+                    slide.duration,
+                ));
+            }
+        }
         if slides.windows(2).any(|pair| pair[0].page >= pair[1].page) {
             return Err(PresentationError::SequenceOutOfOrder);
         }
@@ -848,5 +860,145 @@ mod tests {
                 .layout_rect(viewport(800.0, 600.0), page(400.0, 300.0), FitMode::Fit)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn from_slides_rejects_durations_that_bypass_slide_new() {
+        // Slide fields are public, so a struct literal can carry a duration
+        // that Slide::new would have rejected. from_slides must catch it.
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.5] {
+            let slides = vec![
+                Slide::manual(0),
+                Slide {
+                    page: 2,
+                    duration: bad,
+                    transition: Transition::Fade,
+                },
+            ];
+            match PresentationModel::from_slides(slides) {
+                Err(PresentationError::InvalidDuration(page, reported)) => {
+                    assert_eq!(page, 2);
+                    if bad.is_nan() {
+                        assert!(reported.is_nan());
+                    } else {
+                        assert_eq!(reported, bad);
+                    }
+                }
+                other => panic!("expected InvalidDuration for {bad}, got {other:?}"),
+            }
+        }
+        // A finite struct-literal slide remains valid and keeps document order.
+        let valid = vec![Slide {
+            page: 4,
+            duration: 1.25,
+            transition: Transition::Push,
+        }];
+        let model = PresentationModel::from_slides(valid).expect("finite duration is valid");
+        assert_eq!(model.current_page(), 4);
+    }
+
+    #[test]
+    fn tick_boundary_tolerance_and_chunked_input_are_deterministic() {
+        let mut chunked = PresentationModel::from_slides(timed_slides()).expect("valid");
+        let mut single = PresentationModel::from_slides(timed_slides()).expect("valid");
+        for model in [&mut chunked, &mut single] {
+            assert_eq!(
+                model.command(PresentationCommand::ToggleAutoAdvance),
+                PresentationOutcome::AutoAdvanceStarted
+            );
+        }
+        // Chunks that add up to each duration cross at the same points as one
+        // large tick per slide, with the same remainder and final state.
+        let steps = [
+            (1.0, PresentationOutcome::Nothing),
+            (1.0, PresentationOutcome::PageChanged(1)),
+            (2.5, PresentationOutcome::Nothing),
+            (0.5, PresentationOutcome::PageChanged(2)),
+        ];
+        for (elapsed, expected) in steps {
+            assert_eq!(chunked.tick(elapsed), expected);
+        }
+        assert_eq!(single.tick(2.0), PresentationOutcome::PageChanged(1));
+        assert_eq!(single.tick(3.0), PresentationOutcome::PageChanged(2));
+        assert_eq!(chunked.current_index(), single.current_index());
+        assert_eq!(chunked.elapsed(), single.elapsed());
+        assert_eq!(chunked.state(), single.state());
+        assert_eq!(chunked, single);
+
+        // A tick just under a duration still advances inside TIME_EPSILON,
+        // which keeps exactly-timed presentation steps from being flaky.
+        let mut tolerant = PresentationModel::from_slides(vec![
+            Slide::new(0, 2.0, Transition::None).expect("valid"),
+        ])
+        .expect("valid");
+        tolerant.command(PresentationCommand::ToggleAutoAdvance);
+        assert_eq!(
+            tolerant.tick(2.0 - TIME_EPSILON * 0.5),
+            PresentationOutcome::Finished
+        );
+    }
+
+    #[test]
+    fn manual_navigation_while_playing_resets_elapsed_and_keeps_auto_advance() {
+        let mut model = PresentationModel::from_slides(timed_slides()).expect("valid");
+        model.command(PresentationCommand::ToggleAutoAdvance);
+        assert_eq!(model.tick(1.0), PresentationOutcome::Nothing);
+        assert!(model.elapsed() > 0.0);
+        assert_eq!(
+            model.command(PresentationCommand::Next),
+            PresentationOutcome::PageChanged(1)
+        );
+        assert_eq!(model.elapsed(), 0.0);
+        assert_eq!(model.state(), AdvanceState::Playing);
+        // The newly selected slide's own duration governs the next tick.
+        assert_eq!(model.tick(2.9), PresentationOutcome::Nothing);
+        assert_eq!(model.tick(0.1), PresentationOutcome::PageChanged(2));
+        assert_eq!(
+            model.command(PresentationCommand::Previous),
+            PresentationOutcome::PageChanged(1)
+        );
+        assert_eq!(model.elapsed(), 0.0);
+        assert_eq!(model.state(), AdvanceState::Playing);
+    }
+
+    #[test]
+    fn exit_from_finished_and_repeated_exit_are_terminal() {
+        let mut model = PresentationModel::from_slides(timed_slides()).expect("valid");
+        model.command(PresentationCommand::ToggleAutoAdvance);
+        assert_eq!(model.tick(9.0), PresentationOutcome::Finished);
+        assert_eq!(
+            model.command(PresentationCommand::Exit),
+            PresentationOutcome::Exited
+        );
+        assert_eq!(
+            model.command(PresentationCommand::Exit),
+            PresentationOutcome::Exited
+        );
+        assert_eq!(
+            model.command(PresentationCommand::ToggleAutoAdvance),
+            PresentationOutcome::Nothing
+        );
+        assert_eq!(model.tick(1.0), PresentationOutcome::Nothing);
+        assert_eq!(model.state(), AdvanceState::Exited);
+    }
+
+    #[test]
+    fn layout_fit_uses_width_limit_for_wide_pages() {
+        let model = PresentationModel::new(1).expect("valid");
+        let screen = viewport(800.0, 800.0);
+        let wide = page(1000.0, 200.0);
+        let fit = model
+            .layout(screen, wide, FitMode::Fit)
+            .expect("valid geometry");
+        // Width is limiting here (800/1000 < 800/200).
+        assert_eq!(fit.scale, 0.8);
+        assert_eq!(fit.width, 800.0);
+        assert_eq!(fit.height, 160.0);
+        assert_eq!(fit.x, 0.0);
+        assert_eq!(fit.y, 320.0);
+        let rect = model
+            .layout_rect(screen, wide, FitMode::Fit)
+            .expect("valid geometry");
+        assert_eq!(rect, CanvasRect::new(fit.x, fit.y, fit.width, fit.height));
     }
 }

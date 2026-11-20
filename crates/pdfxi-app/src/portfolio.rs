@@ -13,8 +13,9 @@
 //! A [`PortfolioPath`] is an *internal* portfolio path: a slash-separated list
 //! of components rooted at the collection. Every component is validated to be
 //! traversal-free (no `.`/`..`, no empty components, no absolute or drive
-//! prefixes, no backslashes, no control characters, no `:` alternate-stream
-//! markers). This keeps hostile collection data from escaping the tree.
+//! prefixes, no backslashes, no embedded slashes, no control characters, no
+//! `:` alternate-stream markers). This keeps hostile collection data from
+//! escaping the tree and keeps a file name a genuine *single* component.
 //!
 //! # Ordering and determinism
 //!
@@ -117,6 +118,11 @@ impl PortfolioPath {
     }
 
     /// Validate a single path component (also used to validate entry names).
+    ///
+    /// A component may not contain `/`: paths are split on `/` before their
+    /// components are validated, so allowing an embedded slash in a name would
+    /// let two different component vectors render to the same display path and
+    /// corrupt duplicate detection.
     pub fn validate_component(component: &str) -> Result<(), PortfolioPathError> {
         if component.is_empty() {
             return Err(PortfolioPathError::EmptyComponent);
@@ -133,7 +139,10 @@ impl PortfolioPath {
         if component.contains(':') {
             return Err(PortfolioPathError::AbsoluteOrDrive);
         }
-        if component.chars().any(|c| c.is_control() || c == '\\') {
+        if component
+            .chars()
+            .any(|c| c.is_control() || c == '\\' || c == '/')
+        {
             return Err(PortfolioPathError::InvalidCharacter);
         }
         Ok(())
@@ -1002,5 +1011,110 @@ mod tests {
             }
             _ => panic!("expected TooManyEntries"),
         }
+    }
+
+    #[test]
+    fn entry_name_with_slash_is_rejected_and_cannot_alias_a_folder_path() {
+        // Without the single-component check the first entry would be accepted
+        // as display path "a/b" and the genuinely nested file below would be
+        // misreported as its duplicate.
+        let summary = PortfolioSummary::new()
+            .with_entry(PortfolioEntry::new("a/b", "alias", 1, "txt", None, ""))
+            .with_entry(PortfolioEntry::new("b", "nested", 2, "txt", None, "a"));
+        let model = PortfolioModel::from_summary(&summary).expect("build");
+        assert_eq!(model.accepted(), 1);
+        assert_eq!(model.tree().file_count(), 1);
+        assert!(model.report().duplicates().is_empty());
+        let unsupported = model.report().unsupported();
+        assert_eq!(unsupported.len(), 1);
+        assert_eq!(unsupported[0].index(), 0);
+        assert_eq!(unsupported[0].reason(), &UnsupportedReason::InvalidName);
+        // The survivor is the nested file, not the slashed alias.
+        let folder = match &model.tree().root().children()[0] {
+            PortfolioNode::Folder(folder) => folder,
+            PortfolioNode::File(_) => panic!("expected folder"),
+        };
+        match &folder.children()[0] {
+            PortfolioNode::File(file) => assert_eq!(file.entry().description(), "nested"),
+            PortfolioNode::Folder(_) => panic!("expected file"),
+        }
+    }
+
+    #[test]
+    fn component_validation_rejects_embedded_slash() {
+        assert_eq!(
+            PortfolioPath::validate_component("a/b"),
+            Err(PortfolioPathError::InvalidCharacter)
+        );
+        assert_eq!(
+            PortfolioPath::root().join("folder/file.txt"),
+            Err(PortfolioPathError::InvalidCharacter)
+        );
+        // Folder paths are split on '/' before components are validated, so
+        // ordinary multi-component paths still parse.
+        assert!(PortfolioPath::parse("a/b").is_ok());
+    }
+
+    #[test]
+    fn triple_duplicate_reports_each_with_first_index() {
+        let summary = PortfolioSummary::new()
+            .with_entry(PortfolioEntry::new("d.txt", "one", 1, "txt", None, "d"))
+            .with_entry(PortfolioEntry::new("d.txt", "two", 2, "txt", None, "d"))
+            .with_entry(PortfolioEntry::new("d.txt", "three", 3, "txt", None, "d"));
+        let model = PortfolioModel::from_summary(&summary).expect("build");
+        assert_eq!(model.accepted(), 1);
+        assert_eq!(model.tree().file_count(), 1);
+        let duplicates = model.report().duplicates();
+        assert_eq!(duplicates.len(), 2);
+        assert_eq!((duplicates[0].index(), duplicates[0].first_index()), (1, 0));
+        assert_eq!((duplicates[1].index(), duplicates[1].first_index()), (2, 0));
+        assert_eq!(model.report().issue_count(), 2);
+        assert!(!model.report().is_empty());
+        let rows = model.tree().rows();
+        let description = rows.iter().find_map(|row| match row.kind() {
+            PortfolioRowKind::File { description, .. } => Some(description.as_str()),
+            PortfolioRowKind::Folder { .. } => None,
+        });
+        assert_eq!(description, Some("one"));
+    }
+
+    #[test]
+    fn duplicate_after_a_rejected_first_entry_points_to_first_valid() {
+        let summary = PortfolioSummary::new()
+            .with_entry(PortfolioEntry::new("../bad.txt", "", 1, "txt", None, "d"))
+            .with_entry(PortfolioEntry::new("ok.txt", "kept", 2, "txt", None, "d"))
+            .with_entry(PortfolioEntry::new(
+                "ok.txt", "dropped", 3, "txt", None, "d",
+            ));
+        let model = PortfolioModel::from_summary(&summary).expect("build");
+        assert_eq!(model.accepted(), 1);
+        let unsupported = model.report().unsupported();
+        assert_eq!(unsupported.len(), 1);
+        assert_eq!(unsupported[0].reason(), &UnsupportedReason::InvalidName);
+        let duplicates = model.report().duplicates();
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].index(), 2);
+        assert_eq!(duplicates[0].first_index(), 1);
+        assert_eq!(duplicates[0].path(), "d/ok.txt");
+    }
+
+    #[test]
+    fn path_depth_and_length_boundaries_are_enforced() {
+        let at_limit = (0..MAX_PORTFOLIO_PATH_DEPTH)
+            .map(|index| format!("d{index}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        assert!(PortfolioPath::parse(&at_limit).is_ok());
+        assert_eq!(
+            PortfolioPath::parse(&format!("{at_limit}/extra")),
+            Err(PortfolioPathError::TooDeep)
+        );
+        let too_long_name = "x".repeat(MAX_PORTFOLIO_NAME_LEN + 1);
+        assert_eq!(
+            PortfolioPath::validate_component(&too_long_name),
+            Err(PortfolioPathError::ComponentTooLong)
+        );
+        let full = PortfolioPath::parse(&at_limit).expect("at-limit path");
+        assert_eq!(full.join("leaf"), Err(PortfolioPathError::TooDeep));
     }
 }

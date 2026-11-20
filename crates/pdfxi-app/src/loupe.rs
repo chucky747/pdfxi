@@ -256,6 +256,16 @@ impl LoupeModel {
         self.drag
     }
 
+    /// Clear accumulated drag so a new gesture sequence starts from zero.
+    ///
+    /// Panning and zoom state are deliberately left untouched: only the
+    /// bounded drag total is reset. A host that treats accumulation as
+    /// per-pointer-sequence (rather than per-session) calls this when a new
+    /// gesture begins, which keeps the accumulator from saturating forever.
+    pub fn reset_accumulated_drag(&mut self) {
+        self.drag = LoupePoint::default();
+    }
+
     /// Change the lens shape.
     pub fn set_shape(&mut self, shape: LensShape) {
         self.shape = shape;
@@ -688,5 +698,94 @@ mod tests {
         // [100, 700].
         assert_eq!(loupe.center_screen().x, 100.0);
         assert_eq!(loupe.center_screen().y, 700.0);
+    }
+
+    #[test]
+    fn reset_accumulated_drag_starts_a_fresh_sequence() {
+        let mut loupe = model(LensShape::Rectangle);
+        for _ in 0..40 {
+            loupe.apply(GestureDelta::Drag {
+                dx: MAX_GESTURE_STEP,
+                dy: -MAX_GESTURE_STEP,
+            });
+        }
+        assert_eq!(
+            loupe.accumulated_drag(),
+            LoupePoint::new(MAX_GESTURE_ACCUM, -MAX_GESTURE_ACCUM)
+        );
+        let center = loupe.center_page();
+        let zoom = loupe.zoom();
+        loupe.reset_accumulated_drag();
+        assert_eq!(loupe.accumulated_drag(), LoupePoint::default());
+        assert_eq!(loupe.center_page(), center);
+        assert_eq!(loupe.zoom(), zoom);
+        // A fresh, small drag accumulates from zero again.
+        assert_eq!(
+            loupe.apply(GestureDelta::Drag { dx: 8.0, dy: 0.0 }),
+            GestureEffect::Panned
+        );
+        assert_eq!(loupe.accumulated_drag(), LoupePoint::new(8.0, 0.0));
+    }
+
+    #[test]
+    fn hit_testing_boundaries_are_half_open_and_radius_closed() {
+        let rect = model(LensShape::Rectangle);
+        let bounds = rect.dest_rect();
+        // Half-open rectangle: top/left inclusive, right/bottom exclusive.
+        assert!(rect.contains_screen(LoupePoint::new(bounds.x, bounds.y)));
+        assert!(!rect.contains_screen(LoupePoint::new(bounds.x + bounds.width, bounds.y)));
+        assert!(!rect.contains_screen(LoupePoint::new(bounds.x, bounds.y + bounds.height)));
+        assert!(rect.contains_screen(LoupePoint::new(
+            bounds.x + bounds.width - 0.001,
+            bounds.y + bounds.height - 0.001
+        )));
+
+        let circle = model(LensShape::Circle);
+        let radius = circle.radius();
+        let center = circle.center_screen();
+        // A point exactly on the radius is inside; just beyond is outside.
+        assert!(circle.contains_screen(LoupePoint::new(center.x + radius, center.y)));
+        assert!(!circle.contains_screen(LoupePoint::new(center.x + radius + 0.001, center.y)));
+        assert!(!circle.contains_screen(LoupePoint::new(center.x, center.y - radius - 0.001)));
+    }
+
+    #[test]
+    fn screen_to_page_maps_dest_corners_to_source_corners() {
+        let loupe = model(LensShape::Rectangle);
+        let source = loupe.source_rect();
+        let dest = loupe.dest_rect();
+        let top_left = loupe.screen_to_page(LoupePoint::new(dest.x, dest.y));
+        let bottom_right =
+            loupe.screen_to_page(LoupePoint::new(dest.x + dest.width, dest.y + dest.height));
+        assert!(approx(top_left.x, source.x) && approx(top_left.y, source.y));
+        assert!(approx(bottom_right.x, source.x + source.width));
+        assert!(approx(bottom_right.y, source.y + source.height));
+        // The two centres map to each other exactly (zero offset).
+        assert_eq!(
+            loupe.page_to_screen(loupe.center_page()),
+            loupe.center_screen()
+        );
+        assert_eq!(
+            loupe.screen_to_page(loupe.center_screen()),
+            loupe.center_page()
+        );
+    }
+
+    #[test]
+    fn scroll_deltas_do_not_feed_the_drag_accumulator() {
+        let mut loupe = model(LensShape::Rectangle);
+        assert_eq!(
+            loupe.apply(GestureDelta::Scroll {
+                dx: 100.0,
+                dy: -50.0
+            }),
+            GestureEffect::Panned
+        );
+        assert_eq!(loupe.accumulated_drag(), LoupePoint::default());
+        assert_eq!(
+            loupe.apply(GestureDelta::Drag { dx: 12.0, dy: 6.0 }),
+            GestureEffect::Panned
+        );
+        assert_eq!(loupe.accumulated_drag(), LoupePoint::new(12.0, 6.0));
     }
 }

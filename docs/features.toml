@@ -359,34 +359,31 @@ title = "Links and named destinations"
 docs = [
     "crates/pdfxi-app/src/presentation.rs",
     "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0141.md",
+    "docs/evidence/app/T-0173.md",
 ]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-app: 281 passed, 0 failed, including 14 new presentation::tests::* covering document-order slides, empty-document and invalid-duration typed errors, strict page-order validation, transition/command labels, next/prev/first/last/exit command walking and boundary clamping, keyboard/gesture mapping, auto-advance accumulation with remainder carry and identical-tick determinism, multi-slide crossing to Finished, manual zero-duration stop, invalid tick rejection, restart-from-finished, and fit/actual layout math (centred, non-finite/negative geometry rejected). cargo test -p pdfxi-app --features ui: 344 passed, 0 failed. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0141.md."
+evidence = "docs/evidence/app/T-0173.md: 5 new presentation::tests plus the 14 prior presentation tests all pass; cargo test -p pdfxi-app 381/0 and --features ui 444/0; fmt/clippy/doc EXIT=0."
 id = "VIEW-012"
 notes = """
-Window-free full-screen presentation model. PresentationModel holds a sequence
-of Slides (document page index, duration, Transition None/Fade/Push); `new`
-builds every page in ascending document order and `from_slides` accepts a
-subsequence only when pages are strictly increasing, so document page order is
-always honoured. Slide::new rejects non-finite/negative durations with
-PresentationError::InvalidDuration; an empty document yields EmptyDocument.
-Auto-advance is a caller-timed state machine (Stopped/Playing/Finished/Exited):
-`tick(elapsed)` accumulates supplied seconds, carries the remainder across
-slides on a large tick, treats duration 0.0 as a manual slide that halts
-auto-advance, ignores invalid/negative inputs, and reports outcomes
-(Nothing/PageChanged/AutoAdvanceStarted/AutoAdvanceStopped/Finished/Exited).
-Navigation commands next/prev/first/last/exit and auto-advance toggle have both
-keyboard (`map_presentation_key`) and swipe (`map_presentation_gesture`) paths.
-`layout`/`layout_rect` compute deterministic centred fit (uniform scale,
-letterboxed) and actual (1:1) placements for a given viewport and page size.
+Verified for the deterministic presentation model only (ADR 0008). The existing
+slide/order/transition/state-machine/layout model is now complete at model level:
+T-0173 fixes the one remaining validation hole — `Slide` has public fields, so a
+host can bypass `Slide::new` with a struct literal, and `from_slides` previously
+accepted a NaN/negative duration. A NaN duration made every `tick` comparison
+false and corrupted the deterministic remainder carry into a runaway advance;
+`from_slides` now re-validates each duration into a typed
+`PresentationError::InvalidDuration(page, duration)`. New tests also pin the
+TIME_EPSILON boundary, chunked-vs-single-tick determinism, manual navigation
+while playing (elapsed reset, state preserved), terminal Exit from Finished,
+and width-limited fit layout.
 
-Honest scope: pure model only. No OS full-screen window transition, no native
-key/gesture event capture, no rendering or animation is performed — the host
-must translate outcomes into those effects. Hence `in-progress` per ADR 0008.
+Remaining scope is the host boundary and is deliberately not claimed: no OS
+full-screen window transition, no native key/swipe event capture, no timer
+thread, and no slide rendering/animation. The host supplies `tick` seconds and
+commands and translates `PresentationOutcome`/`FullscreenLayout` into effects.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "presentation::tests::new_builds_document_order_and_rejects_empty_document",
     "presentation::tests::from_slides_honours_document_order_and_rejects_reordering",
@@ -402,6 +399,11 @@ tests = [
     "presentation::tests::toggle_from_finished_restarts_at_first_slide",
     "presentation::tests::layout_fit_and_actual_math_is_deterministic_and_centered",
     "presentation::tests::layout_rejects_invalid_geometry",
+    "presentation::tests::from_slides_rejects_durations_that_bypass_slide_new",
+    "presentation::tests::tick_boundary_tolerance_and_chunked_input_are_deterministic",
+    "presentation::tests::manual_navigation_while_playing_resets_elapsed_and_keeps_auto_advance",
+    "presentation::tests::exit_from_finished_and_repeated_exit_are_terminal",
+    "presentation::tests::layout_fit_uses_width_limit_for_wide_pages",
 ]
 title = "Full screen and presentation mode"
 
@@ -459,26 +461,32 @@ title = "Reflow and read aloud"
 docs = [
     "crates/pdfxi-app/src/portfolio.rs",
     "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0155.md",
+    "docs/evidence/app/T-0173.md",
 ]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0155.md: 9 new portfolio::tests pass; cargo test -p pdfxi-app 321 passed/0 failed, --features ui 384 passed/0 failed; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/app/T-0173.md: 5 new portfolio::tests plus the 9 prior portfolio tests all pass; cargo test -p pdfxi-app 381/0 and --features ui 444/0; fmt/clippy/doc EXIT=0."
 id = "VIEW-014"
 notes = """
-Adds pdfxi_app::portfolio over a caller-supplied embedded-file collection summary
-(name, description, size, MIME/extension, optional modified time, internal folder
-path). PortfolioPath validates internal paths as traversal-free (no . or .., no
-empty components, no absolute/drive prefixes, no backslashes, no control chars,
-no ':' stream markers). PortfolioModel::from_summary returns a deterministic,
-nested PortfolioTree (folders before files, case-insensitive then raw-name sort)
-plus a typed PortfolioReport that records unsupported/malformed entries and
-duplicate full paths (first entry wins); the flat rows() view carries depth for a
-host tree widget. No extraction, no filesystem, and no UI. Host boundary: a tree
-view widget and the embedded-file byte extractor are not wired, so the
-user-visible browsing row stays in-progress.
+Verified for the portfolio metadata/tree model only (ADR 0008). The existing
+path validation, deterministic nested tree, first-wins duplicate report and
+bounded summary validation are now complete at model level. T-0173 closes the
+remaining single-component invariant hole: `PortfolioPath::validate_component`
+now rejects an embedded `/` with `PortfolioPathError::InvalidCharacter`. Folder
+paths are split on `/` before component validation, so this specifically stops
+an entry *name* like `a/b` from rendering the same display path as a genuinely
+nested `folder=a, name=b` file, which previously suppressed the real file as a
+false duplicate. New tests cover that alias rejection, direct component/`join`
+slash validation, triple-duplicate reporting (each duplicate points to the
+first valid index), duplicates after a rejected first entry, and depth/length
+boundaries. Add/remove/rename/move plan invariants remain covered by the
+complementary MANAGE-004 (`portfolio_manage`) row.
+
+Remaining scope is the host boundary and is deliberately not claimed: no tree
+view widget, no embedded-file byte extraction, no filesystem/network I/O. The
+host parses the collection summary and draws `PortfolioTree::rows()`.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "portfolio::tests::empty_portfolio_produces_a_root_only_tree",
     "portfolio::tests::tree_construction_nests_folders",
@@ -489,6 +497,11 @@ tests = [
     "portfolio::tests::build_is_deterministic_regardless_of_input_order",
     "portfolio::tests::path_validation_rejects_absolute_drive_backslash_and_dotdot",
     "portfolio::tests::too_many_entries_is_a_global_typed_error",
+    "portfolio::tests::entry_name_with_slash_is_rejected_and_cannot_alias_a_folder_path",
+    "portfolio::tests::component_validation_rejects_embedded_slash",
+    "portfolio::tests::triple_duplicate_reports_each_with_first_index",
+    "portfolio::tests::duplicate_after_a_rejected_first_entry_points_to_first_valid",
+    "portfolio::tests::path_depth_and_length_boundaries_are_enforced",
 ]
 title = "PDF Portfolio browsing"
 
@@ -4417,30 +4430,30 @@ title = "Find text in a document and select copy text"
 docs = [
     "crates/pdfxi-app/src/loupe.rs",
     "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0141.md",
+    "docs/evidence/app/T-0173.md",
 ]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-app: 281 passed, 0 failed, including 10 new loupe::tests::* covering geometry validation/centring, zoom clamping and sanitization, page<->screen round-trip, source-rect-to-dest-rect mapping, shape-aware screen/page hit-testing, bounded drag/scroll panning clamped to the page, bounded gesture accumulation, pinch zoom clamping and invalid-delta rejection, determinism over identical gesture sequences, and lens centre clamped to the viewport. cargo test -p pdfxi-app --features ui: 344 passed, 0 failed. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0141.md."
+evidence = "docs/evidence/app/T-0173.md: 4 new loupe::tests plus the 10 prior loupe tests all pass; cargo test -p pdfxi-app 381/0 and --features ui 444/0; fmt/clippy/doc EXIT=0."
 id = "VIEW-018"
 notes = """
-Window-free loupe magnifier model. LoupeModel supports circular and rectangular
-lenses (LensShape), a zoom clamped to 1.0..=16.0 (MIN/MAX_LOUPE_ZOOM) with
-NaN/infinity sanitization and try_set_zoom typed error, page/screen coordinate
-mapping via exact inverses (page_to_screen / screen_to_page), source_rect (page
-space, size lens/zoom) and dest_rect (screen space) whose corners map round-trip,
-and deterministic half-open rectangle / radius-based circle hit-testing in both
-spaces. Gesture navigation consumes caller-supplied Drag/Scroll/Pinch deltas
-(no OS gesture recognizer): each step is bounded to MAX_GESTURE_STEP, drag is
-accumulated up to MAX_GESTURE_ACCUM, panning divides by zoom and clamps the page
-centre to page bounds, and pinch scales zoom within bounds. LoupeError reports
-invalid geometry/zoom. No new deps, unsafe, or non-test panics.
+Verified for the deterministic loupe/gesture model only (ADR 0008). The existing
+geometry validation, zoom clamping, exact page/screen inverses, source/dest rect
+mapping, shape-aware hit testing, bounded drag/scroll/pinch handling and
+determinism are now complete at model level. T-0173 adds
+`LoupeModel::reset_accumulated_drag()`: the bounded drag total previously had no
+reset path and could only saturate for the whole session, so a host could not
+start a fresh per-pointer gesture sequence; panning and zoom state are left
+untouched by the reset. New tests pin accumulator reset/restart, half-open
+rectangle and closed-radius circle hit-test boundaries, `screen_to_page`
+destination-corner inversion plus exact centre mapping, and the distinction
+that scroll deltas pan without feeding the drag accumulator.
 
-Honest scope: pure model only. No native pointer/scroll/pinch event capture, no
-OS window, and no rendering of the magnified raster — the host must feed deltas
-into `apply` and draw dest_rect. Hence `in-progress` per ADR 0008.
+Remaining scope is the host boundary and is deliberately not claimed: no native
+pointer/scroll/pinch event capture, no OS window, and no magnified-raster
+rendering. The host feeds `GestureDelta`s into `apply` and draws `dest_rect`.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "loupe::tests::new_validates_geometry_and_centres_the_lens",
     "loupe::tests::zoom_is_bounded_and_sanitized",
@@ -4452,5 +4465,9 @@ tests = [
     "loupe::tests::pinch_clamps_zoom_and_invalid_deltas_are_ignored",
     "loupe::tests::identical_gesture_sequences_are_deterministic",
     "loupe::tests::center_clamping_keeps_the_lens_inside_the_viewport",
+    "loupe::tests::reset_accumulated_drag_starts_a_fresh_sequence",
+    "loupe::tests::hit_testing_boundaries_are_half_open_and_radius_closed",
+    "loupe::tests::screen_to_page_maps_dest_corners_to_source_corners",
+    "loupe::tests::scroll_deltas_do_not_feed_the_drag_accumulator",
 ]
 title = "Loupe magnifier and gesture navigation"

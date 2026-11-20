@@ -1,0 +1,15 @@
+{
+  "id": "T-0177",
+  "lane": "author",
+  "title": "Structure tree serialization with ActualText Alt and Artifact",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0171"],
+  "owns": [
+    "crates/pdfxi-accessibility/**",
+    "docs/evidence/author/T-0177.md",
+    "orchestration/feature-updates/T-0177.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-accessibility",
+  "evidence": ""
+}
