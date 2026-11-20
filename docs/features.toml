@@ -1783,17 +1783,53 @@ tests = [
 title = "Export to PostScript"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/acrofill.rs, docs/evidence/forms/T-0097.md"
+docs = [
+    "crates/pdfxi-forms/src/fillworkflow.rs",
+    "crates/pdfxi-forms/src/fillworkflow/tests.rs",
+    "crates/pdfxi-forms/src/lib.rs",
+    "docs/evidence/forms/T-0147.md",
+]
 domain = "Forms"
-evidence = "docs/evidence/forms/T-0097.md"
+evidence = "cargo test -p pdfxi-forms: 268 passed, 0 failed, TEST_EXIT=0; 13 new fillworkflow tests cover text/choice/checkbox end-to-end, validation failure, readonly rejection, required missing, reset, serialized round-trip value preservation, signature blocked without signature, signature transition recorded, deterministic bytes/plan, malformed input, parse-back rejection, number/clear and reset-field. fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0147.md."
 id = "FORMS-001"
-notes = "Headless fill with appearance regeneration, flag handling, and deterministic reporting; CLI/UI binding and FDF import remain open."
+notes = """
+T-0147 closes the library-level headless fill workflow. `FillDocument` loads a
+caller-supplied parsed model either from `FieldSpec`s (`from_specs`) or from an
+already-loaded `Form` plus its matching `/AcroForm` dictionary model
+(`from_parts`, with shape and page-reference checks). `FillWorkflow` writes
+values with validation inherited from `Form::set_value`/`Form::validate`
+(readonly, required, type shape, choice/text constraints), supports clear,
+reset and per-field reset, and produces a deterministic `FilledDocumentPlan`:
+final field/widget dictionaries with `fill_acroform`-regenerated `/AP /N`
+appearances, a name-sorted `AcroFillReport`, a validation snapshot and signature
+workflow records. `FilledDocumentPlan::serialize` emits concrete PDF bytes with
+the T-0140 `serialize_form_pdf` serializer and `verify` parses them back with
+`parse_pdf`, reading each `/V` (with `/DV` fallback per PDF semantics) to prove
+the filled values survived. `finish` performs validate → plan → serialize →
+verify in one typed-error call.
+
+All new public items have rustdoc; the crate denies missing docs and forbids
+unsafe. Non-test code uses no unwrap/expect/panic. Read-only fields keep their
+caller-supplied dictionary entries and are not re-appeared by the fill pass.
+Host-level CLI/UI binding is a separate lane concern, not library scope, so the
+row is verified at the library boundary this task owns.
+"""
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "acrofill::tests::text_field_fill_sets_value",
-    "acrofill::tests::appearance_stream_is_emitted",
-    "acrofill::tests::report_is_deterministic",
+    "fillworkflow::tests::fill_text_choice_and_checkbox_end_to_end",
+    "fillworkflow::tests::validation_failure_is_typed",
+    "fillworkflow::tests::readonly_field_rejection_is_typed",
+    "fillworkflow::tests::required_missing_is_typed",
+    "fillworkflow::tests::reset_restores_defaults_and_drops_signatures",
+    "fillworkflow::tests::serialized_round_trip_preserves_values",
+    "fillworkflow::tests::signature_field_blocked_without_signature",
+    "fillworkflow::tests::signature_workflow_transition_recorded",
+    "fillworkflow::tests::deterministic_plan_and_bytes",
+    "fillworkflow::tests::malformed_input_is_typed",
+    "fillworkflow::tests::verification_rejects_non_pdf_bytes",
+    "fillworkflow::tests::clear_and_number_values_round_trip",
+    "fillworkflow::tests::valid_signature_and_reset_field_record",
 ]
 title = "Fill existing AcroForm fields"
 
@@ -2047,32 +2083,37 @@ title = "Distribute and collect forms locally"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/signature.rs",
+    "crates/pdfxi-forms/src/fillworkflow.rs",
+    "crates/pdfxi-forms/src/fillworkflow/tests.rs",
     "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0087.md",
+    "docs/evidence/forms/T-0147.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 162 passed, 0 failed; 14 new signature::tests::* including cert_permission_maps_to_exact_iso_values (ISO 32000-1 Table 254 /P = 1/2/3), field creation, lock/certification flags, reason/location/contact, state transitions, invalid-transition rejection, decline/cancel, deterministic reports, byte-range planning, placeholder sizing, signed-appearance presence and typed errors. Full output in docs/evidence/forms/T-0087.md."
+evidence = "cargo test -p pdfxi-forms: 268 passed, 0 failed, TEST_EXIT=0; signature tests include signature_field_blocked_without_signature (direct set/clear refused, Unsigned and Pending attach refused) and signature_workflow_transition_recorded (Signed transition kind/from/to/timestamp/participant recorded, /V stays null, no /Contents or /ByteRange in bytes). fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0147.md."
 id = "FORMS-010"
-notes = "Adds signature field creation (/FT /Sig with /V placeholder, /Ff flags, /Lock, DocMDP certification with ISO 32000-1 Table 254 /P values 1/2/3, reason/location/contact, signature-line appearance), a deterministic local workflow state machine (unsigned/pending/signed/valid/invalid/expired with decline/cancel and caller-supplied timestamps), and a SignatureSlot byte-range planning boundary for a future signer. No crypto is implemented and no signature is forged. Cryptographic signing/validation and the workflow UI remain owned by the security/app lanes, so the row stays in-progress."
+notes = """
+T-0147 binds the existing `SignatureWorkflow` state machine to the fill flow at
+library level. Signature fields are fillable **only** via
+`FillWorkflow::attach_signature`: direct `set`/`clear` is rejected with
+`SignatureMustUseWorkflow`, and a workflow still `Unsigned` or `Pending` is
+rejected with `SignatureNotReady`. Only `Signed`/`Valid` states are accepted;
+the in-memory field value becomes the participant name (a model-level fill) and
+a `SignaturePlanRecord` capturing the latest transition (kind, from, to,
+timestamp), participant and transition count is stored in the plan, sorted by
+field name. Reset/per-field reset drops attached workflows and records.
+
+No cryptography is implemented and no signature is forged: the workflow never
+writes `/Contents`, `/ByteRange` or appearance bytes for a signature field, and
+verification intentionally skips signature fields (their state is in the plan).
+Cryptographic signing/validation and the signing UI remain with the security and
+app lanes, so the row stays in-progress rather than verified.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
-    "signature::tests::signature_field_creation_emits_sig_and_v_placeholder",
-    "signature::tests::lock_and_certification_flags_are_emitted",
-    "signature::tests::cert_permission_maps_to_exact_iso_values",
-    "signature::tests::reason_location_and_contact_are_emitted",
-    "signature::tests::workflow_transitions_follow_unsigned_pending_signed_valid",
-    "signature::tests::invalid_transition_is_rejected",
-    "signature::tests::decline_and_cancel_transitions",
-    "signature::tests::deterministic_report",
-    "signature::tests::byte_range_slot_planning",
-    "signature::tests::placeholder_content_sizing",
-    "signature::tests::signed_appearance_presence",
-    "signature::tests::invalid_placeholder_sizes_are_rejected",
-    "signature::tests::workflow_expiry_transition",
-    "signature::tests::invalid_field_geometry_is_a_typed_error",
-    "signature::tests::empty_timestamps_and_participants_are_rejected",
+    "fillworkflow::tests::signature_field_blocked_without_signature",
+    "fillworkflow::tests::signature_workflow_transition_recorded",
+    "fillworkflow::tests::valid_signature_and_reset_field_record",
 ]
 title = "Electronic signature fields and workflows"
 

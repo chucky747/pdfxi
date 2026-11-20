@@ -12,6 +12,12 @@
 //!   invalid-value-type, and invalid-text problems.
 //! - [`FormFill`] / [`FillReport`] — a filling session that records net field
 //!   changes in deterministic, name-sorted order.
+//! - [`FillDocument`] / [`FillWorkflow`] / [`FilledDocumentPlan`] — a headless,
+//!   end-to-end fill pipeline: load a parsed document model, write validated
+//!   values, regenerate appearances, build a deterministic plan, serialize it
+//!   with the T-0140 serializer and parse it back to verify filled `/V` values.
+//!   Signature fields accept only settled workflow transitions (no bytes are
+//!   written); cryptographic signing stays in `pdfxi-security`.
 //! - [`FieldSpec`] / [`acroform_dictionary`] — typed creation of text,
 //!   checkbox, radio, choice, pushbutton and signature fields, with widget
 //!   rectangles, page association and well-formed AcroForm/widget dictionary
@@ -110,6 +116,7 @@ mod distribution;
 mod fdf;
 mod field;
 mod fill;
+mod fillworkflow;
 mod flatten;
 mod form;
 mod properties;
@@ -156,6 +163,10 @@ pub use distribution::{
 pub use fdf::{FdfDocument, FdfError, FdfField, export_fdf, export_xfdf, import_fdf};
 pub use field::{Field, FieldFlags, FieldType, FieldValue, TextConstraint, ValueKind};
 pub use fill::{ChangedField, FillReport, FormFill};
+pub use fillworkflow::{
+    FillDocument, FillWorkflow, FillWorkflowError, FilledDocument, FilledDocumentPlan,
+    SignaturePlanRecord, Verification,
+};
 pub use flatten::{
     AppearancePolicy, FlatDocument, FlatPage, FlattenError, FlattenedDocument, FlattenedPage,
     PageAnnotation, StoredAppearance, flatten_document, flatten_page,
