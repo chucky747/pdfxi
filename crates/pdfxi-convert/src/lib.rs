@@ -70,6 +70,14 @@
 //!   importer: a documented element/CSS subset, typed rejection of active
 //!   content, remote URLs, path traversal and oversized input, local PNG/JPEG
 //!   embedding, and deterministic pagination through the [`create`] engine.
+//! - [`mod@convert_to_pdf`] with [`ConvertInput`], [`ConvertOptions`], and
+//!   [`ConvertedPdf`] is the document-level "Convert to PDF" entry point
+//!   (A-28): one request carries an ordered mix of text, Markdown, HTML, PNG,
+//!   and JPEG sources, each classified by name and content signature and
+//!   rendered through the [`create`] engine, then joined into one PDF through
+//!   `pdfxi-core`'s page plan and writer. Office formats are detected and
+//!   refused with [`ConvertError::OfficeUnavailable`]; no Office process is
+//!   launched from this crate.
 //! - [`html_export`] writes deterministic, inert HTML from a positioned
 //!   page/text model: absolutely positioned spans (with PDF-to-CSS coordinate
 //!   inversion), page navigation, allow-listed hyperlinks, and local image
@@ -194,6 +202,7 @@
 
 pub mod capture;
 pub mod conformance;
+pub mod convert_to_pdf;
 mod converter;
 pub mod create;
 pub mod create_assembly;
@@ -243,6 +252,11 @@ pub use conformance::{
     ForbiddenEntryPolicy, NormalizationOptions, OutputIntentPlan, PlanRequirement,
     REPORTED_ONLY_CONSTRAINTS, SCOPE_NOTE, export_conformance_pdf, looks_like_normalized_pdf,
     plan_conformance_export,
+};
+pub use convert_to_pdf::{
+    CONVERT_MAX_SOURCES, CONVERT_MAX_TOTAL_BYTES, ConvertError, ConvertInput, ConvertOptions,
+    ConvertSource, ConvertSourceKind, ConvertedPart, ConvertedPdf, OFFICE_UNAVAILABLE_MESSAGE,
+    convert_to_pdf, convert_to_pdf_file,
 };
 pub use converter::{Converter, MockConverter};
 pub use create::{

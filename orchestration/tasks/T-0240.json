@@ -3,7 +3,7 @@
   "lane": "convert",
   "title": "Convert to PDF from images, text, Markdown, HTML and Office",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0214"
   ],
