@@ -70,6 +70,26 @@ print production. Exit: M6 gate plus accessibility audit.
 Fuzzing, performance, packaging, installers, full parity audit, third-party
 licenses, reproducible build, release notes. Exit: `goal-verify --all`.
 
+## 2a. Campaign status
+
+Updated 2026-11-19 by the integrator; the board and `docs/features.toml` remain
+the authoritative live state.
+
+| Milestone | Gate row status | Notes |
+|---|---|---|
+| M0 | satisfied | bootstrap, toolchain, xtask, board, goal controller, memory |
+| M1 | satisfied | viewer slice, CLI, save round-trip, fixtures, first benchmarks |
+| M2 | satisfied | authoring, page operations, annotations, export images/text, print |
+| M3 | satisfied | editing, forms, signatures, redaction, security negative tests |
+| M4 | open | standards rows STD-005..STD-010 and EXPORT-008 in progress |
+| M5 | open | CREATE-010 package assembly, export rows, PLAT-003/PLAT-004 |
+| M6 | open | VIEW-013/VIEW-015 and ACCESS-001 in progress |
+| M7 | open | PLAT-002 cross-platform evidence, then `goal-verify --all` |
+
+Row verification follows `docs/ASSUMPTIONS.md` item 12: a row is verified when
+every library-level capability it names is implemented, tested, documented, and
+evidenced, with host-only integration listed verbatim in its notes.
+
 ## 3. Lanes
 
 | Lane | Owns | Focus |
