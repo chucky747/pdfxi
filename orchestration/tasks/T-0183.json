@@ -3,7 +3,7 @@
   "lane": "qa",
   "title": "Fuzz smoke corpus and malformed fixture coverage",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0081"],
   "owns": [
     "crates/pdfxi-testkit/**",
@@ -13,5 +13,5 @@
     "orchestration/feature-updates/T-0183.toml"
   ],
   "acceptance": "cargo xtask corpus smoke",
-  "evidence": ""
+  "evidence": "docs/evidence/qa/T-0183.md"
 }
