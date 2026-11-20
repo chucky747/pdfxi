@@ -1,0 +1,18 @@
+{
+  "id": "T-0246",
+  "lane": "app",
+  "title": "Shared folder browsing and notifications",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0221"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/**",
+    "docs/evidence/ui/T-0246.md",
+    "orchestration/feature-updates/T-0246.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-02, A-11",
+  "notes": "Split out of T-0221 round A, which delivered A-03, A-04, A-07..A-10 and A-12 but not notifications or the shared folder; those two acceptance items stay open until this task lands. A-02: the bell lists real local events only (document saved, export finished, signature request returned later), a capped list, a popover and an honest empty state; no fabricated or demo events. A-11: the shared folder is configured in settings, lists PDFs and XFDF review files from it, and opens them; file-system semantics only, with no network assumptions and no sync protocol. Both are app-lane work and serialise behind T-0221.",
+  "evidence": "docs/evidence/ui/T-0246.md"
+}
