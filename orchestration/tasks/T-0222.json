@@ -15,5 +15,6 @@
     "orchestration/feature-updates/T-0222.toml"
   ],
   "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-05, O-01, O-03, O-04 (open)",
+  "notes": "Leaves crates/pdfxi-app/src/shell/print_dialog.rs in place as the print dialog entry point (a stub is acceptable) so T-0223 can take that file over. Owns all of crates/pdfxi-app/src/** otherwise; T-0223 is serialised after this task and must not edit shell modules outside print_dialog.rs.",
   "evidence": "docs/evidence/ui/T-0222.md"
 }

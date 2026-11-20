@@ -5,11 +5,12 @@
   "priority": "P0",
   "status": "queued",
   "depends_on": [
-    "T-0220"
+    "T-0220",
+    "T-0222"
   ],
   "owns": [
     "crates/pdfxi-app/src/print.rs",
-    "crates/pdfxi-app/src/shell/**",
+    "crates/pdfxi-app/src/shell/print_dialog.rs",
     "crates/pdfxi-render/src/**",
     "scripts/**",
     "docs/evidence/ui/T-0223.md",
