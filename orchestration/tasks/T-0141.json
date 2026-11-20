@@ -1,0 +1,15 @@
+{
+  "id": "T-0141",
+  "lane": "app",
+  "title": "Full screen presentation and loupe gesture models",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0119"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0141.md",
+    "orchestration/feature-updates/T-0141.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}

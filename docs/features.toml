@@ -738,25 +738,76 @@ tests = [
 title = "Watched-folder conversion"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/paragraph_edit.rs",
+    "docs/evidence/author/T-0137.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "docs/evidence/author/T-0137.md"
 id = "EDIT-001"
-notes = ""
+notes = """
+T-0137 adds pdfxi_edit::paragraph_edit, a model-only paragraph text-edit
+contract. `ParagraphEdit` holds already-extracted source text plus scalar-index
+`Replacement`s; `build_plan` validates spans, rejects overlaps, empty/oversized
+input, non-finite/non-positive widths and non-finite or negative caller glyph
+advances with typed `EditError` variants, then produces a deterministic,
+ordered `EditPlan` (array of `EditStep`s, plain `result`, and `ReflowedLine`s).
+`reflow_paragraph` performs greedy word wrapping using only caller-supplied
+`GlyphMetrics` (no font introspection), with documented leading/trailing
+whitespace preservation flags and interior whitespace collapsing to one space;
+a word wider than the target is placed alone. `EditPlan::apply` is idempotent:
+applying to `source` yields `result`, applying again is a no-op, any other input
+is a typed `SourceMismatch`. `lines_text` gives the host writer deterministic
+text-with-breaks. This crate does NOT rewrite PDF content streams by design;
+serializing the plan into a content stream is a host adapter responsibility.
+"""
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "paragraph_edit::tests::reflow_is_deterministic",
+    "paragraph_edit::tests::width_boundaries_exact_and_over",
+    "paragraph_edit::tests::leading_and_trailing_whitespace_preserved",
+    "paragraph_edit::tests::leading_and_trailing_whitespace_dropped",
+    "paragraph_edit::tests::overlapping_edits_rejected",
+    "paragraph_edit::tests::invalid_span_rejected",
+    "paragraph_edit::tests::oversized_input_rejected",
+    "paragraph_edit::tests::empty_source_rejected",
+    "paragraph_edit::tests::non_finite_and_non_positive_widths_rejected",
+    "paragraph_edit::tests::non_finite_metric_rejected",
+    "paragraph_edit::tests::plan_apply_is_ordered_idempotent_and_typed",
+    "paragraph_edit::tests::edit_plan_round_trip_stability",
+]
 title = "Edit text with paragraph reflow"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/text_style.rs",
+    "docs/evidence/author/T-0137.md",
+]
 domain = "Edit"
-evidence = ""
+evidence = "docs/evidence/author/T-0137.md"
 id = "EDIT-002"
-notes = ""
+notes = """
+T-0137 adds pdfxi_edit::text_style, a model-only text style contract. `RunStyle`
+describes font family/size, horizontal scaling, character/word spacing and RGB
+`FillColor`; `validate_style` enforces a positive finite size, positive finite
+scaling, bounded spacing, a non-empty bounded family name, and color components
+in 0.0..=1.0, returning typed `StyleError` variants. `apply_style` merges a
+partial `StyleOverride` onto a base per run and validates the result.
+`resolve_paragraph_style` implements the documented deterministic first-run-wins
+rule (the first run setting each attribute wins, others fall back to the
+default), and `style_paragraph` yields a `ParagraphStylePlan` with the resolved
+paragraph style and per-run effective styles. Like EDIT-001 this is a model;
+emitting PDF text operators is a host adapter responsibility.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "text_style::tests::style_validation_rejects_bad_inputs",
+    "text_style::tests::per_run_style_application_merges_and_validates",
+    "text_style::tests::paragraph_style_resolution_first_run_wins_is_deterministic",
+    "text_style::tests::style_round_trip_stability",
+]
 title = "Edit fonts size spacing and color"
 
 [[feature]]

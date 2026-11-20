@@ -3,7 +3,7 @@
   "lane": "author",
   "title": "Paragraph text editing model with reflow",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0114"],
   "owns": [
     "crates/pdfxi-edit/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0137.toml"
   ],
   "acceptance": "cargo test -p pdfxi-edit",
-  "evidence": ""
+  "evidence": "docs/evidence/author/T-0137.md"
 }

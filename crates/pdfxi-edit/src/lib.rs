@@ -18,7 +18,11 @@
 //! reporting. [`compare`] deterministically diffs two already-extracted
 //! page-text documents into bounded added/removed/changed hunks. [`measurement`]
 //! computes validated distance/area/perimeter geometry with explicit scale and
-//! units. [`header_footer`]
+//! units. [`paragraph_edit`] models paragraph text edits with deterministic
+//! line-break reflow against caller-supplied glyph metrics (a model only: it
+//! never reads or writes content streams). [`text_style`] models text run styles
+//! (font, size, scaling, spacing, color) with validation and deterministic
+//! first-run-wins paragraph resolution. [`header_footer`]
 //! models six-slot headers, footers, and page numbering and renders them as
 //! additive content-stream overlays, including whole-page-set application with
 //! filename tokens and alternate page selection. [`watermark`] models text,
@@ -47,9 +51,11 @@ pub mod header_footer;
 pub mod markup;
 pub mod measurement;
 pub mod navigation;
+pub mod paragraph_edit;
 pub mod pdf;
 pub mod redaction;
 pub mod review;
+pub mod text_style;
 pub mod watermark;
 
 pub use annotation::{
@@ -86,6 +92,10 @@ pub use navigation::{
     LinkStore, LinkTarget, MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link,
     dict_to_name_tree, dict_to_outline, link_to_dict, name_tree_to_dict, outline_to_dict,
 };
+pub use paragraph_edit::{
+    EditError, EditLimits, EditPlan, EditStep, FixedMetrics, FnMetrics, GlyphMetrics,
+    ParagraphEdit, ReflowOptions, ReflowedLine, Replacement, TextSpan, reflow_paragraph,
+};
 pub use redaction::{
     AppliedPage, AppliedRedaction, FormXObject, Matrix, PageNumber, RedactionError, RedactionInput,
     RedactionOptions, RedactionPlan, RedactionRect, RedactionRegion, RedactionReport, Removal,
@@ -97,6 +107,11 @@ pub use review::{
     dict_to_registry, export_registry, import_registry, participant_status_summary, participants,
     print_registry, registry_to_dict, registry_to_print_lines, registry_to_text,
     root_annotation_ids,
+};
+pub use text_style::{
+    ColorComponent, FillColor, ParagraphStylePlan, Run, RunStyle, SpacingField, StyleError,
+    StyleLimits, StyleOverride, StyledRun, apply_style, resolve_paragraph_style, style_paragraph,
+    validate_style,
 };
 pub use watermark::{
     ImageMark, MarkContent, PageRange, Placement, ResourceExtGState, ResourceFont, ResourcePatch,
