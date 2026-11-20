@@ -1,0 +1,15 @@
+{
+  "id": "T-0186",
+  "lane": "integrator",
+  "title": "Cross-platform build matrix and linux cross-check",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0181"],
+  "owns": [
+    ".github/**",
+    "docs/PLATFORMS.md",
+    "docs/evidence/platform-check.md"
+  ],
+  "acceptance": "cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu",
+  "evidence": "docs/evidence/platform-check.md"
+}

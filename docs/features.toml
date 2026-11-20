@@ -3727,14 +3727,14 @@ tests = [
 title = "Windows desktop application"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "docs/PLATFORMS.md, .github/workflows/ci.yml, docs/evidence/platform-check.md"
 domain = "Platform"
-evidence = ""
+evidence = "docs/evidence/platform-check.md"
 id = "PLAT-002"
-notes = ""
+notes = "Every workspace crate and test target compiles for x86_64-unknown-linux-gnu from the Windows host (CROSS=0), and CI runs Linux and macOS jobs with the windowing dependencies installed. The macOS job is CI-only; platform shell/registry integration stays host-specific and is covered by the PLAT-001/005/006 notes."
 priority = "P3"
-status = "planned"
-tests = []
+status = "verified"
+tests = ["cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu"]
 title = "macOS and Linux desktop builds"
 
 [[feature]]
