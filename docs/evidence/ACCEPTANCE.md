@@ -4,14 +4,14 @@ Source: `docs/GOAL.md`. A criterion is checked only when the listed command
 output or file evidence is current at HEAD. This file is the integrator's
 single view of the end condition; task evidence lives in `docs/evidence/`.
 
-Last updated: 2026-11-19 (M2 verified; 46 verified feature rows of 140; 121 verified tasks).
+Last updated: 2026-11-19 (M2 verified; 53 verified feature rows of 140; 128 verified tasks).
 
 | ID | Criterion | Status | Evidence | Blocker |
 |---|---|---|---|---|
 | AC-01 | Reproducible bootstrap | partial | `scripts/bootstrap.ps1`, `scripts/env.ps1`, `docs/decisions/0001-toolchain.md`; user-local Rust/GCC/MinGit bootstrap works, winget elevation path not exercised | Needs a clean-machine dry run record |
 | AC-02 | Build quality | partial | per-crate clippy `-D warnings` green for all first-party crates; `cargo build --workspace --release` succeeded in 26.21 s (2026-11-19, target/integration) | Workspace-wide fmt/clippy gate re-run at a quiescent checkpoint |
 | AC-03 | Tests | partial | unit/integration tests across all lanes; doctests host-limited (ADR-0005/`docs/ASSUMPTIONS.md`); five fuzz targets with seed corpus and a smoke example (T-0081); `cargo xtask corpus smoke` passed 8/8 with manifest hashes (2026-11-19) | Full-profile fuzz run and coverage targets pending |
-| AC-04 | Feature parity | not met | `docs/features.toml` 140 rows, 46 verified | 94 rows open |
+| AC-04 | Feature parity | not met | `docs/features.toml` 140 rows, 53 verified | 87 rows open |
 | AC-05 | Performance | not met | raw timings only (`bench_open` in T-0024/T-0030) | Budgets in `docs/TESTING.md` not yet measured |
 | AC-06 | Security | partial | AES/RC4 handlers incl. AES-256 R5/R6 (T-0036, T-0061), parameter validation (T-0018), redaction/sanitization plans (T-0052), content-stream redaction removal (T-0076), CMS SignedData build/verify (T-0048), X.509 chain and digital-ID store (T-0070), timestamp validation (T-0077), metadata/XMP scrubbing (T-0078) | PDF ByteRange signing, revocation, key-store/UI pending |
 | AC-07 | Accessibility | partial | reading-order model (T-0013), validated accessibility tree + reading-order export (T-0055), tagged PDF structure writer/reader (T-0075), PDF/UA-style checker (T-0088) | Editor UI, accesskit integration, and independent veraPDF-style cross-validation pending |
