@@ -1,0 +1,13 @@
+{
+  "id": "T-0200",
+  "lane": "integrator",
+  "title": "Baseline build and feature-gated test run",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "docs/evidence/hardening/**"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium && cargo test -p pdfxi-render --features pdfium",
+  "evidence": "docs/evidence/hardening/T-0200.md"
+}

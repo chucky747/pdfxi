@@ -1,0 +1,16 @@
+{
+  "id": "T-0206",
+  "lane": "docs",
+  "title": "User docs match the shipped viewer",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0201", "T-0202", "T-0203"],
+  "owns": [
+    "docs/book/**",
+    "README.md",
+    "docs/evidence/**",
+    "orchestration/HANDOFF.md"
+  ],
+  "acceptance": "cargo xtask docs",
+  "evidence": "docs/evidence/release/T-0206.md"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "T-0203",
+  "lane": "app",
+  "title": "Honest shell: native open, real document text, no demo material",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0201"],
+  "owns": [
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/design.rs",
+    "crates/pdfxi-app/src/settings.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-app/Cargo.toml",
+    "crates/pdfxi-app/src/**",
+    "docs/evidence/ui/T-0203.md"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium",
+  "evidence": "docs/evidence/ui/T-0203.md"
+}

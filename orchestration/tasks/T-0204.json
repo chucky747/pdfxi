@@ -1,0 +1,19 @@
+{
+  "id": "T-0204",
+  "lane": "qa",
+  "title": "Gate runs UI and PDFium tests; real-world PDF and JS wall-clock tests",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "xtask/**",
+    ".github/workflows/**",
+    "crates/pdfxi-testkit/**",
+    "fixtures/realworld/**",
+    "crates/pdfxi-automation/src/js/tests.rs",
+    "crates/pdfxi-core/tests/realworld.rs",
+    "docs/evidence/qa/T-0204.md"
+  ],
+  "acceptance": "cargo xtask verify",
+  "evidence": "docs/evidence/qa/T-0204.md"
+}

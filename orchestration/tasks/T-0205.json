@@ -1,0 +1,16 @@
+{
+  "id": "T-0205",
+  "lane": "docs",
+  "title": "Honest feature matrix statuses with ADR",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/decisions/**",
+    "docs/evidence/release/T-0205.md"
+  ],
+  "acceptance": "cargo xtask features verify",
+  "evidence": "docs/evidence/release/T-0205.md"
+}
