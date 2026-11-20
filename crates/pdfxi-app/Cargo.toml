@@ -13,7 +13,7 @@ build = "build.rs"
 default = []
 # The native egui/eframe viewer shell. Default builds stay dependency-light;
 # enabling `ui` pulls in the GUI stack (winit, egui, and the raster upload path).
-ui = ["dep:eframe", "dep:egui"]
+ui = ["dep:eframe", "dep:egui", "dep:rfd"]
 # Enables the native PDFium backend inside `pdfxi-render`. This is independent
 # of `ui` so the raster cache can be exercised headlessly, and `ui` keeps working
 # without it by drawing the placeholder canvas.
@@ -23,11 +23,13 @@ pdfium = ["pdfxi-render/pdfium"]
 # Rendering is a normal (non-optional) dependency: the dependency-light raster
 # cache uses only the backend-agnostic `pdfxi-render` contracts. Native PDFium
 # is pulled in only through the `pdfium` feature above.
-pdfxi-render = { path = "../pdfxi-render" }
-pdfxi-text = { path = "../pdfxi-text" }
+pdfxi-render = { workspace = true }
+pdfxi-text = { workspace = true }
 thiserror.workspace = true
-# Native file picker for Open (MIT).
-rfd = "0.15"
+# Native file picker for Open (MIT). Only the `ui` shell calls it, so it is
+# optional: a build without `ui` links no picker and emits no unused-dependency
+# warning.
+rfd = { version = "0.15", optional = true }
 # Persisted settings and the launch-flag parser; both are already in the
 # workspace lockfile (MIT OR Apache-2.0).
 serde.workspace = true

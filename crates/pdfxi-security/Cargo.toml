@@ -9,5 +9,5 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-pdfxi-core = { path = "../pdfxi-core" }
+pdfxi-core = { workspace = true }
 

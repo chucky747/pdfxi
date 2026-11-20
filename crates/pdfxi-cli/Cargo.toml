@@ -15,20 +15,20 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-pdfxi-core = { path = "../pdfxi-core" }
+pdfxi-core = { workspace = true }
 # Action-file parsing and the document executor used by `action` and `droplet`.
 # A workspace crate, so no external dependency is introduced.
-pdfxi-automation = { path = "../pdfxi-automation" }
-pdfxi-text = { path = "../pdfxi-text" }
+pdfxi-automation = { workspace = true }
+pdfxi-text = { workspace = true }
 # PDF creation (images, text, Markdown) and tagged/accessible text export used
 # by the `create` and `export` command groups. Both are workspace crates, so no
 # external dependency is introduced. `default-features = false` keeps the
 # optional renderer path out of these headless commands.
-pdfxi-convert = { path = "../pdfxi-convert", default-features = false }
-pdfxi-accessibility = { path = "../pdfxi-accessibility" }
+pdfxi-convert = { workspace = true }
+pdfxi-accessibility = { workspace = true }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.
-pdfxi-render = { path = "../pdfxi-render", optional = true }
+pdfxi-render = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 
@@ -38,4 +38,4 @@ default = []
 pdfium = ["dep:pdfxi-render", "pdfxi-render/pdfium"]
 
 [dev-dependencies]
-pdfxi-testkit = { path = "../pdfxi-testkit" }
+pdfxi-testkit = { workspace = true }

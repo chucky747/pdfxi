@@ -32,6 +32,24 @@ serde_json = "1"
 thiserror = "2"
 toml = "0.8"
 
+# Workspace members. Each entry carries both the path and an explicit version so
+# member manifests inherit a versioned requirement (`{ workspace = true }`) and
+# the `cargo deny` bans check never sees a wildcard path dependency.
+# Only crates another member already depends on are listed: cargo warns about an
+# unused workspace dependency, and binaries with no dependents (`pdfxi-app`,
+# `pdfxi-cli`) plus crates nobody uses yet (`pdfxi-edit`) would trip it. Add the
+# entry with the first dependent.
+pdfxi-accessibility = { path = "crates/pdfxi-accessibility", version = "0.1.0" }
+pdfxi-automation = { path = "crates/pdfxi-automation", version = "0.1.0" }
+pdfxi-convert = { path = "crates/pdfxi-convert", version = "0.1.0", default-features = false }
+pdfxi-core = { path = "crates/pdfxi-core", version = "0.1.0" }
+pdfxi-forms = { path = "crates/pdfxi-forms", version = "0.1.0" }
+pdfxi-render = { path = "crates/pdfxi-render", version = "0.1.0" }
+pdfxi-security = { path = "crates/pdfxi-security", version = "0.1.0" }
+pdfxi-standards = { path = "crates/pdfxi-standards", version = "0.1.0" }
+pdfxi-testkit = { path = "crates/pdfxi-testkit", version = "0.1.0" }
+pdfxi-text = { path = "crates/pdfxi-text", version = "0.1.0" }
+
 [profile.dev]
 debug = 1
 incremental = true

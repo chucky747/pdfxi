@@ -15,9 +15,9 @@ publish = false
 # are normal dependencies rather than dev-dependencies. `pdfxi-core` keeps its
 # dev-dependency back-edge, which Cargo permits (one edge of the cycle is a
 # dev-dependency and is absent from a normal build).
-pdfxi-core = { path = "../pdfxi-core" }
-pdfxi-forms = { path = "../pdfxi-forms" }
-pdfxi-security = { path = "../pdfxi-security" }
+pdfxi-core = { workspace = true }
+pdfxi-forms = { workspace = true }
+pdfxi-security = { workspace = true }
 
 [dev-dependencies]
 # Test-only reverse edge used by the authoring corpus integration tests so every

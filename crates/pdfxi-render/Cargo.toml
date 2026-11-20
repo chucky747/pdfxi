@@ -15,7 +15,7 @@ thiserror.workspace = true
 # dependency cycle. It is a normal (non-optional) dependency because the
 # backend-agnostic conversion helpers in `text_extract` are useful and tested
 # in default builds; the native PDFium bindings remain optional below.
-pdfxi-text = { path = "../pdfxi-text" }
+pdfxi-text = { workspace = true }
 # Optional native backend. Default builds stay dependency-light; only the
 # `pdfium` feature pulls in the PDFium bindings.
 pdfium-render = { version = "0.9.5", optional = true }
