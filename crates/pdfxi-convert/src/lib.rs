@@ -64,6 +64,12 @@
 //!   inversion), page navigation, allow-listed hyperlinks, and local image
 //!   references only when the caller supplies an already-extracted, safe
 //!   filename. It emits no script and fetches nothing.
+//! - [`office_export`] writes editable `.docx`, `.xlsx`, and `.pptx` archives
+//!   from a caller-supplied extraction model using only self-generated ZIP and
+//!   XML. The three local adapters implement a typed [`OfficeExporter`]
+//!   contract, validate their own ZIP structure and required parts, and return
+//!   an explicit report of unsupported content. No Office installation or
+//!   network access is involved.
 //! - [`postscript`] writes a deterministic, DSC-conformant PostScript program
 //!   that draws text, rectangles, and lines with standard fonts and shows every
 //!   page. Unrepresentable glyphs and image content are skipped and recorded in
@@ -107,6 +113,7 @@ mod export_options;
 pub mod html_export;
 pub mod image;
 mod json;
+pub mod office_export;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
@@ -138,6 +145,10 @@ pub use html_export::{
 };
 pub use image::{ImageFormat, encode, encode_png, encode_ppm};
 pub use json::{DocumentJson, DocumentMetadata, JSON_SCHEMA_VERSION, JsonPage, JsonSpan};
+pub use office_export::{
+    DocxExporter, OfficeDocument, OfficeExport, OfficeExportError, OfficeExportReport,
+    OfficeExporter, OfficeFormat, PptxExporter, ReportedUnsupported, SheetMode, XlsxExporter,
+};
 pub use options::ConversionOptions;
 #[cfg(feature = "renderer")]
 pub use page_export::{
