@@ -79,6 +79,7 @@ pub mod measurement;
 pub mod navigation;
 pub mod paragraph_edit;
 pub mod pdf;
+pub mod redact_document;
 pub mod redaction;
 pub mod review;
 pub mod text_style;
@@ -146,6 +147,11 @@ pub use navigation::{
 pub use paragraph_edit::{
     EditError, EditLimits, EditPlan, EditStep, FixedMetrics, FnMetrics, GlyphMetrics,
     ParagraphEdit, ReflowOptions, ReflowedLine, Replacement, TextSpan, reflow_paragraph,
+};
+pub use redact_document::{
+    RedactionError as DocumentRedactionError, RedactionMark,
+    RedactionReport as DocumentRedactionReport, RedactionRequest, RedactionVerification,
+    apply_redaction, verify_redaction,
 };
 pub use redaction::{
     AppliedPage, AppliedRedaction, ContentRemover, FormXObject, Matrix, OverlapPolicy, PageNumber,

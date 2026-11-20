@@ -11,6 +11,10 @@ publish = false
 [dependencies]
 pdfxi-core.workspace = true
 thiserror.workspace = true
+# Image XObject pixel redaction. JPEG decoding only at runtime; the PNG feature
+# is used by the deterministic integration tests that build fixtures. Licence:
+# MIT OR Apache-2.0, already present in the workspace lock.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [dev-dependencies]
 # Renderer-backed proof only: the integration test renders the edited page and

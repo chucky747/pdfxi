@@ -1299,106 +1299,34 @@ tests = [
 title = "Flatten annotations and form fields"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-security/src/redaction.rs",
-    "crates/pdfxi-security/src/error.rs",
-    "crates/pdfxi-edit/src/redaction.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0076.md",
-    "docs/evidence/author/T-0146.md",
-]
+docs = "docs/evidence/hardening/T-0237.md"
 domain = "Edit"
-evidence = "T-0052 (security): 16 redaction tests + clippy/doc clean. T-0076 (author): cargo test -p pdfxi-edit 138 passed, including 27 new redaction tests; fmt/clippy/doc EXIT=0. T-0146 (author, library-level closure): cargo test -p pdfxi-edit 278 passed, 0 failed, including 10 new redaction::tests; fmt/clippy/doc EXIT=0 (RUSTDOCFLAGS=-D warnings). Full output in docs/evidence/author/T-0146.md."
+evidence = "docs/evidence/hardening/T-0237.md"
 id = "EDIT-013"
 notes = """
-Library-level EDIT-013 is complete. Marks are rectangular page regions with an
-optional text-run (pattern) selection model. RedactionPlan sorts regions into a
-canonical (page, kind, contents) order and deduplicates exact regions in both
-new() and add(); execution order is independent of insertion order. Validation
-rejects non-finite/empty rectangles, blank patterns, zero page numbers,
-rectangles on unknown pages or outside declared page bounds, and (under
-OverlapPolicy::Reject) partially overlapping marks on the same page; edge-touching
-rectangles are not overlaps. RedactionPlan::validate_geometry defensively
-re-checks constructor invariants before any removal or verification.
-
-A permanent-removal plan contract is now explicit. PermanentRemovalPlan pairs
-the marks with an OverlapPolicy and optional RedactionMetadata (non-blank
-author/subject, non-negative created_unix_ms, typed InvalidMetadata errors with
-stable Display wording). Its execute() validates the plan and then invokes a
-caller-supplied ContentRemover once per page in ascending page order.
-
-SECURITY BOUNDARY: ContentRemover is the single security-critical step that
-physically rewrites content streams so redacted text is removed, not covered.
-This crate deliberately does not duplicate that security logic: in this
-workspace that step is owned by pdfxi-security's redaction engine, and callers
-that own a remover supply one through the trait. StreamContentRemover delegates
-to this crate's one internal stream rewriter for callers without a separate
-engine. The fake DroppingRemover test drops matched bytes without painting any
-cover box, proving the contract requires removal.
-
-Verification is caller-supplied-text based: PermanentRemovalResult::verify and
-the free verify_extracted_text build a RedactionReport from post-removal text
-and prove that marked regions no longer expose their content; strict mode fails
-via check() when residuals remain. The T-0076 stream-level proof (Tj/TJ/'/"
-operators dropped, Form XObjects recursed with a depth/cycle limit, overlapping
-inline images removed, annotations/links/metadata stripped) is retained.
-
-Out of scope for this library-level row and delegated to other lanes:
-rendering-based verification that rasterised image content inside a rectangle
-is gone (render lane) and UI/CLI exposure of the redaction workflow (app lane).
+Document-level redaction on a real Document: glyph-level content removal with
+partial-run splitting and TJ advance preservation, in-place content-stream
+rewrite, annotation/appearance removal, link and widget gating, AcroForm /Fields
+and /CO filtering, optional /Info and XMP clearing, and a fail-closed verifier
+that checks extracted text, stored and Flate-decompressed stream bytes in UTF-8
+and UTF-16LE, and surviving annotation/field rectangles. Image pixel redaction
+is implemented for 8-bit DeviceGray/RGB/Indexed and DCTDecode JPEG; unsupported
+images fail closed. Intersecting form XObjects and unresolved Do names are also
+fail-closed (`UnsupportedImage`) rather than silently skipped; form recursion
+and inline-image decoding remain follow-up work; no app shell is exposed.
 """
 priority = "P1"
-status = "model"
+status = "library"
 tests = [
-    "redaction::tests::rect_validation_rejects_empty_and_non_finite_coordinates",
-    "redaction::tests::page_bounds_and_page_number_are_validated",
-    "redaction::tests::plan_validation_enforces_page_bounds_and_known_pages",
-    "redaction::tests::pattern_redaction_coverage_detects_every_occurrence",
-    "redaction::tests::residual_detection_strict_mode_fails",
-    "redaction::tests::residual_detection_permissive_mode_reports_without_failing",
-    "redaction::tests::multi_page_ordering_of_residuals_is_page_major",
-    "redaction::tests::case_insensitive_matching_reports_original_byte_offsets",
-    "redaction::tests::case_insensitive_offsets_survive_unicode_case_expansion",
-    "redaction::tests::rectangle_removed_text_is_verified_and_label_source_is_reported",
-    "redaction::tests::empty_plan_verifies_clean_in_both_modes",
-    "redaction::tests::plan_is_deterministic_regardless_of_insertion_order",
-    "redaction::tests::rectangle_removes_tj_text",
-    "redaction::tests::pattern_removes_all_occurrences",
-    "redaction::tests::tj_arrays_are_redacted",
-    "redaction::tests::quote_operators_are_redacted",
-    "redaction::tests::quote_operator_is_removed_by_rectangle_at_its_rendered_line",
-    "redaction::tests::double_quote_operator_is_removed_by_rectangle_at_its_rendered_line",
-    "redaction::tests::form_xobject_recursion_redacts_nested_content",
-    "redaction::tests::form_depth_limit_and_cycles_are_typed_errors",
-    "redaction::tests::residual_inside_form_xobject_fails_strict_verification",
-    "redaction::tests::inline_image_is_untouched",
-    "redaction::tests::inline_image_overlapping_rectangle_is_removed_and_boxed",
-    "redaction::tests::non_target_text_is_preserved_byte_for_byte",
-    "redaction::tests::opaque_box_is_painted_for_rectangles",
-    "redaction::tests::annotations_links_and_metadata_are_stripped",
-    "redaction::tests::verification_fails_when_labeled_content_remains",
-    "redaction::tests::supplied_extractor_controls_verification",
-    "redaction::tests::output_is_deterministic_regardless_of_insertion_order",
-    "redaction::tests::cancellation_is_a_typed_error",
-    "redaction::tests::cancellation_is_checked_during_verification",
-    "redaction::tests::validation_rejects_bad_plans_and_geometry",
-    "redaction::tests::clipping_render_mode_does_not_hide_text",
-    "redaction::tests::matrix_updates_affect_rectangle_matching",
-    "redaction::tests::ctm_scale_and_rotation_are_honored_for_rectangle_text",
-    "redaction::tests::whitespace_before_array_close_is_accepted",
-    "redaction::tests::hostile_unterminated_strings_arrays_and_images_are_typed_errors",
-    "redaction::tests::hostile_deep_arrays_and_non_finite_numbers_do_not_panic",
-    "redaction::tests::comments_and_name_escapes_are_preserved",
-    "redaction::tests::permanent_removal_validates_marks_and_pages",
-    "redaction::tests::duplicate_marks_are_deduplicated_and_ordering_is_canonical",
-    "redaction::tests::overlapping_marks_policy_rejects_and_allows",
-    "redaction::tests::permanent_removal_plan_is_deterministic",
-    "redaction::tests::remover_trait_is_invoked_per_page_and_drops_text",
-    "redaction::tests::verification_detects_residual_text_from_supplied_extract",
-    "redaction::tests::verification_passes_when_no_residual_text",
-    "redaction::tests::invalid_time_and_metadata_fields_are_rejected",
-    "redaction::tests::empty_page_set_verifies_clean",
-    "redaction::tests::error_and_report_wording_is_stable",
+    "redaction_document::redacts_text_annotation_and_metadata_then_verifies_clean",
+    "redaction_document::empty_region_redaction_changes_nothing",
+    "redaction_document::verifier_catches_a_secret_left_outside_the_mark",
+    "redaction_document::partial_intersection_removes_only_the_marked_glyphs",
+    "redaction_document::image_pixels_under_a_mark_are_black_and_metadata_is_gone",
+    "redaction_document::jpeg_image_under_a_mark_is_decoded_refilled_and_flated",
+    "redaction_document::intersecting_jpx_image_fails_closed_without_saving",
+    "redaction_document::form_xobject_under_a_mark_fails_closed",
+    "redaction_document::unresolvable_xobject_under_a_mark_fails_closed",
 ]
 title = "Redaction marks and permanent removal"
 

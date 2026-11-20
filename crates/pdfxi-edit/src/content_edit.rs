@@ -1112,7 +1112,7 @@ fn build_width_array(widths: &[GlyphWidth]) -> Vec<Object> {
 
 /// Parsed metrics and decoding information for one page font resource.
 #[derive(Clone, Debug)]
-struct FontInfo {
+pub(crate) struct FontInfo {
     base_font: String,
     composite: bool,
     subset: bool,
@@ -1155,7 +1155,7 @@ impl FontInfo {
                 .is_some_and(|index| (index as usize) < self.widths.len())
     }
 
-    fn decode(&self, bytes: &[u8]) -> String {
+    pub(crate) fn decode(&self, bytes: &[u8]) -> String {
         match &self.to_unicode {
             Some(map) => map.decode(bytes),
             None if self.composite => {
@@ -1174,7 +1174,7 @@ impl FontInfo {
         }
     }
 
-    fn code_units(&self, bytes: &[u8]) -> Vec<(u32, usize)> {
+    pub(crate) fn code_units(&self, bytes: &[u8]) -> Vec<(u32, usize)> {
         if self.composite {
             bytes
                 .chunks(2)
@@ -1189,7 +1189,7 @@ impl FontInfo {
         }
     }
 
-    fn width_of_code(&self, code: u32) -> f64 {
+    pub(crate) fn width_of_code(&self, code: u32) -> f64 {
         let width = if self.composite {
             self.cid_widths
                 .get(&code)
@@ -1211,7 +1211,7 @@ impl FontInfo {
 }
 
 /// Load every font resource in a page's resource dictionary.
-fn load_fonts(
+pub(crate) fn load_fonts(
     document: &Document,
     page: &pdfxi_core::Page,
 ) -> Result<BTreeMap<String, FontInfo>, TextEditError> {
@@ -1236,7 +1236,7 @@ fn load_fonts(
 }
 
 /// Resolve a page's resource dictionary, including inherited resources.
-fn page_resources(
+pub(crate) fn page_resources(
     document: &Document,
     page: &pdfxi_core::Page,
 ) -> Result<Option<Object>, TextEditError> {
@@ -1255,7 +1255,10 @@ fn page_resources(
 }
 
 /// Resolve an indirect reference once; other values are cloned.
-fn resolve(document: &Document, value: Option<&Object>) -> Result<Option<Object>, TextEditError> {
+pub(crate) fn resolve(
+    document: &Document,
+    value: Option<&Object>,
+) -> Result<Option<Object>, TextEditError> {
     match value {
         None | Some(Object::Null) => Ok(None),
         Some(Object::Reference(id)) => Ok(Some(document.object(*id)?)),
@@ -1444,18 +1447,18 @@ struct RawRun {
 
 /// A 2D affine matrix in PDF `[a b c d e f]` order.
 #[derive(Clone, Copy, Debug)]
-struct Matrix([f64; 6]);
+pub(crate) struct Matrix(pub(crate) [f64; 6]);
 
 impl Matrix {
-    fn identity() -> Self {
+    pub(crate) fn identity() -> Self {
         Self([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
     }
 
-    fn translate(tx: f64, ty: f64) -> Self {
+    pub(crate) fn translate(tx: f64, ty: f64) -> Self {
         Self([1.0, 0.0, 0.0, 1.0, tx, ty])
     }
 
-    fn multiply(left: Self, right: Self) -> Self {
+    pub(crate) fn multiply(left: Self, right: Self) -> Self {
         let a = left.0;
         let b = right.0;
         Self([
@@ -1468,14 +1471,14 @@ impl Matrix {
         ])
     }
 
-    fn point(self) -> (f64, f64) {
+    pub(crate) fn point(self) -> (f64, f64) {
         (self.0[4], self.0[5])
     }
 }
 
 /// One operand parsed from a content stream.
 #[derive(Clone, Debug)]
-enum Operand {
+pub(crate) enum Operand {
     Number(f64),
     Name(String),
     Text(Vec<u8>),
@@ -1485,14 +1488,14 @@ enum Operand {
 }
 
 impl Operand {
-    fn as_name(&self) -> Option<&str> {
+    pub(crate) fn as_name(&self) -> Option<&str> {
         match self {
             Self::Name(name) => Some(name),
             _ => None,
         }
     }
 
-    fn as_number(&self) -> Option<f64> {
+    pub(crate) fn as_number(&self) -> Option<f64> {
         match self {
             Self::Number(value) => Some(*value),
             _ => None,
@@ -1533,11 +1536,11 @@ struct BlockMark {
 }
 
 /// A tokenized operator with its byte span.
-struct Operator {
-    name: String,
-    operands: Vec<Operand>,
-    start: usize,
-    end: usize,
+pub(crate) struct Operator {
+    pub(crate) name: String,
+    pub(crate) operands: Vec<Operand>,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// Scan a content stream into text-showing runs with geometry.
@@ -1865,7 +1868,7 @@ fn matrix_from(operands: &[Operand]) -> Option<Matrix> {
 ///
 /// Inline image data (`BI ... ID ... EI`) is skipped so binary bytes never
 /// become operators. Malformed nesting and truncated strings are typed errors.
-fn tokenize(content: &[u8]) -> Result<Vec<Operator>, TextEditError> {
+pub(crate) fn tokenize(content: &[u8]) -> Result<Vec<Operator>, TextEditError> {
     let mut parser = ContentParser {
         data: content,
         position: 0,
