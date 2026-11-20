@@ -1,0 +1,62 @@
+# Real-world corpus manifest (T-0215).
+#
+# Every PDF in this directory is listed here. The smoke test
+# `crates/pdfxi-testkit/tests/realworld_corpus.rs` verifies the SHA-256, opens
+# the file through `pdfxi_core::Document`, checks the page count, and looks for
+# the marker words in `Document::page_text`.
+#
+# Fields:
+#   name          file name relative to fixtures/realworld/
+#   producer      powerpoint | edge | pdfxi | excel
+#   sha256        lower-case SHA-256 of the committed bytes
+#   pages         expected leaf page count
+#   markers       marker phrases expected in extracted page text
+#   password      documented open password, when the file needs one
+#   expected_error  optional pdfxi-core error variant asserted for page_text
+#   known_failure  current pdfxi-core limitation, kept honest by the test
+#
+# `known_failure` entries assert today's failure instead of hiding it. When the
+# parser is fixed, the assertion flips and the entry must be updated.
+
+version = 1
+
+[[fixture]]
+name = "browser-print.pdf"
+producer = "edge"
+sha256 = "7a837a076e32ac768538009dca96785f0c25a42a205bd2f898f4d330934cf948"
+pages = 1
+markers = ["kestrel browser", "kestrel anchor"]
+known_failure = "page_text returns glyph indices from the Edge subset font because the ToUnicode CMap is not applied; marker words are absent"
+
+[[fixture]]
+name = "microsoft-excel-2019-sample.pdf"
+producer = "excel"
+sha256 = "bb335a4ca5217eb32ed579cc64eb319055917bb9c5594838a63afeea2797f337"
+pages = 2
+markers = ["PDFXI Real-World Sample", "amber compass lantern", "meadow harmonic"]
+
+[[fixture]]
+name = "pdfxi-encrypted-selfmade.pdf"
+producer = "pdfxi"
+sha256 = "127e88f23535ac56bdc5e5d5232b8357ee540163c497e74e11b08a2cf6101878"
+pages = 1
+markers = []
+password = "pdfxi-test"
+expected_error = "UnexpectedToken"
+known_failure = "pdfxi-core has no password or decryption layer, so page_text returns Error::UnexpectedToken for the AES-128 encrypted content stream"
+
+[[fixture]]
+name = "pdfxi-forms-selfmade.pdf"
+producer = "pdfxi"
+sha256 = "31004820fab4fe929b24a1ba5ac49aea32e6677d9fde7c2ee1ea53e692190190"
+pages = 1
+markers = ["Form page"]
+
+[[fixture]]
+name = "powerpoint-slides.pdf"
+producer = "powerpoint"
+sha256 = "a11a98a2d3f9406520726dcff92cdfadb4def4b5c3b79624ffa7fcda224716ac"
+pages = 3
+markers = ["lantern slide marker", "harbor slide marker", "meadow slide marker"]
+
+

@@ -26,6 +26,22 @@ cargo xtask corpus smoke                                 # verify committed set
 cargo xtask bench                                        # 50-fixture open timing
 ```
 
+## Real-world corpus
+
+`fixtures/realworld/` holds small PDFs produced by mainstream software (Excel,
+PowerPoint, Edge) plus clearly labelled self-produced fixtures for the slots no
+installed external producer can fill (AcroForm, password protection). Each file
+is listed in `fixtures/realworld/manifest.toml` with producer, SHA-256, page
+count, marker words, and any current core limitation. The Word slots are a
+recorded gap; see `orchestration/blockers/T-0215-word-com.md`.
+
+```text
+cargo test -p pdfxi-testkit --test realworld_corpus
+pwsh -File fixtures/realworld/generate.ps1                 # regenerate
+```
+
+`cargo xtask corpus smoke` runs both `committed_fixtures` and this suite.
+
 ## manifest.toml
 
 ```toml
@@ -47,3 +63,4 @@ kind = "render"
 - Record license and provenance for every corpus.
 - Malformed samples are fuzz seeds, not runtime fixtures.
 - Baseline images are generated, not hand-edited.
+

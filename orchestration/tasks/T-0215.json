@@ -3,7 +3,7 @@
   "lane": "qa",
   "title": "Real-world corpus and smoke",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [],
   "owns": [
     "fixtures/realworld/**",

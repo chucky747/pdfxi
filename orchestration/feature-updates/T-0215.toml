@@ -1,0 +1,38 @@
+# T-0215 - real-world corpus, manifest and smoke
+#
+# Corpus and evidence task. It proposes no feature-row status changes: the
+# fixtures feed existing `library`-status parser/text rows, and the two current
+# core limitations it documents are owned by T-0216 (ToUnicode CMaps) and
+# T-0214 (decrypt and typed password errors). This fragment records the task,
+# its evidence and its files for the integrator.
+
+task = "T-0215"
+lane = "qa"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0215.md"
+docs = [
+    "fixtures/realworld/manifest.toml",
+    "fixtures/realworld/README.md",
+    "fixtures/realworld/generate.ps1",
+    "crates/pdfxi-testkit/tests/realworld_corpus.rs",
+    "crates/pdfxi-testkit/examples/generate_realworld_selfmade.rs",
+    "docs/CORPUS.md",
+    "orchestration/blockers/T-0215-word-com.md",
+    "docs/evidence/hardening/T-0215.md",
+]
+notes = """
+fixtures/realworld/ now holds five committed PDFs with a manifest that records
+producer, SHA-256, page count, marker words and any current core limitation.
+Excel 2019 and PowerPoint 16.0 provide the Office exports, headless Edge
+provides the browser print, and the AcroForm and AES-128 encrypted slots are
+self-produced and labelled as such because no installed producer can emit them.
+crates/pdfxi-testkit/tests/realworld_corpus.rs runs five offline tests
+(checksums, manifest/directory agreement, field sanity, core open + page count,
+markers or the recorded limitation) and cargo xtask corpus smoke now invokes it
+alongside committed_fixtures. known_failure entries assert today's failure
+rather than hiding it: browser-print.pdf returns glyph indices because the Edge
+subset font's ToUnicode CMap is not applied (T-0216), and the encrypted fixture
+returns Error::UnexpectedToken because pdfxi-core has no decrypt layer
+(T-0214). Word COM save/export hangs on the reference host, so the two Word
+fixtures remain gaps recorded in orchestration/blockers/T-0215-word-com.md.
+"""
