@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/pdfxi-core",
+    "crates/pdfxi-document",
     "crates/pdfxi-render",
     "crates/pdfxi-text",
     "crates/pdfxi-edit",
@@ -43,6 +44,7 @@ pdfxi-accessibility = { path = "crates/pdfxi-accessibility", version = "0.1.0" }
 pdfxi-automation = { path = "crates/pdfxi-automation", version = "0.1.0" }
 pdfxi-convert = { path = "crates/pdfxi-convert", version = "0.1.0", default-features = false }
 pdfxi-core = { path = "crates/pdfxi-core", version = "0.1.0" }
+pdfxi-document = { path = "crates/pdfxi-document", version = "0.1.0" }
 pdfxi-forms = { path = "crates/pdfxi-forms", version = "0.1.0" }
 pdfxi-render = { path = "crates/pdfxi-render", version = "0.1.0" }
 pdfxi-security = { path = "crates/pdfxi-security", version = "0.1.0" }
