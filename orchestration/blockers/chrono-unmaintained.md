@@ -1,10 +1,10 @@
 # Blocker - chrono is unmaintained (RUSTSEC-2026-0543)
 
-Date: 2026-11-20. Owner: integrator / orchestrator. Status: open.
+Date: 2026-11-20. Owner: integrator / orchestrator. Status: **resolved**.
 
 ## Symptom
 
-`cargo deny check` on the T-0256 tree now reports:
+`cargo deny check` on the T-0256 tree originally reported:
 
 ```text
 error[unmaintained]: chrono is unmaintained
@@ -15,30 +15,35 @@ advisories FAILED, bans ok, licenses ok, sources ok
 EXIT=1
 ```
 
-It appeared during the T-0256 checkpoint, but it is **not** caused by T-0256:
-`chrono` enters through the root workspace dependency table
-(`Cargo.toml`: `chrono = { version = "0.4", default-features = false, features =
-["clock", "std"] }`) and no T-0256 manifest adds it. Earlier runs passed because
-the advisory database had not yet picked up RUSTSEC-2026-0543; the gate is
-therefore red for the whole workspace from now on, not for one crate.
+It was not caused by T-0256: `chrono` entered through the root workspace
+dependency table. Earlier runs passed because the advisory database had not yet
+picked up RUSTSEC-2026-0543.
 
-## Impact
+## Resolution (2026-11-20)
 
-`cargo deny check` is required in CI by RULES.md section 8. Until this is
-resolved, no checkpoint can honestly claim a green deny gate, and the T-0256
-acceptance sentence ("deny green") is captured before the advisory refresh.
+Facts verified on the current tree:
 
-## Options for the owner
+- `crates/pdfxi-app/Cargo.toml` no longer depends on `chrono`; the app lane
+  replaced it with `time`.
+- `cargo deny check` exits 0 in a clean shell (`cmd /c`): `advisories ok, bans
+  ok, licenses ok, sources ok`.
+- `cargo tree -i chrono` still shows `chrono 0.4.45` as a transitive dependency
+  of `pdfium-render 0.9.5`.
+- RUSTSEC-2026-0543 is not currently reported by the advisory database, and
+  `deny.toml` has no chrono ignore (none was added).
 
-1. Migrate the `chrono` users to `jiff` or `time` (the advisory's suggested
-   replacements) and drop the workspace dependency.
-2. Replace chrono's use with `std::time` where only timestamps/PDF dates are
-   needed; `pdfxi-security` already computes signing times as unix seconds.
-3. If neither is feasible before release, add a scoped, documented
-   `[advisories] ignore = ["RUSTSEC-2026-0543"]` with a migration task — this is
-   a security/policy decision, not an integrator edit.
+No direct dependency on chrono remains, so no migration was needed beyond the
+app lane's move to `time`.
+
+## Residual risk
+
+chrono remains transitively through `pdfium-render`, which has no replacement
+backend in the workspace: PDFium is the renderer. If the advisory reappears, the
+fallback is a scoped, documented `[advisories]` ignore for that crate path or a
+forked/patched pdfium-render backend — **not** a direct-dependency migration,
+because there is no direct dependency left to migrate. Re-check at final
+packaging (T-0262).
 
 ## Next step
 
-Owner decision. Track as a cleanup task; meanwhile T-0256's functional gates
-(fmt, clippy, 367 tests, the PDFium independent-reader test) are green.
+Closed. T-0262's notes carry the re-check instruction at packaging time.
