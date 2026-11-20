@@ -1474,14 +1474,17 @@ tests = [
 title = "Form field actions and tab order"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-forms/src/recognition.rs, docs/evidence/forms/T-0115.md"
 domain = "Forms"
-evidence = ""
+evidence = "docs/evidence/forms/T-0115.md"
 id = "FORMS-005"
-notes = ""
+notes = "Heuristic conversion of caller-supplied static control hints into an AcroForm plan; no OCR."
 priority = "P3"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "recognition::tests::recognizes_controls_with_confidence_and_reading_order",
+    "recognition::tests::conversion_plan_builds_form_and_acroform_dictionary",
+]
 title = "Automatically recognize static form fields"
 
 [[feature]]
@@ -1545,25 +1548,32 @@ tests = [
 title = "Flatten forms and preserve appearance"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-forms/src/reader_enable.rs, docs/evidence/forms/T-0115.md"
 domain = "Forms"
-evidence = ""
+evidence = "docs/evidence/forms/T-0115.md"
 id = "FORMS-008"
-notes = ""
+notes = "Local usage-rights metadata plan with a placeholder signature; explicitly not Adobe certification and no cryptography."
 priority = "P3"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "reader_enable::tests::plan_emits_local_usage_rights_metadata",
+    "reader_enable::tests::report_is_deterministic_and_not_certified",
+]
 title = "Reader-enable form filling and saving"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-forms/src/distribution.rs, docs/evidence/forms/T-0115.md"
 domain = "Forms"
-evidence = ""
+evidence = "docs/evidence/forms/T-0115.md"
 id = "FORMS-009"
-notes = ""
+notes = "Local bundle export plus FDF/XFDF response-folder import with deterministic merging, conflicts, and status summary; no network."
 priority = "P3"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "distribution::tests::blank_bundle_exports_and_round_trips",
+    "distribution::tests::imports_fdf_and_xfdf_responses",
+    "distribution::tests::merge_is_deterministic_under_input_reordering",
+]
 title = "Distribute and collect forms locally"
 
 [[feature]]

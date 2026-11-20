@@ -3,7 +3,7 @@
   "lane": "forms",
   "title": "Static form recognition and distribution",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0097"],
   "owns": [
     "crates/pdfxi-forms/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0115.toml"
   ],
   "acceptance": "cargo test -p pdfxi-forms",
-  "evidence": ""
+  "evidence": "docs/evidence/forms/T-0115.md"
 }

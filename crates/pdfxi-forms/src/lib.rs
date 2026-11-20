@@ -50,6 +50,18 @@
 //!   `/AA` (K/F/V/C) and `/A` actions into a typed safe whitelist, with
 //!   dangerous actions (JavaScript, URI, Launch, Import/Export) rejected and
 //!   reported; no script is ever executed.
+//! - [`FormHint`] / [`RecognitionPlan`] / [`ConversionPlan`] — heuristic
+//!   recognition of static form areas from caller-supplied label/control
+//!   rectangles (no OCR), with confidence, deterministic reading order and a
+//!   typed conversion into AcroForm fields.
+//! - [`ReaderEnablePlan`] / [`DocumentRights`] / [`UsageRightsSignature`] — a
+//!   local reader-enable compatibility metadata plan with a placeholder usage
+//!   rights signature. This is explicitly not Adobe certification and performs
+//!   no cryptography.
+//! - [`BlankBundle`] / [`ResponseFile`] / [`MergeReport`] — local distribute
+//!   and collect: a canonical blank-bundle export, in-memory FDF/XFDF response
+//!   import, deterministic merge with conflict reporting and a status summary.
+//!   No filesystem or network I/O is performed.
 //!
 //! Field names are fully qualified (for example `order.address.city`). Callers
 //! that build fields directly supply the dotted path; [`load_acroform`] builds
@@ -84,11 +96,14 @@ mod actions;
 mod appearance;
 mod build;
 mod calculation;
+mod distribution;
 mod fdf;
 mod field;
 mod fill;
 mod flatten;
 mod form;
+mod reader_enable;
+mod recognition;
 mod rules;
 mod signature;
 mod taborder;
@@ -120,6 +135,12 @@ pub use calculation::{
     CalculationPlan, CalculationReport, CalculationResult, CalculationStep, MAX_PLAN_STEPS,
     run_calculations,
 };
+pub use distribution::{
+    BlankBundle, BundleField, BundleMeta, CollectionSummary, Contribution, DistributionError,
+    FieldConflict, ImportedResponse, MAX_CONTENT_BYTES, MAX_FIELDS, MAX_RESPONSES, MAX_TEXT_LEN,
+    MergeReport, MergedField, RejectedResponse, ResponseFile, ResponseFormat, import_response_file,
+    merge_responses, parse_bundle,
+};
 pub use fdf::{FdfDocument, FdfError, FdfField, export_fdf, export_xfdf, import_fdf};
 pub use field::{Field, FieldFlags, FieldType, FieldValue, TextConstraint, ValueKind};
 pub use fill::{ChangedField, FillReport, FormFill};
@@ -128,6 +149,15 @@ pub use flatten::{
     PageAnnotation, StoredAppearance, flatten_document, flatten_page,
 };
 pub use form::{Form, FormError};
+pub use reader_enable::{
+    DocumentRights, LOCAL_FILTER, READER_DEFAULT_PLACEHOLDER_SIZE, READER_MAX_PLACEHOLDER_SIZE,
+    READER_MAX_TEXT_LEN, ReaderEnableError, ReaderEnablePlan, RightsReport, SUPPORTED_RIGHT_BITS,
+    UsageRight, UsageRightsSignature,
+};
+pub use recognition::{
+    ConversionPlan, FormHint, HintKind, LABEL_PROXIMITY, MAX_HINTS, RECOGNITION_MAX_TEXT_LEN,
+    RecognitionError, RecognitionPlan, RecognizedField, recognize,
+};
 pub use rules::{
     CurrencyFormat, DateLayout, Format, MAX_PATTERN_LEN, MAX_PATTERN_TEXT_LEN, Pattern,
     PatternError, Rule, ValidationHook, Validator,
