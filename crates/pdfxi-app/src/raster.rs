@@ -37,7 +37,6 @@
 //! stop outstanding work promptly.
 
 use std::collections::{HashMap, VecDeque};
-#[cfg(feature = "pdfium")]
 use std::path::PathBuf;
 
 use pdfxi_render::{CancellationToken, PageIndex, Progress, RenderError, RenderedPage, Renderer};
@@ -282,24 +281,132 @@ fn rect_intersects_viewport(rect: CanvasRect, scroll: CanvasPoint, viewport: Can
     rect.right() > left && rect.x < right && rect.bottom() > top && rect.y < bottom
 }
 
-/// Resolve a fixture path relative to the workspace root.
+/// Maximum number of ancestor directories inspected per search root.
+const FIXTURE_SEARCH_DEPTH: usize = 8;
+
+/// Build the ordered candidate paths for a bundled fixture.
 ///
-/// `CARGO_MANIFEST_DIR` for this crate is `crates/pdfxi-app`, so the workspace
-/// root is two levels up. The returned path is used only by the demo viewer and
-/// the PDFium integration test; it is not part of any document-loading API.
-/// Callers should check [`Path::is_file`](std::path::Path::is_file) before use.
+/// The GUI resolves the demo fixture at runtime so the binary never embeds an
+/// absolute build path. Candidates walk up from the running executable first
+/// (portable layouts keep `fixtures/` beside or above the binary), then up from
+/// the working directory (development builds start in the workspace or a crate
+/// directory). The name must be a plain file name without separators.
+#[must_use]
+pub fn fixture_candidates(name: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." {
+        return candidates;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for root in exe.ancestors().skip(1).take(FIXTURE_SEARCH_DEPTH) {
+            let candidate = root.join("fixtures").join(name);
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        for root in cwd.ancestors().take(FIXTURE_SEARCH_DEPTH) {
+            let candidate = root.join("fixtures").join(name);
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
+/// Find the first existing fixture below the supplied roots.
+///
+/// Pure helper used by tests and by [`demo_fixture_path`].
+#[must_use]
+pub fn find_fixture_in(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    roots
+        .iter()
+        .map(|root| root.join("fixtures").join(name))
+        .find(|path| path.is_file())
+}
+
+/// Resolve a bundled demo fixture at runtime.
+///
+/// Returns `None` when the current layout ships no `fixtures/` directory; the
+/// viewer then starts without a demo document and the user opens a real file.
 #[cfg(feature = "pdfium")]
-pub fn workspace_fixture_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("fixtures")
-        .join(name)
+#[must_use]
+pub fn demo_fixture_path(name: &str) -> Option<PathBuf> {
+    fixture_candidates(name)
+        .into_iter()
+        .find(|path| path.is_file())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_fixture_in_returns_the_first_existing_candidate() {
+        let base = std::env::temp_dir().join("pdfxi-fixture-resolver-test");
+        let fixture_dir = base.join("fixtures");
+        std::fs::create_dir_all(&fixture_dir).expect("create fixture dir");
+        let fixture = fixture_dir.join("sample.pdf");
+        std::fs::write(&fixture, b"%PDF-1.4\n").expect("write fixture");
+
+        let roots = vec![
+            base.join("missing-root"),
+            base.clone(),
+            std::env::temp_dir().join("pdfxi-other-root"),
+        ];
+        let found = find_fixture_in(&roots, "sample.pdf").expect("fixture found");
+        assert_eq!(found, fixture);
+
+        std::fs::remove_dir_all(&base).expect("clean fixture dir");
+    }
+
+    #[test]
+    fn find_fixture_in_returns_none_when_no_root_has_it() {
+        let roots = vec![std::env::temp_dir().join("pdfxi-no-such-root")];
+        assert!(find_fixture_in(&roots, "sample.pdf").is_none());
+    }
+
+    #[test]
+    fn fixture_candidates_reject_names_with_separators() {
+        for name in ["", "..", "a/b.pdf", "a\\b.pdf"] {
+            assert!(
+                fixture_candidates(name).is_empty(),
+                "name {name:?} must not produce candidates"
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_candidates_are_bounded_and_unique() {
+        let candidates = fixture_candidates("minimal.pdf");
+        assert!(!candidates.is_empty(), "the layout always offers roots");
+        assert!(candidates.len() <= FIXTURE_SEARCH_DEPTH * 2);
+        let mut unique = candidates.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), candidates.len(), "candidates must be unique");
+        assert!(
+            candidates
+                .iter()
+                .all(|path| path.ends_with(std::path::Path::new("fixtures").join("minimal.pdf")))
+        );
+    }
+
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn demo_fixture_path_resolves_the_repo_fixture_when_present() {
+        match demo_fixture_path("minimal.pdf") {
+            Some(path) => {
+                assert!(path.ends_with(std::path::Path::new("fixtures").join("minimal.pdf")))
+            }
+            None => assert!(
+                !fixture_candidates("minimal.pdf").is_empty(),
+                "a missing fixture is reported, not built from a baked path"
+            ),
+        }
+    }
     use crate::canvas::CanvasSize;
     use crate::view::{ViewMode, Zoom};
 
@@ -574,8 +681,7 @@ mod tests {
     fn pdfium_raster_fills_cache_with_non_uniform_pixels() {
         use pdfxi_render::PdfiumRenderer;
 
-        let path = workspace_fixture_path("minimal.pdf");
-        assert!(path.is_file(), "missing fixture: {}", path.display());
+        let path = demo_fixture_path("minimal.pdf").expect("demo fixture in the layout");
         let renderer = PdfiumRenderer::from_file(&path).expect("open the minimal fixture");
 
         // Direct render of page 0 at scale 1.0 (72 DPI).

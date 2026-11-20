@@ -1,33 +1,15 @@
 [[feature]]
-docs = [
-    "crates/pdfxi-app/src/open.rs",
-    "crates/pdfxi-app/src/print.rs",
-    "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0167.md",
-]
+docs = "crates/pdfxi-app/src/ui.rs, crates/pdfxi-app/src/raster.rs, docs/evidence/app/T-0190.md"
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0167.md"
+evidence = "docs/evidence/app/T-0190.md"
 id = "VIEW-001"
-notes = """
-Model-level closure. The open pipeline now records explicit Loading -> Ready | Failed phases
-with typed OpenError variants, bounded most-recent-first recent-file tracking, an async-friendly
-begin_open/complete_open handoff, and a deterministic tab-sorted OpenReport. A typed
-document -> print handoff (PrintDispatchSource, PrintDispatchError, PrintDispatchPlan,
-PrintDispatchReport, print_handoff/print_handoff_from_option) uses the opened document's page
-count as the authoritative source and emits a byte-stable report. Host UI boundary: no platform
-printer/spooler driver is contacted; a host feeds PrintDispatchPlan to pdfxi_render::print. This
-row is verified for the workflow/data model only, not for native print output.
-"""
+notes = "GUI open support: toolbar Open… path dialog and Explorer drag-and-drop, duplicate-path focusing, typed path/extension rejection before loading, and a runtime-resolved demo fixture with no baked build path. Host boundary: no native OS file picker yet (offline registry cannot supply rfd; unsafe Win32 interop is forbidden in this crate)."
 priority = "P0"
 status = "verified"
 tests = [
-    "open::tests::open_phase_transitions_loading_ready_failed",
-    "open::tests::failed_open_phase_and_typed_error_are_recorded",
-    "open::tests::recent_files_ordering_dedup_and_report_are_deterministic",
-    "open::tests::open_report_is_sorted_by_tab_and_asynchronous_handoff_is_typed",
-    "print::tests::print_handoff_from_opened_document_resolves_plan_and_report",
-    "print::tests::print_handoff_rejects_missing_empty_and_invalid_inputs",
-    "print::tests::print_handoff_report_is_deterministic_and_honors_current_and_selection",
+    "ui::tests::open_path_text_opens_an_existing_pdf_and_focuses_duplicates",
+    "ui::tests::open_dropped_opens_only_pdfs_and_reports_the_batch",
+    "ui::tests::open_path_text_rejects_empty_control_and_non_pdf",
 ]
 title = "Open and print PDF documents"
 

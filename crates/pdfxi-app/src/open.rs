@@ -1211,7 +1211,7 @@ mod tests {
     #[cfg(feature = "pdfium")]
     #[test]
     fn pdfium_opener_reads_the_real_fixture() {
-        let fixture = crate::raster::workspace_fixture_path("minimal.pdf");
+        let fixture = crate::raster::demo_fixture_path("minimal.pdf").expect("demo fixture");
         let mut pipeline = DocumentOpenPipeline::new(PdfiumDocumentOpener, 5);
         let result = pipeline.open_path(tab(1), &fixture, &CancellationToken::new());
         let document = result.document().expect("fixture opens with PDFium");

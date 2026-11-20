@@ -17,7 +17,7 @@
 //!
 //! With the `pdfium` feature enabled, the demo viewer opens
 //! `fixtures/minimal.pdf` (resolved from the workspace root via
-//! `workspace_fixture_path`) through `PdfiumRenderer`. Visible pages are
+//! `demo_fixture_path`) through `PdfiumRenderer`. Visible pages are
 //! rasterized into [the
 //! bounded raster cache](crate::raster::RasterCache), and the active raster is
 //! uploaded into an `egui` texture that is painted inside the page rectangle.
@@ -92,7 +92,7 @@
 //! [`crate::ui::PdfxiApp`] only mutate in-memory state and return immediately, so they are exercised by
 //! window-free unit tests and never perform blocking I/O.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{
     OpenError, PaperSize, PrintContext, PrintDialogState, PrintModelError, PrintPageRange,
@@ -116,7 +116,7 @@ use crate::{
 #[cfg(feature = "pdfium")]
 use crate::Rotation;
 #[cfg(feature = "pdfium")]
-use crate::raster::{RasterCache, RasterKey, workspace_fixture_path};
+use crate::raster::{RasterCache, RasterKey, demo_fixture_path};
 #[cfg(feature = "pdfium")]
 use crate::uv_quad_for_rotation;
 #[cfg(feature = "pdfium")]
@@ -681,6 +681,10 @@ pub struct PdfxiApp {
     print_dialog: PrintDialogState,
     /// Typed errors surfaced by recent document-open attempts.
     open_errors: Vec<OpenError>,
+    /// Whether the in-app "Open PDF" path dialog is visible.
+    open_dialog_open: bool,
+    /// Path typed into the "Open PDF" dialog.
+    open_dialog_path: String,
     /// Zero-based pages used by the Selection print range.
     print_selection: Vec<usize>,
     scroll_x: f32,
@@ -741,14 +745,19 @@ impl PdfxiApp {
         #[cfg(feature = "pdfium")]
         {
             let mut app = Self::default();
-            let path = workspace_fixture_path("minimal.pdf");
-            match PdfiumRenderer::from_file(&path) {
-                Ok(renderer) => {
-                    app.status = format!("Loaded demo fixture {}", path.display());
-                    app.pdfium_renderer = Some(renderer);
-                }
-                Err(error) => {
-                    app.status = format!("Could not open demo fixture: {error}");
+            match demo_fixture_path("minimal.pdf") {
+                Some(path) => match PdfiumRenderer::from_file(&path) {
+                    Ok(renderer) => {
+                        app.status = format!("Loaded demo fixture {}", path.display());
+                        app.pdfium_renderer = Some(renderer);
+                    }
+                    Err(error) => {
+                        app.status = format!("Could not open demo fixture: {error}");
+                    }
+                },
+                None => {
+                    app.status =
+                        "No demo fixture in this layout; use Open… or drop a PDF".to_owned();
                 }
             }
             app
@@ -968,6 +977,111 @@ impl PdfxiApp {
             }
         }
         outcome
+    }
+
+    /// Open a user-supplied path string, from the toolbar dialog or a drop.
+    ///
+    /// Rejects empty input, surrounding quotes, control characters and
+    /// non-PDF extensions before touching state, so a hostile clipboard or drop
+    /// payload cannot reach the document loader. Returns `true` when the tab
+    /// opened or an existing tab for the same path was focused.
+    pub fn open_path_text(&mut self, raw: &str) -> bool {
+        let trimmed = raw.trim().trim_matches('"');
+        if trimmed.is_empty() {
+            self.status = "Enter a PDF path to open".to_owned();
+            return false;
+        }
+        if trimmed.chars().any(char::is_control) {
+            self.status = "Path contains control characters".to_owned();
+            return false;
+        }
+        let path = Path::new(trimmed);
+        if !Self::is_pdf_path(path) {
+            self.status = format!("Not a PDF file: {}", path.display());
+            return false;
+        }
+        if !path.is_file() {
+            self.status = format!("File not found: {}", path.display());
+            return false;
+        }
+        self.open_document(path);
+        true
+    }
+
+    /// Whether a path carries a `.pdf` extension (case-insensitive).
+    #[must_use]
+    pub fn is_pdf_path(path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    }
+
+    /// Open every PDF in a dropped-file batch; returns how many were opened.
+    ///
+    /// Non-PDF drops are ignored; a batch with no PDFs reports it instead of
+    /// silently doing nothing.
+    pub fn open_dropped(&mut self, paths: &[PathBuf]) -> usize {
+        let mut opened = 0usize;
+        let mut pdfs = 0usize;
+        for path in paths {
+            if !Self::is_pdf_path(path) {
+                continue;
+            }
+            pdfs += 1;
+            let text = path.to_string_lossy();
+            if self.open_path_text(text.as_ref()) {
+                opened += 1;
+            }
+        }
+        if opened > 0 {
+            self.status = format!("Opened {opened} dropped file(s)");
+        } else if pdfs == 0 && !paths.is_empty() {
+            self.status = "Dropped files are not PDFs".to_owned();
+        }
+        opened
+    }
+
+    /// Draw the in-app "Open PDF" path dialog.
+    ///
+    /// The shell links no native file picker, so this is intentionally a typed
+    /// path plus drag-and-drop support. It mutates only in-memory state.
+    fn open_dialog_ui(&mut self, ctx: &egui::Context) {
+        if !self.open_dialog_open {
+            return;
+        }
+        let mut visible = self.open_dialog_open;
+        let mut submit = false;
+        let mut cancel = false;
+        egui::Window::new("Open PDF")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut visible)
+            .show(ctx, |ui| {
+                ui.label("PDF path:");
+                let response = ui.text_edit_singleline(&mut self.open_dialog_path);
+                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    submit = true;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Open").clicked() {
+                        submit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+                ui.label("Tip: drag a PDF from Explorer onto the window.");
+            });
+        if cancel {
+            visible = false;
+        }
+        if submit {
+            let typed = self.open_dialog_path.clone();
+            if self.open_path_text(&typed) {
+                visible = false;
+            }
+        }
+        self.open_dialog_open = visible;
     }
 
     /// Close every tab except the active one, consulting the configured
@@ -2137,6 +2251,9 @@ impl PdfxiApp {
         ui.horizontal(|ui| {
             ui.heading(app_name());
             ui.separator();
+            if ui.button("Open…").clicked() {
+                self.open_dialog_open = true;
+            }
             if ui.button("Open Demo").clicked() {
                 self.open_demo_tab();
             }
@@ -2790,6 +2907,19 @@ impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_keyboard(ctx);
 
+        let dropped: Vec<PathBuf> = ctx.input(|input| {
+            input
+                .raw
+                .dropped_files
+                .iter()
+                .filter_map(|file| file.path.clone())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            self.open_dropped(&dropped);
+        }
+        self.open_dialog_ui(ctx);
+
         egui::SidePanel::left("pdfxi_thumbnails")
             .resizable(true)
             .default_width(156.0)
@@ -2927,6 +3057,74 @@ mod tests {
         let mut app = PdfxiApp::new();
         app.zoom_in();
         assert_eq!(app.status(), "No active tab to zoom");
+    }
+
+    #[test]
+    fn open_path_text_rejects_empty_control_and_non_pdf() {
+        let mut app = PdfxiApp::new();
+        assert!(!app.open_path_text("   "));
+        assert_eq!(app.status(), "Enter a PDF path to open");
+
+        assert!(!app.open_path_text("bad\u{0}path.pdf"));
+        assert_eq!(app.status(), "Path contains control characters");
+
+        assert!(!app.open_path_text("C:\\docs\\notes.txt"));
+        assert!(app.status().starts_with("Not a PDF file"));
+
+        assert!(!app.open_path_text("C:\\definitely\\missing\\file.pdf"));
+        assert!(app.status().starts_with("File not found"));
+        assert_eq!(app.state().tab_count(), 0);
+    }
+
+    #[test]
+    fn open_path_text_opens_an_existing_pdf_and_focuses_duplicates() {
+        let base = std::env::temp_dir().join("pdfxi-open-path-test");
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let pdf = base.join("sample.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").expect("write pdf");
+        let pdf_with_quotes = format!("\"{}\"", pdf.display());
+
+        let mut app = PdfxiApp::new();
+        assert!(app.open_path_text(&pdf_with_quotes));
+        assert_eq!(app.state().tab_count(), 1);
+        // A second open of the same path focuses rather than duplicates.
+        assert!(app.open_path_text(&pdf.display().to_string()));
+        assert_eq!(app.state().tab_count(), 1);
+
+        std::fs::remove_dir_all(&base).expect("clean temp dir");
+    }
+
+    #[test]
+    fn open_dropped_opens_only_pdfs_and_reports_the_batch() {
+        let base = std::env::temp_dir().join("pdfxi-open-dropped-test");
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let pdf = base.join("drop.PDF");
+        std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").expect("write pdf");
+        let txt = base.join("drop.txt");
+        std::fs::write(&txt, b"not a pdf").expect("write txt");
+
+        let mut app = PdfxiApp::new();
+        let opened = app.open_dropped(&[pdf.clone(), txt]);
+        assert_eq!(opened, 1);
+        assert_eq!(app.state().tab_count(), 1);
+        assert!(app.status().contains("Opened 1 dropped file"));
+
+        let mut empty = PdfxiApp::new();
+        assert_eq!(empty.open_dropped(&[]), 0);
+        assert_eq!(empty.open_dropped(&[base.join("missing.pdf")]), 0);
+        assert!(empty.status().starts_with("File not found"));
+
+        std::fs::remove_dir_all(&base).expect("clean temp dir");
+    }
+
+    #[test]
+    fn is_pdf_path_is_case_insensitive_and_extension_based() {
+        assert!(PdfxiApp::is_pdf_path(Path::new("a.pdf")));
+        assert!(PdfxiApp::is_pdf_path(Path::new("A.PDF")));
+        assert!(PdfxiApp::is_pdf_path(Path::new("dir/with space/doc.Pdf")));
+        assert!(!PdfxiApp::is_pdf_path(Path::new("a.txt")));
+        assert!(!PdfxiApp::is_pdf_path(Path::new("pdf")));
+        assert!(!PdfxiApp::is_pdf_path(Path::new("a.pdf.txt")));
     }
 
     #[test]
