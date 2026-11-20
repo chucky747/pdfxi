@@ -65,3 +65,12 @@ $env:CARGO_TARGET_DIR='target/integration'
 cargo xtask bench            # enforce budgets and the >10% regression gate
 cargo xtask bench --report   # informational, never exits non-zero
 ```
+
+## Release-wave re-run (2026-11-20)
+
+```text
+schema=1 runs=2+7x3 budget_tolerance=0.25 regression_tolerance=0.1
+budget_breaches=0 regressions=0
+summary: metrics=18 breaches=0 regressions=0 status=pass
+BENCH=0
+```

@@ -1,0 +1,15 @@
+{
+  "id": "T-0193",
+  "lane": "integrator",
+  "title": "R4 release verification, docs and evidence",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0192"],
+  "owns": [
+    "docs/**",
+    "README.md",
+    "docs/evidence/goal-verify.log"
+  ],
+  "acceptance": "cargo xtask goal-verify --all",
+  "evidence": "docs/evidence/release/T-0193.md"
+}

@@ -5,6 +5,7 @@
 # Getting started
 
 - [Getting started](getting-started.md)
+- [Desktop viewer](gui.md)
 - [CLI reference](cli.md)
 
 # Using PDFXI
