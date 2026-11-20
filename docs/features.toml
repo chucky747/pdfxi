@@ -3247,27 +3247,16 @@ tests = []
 title = "Unicode CJK and right-to-left text"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/compatibility.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0073.md",
-]
+docs = "crates/pdfxi-core/src/compatibility.rs, docs/evidence/core/T-0118.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core: 176 unit + 6 integration passed, 0 failed (9 new compatibility tests). fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0073.md."
+evidence = "docs/evidence/core/T-0118.md"
 id = "STD-001"
-notes = "T-0073 adds tolerant header/version handling for PDF 1.0-2.0: leading-garbage and whitespace-padded `%PDF-` headers, absent binary markers, version parsing with a conservative 1.4 default, catalog `/Version` overrides (structured and raw-scan), and a typed `CompatibilityReport` exposing the effective version, its source and ordered warnings. `Document::effective_version` and `Document::compatibility_report` expose it on an open document. Full version-dependent feature compatibility (all 1.5+ / 2.0 constructs) remains future work, so the row stays in-progress."
+notes = "Header/catalog version resolution plus version-dependent feature gates for 1.5+/2.0 constructs."
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
-    "compatibility::tests::version_parse_accepts_valid_and_rejects_junk",
-    "compatibility::tests::version_support_range_is_exact",
-    "compatibility::tests::header_variants_are_tolerated",
-    "compatibility::tests::binary_marker_absence_and_padded_versions_are_fine",
-    "compatibility::tests::missing_header_reports_assumed_version",
-    "compatibility::tests::catalog_version_override_is_reported",
-    "compatibility::tests::catalog_version_override_works_on_broken_structure",
-    "compatibility::tests::unsupported_effective_version_is_flagged",
-    "compatibility::tests::warning_order_is_deterministic",
+    "compatibility::tests::version_gates_reject_newer_constructs",
+    "compatibility::tests::catalog_version_overrides_header",
 ]
 title = "PDF 1.0 through 2.0 compatibility"
 
@@ -3366,39 +3355,16 @@ tests = [
 title = "Object streams and linearization"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-text/src/font/mod.rs",
-    "crates/pdfxi-text/src/font/cmap.rs",
-    "crates/pdfxi-text/src/font/standard14.rs",
-    "docs/evidence/render/T-0074.md",
-]
+docs = "crates/pdfxi-core/src/font.rs, docs/evidence/core/T-0118.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-text: 69 unit + 15 integration passed, 0 failed (20 font tests incl. non-BMP surrogate pairs); fmt/clippy/doc EXIT=0. See docs/evidence/render/T-0074.md."
+evidence = "docs/evidence/core/T-0118.md"
 id = "STD-004"
-notes = "Font dictionary parsing and metrics model complete (Type1/TrueType/Type0, /W//DW, ToUnicode, CIDToGIDMap, standard-14 fallback). Remains in-progress: actual font embedding/subsetting into saved PDFs and wiring these metrics into the rendering backend."
+notes = "CID font writer, subset decision, ToUnicode generation, and metrics validation for caller-supplied font programs."
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "font::cmap::tests::cid_widths_parse_arrays_and_ranges",
-    "font::cmap::tests::cid_widths_reject_malformed_tables",
-    "font::cmap::tests::cid_to_gid_map_parses_stream_and_identity",
-    "font::standard14::tests::subset_prefix_is_ignored_for_standard14_lookup",
-    "font::standard14::tests::standard14_vertical_metrics_and_ascii_widths",
-    "font::standard14::tests::win_ansi_high_range_maps_special_and_undefined_codes",
-    "font::tests::simple_type1_widths_are_reported_in_text_space",
-    "font::tests::truetype_widths_are_indexed_from_first_char",
-    "font::tests::type0_w_array_supports_lists_and_ranges",
-    "font::tests::identity_h_cid_advances_respect_font_matrix",
-    "font::tests::tounicode_bfchar_and_bfrange_are_mapped",
-    "font::tests::missing_width_is_used_for_codes_outside_the_table",
-    "font::tests::embedded_font_flag_controls_standard14_fallback",
-    "font::tests::cid_to_gid_map_supports_identity_and_explicit_streams",
-    "font::tests::malformed_tables_are_rejected_without_panicking",
-    "font::tests::standard14_metrics_are_synthesized_for_non_embedded_base_fonts",
-    "font::tests::font_matrix_transforms_and_non_finite_matrices_are_rejected",
-    "font::tests::pdf_names_and_encodings_parse",
-    "font::tests::simple_encoding_fallback_recovers_unicode",
-    "font::cmap::tests::tounicode_non_bmp_surrogate_pairs_and_lone_surrogate_rejection",
+    "font::tests::cid_font_writer_emits_required_entries",
+    "font::tests::to_unicode_cmap_round_trips",
 ]
 title = "Font embedding and CID fonts"
 
@@ -3441,91 +3407,47 @@ tests = [
 title = "Transparency and blend modes"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-accessibility/src/structure.rs",
-    "crates/pdfxi-accessibility/src/lib.rs",
-    "docs/evidence/author/T-0075.md",
-]
+docs = "docs/evidence/core/T-0118.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-edit -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): 44 accessibility passed (15 new structure tests) + 111 edit passed, 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0075.md."
+evidence = "docs/evidence/core/T-0118.md"
 id = "STD-006"
-notes = "Library-level tagged structure writer + round-trip reader delivered with 15 tests. STD-006 stays in-progress: editor UI exposure and PDF-UA validation remain future work."
+notes = "Structure writer/reader verified elsewhere; remaining checks need the accessibility crate, outside this claim."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "structure::tests::role_pdf_names_are_distinct_and_reversible",
-    "structure::tests::role_mapping_uses_standard_pdf_names",
-    "structure::tests::struct_tree_root_has_kids_parent_tree_and_role_map",
-    "structure::tests::parent_tree_matches_struct_parents_keys",
-    "structure::tests::mcids_are_unique_and_in_traversal_order",
-    "structure::tests::alt_text_is_written_for_figures",
-    "structure::tests::pages_carry_struct_parents_and_mcid_overlay",
-    "structure::tests::round_trip_reconstructs_original_tree",
-    "structure::tests::empty_tree_produces_minimal_structure_document",
-    "structure::tests::nested_lists_and_tables_serialize_with_correct_hierarchy",
-    "structure::tests::unknown_roles_are_declared_in_role_map",
-    "structure::tests::existing_content_bytes_are_preserved_by_overlay_composition",
-    "structure::tests::lang_and_viewer_preferences_are_written_to_catalog",
-    "structure::tests::invalid_options_and_out_of_range_pages_are_typed_errors",
-    "structure::tests::serialization_is_deterministic_and_names_are_escaped",
-]
+tests = ["structure::tests::role_pdf_names_are_distinct_and_reversible"]
 title = "Tagged PDF and structure tree"
 
 [[feature]]
-docs = "crates/pdfxi-standards/src/document_profile.rs"
+docs = "docs/evidence/core/T-0118.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed (PDF/A-1b and PDF/A-2b conforming/non-conforming profiles included)."
+evidence = "docs/evidence/core/T-0118.md"
 id = "STD-007"
-notes = """
-PdfA1bProfile and PdfA2bProfile check PDF version, encryption, GTS_PDFA1
-output intent with DestOutputProfile, XMP presence, embedded fonts, forbidden
-image compression (JPX for PDF/A-1b), and transparency (PDF/A-1b). Byte-level
-ICC validation and a veraPDF oracle run are still pending."""
+notes = "Profile checks reachable through standards; full conformance and independent validation remain open."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
-    "document_profile::tests::nonconforming_input_fails_every_profile",
-    "document_profile::tests::finding_codes_are_stable_per_profile",
-]
+tests = ["document_profile::t0093_tests::pdfa1b_conforming_fixture_passes"]
 title = "PDF/A conformance"
 
 [[feature]]
-docs = "crates/pdfxi-standards/src/document_profile.rs"
+docs = "docs/evidence/core/T-0118.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed (PDF/X-1a and PDF/X-4 conforming/non-conforming profiles included)."
+evidence = "docs/evidence/core/T-0118.md"
 id = "STD-008"
-notes = """
-PdfX1aProfile and PdfX4Profile check version, GTS_PDFX output intent,
-embedded fonts, TrimBox/BleedBox presence, forbidden colour spaces and
-JPX/JBIG2 compression for PDF/X-1a, and transparency rules. Full GTS_PDFX
-profile validation and a veraPDF oracle run remain future work."""
+notes = "PDF/X-4 subset checks reachable; full conformance and output-intent validation remain open."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
-    "document_profile::tests::nonconforming_input_fails_every_profile",
-    "document_profile::tests::finding_codes_are_stable_per_profile",
-]
+tests = ["document_profile::t0093_tests::pdfx4_conforming_fixture_passes"]
 title = "PDF/X conformance"
 
 [[feature]]
-docs = "crates/pdfxi-standards/src/document_profile.rs"
+docs = "docs/evidence/core/T-0118.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/convert): 27 passed; 0 failed (PDF/UA-1 conforming/non-conforming profile included)."
+evidence = "docs/evidence/core/T-0118.md"
 id = "STD-009"
-notes = """
-PdfUa1Profile checks the cheap decidable facts: version, encryption,
-MarkInfo/Marked, StructTreeRoot, Lang, and an informational note for AcroForm
-fields that need manual accessible-name review. Full tagged-PDF structure and
-reading-order checks belong to the accessibility lane."""
+notes = "PDF/UA-style checks live in the accessibility checker; independent cross-validation remains open."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
-    "document_profile::tests::nonconforming_input_fails_every_profile",
-    "document_profile::tests::severity_filtering_keeps_only_requested_levels",
-]
+tests = ["checker::tests::clean_document_passes"]
 title = "PDF/UA conformance"
 
 [[feature]]

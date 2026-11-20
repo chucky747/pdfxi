@@ -19,6 +19,7 @@ pub mod boxes;
 pub mod compatibility;
 pub mod content;
 pub mod filter;
+pub mod font;
 pub mod incremental;
 pub mod linearization;
 pub mod linearize;
@@ -40,12 +41,18 @@ mod xref_tests;
 
 pub use boxes::{BoxKind, PageBoxes, normalize_rectangle, rectangle_intersection};
 pub use compatibility::{
-    CompatibilityReport, CompatibilityWarning, HEADER_SCAN_LIMIT, PdfVersion, VersionSource,
-    analyze_compatibility,
+    CompatibilityReport, CompatibilityWarning, FeatureSupport, HEADER_SCAN_LIMIT, PdfFeature,
+    PdfVersion, VersionSource, analyze_compatibility, feature_gate,
 };
 pub use content::extract_text;
 pub use filter::{
     DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
+};
+pub use font::{
+    CidFontOptions, CidFontPlan, EmbeddingDecision, EmbeddingPolicy, FontError, FontProgram,
+    FontProgramFormat, GlyphWidth, MAX_FONT_PROGRAM_BYTES, MAX_GLYPHS, MAX_TOUNICODE_BYTES,
+    MAX_TOUNICODE_ENTRIES, ToUnicodeEntry, build_cid_font, decide_embedding, generate_tounicode,
+    is_standard14, validate_metrics,
 };
 pub use incremental::{IncrementalSaveOptions, IncrementalSaveResult, PreservationReport};
 pub use linearization::{HintStreamRange, Linearization, parse_linearization};

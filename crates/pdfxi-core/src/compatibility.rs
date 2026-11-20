@@ -35,6 +35,12 @@ pub struct PdfVersion {
 }
 
 impl PdfVersion {
+    /// Construct a version from its major and minor components.
+    #[must_use]
+    pub const fn new(major: u8, minor: u8) -> Self {
+        Self { major, minor }
+    }
+
     /// PDF 1.0, the earliest version this crate recognizes.
     pub const V1_0: Self = Self { major: 1, minor: 0 };
     /// PDF 1.7, the most widely deployed 1.x version.
@@ -361,6 +367,157 @@ pub fn analyze_compatibility(data: &[u8]) -> CompatibilityReport {
     }
 }
 
+/// A PDF construct whose availability depends on the document version.
+///
+/// Each variant names a feature that was introduced in a specific PDF version.
+/// Feature gates are used to report when a document's *effective* version (see
+/// [`CompatibilityReport::effective_version`]) is too old for a construct a
+/// caller wants to write or has found in a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PdfFeature {
+    /// Transparency, soft masks and extended graphics states (PDF 1.4+).
+    Transparency,
+    /// Tagged PDF structure trees (PDF 1.4+).
+    TaggedPdf,
+    /// Cross-reference streams (PDF 1.5+).
+    XrefStreams,
+    /// Object streams (`/ObjStm`, PDF 1.5+).
+    ObjectStreams,
+    /// Optional content groups and layers (PDF 1.5+).
+    OptionalContent,
+    /// Crypt filters and public-key security handlers (PDF 1.6+).
+    CryptFilters,
+    /// 3D annotations and 3D streams (PDF 1.6+).
+    Annotations3D,
+    /// Embedded files and file-specification dictionaries (PDF 1.7+).
+    EmbeddedFiles,
+    /// Rich-media and screen/sound annotations (PDF 1.7+).
+    Multimedia,
+    /// AES-256 encryption (`/V 5`, PDF 2.0+).
+    Aes256Encryption,
+    /// Associated files and `/AF` relationships (PDF 2.0+).
+    AssociatedFiles,
+    /// Encrypted metadata streams (PDF 2.0+).
+    EncryptedMetadata,
+}
+
+impl PdfFeature {
+    /// Every feature in a stable, declarative order.
+    pub const ALL: &'static [Self] = &[
+        Self::Transparency,
+        Self::TaggedPdf,
+        Self::XrefStreams,
+        Self::ObjectStreams,
+        Self::OptionalContent,
+        Self::CryptFilters,
+        Self::Annotations3D,
+        Self::EmbeddedFiles,
+        Self::Multimedia,
+        Self::Aes256Encryption,
+        Self::AssociatedFiles,
+        Self::EncryptedMetadata,
+    ];
+
+    /// The first PDF version in which this feature is available.
+    #[must_use]
+    pub const fn min_version(self) -> PdfVersion {
+        match self {
+            Self::Transparency | Self::TaggedPdf => PdfVersion { major: 1, minor: 4 },
+            Self::XrefStreams | Self::ObjectStreams | Self::OptionalContent => {
+                PdfVersion { major: 1, minor: 5 }
+            }
+            Self::CryptFilters | Self::Annotations3D => PdfVersion { major: 1, minor: 6 },
+            Self::EmbeddedFiles | Self::Multimedia => PdfVersion { major: 1, minor: 7 },
+            Self::Aes256Encryption | Self::AssociatedFiles | Self::EncryptedMetadata => {
+                PdfVersion::V2_0
+            }
+        }
+    }
+
+    /// A short human-readable label for diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Transparency => "transparency",
+            Self::TaggedPdf => "tagged PDF",
+            Self::XrefStreams => "cross-reference streams",
+            Self::ObjectStreams => "object streams",
+            Self::OptionalContent => "optional content",
+            Self::CryptFilters => "crypt filters",
+            Self::Annotations3D => "3D annotations",
+            Self::EmbeddedFiles => "embedded files",
+            Self::Multimedia => "multimedia annotations",
+            Self::Aes256Encryption => "AES-256 encryption",
+            Self::AssociatedFiles => "associated files",
+            Self::EncryptedMetadata => "encrypted metadata",
+        }
+    }
+}
+
+impl PdfVersion {
+    /// Return `true` when this version provides `feature`.
+    #[must_use]
+    pub fn supports(self, feature: PdfFeature) -> bool {
+        self >= feature.min_version()
+    }
+}
+
+/// Result of checking one version-dependent feature gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureSupport {
+    /// The effective version is new enough for the feature.
+    Supported,
+    /// The effective version predates the feature.
+    Requires {
+        /// The first version that provides the feature.
+        min: PdfVersion,
+        /// The effective version of the document under test.
+        effective: PdfVersion,
+    },
+}
+
+impl FeatureSupport {
+    /// Return `true` when the gate is satisfied.
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::Supported)
+    }
+}
+
+/// Evaluate a single feature gate against a compatibility report.
+#[must_use]
+pub fn feature_gate(report: &CompatibilityReport, feature: PdfFeature) -> FeatureSupport {
+    let effective = report.effective_version();
+    if effective.supports(feature) {
+        FeatureSupport::Supported
+    } else {
+        FeatureSupport::Requires {
+            min: feature.min_version(),
+            effective,
+        }
+    }
+}
+
+impl CompatibilityReport {
+    /// Return `true` when the effective version provides `feature`.
+    #[must_use]
+    pub fn supports(&self, feature: PdfFeature) -> bool {
+        self.effective_version().supports(feature)
+    }
+
+    /// Return every feature whose minimum version exceeds the effective one.
+    ///
+    /// The result follows [`PdfFeature::ALL`] and is therefore deterministic.
+    #[must_use]
+    pub fn unsupported_features(&self) -> Vec<PdfFeature> {
+        PdfFeature::ALL
+            .iter()
+            .copied()
+            .filter(|feature| !self.supports(*feature))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,5 +703,119 @@ mod tests {
             a.warnings()[2],
             CompatibilityWarning::UnsupportedVersion { .. }
         ));
+    }
+
+    // ---- T-0118 version-dependent feature gates ----
+
+    #[test]
+    fn feature_min_versions_match_the_pdf_specification() {
+        assert_eq!(
+            PdfFeature::Transparency.min_version(),
+            PdfVersion::new(1, 4)
+        );
+        assert_eq!(PdfFeature::TaggedPdf.min_version(), PdfVersion::new(1, 4));
+        assert_eq!(PdfFeature::XrefStreams.min_version(), PdfVersion::new(1, 5));
+        assert_eq!(
+            PdfFeature::ObjectStreams.min_version(),
+            PdfVersion::new(1, 5)
+        );
+        assert_eq!(
+            PdfFeature::OptionalContent.min_version(),
+            PdfVersion::new(1, 5)
+        );
+        assert_eq!(
+            PdfFeature::CryptFilters.min_version(),
+            PdfVersion::new(1, 6)
+        );
+        assert_eq!(
+            PdfFeature::Annotations3D.min_version(),
+            PdfVersion::new(1, 6)
+        );
+        assert_eq!(
+            PdfFeature::EmbeddedFiles.min_version(),
+            PdfVersion::new(1, 7)
+        );
+        assert_eq!(PdfFeature::Multimedia.min_version(), PdfVersion::new(1, 7));
+        assert_eq!(PdfFeature::Aes256Encryption.min_version(), PdfVersion::V2_0);
+        assert_eq!(PdfFeature::AssociatedFiles.min_version(), PdfVersion::V2_0);
+        assert_eq!(
+            PdfFeature::EncryptedMetadata.min_version(),
+            PdfVersion::V2_0
+        );
+    }
+
+    #[test]
+    fn feature_support_boundaries_are_exact() {
+        let v14 = PdfVersion::new(1, 4);
+        assert!(v14.supports(PdfFeature::Transparency));
+        assert!(!v14.supports(PdfFeature::XrefStreams));
+        let v15 = PdfVersion::new(1, 5);
+        assert!(v15.supports(PdfFeature::XrefStreams));
+        assert!(!v15.supports(PdfFeature::EmbeddedFiles));
+        let v20 = PdfVersion::V2_0;
+        assert!(v20.supports(PdfFeature::EncryptedMetadata));
+        assert!(PdfVersion::new(2, 1).supports(PdfFeature::EncryptedMetadata));
+        assert!(!PdfVersion::V1_7.supports(PdfFeature::Aes256Encryption));
+    }
+
+    #[test]
+    fn feature_gate_reports_required_version() {
+        let report = analyze_compatibility(&minimal_pdf_with(b"%PDF-1.4", b""));
+        assert_eq!(
+            feature_gate(&report, PdfFeature::Transparency),
+            FeatureSupport::Supported
+        );
+        assert_eq!(
+            feature_gate(&report, PdfFeature::XrefStreams),
+            FeatureSupport::Requires {
+                min: PdfVersion::new(1, 5),
+                effective: PdfVersion::new(1, 4),
+            }
+        );
+        assert!(!feature_gate(&report, PdfFeature::XrefStreams).is_supported());
+        assert!(feature_gate(&report, PdfFeature::Transparency).is_supported());
+    }
+
+    #[test]
+    fn catalog_override_changes_feature_gates() {
+        let report = analyze_compatibility(&minimal_pdf_with(b"%PDF-1.4", b" /Version /2.0"));
+        assert_eq!(report.effective_version(), PdfVersion::V2_0);
+        assert!(report.supports(PdfFeature::Aes256Encryption));
+        assert!(report.supports(PdfFeature::AssociatedFiles));
+        assert!(report.unsupported_features().is_empty());
+    }
+
+    #[test]
+    fn unsupported_features_are_ordered_and_deterministic() {
+        let report = analyze_compatibility(&minimal_pdf_with(b"%PDF-1.4", b""));
+        let features = report.unsupported_features();
+        assert_eq!(features, report.unsupported_features());
+        let expected = [
+            PdfFeature::XrefStreams,
+            PdfFeature::ObjectStreams,
+            PdfFeature::OptionalContent,
+            PdfFeature::CryptFilters,
+            PdfFeature::Annotations3D,
+            PdfFeature::EmbeddedFiles,
+            PdfFeature::Multimedia,
+            PdfFeature::Aes256Encryption,
+            PdfFeature::AssociatedFiles,
+            PdfFeature::EncryptedMetadata,
+        ];
+        assert_eq!(features, expected);
+        assert!(features.iter().all(|feature| !report.supports(*feature)));
+    }
+
+    #[test]
+    fn every_feature_has_a_nonempty_label_and_all_is_unique() {
+        for feature in PdfFeature::ALL {
+            assert!(!feature.label().is_empty());
+            assert!(feature.min_version().is_supported());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for feature in PdfFeature::ALL {
+            assert!(seen.insert(*feature), "duplicate feature in ALL");
+        }
+        assert_eq!(seen.len(), PdfFeature::ALL.len());
     }
 }
