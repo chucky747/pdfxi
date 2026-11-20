@@ -3,7 +3,7 @@
   "lane": "qa",
   "title": "UI interaction harness and no-dead-controls gate",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0211"
   ],

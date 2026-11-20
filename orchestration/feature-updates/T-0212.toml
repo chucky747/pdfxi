@@ -1,0 +1,54 @@
+# T-0212 - UI interaction harness and no-dead-controls gate
+#
+# Adds an integration-test harness that dispatches every AppCommand through
+# `PdfxiApp::dispatch` and requires observable state (or a viewport command) to
+# change, plus a static scanner that fails when a shell control has no
+# dispatch in its enclosing function. No production code changed; no feature
+# row status changes.
+
+task = "T-0212"
+lane = "qa"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0212.md"
+docs = [
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/hardening/T-0212.md",
+]
+notes = """
+Integration-test gate in crates/pdfxi-app/tests/ui_controls.rs (15 tests). A
+Snapshot of every public accessor is taken before/after dispatch; a command
+passes only if it changes tabs, page, zoom, rotation, view mode, tool, find
+state, status, theme, window controls, banner, errors, close policy, selection
+or thumbnails. Viewport-only commands (Caption, StartWindowDrag,
+ToggleFullscreen) are proven through `egui::Context::run`'s viewport command
+queue. All 60 AppCommand labels are pinned, unique and non-empty. 55 commands
+are proven; 5 are allowlisted with reasons (open-dialog opens the native rfd
+picker next frame; copy-selection needs a canvas selection; toggle-tools,
+toggle-grid and show-rail flip private flags without public getters so T-0220
+needs to add accessors). A static scanner over src/shell/**.rs and src/ui.rs
+flags `.button(`, `.clicked()`, menus, checkboxes, selectable widgets and the
+shell icon-button factories when the enclosing function contains neither
+`dispatch(` nor `AppCommand`, with narrow allowlists for text fields, drag
+values, control factories and deferred TabAction returns; positive/negative
+synthetic snippets prove the scanner fails on a dead button. `egui_kittest`
+was not needed and no dependency was added. No production source edited.
+Gates: `cargo fmt -p pdfxi-app -- --check` clean, clippy -D warnings clean,
+cargo test -p pdfxi-app --features ui,pdfium = 447 lib + 15 integration passed.
+"""
+tests = [
+    "command_labels_are_stable_unique_and_non_empty",
+    "every_app_command_is_proven_or_allowlisted",
+    "dispatched_navigation_and_view_commands_act",
+    "dispatched_tab_commands_act",
+    "dispatched_find_commands_act",
+    "dispatched_shell_and_settings_commands_act",
+    "dispatched_capability_commands_report_unavailable",
+    "viewport_commands_reach_the_egui_context",
+    "allowlisted_commands_have_a_reason",
+    "scanner_flags_a_dead_button",
+    "scanner_flags_a_dead_custom_click_target",
+    "scanner_accepts_a_dispatched_button",
+    "scanner_accepts_an_allowlisted_text_field",
+    "scanner_accepts_a_deferred_tab_action",
+    "repository_shell_has_no_dead_controls",
+]
