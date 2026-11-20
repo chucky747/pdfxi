@@ -20,6 +20,10 @@
 //! and a bounded prefetch request queue backed by `pdfxi-render`'s cache.
 //! The [`commands`] module defines typed view commands (rotation, fit modes,
 //! zoom) and a pure keyboard-shortcut map shared by the toolbar and key paths.
+//! The [`split`] module adds a window-free split/tile pane model: deterministic
+//! pane geometry (rects, dividers, minimum sizes), per-pane scroll/zoom/page
+//! state with sharing rules, focus, and close-pane/tab-close cleanup. Panes are
+//! logical rectangles inside the single viewer window, never native OS windows.
 //! [`AppState`] is the tabbed document workspace: it owns an insertion-ordered
 //! set of stable-id tabs, each with its own path, dirty flag, and per-tab view
 //! state (page, zoom, layout, rotation, and scroll offset). Open, close,
@@ -41,6 +45,7 @@ pub mod open;
 pub mod print;
 pub mod raster;
 pub mod selection;
+pub mod split;
 mod state;
 mod tabs;
 pub mod thumbs;
@@ -73,6 +78,12 @@ pub use print::{
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
+};
+pub use split::{
+    DEFAULT_DIVIDER_THICKNESS, DEFAULT_MINIMUM_PANE, DEFAULT_SPLIT_RATIO, Divider, DividerAxis,
+    PaneCommand, PaneKey, PaneLayout, PaneManager, PanePoint, PaneRect, PaneViewState,
+    SplitDirection, SplitError, SplitGeometry, SplitLayout, TileGrid, TileLayout, ViewSharing,
+    map_pane_shortcut,
 };
 pub use state::{AppError, AppState, CloseDecision, CloseOthersOutcome, CloseOutcome, OpenOutcome};
 pub use tabs::{DocumentTab, TabId, display_name_from_path, normalize_path_key};

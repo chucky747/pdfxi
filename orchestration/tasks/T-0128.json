@@ -1,0 +1,16 @@
+{
+  "id": "T-0128",
+  "lane": "core",
+  "title": "Close preflight and page box rows for M2",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0127"],
+  "owns": [
+    "crates/pdfxi-core/**",
+    "crates/pdfxi-standards/**",
+    "docs/evidence/core/T-0128.md",
+    "orchestration/feature-updates/T-0128.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core -p pdfxi-standards",
+  "evidence": ""
+}

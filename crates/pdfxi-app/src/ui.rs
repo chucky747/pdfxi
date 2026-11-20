@@ -69,6 +69,17 @@
 //! UI never blocks. The visibility plan these methods expose is a boundary for a
 //! renderer backend; actual optional-content rasterization depends on backend
 //! support that `pdfxi-render` does not yet provide.
+//!
+//! # Split and tile panes
+//!
+//! A toolbar row and keyboard shortcuts drive the window-free
+//! [`crate::split::PaneManager`]: horizontal/vertical splits, `1x1`..`2x2` tile
+//! grids, pane focus, and close-pane actions. Each pane keeps its own scroll,
+//! zoom, and page (or mirrors its tab under `MirrorTab` sharing), and panes are
+//! logical rectangles inside this single central canvas — the shell never
+//! creates native multi-window OS handles. Split/tile helpers on
+//! [`crate::ui::PdfxiApp`] only mutate in-memory state and return immediately, so they are exercised by
+//! window-free unit tests and never perform blocking I/O.
 
 use std::path::Path;
 
@@ -82,9 +93,10 @@ use pdfxi_render::{Duplex, Orientation, PageScaleMode};
 use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
     DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, LayerRegistry,
-    OcPropertiesSummary, OcgInfo, OpenOutcome, OwnedSpan, OwnedTextPage, PageSize, RadioGroup,
-    SelectionModel, ShortcutKey, ShortcutModifiers, TabId, ThumbnailPaneState, Toolset,
-    ViewCommand, ViewMode, VisibilityPlan, Zoom, app_name, map_shortcut,
+    OcPropertiesSummary, OcgInfo, OpenOutcome, OwnedSpan, OwnedTextPage, PageSize, PaneCommand,
+    PaneKey, PaneManager, PaneRect, RadioGroup, SelectionModel, ShortcutKey, ShortcutModifiers,
+    TabId, ThumbnailPaneState, Toolset, ViewCommand, ViewMode, ViewSharing, VisibilityPlan, Zoom,
+    app_name, map_pane_shortcut, map_shortcut,
 };
 
 #[cfg(feature = "pdfium")]
@@ -280,6 +292,45 @@ fn native_shortcut_key(key: Key) -> Option<ShortcutKey> {
         Key::Equals => Some(ShortcutKey::Equals),
         Key::Minus => Some(ShortcutKey::Minus),
         _ => None,
+    }
+}
+
+/// Translate an `egui` key into the toolkit-independent [`PaneKey`].
+///
+/// Only keys used by [`map_pane_shortcut`] are mapped; other keys return `None`
+/// so the find field and other widgets keep their normal handling.
+fn native_pane_key(key: Key) -> Option<PaneKey> {
+    match key {
+        Key::H => Some(PaneKey::H),
+        Key::V => Some(PaneKey::V),
+        Key::Num1 => Some(PaneKey::One),
+        Key::Num2 => Some(PaneKey::Two),
+        Key::Num3 => Some(PaneKey::Three),
+        Key::Num4 => Some(PaneKey::Four),
+        Key::Period => Some(PaneKey::Period),
+        Key::Comma => Some(PaneKey::Comma),
+        Key::W => Some(PaneKey::W),
+        Key::P => Some(PaneKey::P),
+        _ => None,
+    }
+}
+
+/// A stable, human-readable label for a [`crate::PaneLayout`].
+///
+/// Pure and window-free so it can be asserted by UI helper tests.
+pub fn pane_layout_label(layout: crate::PaneLayout) -> String {
+    use crate::PaneLayout;
+    match layout {
+        PaneLayout::Single => "Single".to_string(),
+        PaneLayout::Split(split) => match split.direction {
+            crate::SplitDirection::Horizontal => {
+                format!("Split H {}", (split.ratio * 100.0).round() as i32)
+            }
+            crate::SplitDirection::Vertical => {
+                format!("Split V {}", (split.ratio * 100.0).round() as i32)
+            }
+        },
+        PaneLayout::Tile(grid) => format!("Tile {}x{}", grid.rows, grid.cols),
     }
 }
 
@@ -536,6 +587,8 @@ pub struct PdfxiApp {
     thumb_follow_active: bool,
     /// Per-tab optional content layer models and viewing states.
     layers: LayerRegistry,
+    /// Logical split/tile panes inside the single central canvas.
+    panes: PaneManager,
     /// GPU textures for generated thumbnails, keyed by page.
     #[cfg(feature = "pdfium")]
     thumb_textures: std::collections::HashMap<usize, egui::TextureHandle>,
@@ -613,6 +666,10 @@ impl PdfxiApp {
         if let Some(tab) = self.state.tab_mut(id) {
             tab.set_page_count(page_count);
         }
+        // A newly focused document starts with one pane bound to it. Any prior
+        // split/tile arrangement is intentionally discarded on tab open so the
+        // pane set always starts from a deterministic, single-document state.
+        self.panes = PaneManager::single(id);
         self.demo_text = demo_text_pages(page_count);
         // Search, selection, and copy all read the same displayed text snapshot.
         self.find.set_pages(demo_find_pages(&self.demo_text));
@@ -681,6 +738,9 @@ impl PdfxiApp {
         match outcome {
             crate::CloseOutcome::Closed { .. } => {
                 self.layers.remove(id);
+                // Tab close deterministically removes every pane bound to it;
+                // pane-local view state is discarded, never written back.
+                let _ = self.panes.close_tab(id);
                 self.status = format!("Closed tab {id}");
                 self.restore_scroll_from_active();
                 true
@@ -943,6 +1003,88 @@ impl PdfxiApp {
             ViewCommand::ZoomIn => self.zoom_in(),
             ViewCommand::ZoomOut => self.zoom_out(),
         }
+    }
+
+    /// Borrow the window-free split/tile pane manager.
+    pub fn pane_manager(&self) -> &PaneManager {
+        &self.panes
+    }
+
+    /// Apply a typed [`PaneCommand`] and report the outcome through [`Self::status`].
+    ///
+    /// This is the single implementation used by both the toolbar buttons and
+    /// the keyboard path. It only mutates in-memory pane state, so it never
+    /// blocks and is fully testable without a window.
+    pub fn apply_pane_command(&mut self, command: PaneCommand) {
+        let label = command.shortcut_label();
+        match self.panes.apply_command(command) {
+            Ok(()) => {
+                self.status = format!(
+                    "Panes: {} | {} pane(s) | focus {}",
+                    pane_layout_label(self.panes.layout()),
+                    self.panes.pane_count(),
+                    self.panes.active_index(),
+                );
+            }
+            Err(error) => self.status = format!("Pane command failed ({label}): {error}"),
+        }
+    }
+
+    /// Focus a pane by index, reporting an invalid focus through the status.
+    pub fn focus_pane(&mut self, index: usize) {
+        match self.panes.focus_pane(index) {
+            Ok(()) => self.status = format!("Focused pane {index}"),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Set the focused pane's scroll offset through the sharing rule.
+    pub fn set_pane_scroll(&mut self, offset: CanvasPoint) {
+        match self.panes.set_scroll(offset) {
+            Ok(()) => self.status = "Pane scroll updated".to_string(),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Set the focused pane's zoom through the sharing rule.
+    pub fn set_pane_zoom(&mut self, zoom: Zoom) {
+        match self.panes.set_zoom(zoom) {
+            Ok(()) => self.status = format!("Pane zoom: {zoom}"),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Set the focused pane's page through the sharing rule.
+    pub fn set_pane_page(&mut self, page: usize) {
+        match self.panes.set_page(page) {
+            Ok(()) => self.status = format!("Pane page: {}", page + 1),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Set the pane view-sharing rule.
+    pub fn set_view_sharing(&mut self, sharing: ViewSharing) {
+        self.panes.set_sharing(sharing);
+        self.status = format!("Pane sharing: {sharing:?}");
+    }
+
+    /// Resolve the current pane layout against a viewport, or `None` when the
+    /// viewport is too small for the layout's dividers and minimum sizes.
+    ///
+    /// This is a pure helper: no OS window is created or measured.
+    pub fn pane_geometry(&self, width: u32, height: u32) -> Option<Vec<PaneRect>> {
+        self.panes.geometry(PaneRect::new(0, 0, width, height)).ok()
+    }
+
+    /// A short textual description of the active pane and layout.
+    pub fn pane_status(&self) -> String {
+        format!(
+            "{} | {} pane(s) | focus {} | sharing {:?}",
+            pane_layout_label(self.panes.layout()),
+            self.panes.pane_count(),
+            self.panes.active_index(),
+            self.panes.sharing(),
+        )
     }
 
     /// Select the interaction tool used on the canvas.
@@ -1608,6 +1750,42 @@ impl PdfxiApp {
                 }
             }
         });
+
+        ui.horizontal(|ui| {
+            ui.label("Panes:");
+            for (label, command) in [
+                ("Split H", PaneCommand::SplitHorizontal),
+                ("Split V", PaneCommand::SplitVertical),
+                ("1x1", PaneCommand::Tile1x1),
+                ("1x2", PaneCommand::Tile1x2),
+                ("2x1", PaneCommand::Tile2x1),
+                ("2x2", PaneCommand::Tile2x2),
+            ] {
+                if ui
+                    .button(label)
+                    .on_hover_text(command.shortcut_label())
+                    .clicked()
+                {
+                    self.apply_pane_command(command);
+                }
+            }
+            ui.separator();
+            if ui
+                .button("Next pane")
+                .on_hover_text(PaneCommand::FocusNextPane.shortcut_label())
+                .clicked()
+            {
+                self.apply_pane_command(PaneCommand::FocusNextPane);
+            }
+            if ui
+                .button("Close pane")
+                .on_hover_text(PaneCommand::ClosePane.shortcut_label())
+                .clicked()
+            {
+                self.apply_pane_command(PaneCommand::ClosePane);
+            }
+            ui.label(self.pane_status());
+        });
     }
 
     /// Render the document tab strip.
@@ -1822,25 +2000,67 @@ impl PdfxiApp {
 
     /// Apply keyboard shortcuts for the main find, copy, and view commands.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let (open, next_tab, prev_tab, close, view_command, escape, open_find, next, prev, copy) =
-            ctx.input(|input| {
-                let ctrl = input.modifiers.ctrl;
-                let shift = input.modifiers.shift;
-                // Rotation, fit modes, and zoom are resolved through the shared
-                // shortcut map, so the toolbar and keyboard paths cannot drift.
-                let view_command = [
-                    Key::R,
-                    Key::Num0,
-                    Key::Num1,
-                    Key::Num2,
-                    Key::Equals,
-                    Key::Minus,
-                ]
-                .into_iter()
-                .find(|key| input.key_pressed(*key))
-                .and_then(native_shortcut_key)
+        let (
+            open,
+            next_tab,
+            prev_tab,
+            close,
+            view_command,
+            pane_command,
+            escape,
+            open_find,
+            next,
+            prev,
+            copy,
+        ) = ctx.input(|input| {
+            let ctrl = input.modifiers.ctrl;
+            let shift = input.modifiers.shift;
+            // Rotation, fit modes, and zoom are resolved through the shared
+            // shortcut map, so the toolbar and keyboard paths cannot drift.
+            let view_command = [
+                Key::R,
+                Key::Num0,
+                Key::Num1,
+                Key::Num2,
+                Key::Equals,
+                Key::Minus,
+            ]
+            .into_iter()
+            .find(|key| input.key_pressed(*key))
+            .and_then(native_shortcut_key)
+            .and_then(|key| {
+                map_shortcut(
+                    key,
+                    ShortcutModifiers {
+                        ctrl,
+                        shift,
+                        alt: input.modifiers.alt,
+                    },
+                )
+            });
+            // Pane commands use Ctrl+Shift and are resolved through the
+            // shared map so the toolbar and keyboard paths cannot drift.
+            let pane_command = (ctrl && shift)
+                .then(|| {
+                    [
+                        Key::H,
+                        Key::V,
+                        Key::Num1,
+                        Key::Num2,
+                        Key::Num3,
+                        Key::Num4,
+                        Key::Period,
+                        Key::Comma,
+                        Key::W,
+                        Key::P,
+                    ]
+                    .into_iter()
+                    .find(|key| input.key_pressed(*key))
+                    .and_then(native_pane_key)
+                })
+                .flatten()
                 .and_then(|key| {
-                    map_shortcut(
+                    map_pane_shortcut(
                         key,
                         ShortcutModifiers {
                             ctrl,
@@ -1849,19 +2069,20 @@ impl PdfxiApp {
                         },
                     )
                 });
-                (
-                    ctrl && input.key_pressed(Key::N),
-                    ctrl && !shift && input.key_pressed(Key::Tab),
-                    ctrl && shift && input.key_pressed(Key::Tab),
-                    ctrl && input.key_pressed(Key::W),
-                    view_command,
-                    input.key_pressed(Key::Escape),
-                    ctrl && input.key_pressed(Key::F),
-                    !shift && input.key_pressed(Key::F3),
-                    shift && input.key_pressed(Key::F3),
-                    ctrl && input.key_pressed(Key::C),
-                )
-            });
+            (
+                ctrl && input.key_pressed(Key::N),
+                ctrl && !shift && input.key_pressed(Key::Tab),
+                ctrl && shift && input.key_pressed(Key::Tab),
+                ctrl && !shift && input.key_pressed(Key::W),
+                view_command,
+                pane_command,
+                input.key_pressed(Key::Escape),
+                ctrl && input.key_pressed(Key::F),
+                !shift && input.key_pressed(Key::F3),
+                shift && input.key_pressed(Key::F3),
+                ctrl && input.key_pressed(Key::C),
+            )
+        });
 
         if open {
             self.open_demo_tab();
@@ -1877,6 +2098,9 @@ impl PdfxiApp {
         }
         if let Some(command) = view_command {
             self.apply_view_command(command);
+        }
+        if let Some(command) = pane_command {
+            self.apply_pane_command(command);
         }
         if open_find {
             self.open_find();
@@ -3107,5 +3331,114 @@ mod open_print_tests {
         assert!(app.submit_print().is_err());
         assert!(app.print_dialog().last_error().is_some());
         assert!(app.print_dialog().last_plan().is_none());
+    }
+
+    // ---- T-0126 split / tile UI helper behavior --------------------------
+
+    #[test]
+    fn pane_layout_label_is_stable() {
+        use crate::{PaneLayout, SplitDirection, TileGrid};
+        assert_eq!(pane_layout_label(PaneLayout::Single), "Single");
+        let split = crate::SplitLayout::new(SplitDirection::Horizontal, 0.5, 4, 32)
+            .expect("valid split layout");
+        assert_eq!(pane_layout_label(PaneLayout::Split(split)), "Split H 50");
+        assert_eq!(
+            pane_layout_label(PaneLayout::Tile(TileGrid::new(2, 2).expect("valid grid"))),
+            "Tile 2x2"
+        );
+    }
+
+    #[test]
+    fn pane_commands_update_the_manager_and_status() {
+        let mut app = PdfxiApp::default();
+        let tab = app.open_demo_tab();
+        assert_eq!(app.pane_manager().pane_count(), 1);
+        assert_eq!(app.pane_manager().bound_tabs(), vec![tab]);
+
+        app.apply_pane_command(PaneCommand::SplitVertical);
+        assert_eq!(app.pane_manager().pane_count(), 2);
+        assert!(app.status().contains("Split V"), "{}", app.status());
+
+        app.set_pane_zoom(Zoom::custom(1.5));
+        app.apply_pane_command(PaneCommand::FocusNextPane);
+        assert_eq!(app.pane_manager().active_index(), 1);
+        assert!(app.status().contains("focus 1"), "{}", app.status());
+        // The direct focus helper reports its own confirmation status.
+        app.focus_pane(0);
+        assert!(app.status().contains("Focused pane 0"), "{}", app.status());
+
+        app.apply_pane_command(PaneCommand::Tile2x2);
+        assert_eq!(app.pane_manager().pane_count(), 4);
+        assert!(
+            app.pane_status().contains("4 pane(s)"),
+            "{}",
+            app.pane_status()
+        );
+
+        // An invalid focus is reported through the status without panicking.
+        app.focus_pane(99);
+        assert!(
+            app.status().contains("no pane at index 99"),
+            "{}",
+            app.status()
+        );
+    }
+
+    #[test]
+    fn pane_geometry_helper_is_window_free_and_reports_small_viewports() {
+        let mut app = PdfxiApp::default();
+        assert_eq!(
+            app.open_demo_tab(),
+            app.state().active_tab_id().expect("tab")
+        );
+        let geometry = app.pane_geometry(400, 300).expect("roomy viewport");
+        assert_eq!(geometry, vec![crate::PaneRect::new(0, 0, 400, 300)]);
+
+        app.apply_pane_command(PaneCommand::SplitHorizontal);
+        let geometry = app.pane_geometry(400, 300).expect("roomy viewport");
+        assert_eq!(geometry.len(), 2);
+        assert!(
+            geometry[0].bottom() < geometry[1].y,
+            "top pane above bottom pane"
+        );
+
+        // A viewport too small for the divider/minimum has no geometry.
+        assert_eq!(app.pane_geometry(10, 10), None);
+    }
+
+    #[test]
+    fn closing_a_tab_removes_its_panes_through_the_shell() {
+        let mut app = PdfxiApp::default();
+        let first = app.open_demo_tab();
+        app.apply_pane_command(PaneCommand::SplitHorizontal);
+        assert_eq!(app.pane_manager().pane_count(), 2);
+
+        let second = app.open_demo_tab();
+        assert_eq!(
+            app.pane_manager().pane_count(),
+            1,
+            "new tab resets to one pane"
+        );
+        assert_eq!(app.pane_manager().bound_tabs(), vec![second]);
+
+        // Closing the active tab empties the pane manager.
+        assert!(app.close_tab_by_id(second));
+        assert_eq!(app.pane_manager().pane_count(), 0);
+        assert_eq!(app.pane_manager().active_pane(), None);
+        // The earlier tab still exists but its panes were discarded on switch.
+        assert!(app.state().tab(first).is_some());
+    }
+
+    #[test]
+    fn pane_sharing_toggle_is_reflected_in_status() {
+        let mut app = PdfxiApp::default();
+        app.open_demo_tab();
+        app.apply_pane_command(PaneCommand::ToggleSharing);
+        assert_eq!(app.pane_manager().sharing(), ViewSharing::MirrorTab);
+        assert!(
+            app.pane_status().contains("MirrorTab"),
+            "{}",
+            app.pane_status()
+        );
     }
 }

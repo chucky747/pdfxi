@@ -1,0 +1,15 @@
+{
+  "id": "T-0129",
+  "lane": "security",
+  "title": "Certificate encryption and trust manager",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0109"],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/security/T-0129.md",
+    "orchestration/feature-updates/T-0129.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security",
+  "evidence": ""
+}

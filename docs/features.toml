@@ -211,17 +211,17 @@ tests = [
 title = "Tabbed multi-document interface"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/view.rs"
+docs = "crates/pdfxi-app/src/split.rs, docs/evidence/app/T-0126.md"
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-app (T-0011)"
+evidence = "docs/evidence/app/T-0126.md"
 id = "VIEW-006"
-notes = "Two-page and two-page-continuous layout modes plus independent per-tab view state provide the data model a split/tile window manager will consume. Actual split/tile window management is not implemented in this task."
+notes = "Single-window split/tile panes with independent view state and deterministic layout; OS-level multi-window remains out of scope."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "view::tests::view_mode_classification_is_consistent",
-    "state::tests::set_zoom_rotation_and_view_mode_on_active_tab",
-    "state::tests::rotation_commands_update_active_tab_only",
+    "split::tests::split_geometry_panes_and_divider_tile_the_viewport",
+    "split::tests::per_pane_scroll_and_zoom_are_isolated",
+    "split::tests::tab_close_removes_all_its_panes_deterministically",
 ]
 title = "Split and tile document windows"
 
