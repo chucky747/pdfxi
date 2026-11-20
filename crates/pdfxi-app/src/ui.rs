@@ -467,12 +467,16 @@ pub fn run() -> Result<(), String> {
         options,
         Box::new(|_creation_context| {
             let arguments: Vec<String> = std::env::args().skip(1).collect();
+            let print_requested = arguments.iter().any(|argument| argument == "--print");
             let launch = settings::parse_launch_arguments(&arguments);
             let mut app = PdfxiApp::new_for_window();
             app.apply_launch_options(&launch);
             app.open_startup_argument(arguments);
             app.apply_launch_title(launch.title.as_deref());
             app.apply_launch_panel(launch.panel);
+            if print_requested {
+                app.dispatch(AppCommand::Print, None);
+            }
             Ok(Box::new(app))
         }),
     )
@@ -555,6 +559,8 @@ pub struct PdfxiApp {
     pub(super) pending_close: Option<shell::session::PendingClose>,
     /// Open external-modification dialog, if any.
     pub(super) save_conflict: Option<shell::session::SaveConflict>,
+    /// Pre-print panel, progress and worker state.
+    print_ui: shell::print_dialog::PrintUiState,
     /// Revision of the active session bound to the renderer.
     ///
     /// Alongside `renderer_path` this key notices edits, undo and redo so the
@@ -1538,6 +1544,7 @@ impl PdfxiApp {
             save_as,
             undo,
             redo,
+            print,
         ) = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl;
             let shift = input.modifiers.shift;
@@ -1581,6 +1588,7 @@ impl PdfxiApp {
                 ctrl && shift && input.key_pressed(Key::S),
                 ctrl && !shift && input.key_pressed(Key::Z),
                 ctrl && (input.key_pressed(Key::Y) || (shift && input.key_pressed(Key::Z))),
+                ctrl && input.key_pressed(Key::P),
             )
         });
 
@@ -1607,6 +1615,9 @@ impl PdfxiApp {
         }
         if redo {
             self.dispatch(AppCommand::Redo, Some(ctx));
+        }
+        if print {
+            self.dispatch(AppCommand::Print, Some(ctx));
         }
         if let Some(command) = view_command {
             let command = match command {
@@ -1691,6 +1702,7 @@ impl eframe::App for PdfxiApp {
         }
         self.open_dialog_ui(ctx);
         self.shell_ui(ctx);
+        self.print_ui_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);

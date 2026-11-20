@@ -17,6 +17,7 @@ pub mod empty_state;
 pub mod find_bar;
 pub mod help;
 pub mod preferences;
+pub mod print_dialog;
 pub mod rail;
 pub mod session;
 pub mod side_panel;

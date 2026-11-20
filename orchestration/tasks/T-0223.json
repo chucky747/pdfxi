@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Printing through the Windows print dialog",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0220",
     "T-0222"
@@ -16,6 +16,6 @@
     "docs/evidence/ui/T-0223.md",
     "orchestration/feature-updates/T-0223.toml"
   ],
-  "acceptance": "print a fixture to Microsoft Print to PDF and verify the result page count and text; O-02",
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; O-02 automated Print-to-PDF proof (Microsoft Print to PDF: page count and document text); the physical real-printer test stays manual; booklet/N-up printing is out of scope",
   "evidence": "docs/evidence/ui/T-0223.md"
 }

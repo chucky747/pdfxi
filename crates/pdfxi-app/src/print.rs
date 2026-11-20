@@ -3016,3 +3016,113 @@ mod impose_tests {
         ));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Host print backend (T-0223 Round A).
+//
+// The GDI backend lives in `pdfxi_render::win_print` because this crate forbids
+// `unsafe` code; the types are re-exported here so the shell has one import.
+// ---------------------------------------------------------------------------
+
+pub use pdfxi_render::win_print::{
+    DialogPageChoice, PagePlacement, PrintBackendError, PrintOutcome, PrinterMetrics,
+    compute_placement, print_to_file, print_with_dialog, resolve_dialog_pages,
+};
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+
+    /// Print one page to the Microsoft Print to PDF driver and reopen the file.
+    ///
+    /// The driver writes the PDF when the job ends, so the test polls briefly
+    /// for the file. It writes only under the cargo target directory.
+    #[cfg(all(windows, feature = "pdfium"))]
+    #[test]
+    fn prints_first_page_through_microsoft_print_to_pdf() {
+        use pdfxi_document::DocumentSession;
+
+        // Cargo runs tests with the package directory as the cwd, so a
+        // relative CARGO_TARGET_DIR must be resolved against the workspace.
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = match std::env::var_os("CARGO_TARGET_DIR") {
+            Some(dir) => {
+                let dir = PathBuf::from(dir);
+                if dir.is_absolute() {
+                    dir
+                } else {
+                    workspace.join(dir)
+                }
+            }
+            None => workspace.join("target"),
+        };
+        let out_dir = root.join("t0223-out");
+        std::fs::create_dir_all(&out_dir).expect("create output folder");
+        let output = out_dir.join("printed.pdf");
+        let _ = std::fs::remove_file(&output);
+
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/realworld/microsoft-excel-2019-sample.pdf");
+        let bytes = std::fs::read(&fixture).expect("read fixture");
+        let renderer = pdfxi_render::PdfiumRenderer::from_bytes(bytes).expect("open fixture");
+        let cancel = AtomicBool::new(false);
+        let outcome = print_to_file(
+            &renderer,
+            "Microsoft Print to PDF",
+            &output,
+            &[0],
+            1,
+            pdfxi_render::PageScaleMode::Fit,
+            pdfxi_render::Orientation::Portrait,
+            &cancel,
+            &mut |_, _| {},
+        )
+        .expect("print job");
+        assert_eq!(outcome.pages_printed, 1);
+        assert_eq!(outcome.output.as_deref(), Some(output.as_path()));
+
+        let mut written = false;
+        for _ in 0..200 {
+            if std::fs::metadata(&output).is_ok_and(|meta| meta.len() > 0) {
+                written = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(written, "the print-to-PDF driver wrote no file");
+
+        let reopened = DocumentSession::open(&output).expect("reopen printed PDF");
+        assert_eq!(
+            reopened.document().page_count().expect("page count"),
+            1,
+            "printed PDF must contain exactly the selected page"
+        );
+        // GDI printing rasterizes the page: the Print to PDF driver embeds a
+        // page image and no text objects. Render the printed page and require
+        // real ink, which is the honest end-to-end proof for this path.
+        let printed = pdfxi_render::PdfiumRenderer::from_bytes(
+            std::fs::read(&output).expect("printed bytes"),
+        )
+        .expect("render printed PDF");
+        let cancellation = pdfxi_render::CancellationToken::new();
+        let raster = pdfxi_render::Renderer::render_page(
+            &printed,
+            pdfxi_render::PageIndex::new(0),
+            0.5,
+            &cancellation,
+            &mut |_| {},
+        )
+        .expect("rasterize printed page");
+        let (pixels, _) = raster.pixels().as_chunks::<4>();
+        let ink = pixels
+            .iter()
+            .filter(|pixel| pixel[0] < 250 || pixel[1] < 250 || pixel[2] < 250)
+            .count();
+        assert!(
+            ink > 1_000,
+            "printed page contains almost no ink: {ink} pixels"
+        );
+    }
+}

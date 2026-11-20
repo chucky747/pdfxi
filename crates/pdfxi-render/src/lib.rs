@@ -87,7 +87,7 @@
 //! dangerous or unsupported actions. No script is executed.
 
 #![deny(missing_docs)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 /// Native PDFium renderer, available only with the `pdfium` Cargo feature.
 #[cfg(feature = "pdfium")]
@@ -102,8 +102,16 @@ pub mod thumbnail;
 
 /// Dependency-free print raster pipeline: page selection, job settings, page
 /// ranges, and cancellation-aware raster spooling. Produces rasters only; a
-/// platform printer adapter is a later concern.
+/// Windows device adapter lives in [`win_print`].
 pub mod print;
+
+/// Windows GDI print adapter: native print dialog, printer DPI, and
+/// `StartDoc`/`StretchDIBits` page output. Non-Windows builds expose the same
+/// API and return [`win_print::PrintBackendError::Unsupported`].
+///
+/// This is the only module in the crate allowed to contain `unsafe` code; the
+/// crate-level lint stays `deny` and this module opts in explicitly.
+pub mod win_print;
 
 /// Dependency-free page-image export: PNG, baseline JPEG, and uncompressed
 /// multi-page TIFF with DPI and page-fit controls. Reuses the print pipeline for
@@ -163,9 +171,9 @@ pub mod geospatial;
 
 /// Audio and video annotation model (feature MEDIA-001).
 ///
-/// Parses and validates `/Sound`, `/Movie` and `/Screen` annotations — their
+/// Parses and validates `/Sound`, `/Movie` and `/Screen` annotations ΓÇö their
 /// media sources, poster and rendition references, playback controls and
-/// activation triggers — and produces a deterministic playback plan for a host
+/// activation triggers ΓÇö and produces a deterministic playback plan for a host
 /// player. It decodes no codec and starts no OS playback.
 pub mod media;
 
@@ -457,7 +465,7 @@ pub enum RenderError {
     Backend(String),
 }
 
-/// Maximum pixels (width × height) a single page raster may allocate.
+/// Maximum pixels (width ├ù height) a single page raster may allocate.
 ///
 /// 16 Mpx is 64 MiB of RGBA pixels. Renderers clamp their scale so a hostile or
 /// very large page cannot request an unbounded allocation.
@@ -466,7 +474,7 @@ pub const MAX_RASTER_PIXELS: u64 = 16 * 1024 * 1024;
 /// Smallest scale a clamped render falls back to.
 pub const MIN_RASTER_SCALE: f32 = 0.05;
 
-/// Clamp `scale` so `width_pt × height_pt × scale²` stays within `max_pixels`.
+/// Clamp `scale` so `width_pt ├ù height_pt ├ù scale┬▓` stays within `max_pixels`.
 ///
 /// Returns `scale` unchanged when it is invalid or already within budget, and
 /// otherwise the largest scale that fits, floored at [`MIN_RASTER_SCALE`]. The

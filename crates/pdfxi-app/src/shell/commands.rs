@@ -190,6 +190,12 @@ pub enum AppCommand {
     OverwriteDocument,
     /// Dismiss the external-modification dialog.
     DismissSaveConflict,
+    /// Open the pre-print panel for the active document.
+    Print,
+    /// Confirm the pre-print panel and start the native dialog.
+    ConfirmPrint,
+    /// Cancel the running print job between pages.
+    CancelPrint,
 }
 
 impl AppCommand {
@@ -280,6 +286,9 @@ impl AppCommand {
             Self::ResolveClose(_) => "resolve-close",
             Self::OverwriteDocument => "overwrite-document",
             Self::DismissSaveConflict => "dismiss-save-conflict",
+            Self::Print => "print",
+            Self::ConfirmPrint => "confirm-print",
+            Self::CancelPrint => "cancel-print",
         }
     }
 }
@@ -469,6 +478,9 @@ impl crate::ui::PdfxiApp {
                 }
             }
             AppCommand::DismissSaveConflict => self.cancel_save_conflict(),
+            AppCommand::Print => self.open_print_panel(),
+            AppCommand::ConfirmPrint => self.start_print_job(),
+            AppCommand::CancelPrint => self.cancel_print_job(),
         }
     }
 }

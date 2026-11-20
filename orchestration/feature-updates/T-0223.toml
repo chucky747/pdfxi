@@ -1,0 +1,49 @@
+# T-0223 Round A - printing through the Windows print dialog
+#
+# Real GDI printing: PrintDlgW for printer/range/copies, CreateDC/GetDeviceCaps,
+# and StartDoc/StartPage/StretchDIBits for each page rendered by PDFium at the
+# printer's DPI. The automated test prints page 1 of the Excel fixture to
+# "Microsoft Print to PDF" and reopens the result.
+
+task = "T-0223"
+lane = "app"
+status = "review"
+evidence = "docs/evidence/ui/T-0223.md"
+docs = [
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/shell/print_dialog.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/command_bar.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "crates/pdfxi-render/src/win_print.rs",
+    "docs/evidence/ui/T-0223.md",
+    "docs/evidence/ui/t0223-print-dark-windows.png",
+]
+notes = """
+Adds the Windows GDI print adapter in pdfxi_render::win_print and re-exports it
+from the app's print model. The native dialog supplies printer, paper, page
+range and copies; the pre-print panel supplies fit/actual and orientation.
+Pages are measured at 72 DPI, rendered at the printer's LOGPIXELS scale, and
+centred in HORZRES/VERTRES; landscape rotates portrait pages. Every GDI object
+and the dialog's DEVMODE/DEVNAMES are freed, and cancelled or failed jobs call
+AbortDoc. The UI adds a Print command bar button, Ctrl+P, a pre-print panel, a
+worker thread with progress and between-page cancel, and refuses when the
+document permissions deny printing. The render crate's unsafe lint changed from
+forbid to deny so win_print can declare Win32 entry points directly; no new
+dependency was added. Automated proof: one page printed to Microsoft Print to
+PDF, reopened as one page with a 3600x4659 page image and non-blank ink. GDI
+rasterizes, so the printed PDF has no text objects; the test asserts that
+honestly instead of faking a text match.
+"""
+tests = [
+    "win_print::tests::actual_size_uses_printer_dpi_and_centers_the_page",
+    "win_print::tests::fit_chooses_the_tighter_ratio_and_stays_inside_the_area",
+    "win_print::tests::landscape_rotates_a_portrait_page",
+    "win_print::tests::custom_percent_scales_physical_size",
+    "win_print::tests::unusable_metrics_and_pages_are_typed_errors",
+    "win_print::tests::dialog_ranges_clamp_and_swap",
+    "win_print::tests::rotating_a_raster_moves_the_top_left_pixel_to_the_top_right",
+    "print::backend_tests::prints_first_page_through_microsoft_print_to_pdf",
+]

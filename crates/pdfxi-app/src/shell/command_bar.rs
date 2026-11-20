@@ -14,6 +14,12 @@ impl PdfxiApp {
             if shell_tool_button(ui, palette, Icon::File, "Open", false).clicked() {
                 self.dispatch(AppCommand::OpenDialog, Some(ui.ctx()));
             }
+            if shell_tool_button(ui, palette, Icon::Print, "Print", false)
+                .on_hover_text("Print (Ctrl+P)")
+                .clicked()
+            {
+                self.dispatch(AppCommand::Print, Some(ui.ctx()));
+            }
             // Undo and redo exist only when the active session can use them.
             if self.can_undo()
                 && shell_tool_button(ui, palette, Icon::ArrowLeft, "Undo", false)
