@@ -84,8 +84,9 @@ viewer surface rather than the desktop behind it.
 - `cargo test -p pdfxi-app --features ui,pdfium`: 490 passed.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean.
 - `cargo fmt --all --check`: clean.
-- `cargo xtask goal-verify --all`: recorded in
-  `docs/evidence/goal-verify.log` after the final gate.
+- `cargo xtask goal-verify --all`: `GOAL VERIFIED:
+  d97ace5e224b84b07d510a829518700989fe55e2`; transcript at
+  `docs/evidence/ui/goal-verify.log`.
 
 ## Sign-off
 
