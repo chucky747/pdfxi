@@ -97,6 +97,11 @@ git branch <new-branch>
 - Fuzz targets: parser, filters, content streams, forms, crypto. A release
   requires a clean 24-hour fuzz run.
 - Security-sensitive code gets a reviewer and a negative test.
+- Every completed viewer build must leave a working desktop shortcut to that
+  build. After building, run `scripts/install.ps1 -DesktopShortcut` (or the
+  packaging/install step), verify the shortcut target is the new binary, and
+  record the shortcut path and target in the task evidence. A build without the
+  shortcut is not complete.
 
 ## 6. Documentation
 
