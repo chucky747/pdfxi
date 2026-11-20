@@ -416,6 +416,147 @@ pub fn shaping_plan_with_boundaries(
     shaping_plan(text)
 }
 
+/// Build a deterministic [`ShapingPlan`] with a caller-specified base direction.
+///
+/// This overrides the first-strong heuristic of [`shaping_plan`], which is
+/// useful when a caller knows a paragraph's direction from surrounding context
+/// (for example a document-level `/ReadingDirection`) while its first strong
+/// character is ambiguous. As in [`shaping_plan`], an RTL base reverses the
+/// whole run list at paragraph level; each run keeps its own direction.
+///
+/// # Errors
+///
+/// Returns [`TextError::EmptyInput`] when `text` is empty.
+#[must_use = "the shaping plan describes the requested ordering"]
+pub fn shaping_plan_with_base_direction(
+    text: &str,
+    base: Direction,
+) -> Result<ShapingPlan, TextError> {
+    if text.is_empty() {
+        return Err(TextError::EmptyInput);
+    }
+    let mut runs = bidi_runs(text);
+    if base.is_rtl() {
+        runs.reverse();
+    }
+    Ok(ShapingPlan {
+        base_direction: base,
+        runs,
+    })
+}
+
+/// A deterministic aggregate analysis of one text string.
+///
+/// Combines script classification, direction resolution, bidi-run detection and
+/// caller-validated grapheme boundaries into one report with a stable
+/// [`Self::summary`]. Runs are kept in *logical* (input) order so the report is
+/// independent of base direction; use [`shaping_plan`] (or
+/// [`shaping_plan_with_base_direction`]) for visual ordering. Byte ranges of
+/// each run lie on UTF-8 character boundaries, matching
+/// [`validate_grapheme_boundaries`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextAnalysis {
+    text_len: usize,
+    dominant: Script,
+    base_direction: Direction,
+    boundaries: Vec<usize>,
+    runs: Vec<BidiRun>,
+}
+
+impl TextAnalysis {
+    /// Length of the analysed text in bytes.
+    #[must_use]
+    pub const fn text_len(&self) -> usize {
+        self.text_len
+    }
+
+    /// The dominant script family of the text.
+    #[must_use]
+    pub const fn dominant_script(&self) -> Script {
+        self.dominant
+    }
+
+    /// The resolved paragraph base direction (first-strong heuristic).
+    #[must_use]
+    pub const fn base_direction(&self) -> Direction {
+        self.base_direction
+    }
+
+    /// The validated caller-supplied grapheme boundaries, in order.
+    #[must_use]
+    pub fn boundaries(&self) -> &[usize] {
+        &self.boundaries
+    }
+
+    /// Detected bidi runs in logical (input) order.
+    #[must_use]
+    pub fn runs(&self) -> &[BidiRun] {
+        &self.runs
+    }
+
+    /// A stable, human-readable summary of the analysis.
+    ///
+    /// The form is `bytes=<n> dominant=<script> base=<dir> runs=<n>
+    /// boundaries=<n>`. All fields are deterministic for a given input.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        format!(
+            "bytes={} dominant={} base={} runs={} boundaries={}",
+            self.text_len,
+            self.dominant.as_str(),
+            self.base_direction.as_str(),
+            self.runs.len(),
+            self.boundaries.len()
+        )
+    }
+}
+
+impl std::fmt::Display for TextAnalysis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.summary())
+    }
+}
+
+/// Analyze `text` into a deterministic [`TextAnalysis`] report.
+///
+/// Caller-supplied grapheme `boundaries` are checked with
+/// [`validate_grapheme_boundaries`] before the report is built, so the returned
+/// analysis never assumes a boundary that splits a multi-byte character.
+///
+/// # Errors
+///
+/// Returns [`TextError::EmptyInput`] for empty text and any boundary error from
+/// [`validate_grapheme_boundaries`].
+#[must_use = "the text analysis report carries the classification result"]
+pub fn analyze_text(text: &str, boundaries: &[usize]) -> Result<TextAnalysis, TextError> {
+    if text.is_empty() {
+        return Err(TextError::EmptyInput);
+    }
+    validate_grapheme_boundaries(text, boundaries)?;
+    Ok(TextAnalysis {
+        text_len: text.len(),
+        dominant: dominant_script(text),
+        base_direction: resolve_base_direction(text),
+        boundaries: boundaries.to_vec(),
+        runs: bidi_runs(text),
+    })
+}
+
+/// Validate raw bytes as UTF-8, then analyze them with [`analyze_text`].
+///
+/// This is the byte-oriented entry point: it exercises the same UTF-8
+/// validation as [`validate_utf8`] (which also excludes encoded surrogates)
+/// before producing the report.
+///
+/// # Errors
+///
+/// Returns [`TextError::InvalidUtf8`] for malformed bytes, then any error from
+/// [`analyze_text`].
+#[must_use = "the text analysis report carries the classification result"]
+pub fn analyze_utf8(bytes: &[u8], boundaries: &[usize]) -> Result<TextAnalysis, TextError> {
+    analyze_text(validate_utf8(bytes)?, boundaries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,5 +706,115 @@ mod tests {
         assert!(!Direction::Ltr.is_rtl());
         assert_eq!(Script::Cjk.as_str(), "cjk");
         assert_eq!(Direction::Rtl.as_str(), "rtl");
+    }
+
+    // ---- T-0172 explicit direction and aggregate text analysis ----
+
+    #[test]
+    fn explicit_base_direction_overrides_first_strong() {
+        let forced_rtl = shaping_plan_with_base_direction("hello world", Direction::Rtl)
+            .unwrap_or_else(|error| panic!("plan: {error}"));
+        assert_eq!(forced_rtl.base_direction(), Direction::Rtl);
+        let logical: Vec<String> = bidi_runs("hello world")
+            .iter()
+            .map(|run| run.text().to_owned())
+            .collect();
+        let mut expected = logical.clone();
+        expected.reverse();
+        let visual: Vec<String> = forced_rtl
+            .runs()
+            .iter()
+            .map(|run| run.text().to_owned())
+            .collect();
+        assert_eq!(visual, expected);
+
+        let forced_ltr = shaping_plan_with_base_direction("שלום world", Direction::Ltr)
+            .unwrap_or_else(|error| panic!("plan: {error}"));
+        assert_eq!(forced_ltr.base_direction(), Direction::Ltr);
+        let natural: Vec<String> = bidi_runs("שלום world")
+            .iter()
+            .map(|run| run.text().to_owned())
+            .collect();
+        let visual_ltr: Vec<String> = forced_ltr
+            .runs()
+            .iter()
+            .map(|run| run.text().to_owned())
+            .collect();
+        assert_eq!(visual_ltr, natural);
+        assert_eq!(
+            shaping_plan_with_base_direction("", Direction::Rtl),
+            Err(TextError::EmptyInput)
+        );
+    }
+
+    #[test]
+    fn text_analysis_report_is_deterministic_and_has_stable_summary() {
+        let text = "hello שלום 漢字";
+        let boundaries = [0, 6, 15, text.len()];
+        let a = analyze_text(text, &boundaries).unwrap_or_else(|e| panic!("analysis: {e}"));
+        let b = analyze_text(text, &boundaries).unwrap_or_else(|e| panic!("analysis: {e}"));
+        assert_eq!(a, b);
+        assert_eq!(a.summary(), b.summary());
+        assert_eq!(a.summary(), a.to_string());
+        assert_eq!(a.base_direction(), Direction::Ltr);
+        assert_eq!(a.dominant_script(), Script::Latin);
+        assert_eq!(a.boundaries(), &boundaries);
+        assert_eq!(a.text_len(), text.len());
+        assert!(a.summary().starts_with("bytes="));
+        assert!(a.summary().contains("dominant=latin"));
+        assert!(a.summary().contains("base=ltr"));
+    }
+
+    #[test]
+    fn text_analysis_validates_grapheme_boundaries() {
+        let text = "a漢😀b";
+        let bad = 2; // inside the 3-byte '漢' starting at byte 1
+        assert_eq!(
+            analyze_text(text, &[bad]),
+            Err(TextError::BoundaryNotOnChar { offset: bad })
+        );
+        assert_eq!(
+            analyze_text(text, &[text.len() + 1]),
+            Err(TextError::BoundaryOutOfRange {
+                offset: text.len() + 1,
+                len: text.len()
+            })
+        );
+        assert_eq!(
+            analyze_text(text, &[4, 4]),
+            Err(TextError::BoundariesNotIncreasing {
+                previous: 4,
+                offset: 4
+            })
+        );
+    }
+
+    #[test]
+    fn text_analysis_empty_and_invalid_utf8_are_typed_errors() {
+        assert_eq!(analyze_text("", &[]), Err(TextError::EmptyInput));
+        assert_eq!(analyze_utf8(b"", &[]), Err(TextError::EmptyInput));
+        assert!(matches!(
+            analyze_utf8(&[0xED, 0xA0, 0x80], &[]),
+            Err(TextError::InvalidUtf8(_))
+        ));
+        let analysis = analyze_utf8(b"hello", &[0, 5]).unwrap_or_else(|e| panic!("analysis: {e}"));
+        assert_eq!(analysis.base_direction(), Direction::Ltr);
+        assert_eq!(analysis.dominant_script(), Script::Latin);
+    }
+
+    #[test]
+    fn text_analysis_byte_ranges_cover_text_on_char_boundaries() {
+        let text = "abc שלום 漢字 مرحبا";
+        let analysis = analyze_text(text, &[]).unwrap_or_else(|e| panic!("analysis: {e}"));
+        let runs = analysis.runs();
+        assert_eq!(runs.first().map(BidiRun::start), Some(0));
+        assert_eq!(runs.last().map(BidiRun::end), Some(text.len()));
+        for pair in runs.windows(2) {
+            assert_eq!(pair[0].end(), pair[1].start());
+        }
+        for run in runs {
+            assert!(text.is_char_boundary(run.start()));
+            assert!(text.is_char_boundary(run.end()));
+        }
     }
 }

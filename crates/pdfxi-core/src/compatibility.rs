@@ -516,6 +516,185 @@ impl CompatibilityReport {
             .filter(|feature| !self.supports(*feature))
             .collect()
     }
+
+    /// Evaluate every version-dependent feature gate into one deterministic report.
+    ///
+    /// This is the aggregate companion to [`crate::feature_gate`]: it records a
+    /// result for every member of [`PdfFeature::ALL`] in a stable order, so the
+    /// report (including its [`FeatureGateReport::summary`]) is byte-identical
+    /// for the same effective version.
+    #[must_use]
+    pub fn feature_gate_report(&self) -> FeatureGateReport {
+        FeatureGateReport::new(self)
+    }
+}
+
+/// One feature-gate result inside a [`FeatureGateReport`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeatureGateEntry {
+    feature: PdfFeature,
+    support: FeatureSupport,
+}
+
+impl FeatureGateEntry {
+    /// The feature whose gate was evaluated.
+    #[must_use]
+    pub const fn feature(&self) -> PdfFeature {
+        self.feature
+    }
+
+    /// Whether the effective version provides the feature.
+    #[must_use]
+    pub const fn support(&self) -> FeatureSupport {
+        self.support
+    }
+}
+
+/// A deterministic, ordered report of every version-dependent feature gate.
+///
+/// Entries follow [`PdfFeature::ALL`], so two reports for the same effective
+/// version are always equal, and their [`Self::summary`] strings are identical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureGateReport {
+    effective: PdfVersion,
+    entries: Vec<FeatureGateEntry>,
+}
+
+impl FeatureGateReport {
+    /// Evaluate all feature gates against a compatibility report.
+    #[must_use]
+    pub fn new(report: &CompatibilityReport) -> Self {
+        let effective = report.effective_version();
+        let entries = PdfFeature::ALL
+            .iter()
+            .copied()
+            .map(|feature| FeatureGateEntry {
+                feature,
+                support: feature_gate(report, feature),
+            })
+            .collect();
+        Self { effective, entries }
+    }
+
+    /// The effective version the gates were evaluated against.
+    #[must_use]
+    pub const fn effective_version(&self) -> PdfVersion {
+        self.effective
+    }
+
+    /// All gate results, in [`PdfFeature::ALL`] order.
+    #[must_use]
+    pub fn entries(&self) -> &[FeatureGateEntry] {
+        &self.entries
+    }
+
+    /// Features whose minimum version exceeds the effective one, in order.
+    #[must_use]
+    pub fn unsupported(&self) -> Vec<PdfFeature> {
+        self.entries
+            .iter()
+            .filter(|entry| !entry.support.is_supported())
+            .map(|entry| entry.feature)
+            .collect()
+    }
+
+    /// Return `true` when every feature gate is satisfied.
+    #[must_use]
+    pub fn all_supported(&self) -> bool {
+        self.entries
+            .iter()
+            .all(|entry| entry.support.is_supported())
+    }
+
+    /// A stable, human-readable summary of all gates.
+    ///
+    /// The form is `effective=<M.m> supported=<n>/<total> unsupported=<list>`;
+    /// `<list>` is `-` when nothing is missing, otherwise comma-separated
+    /// `<label>(need <version>)` items in [`PdfFeature::ALL`] order.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let missing: Vec<&FeatureGateEntry> = self
+            .entries
+            .iter()
+            .filter(|entry| !entry.support.is_supported())
+            .collect();
+        let supported = self.entries.len() - missing.len();
+        let mut out = format!(
+            "effective={} supported={}/{} unsupported=",
+            self.effective,
+            supported,
+            self.entries.len()
+        );
+        if missing.is_empty() {
+            out.push('-');
+        } else {
+            let parts: Vec<String> = missing
+                .iter()
+                .map(|entry| match entry.support {
+                    FeatureSupport::Requires { min, .. } => {
+                        format!("{}(need {})", entry.feature.label(), min)
+                    }
+                    FeatureSupport::Supported => String::new(),
+                })
+                .filter(|part| !part.is_empty())
+                .collect();
+            out.push_str(&parts.join(","));
+        }
+        out
+    }
+}
+
+impl std::fmt::Display for FeatureGateReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.summary())
+    }
+}
+
+/// Return `true` when `data` contains `token` as a contiguous byte sequence.
+fn contains_token(data: &[u8], token: &[u8]) -> bool {
+    !token.is_empty() && token.len() <= data.len() && data.windows(token.len()).any(|w| w == token)
+}
+
+/// Heuristically detect version-dependent constructs from raw PDF bytes.
+///
+/// This is a *token-presence scan*, not a structural parse: it reports every
+/// feature whose characteristic PDF name appears anywhere in `data`, in
+/// [`PdfFeature::ALL`] order. It is a fast compatibility signal for damaged or
+/// partially available files; a caller should confirm a finding by resolving
+/// the corresponding object through the structural layer. Stream contents are
+/// not excluded, so a token embedded in a stream is a documented false-positive
+/// possibility rather than a correctness bug.
+#[must_use]
+pub fn detect_features(data: &[u8]) -> Vec<PdfFeature> {
+    const MARKERS: &[(PdfFeature, &[&[u8]])] = &[
+        (PdfFeature::Transparency, &[b"/SMask", b"/ExtGState"]),
+        (PdfFeature::TaggedPdf, &[b"/StructTreeRoot"]),
+        (PdfFeature::XrefStreams, &[b"/Type /XRef", b"/XRefStm"]),
+        (PdfFeature::ObjectStreams, &[b"/ObjStm"]),
+        (PdfFeature::OptionalContent, &[b"/OCProperties"]),
+        (PdfFeature::CryptFilters, &[b"/CF <<", b"/CF<<"]),
+        (PdfFeature::Annotations3D, &[b"/3DD", b"/3D"]),
+        (PdfFeature::EmbeddedFiles, &[b"/EmbeddedFiles"]),
+        (
+            PdfFeature::Multimedia,
+            &[b"/RichMedia", b"/Movie", b"/Screen"],
+        ),
+        (PdfFeature::Aes256Encryption, &[b"/V 5"]),
+        (
+            PdfFeature::AssociatedFiles,
+            &[b"/AF ", b"/AF\n", b"/AF\t", b"/AF[", b"/AF<<", b"/AF <<"],
+        ),
+        (PdfFeature::EncryptedMetadata, &[b"/EncryptMetadata"]),
+    ];
+    PdfFeature::ALL
+        .iter()
+        .copied()
+        .filter(|feature| {
+            MARKERS.iter().any(|(candidate, tokens)| {
+                *candidate == *feature && tokens.iter().any(|token| contains_token(data, token))
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -817,5 +996,88 @@ mod tests {
             assert!(seen.insert(*feature), "duplicate feature in ALL");
         }
         assert_eq!(seen.len(), PdfFeature::ALL.len());
+    }
+
+    // ---- T-0172 deterministic feature-gate report and raw-byte detection ----
+
+    #[test]
+    fn feature_gate_report_is_ordered_and_deterministic() {
+        let report = analyze_compatibility(&minimal_pdf_with(b"%PDF-1.4", b""));
+        let gates = report.feature_gate_report();
+        assert_eq!(gates.effective_version(), PdfVersion::new(1, 4));
+        assert_eq!(gates.entries().len(), PdfFeature::ALL.len());
+        let features: Vec<PdfFeature> = gates
+            .entries()
+            .iter()
+            .map(FeatureGateEntry::feature)
+            .collect();
+        assert_eq!(features, PdfFeature::ALL);
+        assert_eq!(gates, report.feature_gate_report());
+        assert_eq!(gates.summary(), gates.to_string());
+        assert_eq!(gates.unsupported(), report.unsupported_features());
+        assert!(!gates.all_supported());
+    }
+
+    #[test]
+    fn feature_gate_report_summary_is_stable_and_reflects_version() {
+        let pdf = minimal_pdf_with(b"%PDF-1.4", b"");
+        let gates = analyze_compatibility(&pdf).feature_gate_report();
+        let summary = gates.summary();
+        assert!(summary.starts_with("effective=1.4 supported=2/12 unsupported="));
+        assert!(summary.contains("cross-reference streams(need 1.5)"));
+        assert!(summary.contains("AES-256 encryption(need 2.0)"));
+        // Rebuilding the report from the same bytes yields identical text.
+        assert_eq!(
+            summary,
+            analyze_compatibility(&pdf).feature_gate_report().summary()
+        );
+        // A newer version changes the summary deterministically.
+        let v17 = analyze_compatibility(&minimal_pdf_with(b"%PDF-1.7", b""));
+        assert!(
+            v17.feature_gate_report()
+                .summary()
+                .starts_with("effective=1.7 supported=9/12")
+        );
+    }
+
+    #[test]
+    fn feature_gate_report_reflects_catalog_override() {
+        let report = analyze_compatibility(&minimal_pdf_with(b"%PDF-1.4", b" /Version /2.0"));
+        let gates = report.feature_gate_report();
+        assert_eq!(gates.effective_version(), PdfVersion::V2_0);
+        assert!(gates.all_supported());
+        assert!(gates.unsupported().is_empty());
+        assert_eq!(
+            gates.summary(),
+            "effective=2.0 supported=12/12 unsupported=-"
+        );
+    }
+
+    #[test]
+    fn detect_features_finds_version_dependent_tokens() {
+        let bytes = b"%PDF-1.7 /Type /XRef /ObjStm /StructTreeRoot /OCProperties \
+                      /SMask /EmbeddedFiles /RichMedia /EncryptMetadata /V 5 /AF << >>";
+        let detected = detect_features(bytes);
+        let expected = [
+            PdfFeature::Transparency,
+            PdfFeature::TaggedPdf,
+            PdfFeature::XrefStreams,
+            PdfFeature::ObjectStreams,
+            PdfFeature::OptionalContent,
+            PdfFeature::EmbeddedFiles,
+            PdfFeature::Multimedia,
+            PdfFeature::Aes256Encryption,
+            PdfFeature::AssociatedFiles,
+            PdfFeature::EncryptedMetadata,
+        ];
+        assert_eq!(detected, expected);
+        assert_eq!(detected, detect_features(bytes));
+    }
+
+    #[test]
+    fn detect_features_is_empty_for_plain_14_pdf() {
+        let pdf = minimal_pdf_with(b"%PDF-1.4", b"");
+        assert!(detect_features(&pdf).is_empty());
+        assert!(detect_features(b"").is_empty());
     }
 }

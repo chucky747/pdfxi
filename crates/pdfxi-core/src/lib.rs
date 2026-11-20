@@ -60,8 +60,9 @@ pub use browser_handoff::{
     MAX_HANDOFF_PATH_BYTES, validate_rooted_path,
 };
 pub use compatibility::{
-    CompatibilityReport, CompatibilityWarning, FeatureSupport, HEADER_SCAN_LIMIT, PdfFeature,
-    PdfVersion, VersionSource, analyze_compatibility, feature_gate,
+    CompatibilityReport, CompatibilityWarning, FeatureGateEntry, FeatureGateReport, FeatureSupport,
+    HEADER_SCAN_LIMIT, PdfFeature, PdfVersion, VersionSource, analyze_compatibility,
+    detect_features, feature_gate,
 };
 pub use conformance::{
     CheckScope, ConformanceError, ConformanceFinding, ConformanceOperation, ConformancePlan,
@@ -76,7 +77,7 @@ pub use font::{
     CidFontOptions, CidFontPlan, EmbeddingDecision, EmbeddingPolicy, FontError, FontProgram,
     FontProgramFormat, GlyphWidth, MAX_FONT_PROGRAM_BYTES, MAX_GLYPHS, MAX_TOUNICODE_BYTES,
     MAX_TOUNICODE_ENTRIES, ToUnicodeEntry, build_cid_font, decide_embedding, generate_tounicode,
-    is_standard14, validate_metrics,
+    is_standard14, stage_cid_font, validate_metrics,
 };
 pub use incremental::{IncrementalSaveOptions, IncrementalSaveResult, PreservationReport};
 pub use launch::{
@@ -131,8 +132,9 @@ pub use transparency::{
     TransparencyError, TransparencyGroup, TransparencyStack,
 };
 pub use unicode::{
-    BidiRun, Direction, Script, ShapingPlan, TextError, bidi_runs, classify_char, dominant_script,
-    is_strong_direction, resolve_base_direction, shaping_plan, shaping_plan_with_boundaries,
+    BidiRun, Direction, Script, ShapingPlan, TextAnalysis, TextError, analyze_text, analyze_utf8,
+    bidi_runs, classify_char, dominant_script, is_strong_direction, resolve_base_direction,
+    shaping_plan, shaping_plan_with_base_direction, shaping_plan_with_boundaries,
     validate_grapheme_boundaries, validate_utf8,
 };
 pub use xref_stream::{

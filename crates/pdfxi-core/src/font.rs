@@ -16,6 +16,7 @@
 //! have hard caps, and object identifiers are checked for overflow. Errors are
 //! typed as [`FontError`]; no public function panics on hostile input.
 
+use crate::Document;
 use crate::ObjectId;
 use crate::object::{Dictionary, Object};
 
@@ -596,6 +597,48 @@ pub fn build_cid_font(
     })
 }
 
+/// Stage every object of a built [`CidFontPlan`] into `document`.
+///
+/// The five objects are written at `base_id` through `base_id + 4` using
+/// [`Document::set_object`], matching the identifiers assumed by the plan's
+/// internal [`Object::Reference`] entries. The returned identifier is the
+/// Type0 font object a page resource dictionary can reference directly. This
+/// is the bridge that makes a font plan serializable into the object model and
+/// round-trippable through [`Document::save`].
+///
+/// # Errors
+///
+/// Returns [`FontError::InvalidObjectNumber`] for a zero base,
+/// [`FontError::ObjectIdOverflow`] when the five-number range overflows, and
+/// [`FontError::Stage`] when the document rejects an object.
+#[must_use = "the staged Type0 object id is needed to reference the font"]
+pub fn stage_cid_font(
+    document: &mut Document,
+    plan: &CidFontPlan,
+    base_id: u32,
+) -> Result<ObjectId, FontError> {
+    if base_id == 0 {
+        return Err(FontError::InvalidObjectNumber(0));
+    }
+    // Checking the highest id up front makes the enumerated additions below
+    // provably overflow-free (offsets are 0..=4).
+    let _last = base_id.checked_add(4).ok_or(FontError::ObjectIdOverflow)?;
+    let objects = [
+        Object::Dictionary(plan.type0.clone()),
+        Object::Dictionary(plan.cid_font.clone()),
+        Object::Dictionary(plan.descriptor.clone()),
+        plan.font_file.clone(),
+        plan.to_unicode.clone(),
+    ];
+    for (offset, object) in objects.into_iter().enumerate() {
+        let number = base_id + offset as u32;
+        document
+            .set_object(ObjectId::new(number, 0), object)
+            .map_err(|error| FontError::Stage(format!("object {number}: {error}")))?;
+    }
+    Ok(ObjectId::new(base_id, 0))
+}
+
 /// Build a deterministic `/W` array, grouping runs of equal widths.
 fn build_width_array(widths: &[GlyphWidth]) -> Vec<Object> {
     let mut sorted = widths.to_vec();
@@ -690,6 +733,9 @@ pub enum FontError {
     /// Object number zero was supplied as a base identifier.
     #[error("object number {0} is reserved for the free list")]
     InvalidObjectNumber(u32),
+    /// The target document rejected a staged font object.
+    #[error("failed to stage font object: {0}")]
+    Stage(String),
 }
 
 #[cfg(test)]
@@ -974,5 +1020,121 @@ mod tests {
         assert!(FontProgramFormat::OpenTypeCff.matches_header(b"OTTOxxxx"));
         assert!(FontProgramFormat::Type1.matches_header(b"\x80\x01data"));
         assert!(!FontProgramFormat::TrueType.matches_header(b"OTTOxxxx"));
+    }
+
+    // ---- T-0172 document staging and end-to-end serialization ----
+
+    fn staged_document(plan: &CidFontPlan, base: u32) -> Document {
+        let mut document = Document::from_bytes(pdfxi_testkit::minimal_pdf())
+            .unwrap_or_else(|error| panic!("fixture must parse: {error}"));
+        stage_cid_font(&mut document, plan, base)
+            .unwrap_or_else(|error| panic!("staging must succeed: {error}"));
+        document
+    }
+
+    #[test]
+    fn cid_font_plan_stages_five_objects_into_document() {
+        let font = truetype_program("Sample");
+        let plan = build_cid_font(&font, &options(EmbeddingDecision::Embed), 10)
+            .unwrap_or_else(|error| panic!("build must succeed: {error}"));
+        let document = staged_document(&plan, 10);
+        let saved = document
+            .save()
+            .unwrap_or_else(|error| panic!("save: {error}"));
+        let reparsed =
+            Document::from_bytes(saved).unwrap_or_else(|error| panic!("reparse: {error}"));
+        for number in 10..=14 {
+            let object = reparsed
+                .object(ObjectId::new(number, 0))
+                .unwrap_or_else(|error| panic!("object {number}: {error}"));
+            assert!(
+                matches!(object, Object::Dictionary(_) | Object::Stream { .. }),
+                "staged object {number} must survive the round trip"
+            );
+        }
+    }
+
+    #[test]
+    fn cid_font_round_trips_through_document_save_and_reparse() {
+        let font = truetype_program("Sample");
+        let plan = build_cid_font(&font, &options(EmbeddingDecision::Embed), 10)
+            .unwrap_or_else(|error| panic!("build must succeed: {error}"));
+        let document = staged_document(&plan, 10);
+        let saved = document
+            .save()
+            .unwrap_or_else(|error| panic!("save: {error}"));
+        let reparsed =
+            Document::from_bytes(saved).unwrap_or_else(|error| panic!("reparse: {error}"));
+
+        let type0 = reparsed
+            .object(ObjectId::new(10, 0))
+            .unwrap_or_else(|error| panic!("type0: {error}"));
+        let dict = type0
+            .as_dictionary()
+            .unwrap_or_else(|| panic!("type0 must be a dictionary"));
+        assert_eq!(dict.get("Subtype"), Some(&Object::Name("Type0".to_owned())));
+        assert_eq!(
+            dict.get("Encoding"),
+            Some(&Object::Name("Identity-H".to_owned()))
+        );
+        assert_eq!(
+            dict.get("ToUnicode"),
+            Some(&Object::Reference(ObjectId::new(14, 0)))
+        );
+
+        let file = reparsed
+            .object(ObjectId::new(13, 0))
+            .unwrap_or_else(|error| panic!("font file: {error}"));
+        let Object::Stream { data, .. } = &file else {
+            panic!("font file must be a stream")
+        };
+        assert_eq!(data.as_slice(), font.data());
+
+        let cmap = reparsed
+            .object(ObjectId::new(14, 0))
+            .unwrap_or_else(|error| panic!("ToUnicode: {error}"));
+        let Object::Stream { data, .. } = &cmap else {
+            panic!("ToUnicode must be a stream")
+        };
+        let text = String::from_utf8(data.clone()).unwrap_or_default();
+        assert!(
+            text.contains("beginbfchar"),
+            "CMap lost its bfchar block: {text}"
+        );
+        assert!(
+            text.contains("<0001> <0041>"),
+            "CMap lost its mapping: {text}"
+        );
+    }
+
+    #[test]
+    fn cid_font_document_save_is_byte_deterministic() {
+        let font = truetype_program("Sample");
+        let plan = build_cid_font(&font, &options(EmbeddingDecision::Embed), 10)
+            .unwrap_or_else(|error| panic!("build must succeed: {error}"));
+        let a = staged_document(&plan, 10)
+            .save()
+            .unwrap_or_else(|error| panic!("save a: {error}"));
+        let b = staged_document(&plan, 10)
+            .save()
+            .unwrap_or_else(|error| panic!("save b: {error}"));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn stage_cid_font_rejects_zero_and_overflow_base() {
+        let font = truetype_program("Sample");
+        let plan = build_cid_font(&font, &options(EmbeddingDecision::Embed), 10)
+            .unwrap_or_else(|error| panic!("build must succeed: {error}"));
+        let mut document = Document::from_bytes(pdfxi_testkit::minimal_pdf())
+            .unwrap_or_else(|error| panic!("fixture: {error}"));
+        assert_eq!(
+            stage_cid_font(&mut document, &plan, 0),
+            Err(FontError::InvalidObjectNumber(0))
+        );
+        assert_eq!(
+            stage_cid_font(&mut document, &plan, u32::MAX),
+            Err(FontError::ObjectIdOverflow)
+        );
     }
 }
