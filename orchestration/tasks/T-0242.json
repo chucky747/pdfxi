@@ -1,0 +1,18 @@
+{
+  "id": "T-0242",
+  "lane": "app",
+  "title": "Comments and markup UI: panel, badge, popup, tools",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0230"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/**",
+    "docs/evidence/ui/T-0242.md",
+    "orchestration/feature-updates/T-0242.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-15, A-18, A-19, A-24 and A-32 work on a real document in all four theme/control combinations",
+  "notes": "Shell half of the comments pair per ADR 0012; opens only after the T-0230 library is verified and its claim is released. Serves acceptance items A-15 (Comments rail with real count badge), A-18 (highlight from a text selection), A-19 (comment note with thread popup, author, time, menu: reply/resolve/edit/delete), A-24 (Comment tool and markup set) and A-32 (Comment & Review, XFDF import/export) from docs/design/FEATURE_ACCEPTANCE.md. Adds the Comments rail entry and panel with the real annotation count, note and highlight tools through the command bar, the annotation popup with reply/resolve/edit/delete, and XFDF import/export, calling the T-0230 API and not changing its semantics. A-11 shared-folder review remains the app lane's own later work. The three annotation feature-matrix rows become `verified` only when this task lands; until then they stay `library` after T-0230. The app lane runs one task at a time, so T-0221 is an implicit ordering constraint, not a formal dependency.",
+  "evidence": "docs/evidence/ui/T-0242.md"
+}
