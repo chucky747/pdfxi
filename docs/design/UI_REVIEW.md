@@ -34,7 +34,7 @@ Every shell change follows this loop:
 A change that compiles but clips a primary action, breaks dark-mode paper
 contrast, or loses a region is rejected. The screenshots are the visual gate.
 
-## Checklist (v8)
+## Checklist (v9)
 
 | Area | Criteria | Light | Dark |
 |---|---|---|---|
@@ -50,7 +50,7 @@ contrast, or loses a region is rejected. The screenshots are the visual gate.
 | Contrast | Shell text at least 7:1; muted text at least 4.5:1; paper ink at least 12:1; paper accent at least 3:1; unit tests enforce these | pass | pass |
 | Density | Rail 68 pt, pages 218 pt, tools 300 pt; primary actions visible without scrolling at 1280x800 | pass | pass |
 | States | Active tab underline, active rail item, active page, hover surfaces, empty panels, saved dot, comment badge | pass | pass |
-| Evidence | `light-v8.png` and `dark-v8.png`; capture command is reproducible | pass | pass |
+| Evidence | `light-v9.png` and `dark-v9.png`; capture command is reproducible | pass | pass |
 
 ## Findings log
 
@@ -60,19 +60,20 @@ contrast, or loses a region is rejected. The screenshots are the visual gate.
 | R2 (v4) | Shell present but the Export card was clipped; the native title bar produced double chrome; dark paper reused shell accent backgrounds | Custom window chrome, density pass, and a separate `PaperPalette` | Rejected |
 | R3 (v6) | Product chrome and full cards; missing command search, active-tab underline, saved indicator, and comment badge | Added search, tab underline, saved dot, and comment badge | Pass with notes |
 | R4 (v8) | Final density and document type pass | Larger proposal type, prepared-for line, 1-reply label, tools subtitle removed | Accepted |
+| R5 (v9) | Tool rows were monochrome and the tab read as a fixture | Real document title and color-coded tool icons | Accepted |
 
 ## Evidence
 
-- `docs/evidence/ui/light-v8.png` — light theme, 1920x1200 physical at 125%
+- `docs/evidence/ui/light-v9.png` — light theme, 1920x1200 physical at 125%
   scaling (1536x960 logical).
-- `docs/evidence/ui/dark-v8.png` — dark theme, same viewport.
+- `docs/evidence/ui/dark-v9.png` — dark theme, same viewport.
 - Capture:
   ```powershell
   powershell -NoProfile -File scripts/capture-ui.ps1 `
-      -Out docs/evidence/ui/light-v8.png `
+      -Out docs/evidence/ui/light-v9.png `
       -Exe target/integration/release/pdfxi-ui.exe
   powershell -NoProfile -File scripts/capture-ui.ps1 `
-      -Out docs/evidence/ui/dark-v8.png `
+      -Out docs/evidence/ui/dark-v9.png `
       -Exe target/integration/release/pdfxi-ui.exe -Arguments '--dark'
   ```
 
@@ -84,15 +85,13 @@ viewer surface rather than the desktop behind it.
 - `cargo test -p pdfxi-app --features ui,pdfium`: 490 passed.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean.
 - `cargo fmt --all --check`: clean.
-- `cargo xtask goal-verify --all`: `GOAL VERIFIED:
-  d97ace5e224b84b07d510a829518700989fe55e2`; transcript at
-  `docs/evidence/ui/goal-verify.log`.
+- `cargo xtask goal-verify --all`: `GOAL VERIFIED`; transcript at `docs/evidence/ui/goal-verify.log`.
 
 ## Sign-off
 
 | Date | Reviewer | Scope | Result |
 |---|---|---|---|
-| 2026-11-20 | UI author + visual review | Shell light/dark, pages, tools, document, status | Accepted at v8 |
+| 2026-11-20 | UI author + visual review | Shell light/dark, pages, tools, document, status | Accepted at v9 |
 
 A future shell change must add a new findings row and recapture both themes
 before it is accepted.

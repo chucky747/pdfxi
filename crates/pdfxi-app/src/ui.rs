@@ -913,10 +913,14 @@ impl PdfxiApp {
     pub fn open_demo_tab(&mut self) -> TabId {
         // Preserve the outgoing tab's view before a new tab becomes active.
         self.save_scroll_to_active();
-        let name = format!("Demo Document {}", self.state.tab_count() + 1);
+        let name = if self.state.tab_count() == 0 {
+            "Modern Business Proposal".to_owned()
+        } else {
+            format!("Modern Business Proposal {}", self.state.tab_count() + 1)
+        };
         let id = self.state.open_tab(name);
         self.finish_new_tab(id);
-        self.status = format!("Demo proposal · {DEMO_PAGE_COUNT} pages · local preview");
+        self.status = format!("Modern Business Proposal · {DEMO_PAGE_COUNT} pages · local preview");
         id
     }
 
@@ -3315,6 +3319,21 @@ fn shell_pill_button(
     response
 }
 
+/// Per-tool icon tint, echoing the color-coded tools in Acrobat.
+fn tool_icon_color(glyph: Icon, palette: Palette) -> egui::Color32 {
+    match glyph {
+        Icon::Edit => palette.accent,
+        Icon::Comment => egui::Color32::from_rgb(0xd9, 0x8a, 0x2b),
+        Icon::Sign => egui::Color32::from_rgb(0x8b, 0x5c, 0xf6),
+        Icon::Organize => egui::Color32::from_rgb(0x3b, 0x82, 0xf6),
+        Icon::Export => egui::Color32::from_rgb(0x14, 0xb8, 0xa6),
+        Icon::Convert => egui::Color32::from_rgb(0x22, 0xc5, 0x5e),
+        Icon::Combine => egui::Color32::from_rgb(0xf9, 0x73, 0x16),
+        Icon::Protect => egui::Color32::from_rgb(0x63, 0x66, 0xf1),
+        _ => palette.text_muted,
+    }
+}
+
 /// One tool row in the right panel.
 fn tool_row(
     ui: &mut egui::Ui,
@@ -3336,7 +3355,7 @@ fn tool_row(
     let color = if highlighted {
         palette.accent
     } else {
-        palette.text_muted
+        tool_icon_color(glyph, palette)
     };
     icon(
         ui.painter(),
@@ -3671,15 +3690,15 @@ impl PdfxiApp {
         title: &str,
         active: bool,
     ) -> TabAction {
-        let mut label: String = title.chars().take(22).collect();
-        if title.chars().count() > 22 {
+        let mut label: String = title.chars().take(28).collect();
+        if title.chars().count() > 28 {
             label.push('…');
         }
         let font = egui::FontId::proportional(12.0);
         let galley = ui
             .painter()
             .layout_no_wrap(label.clone(), font.clone(), palette.text);
-        let width = (galley.size().x + 56.0).clamp(126.0, 220.0);
+        let width = (galley.size().x + 56.0).clamp(140.0, 250.0);
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
         if active {
@@ -4243,14 +4262,14 @@ impl PdfxiApp {
         ui.painter().text(
             egui::pos2(recent.left() + 32.0, recent.center().y - 7.0),
             egui::Align2::LEFT_CENTER,
-            "Demo Document 1",
+            "Modern Business Proposal",
             egui::FontId::proportional(11.0),
             palette.text,
         );
         ui.painter().text(
             egui::pos2(recent.left() + 32.0, recent.center().y + 8.0),
             egui::Align2::LEFT_CENTER,
-            "3 pages · demo preview",
+            "3 pages · local preview",
             egui::FontId::proportional(9.0),
             palette.text_muted,
         );
@@ -6402,10 +6421,10 @@ mod tests {
         let snapshot = app.tab_strip_snapshot();
         assert_eq!(snapshot.len(), 2);
         assert_eq!(snapshot[0].0, a);
-        assert!(snapshot[0].1.contains("Demo Document 1"));
+        assert!(snapshot[0].1.contains("Modern Business Proposal"));
         assert!(!snapshot[0].2);
         assert_eq!(snapshot[1].0, b);
-        assert!(snapshot[1].1.contains("Demo Document 2"));
+        assert!(snapshot[1].1.contains("Modern Business Proposal 2"));
         assert!(snapshot[1].2, "the newest tab is active");
 
         app.activate_tab(a);
@@ -6446,7 +6465,7 @@ mod tests {
         assert_eq!(app.close_policy(), UiClosePolicy::RequireClean);
         let id = app.open_demo_tab();
         app.state.tab_mut(id).expect("demo tab").set_dirty(true);
-        assert_eq!(app.tab_strip_snapshot()[0].1, "Demo Document 1 *");
+        assert_eq!(app.tab_strip_snapshot()[0].1, "Modern Business Proposal *");
 
         assert!(!app.close_tab_by_id(id), "dirty close is vetoed by default");
         assert!(app.state().tab(id).is_some());
