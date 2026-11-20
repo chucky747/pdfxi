@@ -9,5 +9,6 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+pdfxi-core.workspace = true
 thiserror.workspace = true
 

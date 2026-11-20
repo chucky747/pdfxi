@@ -34,6 +34,11 @@
 //!   a small [`export_xfdf`] XML subset.
 //! - [`parse_xfdf`] / [`import_xfdf`] — a bounded XML reader for XFDF field data
 //!   that maps names and values onto the target [`Form`]'s field types.
+//! - [`read_acroform`] / [`set_text`] / [`set_checkbox`] / [`set_radio`] /
+//!   [`set_choice`] — read and fill a real `pdfxi_core::Document` directly,
+//!   resolving inherited `/FT`, `/T`, `/V` and `/Ff`, regenerating `/AP /N`
+//!   appearances, exporting and importing XFDF, and flattening widgets into
+//!   page content.
 //! - [`load_acroform`] — loads a real PDF catalog `/AcroForm` dictionary into a
 //!   [`Form`] through the dependency-free [`FormSource`] adapter trait.
 //! - [`fill_acroform`] — applies [`FieldAssignment`]s to a concrete `/AcroForm`
@@ -120,6 +125,16 @@ mod appearance;
 mod build;
 mod calculation;
 mod distribution;
+
+/// Reading and filling a real `pdfxi_core::Document`.
+///
+/// The module keeps the explicit constructors [`document_form::read_acroform`],
+/// [`document_form::set_text`], [`document_form::export_xfdf`] and
+/// [`document_form::import_xfdf`]. The crate root re-exports the setter and
+/// model names directly and exposes the two XFDF entry points under
+/// `*_document` names because [`export_xfdf`] and [`import_xfdf`] already denote
+/// the dependency-free [`Form`] API.
+pub mod document_form;
 mod fdf;
 mod field;
 mod fill;
@@ -169,6 +184,12 @@ pub use distribution::{
     FieldConflict, ImportedResponse, MAX_CONTENT_BYTES, MAX_FIELDS, MAX_RESPONSES, MAX_TEXT_LEN,
     MergeReport, MergedField, RejectedResponse, ResponseFile, ResponseFormat, import_response_file,
     merge_responses, parse_bundle,
+};
+pub use document_form::{
+    AcroFormError, AcroFormModel, FlattenFormReport, FormField, FormFieldKind, FormRect,
+    FormWidget, export_xfdf as export_xfdf_document, flatten, import_xfdf as import_xfdf_document,
+    needs_appearances, read_acroform, regenerate_appearances, set_checkbox, set_choice, set_radio,
+    set_text,
 };
 pub use fdf::{FdfDocument, FdfError, FdfField, export_fdf, export_xfdf, import_fdf};
 pub use field::{Field, FieldFlags, FieldType, FieldValue, TextConstraint, ValueKind};
