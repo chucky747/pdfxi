@@ -1,18 +1,18 @@
 {
-  "id": "T-0231",
-  "lane": "app",
-  "title": "Organize pages and Combine Files UI",
-  "priority": "P0",
-  "status": "queued",
-  "depends_on": [
-    "T-0222"
-  ],
-  "owns": [
-    "crates/pdfxi-app/src/**",
-    "docs/evidence/ui/T-0231.md",
-    "orchestration/feature-updates/T-0231.toml"
-  ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-13, A-14, A-26 and A-29 work on real documents in all four theme/control combinations",
-  "notes": "App half of the organise pair per ADR 0012. Serves acceptance items A-13 (Pages panel with real count, grid toggle, insert page), A-14 (thumbnails with multi-select and drag reorder), A-26 (Organize Pages: reorder, rotate, delete, insert, extract, split) and A-29 (Combine Files: merge several PDFs, and images, into one) from docs/design/FEATURE_ACCEPTANCE.md. Drives the core page plans through the pdfxi-document session of ADR 0010 and never re-implements page-tree edits in the shell. Grid view with multi-select, drag reorder, rotate, delete, insert blank or from file, extract, split, and combine PDFs and images. Calls the library and does not change its semantics; feature-matrix rows stay as the library left them until this task verifies them.",
-  "evidence": "docs/evidence/ui/T-0231.md"
+    "id":  "T-0231",
+    "lane":  "app",
+    "title":  "Organize pages and Combine Files UI",
+    "priority":  "P0",
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0222"
+                   ],
+    "owns":  [
+                 "crates/pdfxi-app/src/**",
+                 "docs/evidence/ui/T-0231.md",
+                 "orchestration/feature-updates/T-0231.toml"
+             ],
+    "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; A-13, A-14, A-26 and A-29 work on real documents in all four theme/control combinations",
+    "notes":  "App half of the organise pair per ADR 0012. Serves acceptance items A-13 (Pages panel with real count, grid toggle, insert page), A-14 (thumbnails with multi-select and drag reorder), A-26 (Organize Pages: reorder, rotate, delete, insert, extract, split) and A-29 (Combine Files: merge several PDFs, and images, into one) from docs/design/FEATURE_ACCEPTANCE.md. Drives the core page plans through the pdfxi-document session of ADR 0010 and never re-implements page-tree edits in the shell. Grid view with multi-select, drag reorder, rotate, delete, insert blank or from file, extract, split, and combine PDFs and images. Calls the library and does not change its semantics; feature-matrix rows stay as the library left them until this task verifies them. Promote CREATE-009 (Combine Files), EDIT-005 (extract pages), EDIT-006 (reorder/rotate) and EDIT-007 (page-plan insert/delete/split) when the Organize/Combine UI proves them on a real document.",
+    "evidence":  "docs/evidence/ui/T-0231.md"
 }

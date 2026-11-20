@@ -1,18 +1,18 @@
 {
-  "id": "T-0255",
-  "lane": "app",
-  "title": "Bookmarks panel and document properties dialog",
-  "priority": "P1",
-  "status": "queued",
-  "depends_on": [
-    "T-0222"
-  ],
-  "owns": [
-    "crates/pdfxi-app/src/**",
-    "docs/evidence/ui/T-0255.md",
-    "orchestration/feature-updates/T-0255.toml"
-  ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; O-03 bookmarks navigate, add, rename, delete and reorder and persist; the document-properties dialog shows real metadata",
-  "notes": "Split out of T-0222 round A, which delivered A-05 undo/redo, O-01 save/Save As/dirty/close prompt and the O-04 open half, but not the bookmarks panel or the document-properties dialog. O-03 from docs/design/FEATURE_ACCEPTANCE.md: a bookmarks panel that navigates the page tree, adds, renames, deletes and reorders bookmarks, and persists them through pdfxi-document / pdfxi-edit on real bytes. The properties dialog shows real `/Info`/XMP metadata and never invents values. App-lane work, serialised behind T-0222; feature-matrix rows stay `library` until this task verifies them.",
-  "evidence": "docs/evidence/ui/T-0255.md"
+    "id":  "T-0255",
+    "lane":  "app",
+    "title":  "Bookmarks panel and document properties dialog",
+    "priority":  "P1",
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0222"
+                   ],
+    "owns":  [
+                 "crates/pdfxi-app/src/**",
+                 "docs/evidence/ui/T-0255.md",
+                 "orchestration/feature-updates/T-0255.toml"
+             ],
+    "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; O-03 bookmarks navigate, add, rename, delete and reorder and persist; the document-properties dialog shows real metadata",
+    "notes":  "Split out of T-0222 round A, which delivered A-05 undo/redo, O-01 save/Save As/dirty/close prompt and the O-04 open half, but not the bookmarks panel or the document-properties dialog. O-03 from docs/design/FEATURE_ACCEPTANCE.md: a bookmarks panel that navigates the page tree, adds, renames, deletes and reorders bookmarks, and persists them through pdfxi-document / pdfxi-edit on real bytes. The properties dialog shows real `/Info`/XMP metadata and never invents values. App-lane work, serialised behind T-0222; feature-matrix rows stay `library` until this task verifies them. Promote VIEW-008 (bookmarks/destinations) and MANAGE-001 (document-properties dialog) when the bookmark editing/navigation and properties UI are proven on a real document; leave article threads out of VIEW-008\u0027s claim.",
+    "evidence":  "docs/evidence/ui/T-0255.md"
 }

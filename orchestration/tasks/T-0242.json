@@ -3,7 +3,7 @@
     "lane":  "app",
     "title":  "Comments and markup UI: panel, badge, popup, tools",
     "priority":  "P0",
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0230"
                    ],
