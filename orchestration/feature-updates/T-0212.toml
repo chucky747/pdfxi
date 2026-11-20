@@ -1,9 +1,9 @@
 # T-0212 - UI interaction harness and no-dead-controls gate
 #
-# Follow-up hardening of the harness after the T-0220/T-0221/T-0222 shell work.
-# The source of truth for AppCommand coverage is now the enum itself: the guard
-# parses `AppCommand` from src/shell/commands.rs, so a new variant cannot be
-# silently forgotten. No production code changed; no feature row status changes.
+# Second follow-up hardening: display name, document title and save are now
+# proven, so the source-derived guard reports 92 variants, 77 covered, 15
+# pending with reasons, and the allowlist stays at exactly two entries. No
+# production code changed; no feature row status changes.
 
 task = "T-0212"
 lane = "qa"
@@ -14,28 +14,27 @@ docs = [
     "docs/evidence/hardening/T-0212.md",
 ]
 notes = """
-Integration-test gate in crates/pdfxi-app/tests/ui_controls.rs (20 tests). The
+Integration-test gate in crates/pdfxi-app/tests/ui_controls.rs (22 tests). The
 source-derived variant guard parses the AppCommand enum out of
-src/shell/commands.rs and finds 92 variants; `all_commands()` covers 74 of them
-and enumerates 18 as pending with a written reason. The guard fails when a
+src/shell/commands.rs and finds 92 variants; `all_commands()` covers 77 of them
+and enumerates 15 as pending with a written reason. The guard fails when a
 variant is missing from both lists (source_guard_reports_a_missing_variant
 proves the failure path) and when a listed variant no longer exists. The
 allowlist is exactly two entries (open-dialog, copy-selection), each with its
-reason, and the guard asserts len() == 2. A Snapshot of every public accessor is
-taken before/after dispatch; a command passes only if it changes tabs, page,
-zoom, rotation, view mode, tool, find state, status, theme, window controls,
-banner, errors, close policy, selection or thumbnails. Viewport-only commands
-are proven through egui::Context::run. New since the first round:
-dispatched_annotation_commands_act proves the comments commands,
-save_note_draft_commits_and_cancels_the_public_draft proves the note draft is
-public and reversible, and undo_redo_and_help_commands_act proves undo/redo and
-the help window. The static scanner over src/shell/**.rs and src/ui.rs still
-fails on a dead control, with positive/negative synthetic snippets. egui_kittest
-was not needed and no dependency was added. Gates: `cargo fmt -p pdfxi-app --
---check` clean; `cargo test -p pdfxi-app --features ui,pdfium` = 473 lib + 20
-integration passed. Clippy is clean for pdfxi-app; the full-workspace run is
-temporarily red on an unrelated in-flight security lint, recorded in the
-evidence.
+reason, and the guard asserts len() == 2. New in this round:
+set_display_name_and_document_title_act proves SetDisplayName and
+SetDocumentTitle change observable state, and save_writes_a_temp_copy_and_clears_dirty
+proves Save writes a real temp copy and clears the dirty flag; the earlier
+save_note_draft_commits_and_cancels_the_public_draft and
+undo_redo_and_help_commands_act remain. A Snapshot of every public accessor is
+taken before/after dispatch; viewport-only commands are proven through
+egui::Context::run. The static scanner over src/shell/**.rs and src/ui.rs still
+fails on a dead control with positive/negative synthetic snippets. Gates:
+`cargo fmt -p pdfxi-app -- --check` clean; `cargo test -p pdfxi-app --features
+ui,pdfium` = 473 lib + 22 integration passed; `clippy --no-deps` clean. The
+full-dependency clippy run is red only on
+crates/pdfxi-security/src/pkcs12/decrypt.rs, an in-flight T-0249 lint, not on
+app code.
 """
 tests = [
     "command_labels_are_stable_unique_and_non_empty",
@@ -48,6 +47,8 @@ tests = [
     "dispatched_annotation_commands_act",
     "save_note_draft_commits_and_cancels_the_public_draft",
     "undo_redo_and_help_commands_act",
+    "set_display_name_and_document_title_act",
+    "save_writes_a_temp_copy_and_clears_dirty",
     "dispatched_shell_and_settings_commands_act",
     "dispatched_capability_commands_report_unavailable",
     "viewport_commands_reach_the_egui_context",

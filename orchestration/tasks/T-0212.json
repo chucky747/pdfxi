@@ -14,5 +14,5 @@
              ],
     "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium, plus the no-dead-controls gate inside cargo xtask verify",
     "evidence":  "docs/evidence/hardening/T-0212.md",
-    "notes":  " Follow-up hardening: the coverage guard is source-derived from the AppCommand enum (92 variants, 74 covered, 18 pending with reasons), the allowlist is exactly two entries, and the harness now has 20 tests including save_note_draft_commits_and_cancels_the_public_draft and undo_redo_and_help_commands_act."
+    "notes":  " Follow-up hardening: the coverage guard is source-derived from the AppCommand enum (92 variants, 74 covered, 18 pending with reasons), the allowlist is exactly two entries, and the harness now has 20 tests including save_note_draft_commits_and_cancels_the_public_draft and undo_redo_and_help_commands_act. Second follow-up: 92 variants parsed, 77 covered, 15 pending with reasons, allowlist of 2, 22 tests including set_display_name_and_document_title_act and save_writes_a_temp_copy_and_clears_dirty. Full-dependency clippy is blocked only by crates/pdfxi-security/src/pkcs12/decrypt.rs (T-0249 in flight)."
 }
