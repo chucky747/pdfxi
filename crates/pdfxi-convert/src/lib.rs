@@ -118,6 +118,7 @@ mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
 pub mod postscript;
+pub mod preflight;
 mod rtf;
 mod source;
 mod tagged_text;
@@ -160,6 +161,10 @@ pub use postscript::{
     MAX_PAGES as POSTSCRIPT_MAX_PAGES, PsContent, PsDocument, PsExportError, PsExportReport,
     PsFont, PsImageRef, PsLine, PsPage, PsRect, PsText, PsUnsupportedItem, export_postscript,
     export_postscript_with_report,
+};
+pub use preflight::{
+    BytePreflightError, BytePreflightReport, PreflightOptions, PreflightReport,
+    REPORTED_ONLY_CHECKS, build_preflight_input, preflight_bytes,
 };
 pub use rtf::{RtfOptions, RtfPage, export_rtf, export_rtf_string};
 pub use source::SourceKind;

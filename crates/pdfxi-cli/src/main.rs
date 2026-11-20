@@ -29,6 +29,13 @@
 //! versioned, line-delimited JSON protocol on stdin/stdout. It opens no sockets
 //! and shares the action executor with `action run`; `--once` answers a single
 //! request so scripts can use it as a one-shot filter.
+//!
+//! The `preflight` command runs a deterministic, byte-level subset preflight
+//! profile through `pdfxi-convert`'s adapter over `pdfxi-standards`; it exits 0
+//! for a clean report and 2 for error-severity findings, and never claims
+//! certification. The `marks` command applies crop, registration, colour-bar
+//! and page-information marks to every page through `pdfxi-core`'s application
+//! API, reparses the result, and writes deterministic bytes.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -48,6 +55,11 @@ mod api;
 // pdfxi-convert and the accessibility tree builder.
 mod create;
 mod export;
+
+// Byte-level subset preflight (`preflight`) and printer-mark placement
+// (`marks`) added for T-0131. Both use the core application API.
+mod marks;
+mod preflight;
 
 use std::path::{Path, PathBuf};
 
@@ -185,6 +197,58 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Run a deterministic, byte-level subset preflight profile.
+    ///
+    /// `PROFILE` is a canonical label such as `PDF/A-2b` (ASCII case is
+    /// ignored). The command loads real PDF bytes, runs the `pdfxi-standards`
+    /// profile over a derived snapshot and exits 0 when no error-severity
+    /// finding fires, or 2 when the check fails. A passing verdict is not a
+    /// conformance certification; the report always lists reported-only
+    /// constraints and states that certification is not claimed.
+    ///
+    /// `--fix` applies the opt-in, byte-expressible normalizations (minimum
+    /// version, XMP presence, output-intent presence/subtype) and writes the
+    /// normalized PDF to `--output`, or to a deterministic
+    /// `<input-stem>.preflight.pdf` sibling when `--output` is omitted.
+    Preflight {
+        /// Canonical profile label, for example `PDF/A-2b` or `PDF/X-4`.
+        profile: String,
+        /// Path to the PDF file to check.
+        input: PathBuf,
+        /// Apply opt-in byte-level fixups and write the normalized PDF.
+        #[arg(long)]
+        fix: bool,
+        /// Destination for the normalized PDF; defaults to a sibling file.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply printer marks to every page of a PDF.
+    ///
+    /// With no family switch, all four families (crop, registration, colour
+    /// bar and page information) are applied. When at least one switch is
+    /// given, only the requested families are drawn. The marked bytes are
+    /// reparsed before they are written, and output is deterministic.
+    Marks {
+        /// Path to the source PDF.
+        input: PathBuf,
+        /// Destination path for the marked PDF.
+        output: PathBuf,
+        /// Draw crop marks just outside the TrimBox.
+        #[arg(long)]
+        crop_marks: bool,
+        /// Draw registration targets on the MediaBox corners.
+        #[arg(long)]
+        registration: bool,
+        /// Draw the CMYK colour bar.
+        #[arg(long)]
+        colour_bars: bool,
+        /// Draw page-information text.
+        #[arg(long)]
+        page_info: bool,
     },
     /// Run a local, line-delimited JSON automation API over stdin and stdout.
     ///
@@ -477,6 +541,30 @@ fn main() -> anyhow::Result<()> {
             inputs,
             json,
         } => action::run_action(&action_file, &name, &inputs, None, json),
+        Command::Preflight {
+            profile,
+            input,
+            fix,
+            output,
+            json,
+        } => preflight::run_preflight(&profile, &input, fix, output.as_deref(), json),
+        Command::Marks {
+            input,
+            output,
+            crop_marks,
+            registration,
+            colour_bars,
+            page_info,
+        } => marks::apply_marks(
+            &input,
+            &output,
+            marks::MarkSelection {
+                crop_marks,
+                registration,
+                colour_bars,
+                page_info,
+            },
+        ),
         Command::Api { once } => api::run_api(once),
     }
 }

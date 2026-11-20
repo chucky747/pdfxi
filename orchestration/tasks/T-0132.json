@@ -1,0 +1,15 @@
+{
+  "id": "T-0132",
+  "lane": "qa",
+  "title": "Bootstrap dry-run record for AC-01",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0123"],
+  "owns": [
+    "scripts/**",
+    "docs/evidence/qa/T-0132.md",
+    "orchestration/feature-updates/T-0132.toml"
+  ],
+  "acceptance": "powershell -File scripts/bootstrap.ps1 -Check",
+  "evidence": ""
+}

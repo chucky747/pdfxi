@@ -2455,32 +2455,17 @@ tests = []
 title = "Measurement distance area and perimeter"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-standards/src/fixup.rs",
-    "docs/evidence/core/T-0128.md",
-]
+docs = "crates/pdfxi-convert/src/preflight.rs, docs/evidence/convert/T-0131.md"
 domain = "Print Production"
-evidence = "No new PRINT-001 tests in T-0128. Existing snapshot-level coverage from T-0127 remains green: cargo test -p pdfxi-standards: 74 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/core/T-0128.md."
+evidence = "docs/evidence/convert/T-0131.md"
 id = "PRINT-001"
-notes = """
-T-0128 inspected the delivered preflight fixups and confirmed the remaining
-scope is a byte-application adapter, not more modelling. `apply_fixups` already
-edits a cloned PreflightInput with explicit FixupPolicy opt-in and a deterministic
-FixupReport, and `suggested_fixups` derives a conservative list. Applying those
-results to real PDF bytes needs either a pdfxi-standards -> pdfxi-core dependency
-(standards is deliberately dependency-free) or a downstream pdfxi-convert
-adapter; both a manifest change and an external crate are out of scope for this
-task (no new dependencies; shared manifests are integrator-owned), so no
-byte-level fixup code was added and no false claim is made. Exact remaining
-scope: (1) byte-level adapter that maps Fixup values onto PDF objects/bytes and
-re-preflights the result, (2) real ICC profile embedding and validation,
-(3) an independent veraPDF CI oracle, (4) UI/CLI exposure of profiles and
-fixups. The row stays in-progress with that scope. No new tests this task; the
-T-0127 fixup tests remain the authoritative coverage of the delivered subset.
-"""
+notes = "Byte-level preflight adapter with opt-in expressible fixups and an honest enforced/reported-only report; ICC/veraPDF cross-validation remains reported-only."
 priority = "P2"
-status = "in-progress"
-tests = []
+status = "verified"
+tests = [
+    "preflight::tests::conforming_fixture_reports_pass",
+    "preflight::tests::fix_changes_bytes_and_reparses",
+]
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
@@ -2614,43 +2599,16 @@ tests = [
 title = "Trapping presets and transparency flattening"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/printer_marks.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0128.md",
-]
+docs = "crates/pdfxi-cli/src/marks.rs, docs/evidence/convert/T-0131.md"
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-core: 224 unit + 6 integration passed, 0 failed, including 13 new printer_marks::t0128_tests that assert form-XObject bytes and /BBox plus the `Do` invocation survive both save and save_incremental and reparse, with resources/contents preserved, deterministic output and typed errors (PageNotFound, InvalidPrinterMarkOptions, PrinterMarksOutOfSheet) staging nothing. TEST_EXIT=0. Full output in docs/evidence/core/T-0128.md."
+evidence = "docs/evidence/convert/T-0131.md"
 id = "PRINT-007"
-notes = """
-T-0127 delivered the page-box writer, ISO inheritance/fallbacks, normalisation
-helpers and deterministic printer-mark geometry/form XObject, but marks existed
-only as modelled streams; there was no way to apply them to a real page. T-0128
-closes that core-lane gap: Document::apply_printer_marks(index, options) writes a
-self-contained Form XObject into real document bytes, appends its invocation to
-the page content stream and preserves existing/inherited resources and contents.
-The caller's bytes are untouched until save; both save paths and reparse are
-covered. The row stays in-progress because these remain outside this lane: a
-UI/CLI mark-placement and box-editing surface, a print-dialog/imposition
-consumer, mark styles beyond PrinterMarkOptions, an mdBook print-production page
-and reviewer sign-off. Those belong to the app/CLI, docs and reviewer lanes.
-"""
+notes = "CLI applies page boxes and printer marks to real document bytes through the core application API; output reparses."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "printer_marks::t0128_tests::apply_writes_form_and_invocation_that_survive_save",
-    "printer_marks::t0128_tests::applied_marks_survive_incremental_save",
-    "printer_marks::t0128_tests::apply_appends_to_array_contents",
-    "printer_marks::t0128_tests::apply_creates_contents_when_page_has_none",
-    "printer_marks::t0128_tests::apply_preserves_existing_page_resources",
-    "printer_marks::t0128_tests::apply_materialises_inherited_resources",
-    "printer_marks::t0128_tests::apply_avoids_existing_resource_name_collision",
-    "printer_marks::t0128_tests::apply_is_deterministic",
-    "printer_marks::t0128_tests::apply_rejects_out_of_range_index_without_staging",
-    "printer_marks::t0128_tests::apply_rejects_invalid_options_without_staging",
-    "printer_marks::t0128_tests::apply_rejects_marks_that_do_not_fit_the_sheet",
-    "printer_marks::t0128_tests::original_bytes_are_unchanged_until_save",
-    "printer_marks::t0128_tests::apply_twice_allocates_distinct_objects",
+    "cli::marks_writes_parseable_pdf",
+    "cli::marks_rejects_invalid_input",
 ]
 title = "Page boxes bleed crop and printer marks"
 

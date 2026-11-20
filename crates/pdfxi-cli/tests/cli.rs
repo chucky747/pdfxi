@@ -1764,3 +1764,274 @@ fn api_rejects_dangerous_aliased_operations() {
     assert_eq!(value["ok"].as_bool(), Some(false));
     assert_eq!(value["error"]["code"].as_str(), Some("dangerous_operation"));
 }
+
+// ---------------------------------------------------------------------------
+// preflight and marks (T-0131)
+// ---------------------------------------------------------------------------
+
+/// Assemble a classic-xref PDF from numbered object bodies.
+fn t0131_pdf(version: &str, bodies: &[String]) -> Vec<u8> {
+    let mut out = format!("%PDF-{version}\n%PDFXI\n").into_bytes();
+    let mut offsets = Vec::with_capacity(bodies.len());
+    for (index, body) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, body).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n", bodies.len() + 1).as_bytes());
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            bodies.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+/// A PDF/A-2b-shaped fixture with XMP, a GTS_PDFA1 intent and print boxes.
+fn t0131_conforming_pdf() -> Vec<u8> {
+    let content = "BT (Hi) Tj ET";
+    let xmp = "<?xpacket begin=\"\" id=\"W5M0\"?><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>\
+               <?xpacket end=\"w\"?>";
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R /OutputIntents [6 0 R] >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /CropBox [10 10 602 782] /BleedBox [20 20 592 772] /TrimBox [30 30 582 762] \
+             /Contents 4 0 R >>"
+                .to_owned(),
+            format!(
+                "<< /Length {} >>\nstream\n{}\nendstream",
+                content.len(),
+                content
+            ),
+            format!(
+                "<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{}\nendstream",
+                xmp.len(),
+                xmp
+            ),
+            "<< /Type /OutputIntent /S /GTS_PDFA1 /DestOutputProfile 7 0 R >>".to_owned(),
+            "<< /Length 0 /N 3 >>\nstream\n\nendstream".to_owned(),
+        ],
+    )
+}
+
+/// A violating fixture: low version, no XMP/intent, prohibited /JavaScript.
+fn t0131_violating_pdf() -> Vec<u8> {
+    let content = "BT (Hi) Tj ET";
+    t0131_pdf(
+        "1.4",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /JavaScript 1 >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_owned(),
+            format!(
+                "<< /Length {} >>\nstream\n{}\nendstream",
+                content.len(),
+                content
+            ),
+        ],
+    )
+}
+
+/// A one-page fixture with enough trim inset for all printer marks.
+fn t0131_roomy_pdf() -> Vec<u8> {
+    let content = "BT (Hi) Tj ET";
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /CropBox [10 10 602 782] /BleedBox [20 20 592 772] /TrimBox [30 30 582 762] \
+             /Contents 4 0 R >>"
+                .to_owned(),
+            format!(
+                "<< /Length {} >>\nstream\n{}\nendstream",
+                content.len(),
+                content
+            ),
+        ],
+    )
+}
+
+#[test]
+fn preflight_pass_exits_zero_and_reports_no_errors() {
+    let pdf = TempPdf::new(&t0131_conforming_pdf());
+    let output = run(&["preflight", "PDF/A-2b", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(text.contains("profile: PDF/A-2b"));
+    assert!(text.contains("verdict: pass"));
+    assert!(text.contains("certification: not claimed"));
+    assert!(text.contains("reported-only: "));
+    assert!(!text.contains("error "));
+}
+
+#[test]
+fn preflight_fail_exits_two_with_actionable_codes() {
+    let pdf = TempPdf::new(&t0131_violating_pdf());
+    let output = run(&["preflight", "PDF/A-2b", pdf.arg()]);
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("verdict: fail"));
+    for code in [
+        "PDFA2B.VERSION_TOO_LOW",
+        "PDFA2B.NO_OUTPUT_INTENT",
+        "PDFA2B.NO_XMP_METADATA",
+        "PDFA2B.FORBIDDEN_ENTRY",
+    ] {
+        assert!(text.contains(code), "missing {code} in {text}");
+    }
+}
+
+#[test]
+fn preflight_json_is_stable_machine_readable() {
+    let pdf = TempPdf::new(&t0131_violating_pdf());
+    let first = run(&["preflight", "pdf/a-2b", pdf.arg(), "--json"]);
+    let second = run(&["preflight", "PDF/A-2b", pdf.arg(), "--json"]);
+    assert_eq!(first.status.code(), Some(2));
+    assert_eq!(second.status.code(), Some(2));
+    assert_eq!(
+        stdout(&first),
+        stdout(&second),
+        "JSON must be deterministic"
+    );
+    let value: Value = serde_json::from_str(stdout(&first).trim()).expect("preflight JSON");
+    assert_eq!(value["profile"].as_str(), Some("PDF/A-2b"));
+    assert_eq!(value["conforming"].as_bool(), Some(false));
+    assert_eq!(value["exit_code"].as_i64(), Some(2));
+    assert_eq!(value["certification_claimed"].as_bool(), Some(false));
+    assert!(
+        value["before"]["findings"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+    );
+    assert!(
+        value["reported_only"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+    );
+}
+
+#[test]
+fn preflight_rejects_invalid_profile_and_missing_input() {
+    let pdf = TempPdf::new(&t0131_conforming_pdf());
+    let bad_profile = run(&["preflight", "PDF/A-9c", pdf.arg()]);
+    assert_eq!(bad_profile.status.code(), Some(1));
+    assert!(stderr(&bad_profile).contains("unsupported preflight profile"));
+
+    let missing = run(&[
+        "preflight",
+        "PDF/A-2b",
+        "C:/definitely/not/a/pdfxi-file.pdf",
+    ]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("failed to read"));
+}
+
+#[test]
+fn preflight_fix_writes_reparable_bytes_and_reports_enforced_checks() {
+    let pdf = TempPdf::new(&t0131_violating_pdf());
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "preflight",
+        "PDF/A-2b",
+        pdf.arg(),
+        "--fix",
+        "--output",
+        out.arg(),
+    ]);
+    // The placeholder ICC and unfixed /JavaScript keep the result non-conforming.
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    let bytes = fs::read(&out.path).expect("normalized output exists");
+    assert_ne!(bytes, t0131_violating_pdf());
+    let reparsed = pdfxi_core::Document::from_bytes(bytes).expect("normalized bytes reparse");
+    assert_eq!(reparsed.page_count().expect("page count"), 1);
+
+    let text = stdout(&output);
+    assert!(text.contains("after: "));
+    assert!(text.contains("fixups: "));
+    assert!(text.contains("enforced: minimum_version"));
+    assert!(text.contains("certification: not claimed"));
+    assert!(text.contains(&format!("output: {}", out.arg())));
+
+    let repeat = TempOut::new("pdf");
+    let second = run(&[
+        "preflight",
+        "PDF/A-2b",
+        pdf.arg(),
+        "--fix",
+        "--output",
+        repeat.arg(),
+    ]);
+    assert_eq!(second.status.code(), Some(2));
+    assert_eq!(
+        fs::read(&out.path).expect("first bytes"),
+        fs::read(&repeat.path).expect("second bytes"),
+        "fix output must be deterministic"
+    );
+}
+
+#[test]
+fn marks_applies_all_families_and_reparses() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "marks",
+        pdf.arg(),
+        out.arg(),
+        "--crop-marks",
+        "--registration",
+        "--colour-bars",
+        "--page-info",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let bytes = fs::read(&out.path).expect("marked output exists");
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(text.contains("PdfxiMarks"), "form invocation is present");
+    let reparsed = pdfxi_core::Document::from_bytes(bytes).expect("marked bytes reparse");
+    assert_eq!(reparsed.page_count().expect("page count"), 1);
+    assert!(stdout(&output).contains("wrote "));
+}
+
+#[test]
+fn marks_partial_selection_is_deterministic() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let a = run(&["marks", pdf.arg(), first.arg(), "--registration"]);
+    let b = run(&["marks", pdf.arg(), second.arg(), "--registration"]);
+    assert!(a.status.success(), "stderr: {}", stderr(&a));
+    assert!(b.status.success(), "stderr: {}", stderr(&b));
+    assert_eq!(
+        fs::read(&first.path).expect("first marked bytes"),
+        fs::read(&second.path).expect("second marked bytes")
+    );
+    let text = stdout(&a);
+    assert!(text.contains("registration=true"));
+    assert!(text.contains("crop=false"));
+}
+
+#[test]
+fn marks_rejects_malformed_and_tight_box_inputs() {
+    let bad = TempPdf::new(b"not a pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&["marks", bad.arg(), out.arg()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("failed to parse"));
+
+    let tight = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let out2 = TempOut::new("pdf");
+    let tight_output = run(&["marks", tight.arg(), out2.arg(), "--crop-marks"]);
+    assert_eq!(tight_output.status.code(), Some(1));
+    assert!(stderr(&tight_output).contains("trim"));
+}
