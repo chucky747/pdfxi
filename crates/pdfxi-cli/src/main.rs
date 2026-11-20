@@ -36,6 +36,14 @@
 //! certification. The `marks` command applies crop, registration, colour-bar
 //! and page-information marks to every page through `pdfxi-core`'s application
 //! API, reparses the result, and writes deterministic bytes.
+//!
+//! The `repair` command exposes `pdfxi-core`'s `repair_document` path: it reads
+//! a damaged PDF, writes a verified standalone PDF to a distinct output path,
+//! and reports the deterministic typed repairs. It refuses to overwrite its
+//! input, rejects `..` traversal in the output path, and exits 0 on success,
+//! 1 for CLI/I/O errors or 3 when the input is unrecoverable. `--json` emits a
+//! stable report whose `warnings` array carries one code/message pair per typed
+//! core warning.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -60,6 +68,7 @@ mod export;
 // (`marks`) added for T-0131. Both use the core application API.
 mod marks;
 mod preflight;
+mod repair;
 
 use std::path::{Path, PathBuf};
 
@@ -249,6 +258,23 @@ enum Command {
         /// Draw page-information text.
         #[arg(long)]
         page_info: bool,
+    },
+    /// Repair a damaged PDF into a new, verified standalone file.
+    ///
+    /// `INPUT` is read but never modified. `OUTPUT` must name a distinct file:
+    /// the command refuses to overwrite the input, rejects `..` traversal in
+    /// the output path, and reparses the result before reporting success. Exit
+    /// codes are 0 on success, 1 for CLI/I/O errors and 3 when the input cannot
+    /// be repaired. `--json` prints a stable report whose `warnings` array holds
+    /// one code/message pair per typed repair applied by the core crate.
+    Repair {
+        /// Path to the damaged source PDF (never modified).
+        input: PathBuf,
+        /// Destination path for the repaired PDF; must differ from `INPUT`.
+        output: PathBuf,
+        /// Emit a machine-readable JSON repair report with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Run a local, line-delimited JSON automation API over stdin and stdout.
     ///
@@ -565,6 +591,11 @@ fn main() -> anyhow::Result<()> {
                 page_info,
             },
         ),
+        Command::Repair {
+            input,
+            output,
+            json,
+        } => repair::run_repair(&input, &output, json),
         Command::Api { once } => api::run_api(once),
     }
 }

@@ -1213,27 +1213,46 @@ title = "Optimize and compress documents"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/repair.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/README.md",
     "crates/pdfxi-core/src/repair.rs",
-    "crates/pdfxi-core/src/parser.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0073.md",
+    "docs/evidence/core/T-0139.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-core: 176 unit + 6 integration passed, 0 failed (9 new repair tests). fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0073.md."
+evidence = "cargo test -p pdfxi-core -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 62 pdfxi-cli integration passed including 6 new repair tests; 267 core unit passed including 9 repair tests; fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0139.md."
 id = "EDIT-015"
-notes = "T-0073 adds `repair_document(&[u8]) -> Result<RepairedDocument, RepairError>`: scans indirect objects (skipping stream payloads) to rebuild a correct classic xref/trailer/startxref/%%EOF when startxref is missing or misplaced or xref offsets are wrong; corrects broken stream `/Length`; synthesizes missing `endobj`; handles truncated EOF; and keeps the newest revision of duplicate object numbers. Unknown content is preserved verbatim where intact. Every repair is reported as a deterministic typed `RepairWarning`, and the rebuilt bytes are structurally verified before success; unrecoverable input returns a typed error. Library path only with a documented finite damage set and no UI/CLI exposure, so the row stays in-progress."
+notes = """
+T-0073 delivered `repair_document(&[u8]) -> Result<RepairedDocument,
+RepairError>` in pdfxi-core with a documented finite damage set and typed
+`RepairWarning` reports. T-0139 now exposes that path through `pdfxi repair
+<INPUT> <OUTPUT> [--json]`: a documented CLI subcommand that validates the
+output path (rejects '..' traversal), refuses to overwrite the input
+(canonicalized, symlink-aware comparison), writes to a distinct output, reparses
+the written bytes before success, and prints stable text or JSON. Exit codes
+are 0 (success), 1 (CLI/I/O/path error via anyhow) and 3
+(EXIT_REPAIR_FAILED, unrecoverable input). The JSON report carries a typed
+`warnings` array with a stable code and message per applied repair plus a
+warning count. Six CLI integration tests build a damaged PDF in-test and cover
+repair, JSON shape/determinism, overwrite refusal, traversal refusal, exit 3
+with a typed report and exit 1 for a missing input. This closes the
+"no UI/CLI exposure" gap that kept the row in-progress; library and CLI are now
+tested end-to-end. No new dependency and no modification of the core repair
+algorithm were needed.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
+    "cli.rs::repair_repairs_a_damaged_fixture_without_touching_the_input",
+    "cli.rs::repair_json_reports_typed_warnings_with_a_stable_shape",
+    "cli.rs::repair_refuses_to_overwrite_the_input",
+    "cli.rs::repair_rejects_traversal_in_the_output_path",
+    "cli.rs::repair_unrecoverable_input_exits_three_with_a_typed_report",
+    "cli.rs::repair_missing_input_exits_one",
     "repair::tests::missing_startxref_is_rescanned",
-    "repair::tests::misplaced_startxref_is_reported",
     "repair::tests::wrong_xref_offset_is_corrected",
     "repair::tests::broken_stream_length_is_corrected",
-    "repair::tests::truncated_eof_is_reported_and_repaired",
     "repair::tests::unrecoverable_input_is_a_typed_error",
-    "repair::tests::repair_report_warnings_are_ordered_and_deterministic",
-    "repair::tests::repaired_document_round_trips_with_original_content",
-    "repair::tests::duplicate_objects_keep_the_latest_revision",
 ]
 title = "Repair malformed documents"
 
@@ -3392,14 +3411,44 @@ tests = []
 title = "Deployment preferences and customization"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-core/src/unicode.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0139.md",
+]
 domain = "Platform"
-evidence = ""
+evidence = "cargo test -p pdfxi-core --lib unicode:: (CARGO_TARGET_DIR=target/lanes/core): 8 passed, 0 failed; full suite core 267 unit + 6 integration passed; fmt/clippy/doc EXIT=0. See docs/evidence/core/T-0139.md."
 id = "PLAT-007"
-notes = ""
+notes = """
+Adds a dependency-free Unicode text model in pdfxi-core: `Script`
+(Latin/CJK/Hebrew/Arabic/Other) classification by public Unicode ranges;
+`Direction` (Ltr/Rtl) with inherent script direction; `TextError` typed
+validation; `bidi_runs` maximal same-script/same-direction runs with byte
+ranges; `resolve_base_direction` using a documented first-strong heuristic;
+and `shaping_plan` / `shaping_plan_with_boundaries` producing a deterministic,
+shaping-free visual ordering plan (RTL base reverses whole runs at paragraph
+level). Grapheme safety is achieved without a new dependency: valid UTF-8 rules
+out surrogates, and caller-supplied grapheme boundaries are validated for UTF-8
+char-boundary safety and strict increase, with the char as the atomic unit.
+This is explicitly a documented subset of UAX #9, not full embedding-level
+resolution or glyph shaping. Eight unit tests cover every listed item. The row
+stays in-progress rather than verified because font fallback, real glyph
+shaping and viewer/UI integration for CJK and RTL text are not part of this
+library-scoped task; this fragment advances it from planned and records the
+completed core contract.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "unicode::tests::cjk_detection",
+    "unicode::tests::arabic_and_hebrew_bidi_runs",
+    "unicode::tests::mixed_direction_ordering_plan",
+    "unicode::tests::invalid_and_empty_input",
+    "unicode::tests::surrogate_and_char_boundary_safety",
+    "unicode::tests::determinism",
+    "unicode::tests::script_classification",
+    "unicode::tests::direction_resolution",
+]
 title = "Unicode CJK and right-to-left text"
 
 [[feature]]

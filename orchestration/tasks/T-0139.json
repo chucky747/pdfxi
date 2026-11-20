@@ -3,7 +3,7 @@
   "lane": "core",
   "title": "Repair-path CLI exposure and PLAT-007 Unicode text checks",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0118"],
   "owns": [
     "crates/pdfxi-core/**",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0139.toml"
   ],
   "acceptance": "cargo test -p pdfxi-core -p pdfxi-cli",
-  "evidence": ""
+  "evidence": "docs/evidence/core/T-0139.md"
 }

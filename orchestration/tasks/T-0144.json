@@ -1,0 +1,17 @@
+{
+  "id": "T-0144",
+  "lane": "qa",
+  "title": "Fuzz corpus expansion and benchmark budget baseline",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0132"],
+  "owns": [
+    "crates/pdfxi-testkit/**",
+    "fuzz/**",
+    "docs/TESTING.md",
+    "docs/evidence/qa/T-0144.md",
+    "orchestration/feature-updates/T-0144.toml"
+  ],
+  "acceptance": "cargo xtask corpus smoke",
+  "evidence": ""
+}

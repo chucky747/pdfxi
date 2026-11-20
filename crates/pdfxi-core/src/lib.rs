@@ -31,6 +31,7 @@ pub mod page;
 pub mod pages;
 pub mod printer_marks;
 pub mod repair;
+pub mod unicode;
 
 mod lexer;
 mod parser;
@@ -79,6 +80,11 @@ pub use printer_marks::{
     PrinterMarks, generate_printer_marks,
 };
 pub use repair::{RepairError, RepairReport, RepairWarning, RepairedDocument, repair_document};
+pub use unicode::{
+    BidiRun, Direction, Script, ShapingPlan, TextError, bidi_runs, classify_char, dominant_script,
+    is_strong_direction, resolve_base_direction, shaping_plan, shaping_plan_with_boundaries,
+    validate_grapheme_boundaries, validate_utf8,
+};
 
 use std::collections::BTreeMap;
 

@@ -2035,3 +2035,177 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
     assert_eq!(tight_output.status.code(), Some(1));
     assert!(stderr(&tight_output).contains("trim"));
 }
+
+// ---------------------------------------------------------------------------
+// repair (EDIT-015)
+// ---------------------------------------------------------------------------
+
+/// Build a one-page PDF in-test, then damage it by removing `startxref` so the
+/// core repair path must rescan objects and rebuild the cross-reference table.
+fn damaged_one_page_pdf() -> Vec<u8> {
+    let source = one_page_pdf("", "BT (Hello, repair CLI!) Tj ET");
+    let text = String::from_utf8(source).expect("ASCII fixture");
+    let marker = "startxref\n";
+    let start = text.find(marker).expect("startxref marker");
+    let end = start + text[start..].find("%%EOF").expect("eof marker");
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..start]);
+    out.push_str(&text[end..]);
+    out.into_bytes()
+}
+
+#[test]
+fn repair_repairs_a_damaged_fixture_without_touching_the_input() {
+    let damaged = damaged_one_page_pdf();
+    let pdf = TempPdf::new(&damaged);
+    let out = TempOut::new("pdf");
+    let output = run(&["repair", pdf.arg(), out.arg()]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+
+    let bytes = fs::read(&out.path).expect("repaired output exists");
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("repaired PDF reparses");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    assert_eq!(
+        document.page_text(0).expect("page text"),
+        "Hello, repair CLI!"
+    );
+    assert_eq!(fs::read(&pdf.path).expect("input unchanged"), damaged);
+
+    let text = stdout(&output);
+    assert!(text.contains("warnings: 2"), "stdout: {text}");
+    assert!(text.contains("startxref_missing"), "stdout: {text}");
+    assert!(text.contains("xref_rebuilt_by_scan"), "stdout: {text}");
+    assert!(text.contains("repaired: ok"), "stdout: {text}");
+}
+
+#[test]
+fn repair_json_reports_typed_warnings_with_a_stable_shape() {
+    let pdf = TempPdf::new(&damaged_one_page_pdf());
+    let out = TempOut::new("pdf");
+    let output = run(&["repair", pdf.arg(), out.arg(), "--json"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+
+    let value: Value = serde_json::from_str(stdout(&output).trim()).expect("repair JSON");
+    let map = value.as_object().expect("JSON object");
+    for key in [
+        "ok",
+        "input",
+        "output",
+        "error",
+        "version",
+        "bytes",
+        "pages",
+        "warnings",
+        "warning_count",
+        "exit_code",
+    ] {
+        assert!(map.contains_key(key), "missing field {key}");
+    }
+    assert_eq!(map.len(), 10, "unexpected extra fields: {map:?}");
+    assert_eq!(value["ok"].as_bool(), Some(true));
+    assert!(value["error"].is_null());
+    assert_eq!(value["pages"].as_u64(), Some(1));
+    assert_eq!(value["exit_code"].as_i64(), Some(0));
+    assert_eq!(value["input"].as_str(), Some(pdf.arg()));
+    assert_eq!(value["output"].as_str(), Some(out.arg()));
+
+    let warnings = value["warnings"].as_array().expect("warnings array");
+    assert_eq!(warnings.len(), 2);
+    let codes: Vec<&str> = warnings
+        .iter()
+        .map(|w| w["code"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(codes, ["startxref_missing", "xref_rebuilt_by_scan"]);
+    assert!(warnings[0]["message"].as_str().is_some());
+    assert_eq!(value["warning_count"].as_u64(), Some(2));
+
+    // The same input and output produce byte-identical JSON.
+    let repeat = run(&["repair", pdf.arg(), out.arg(), "--json"]);
+    assert_eq!(
+        stdout(&repeat),
+        stdout(&output),
+        "JSON must be deterministic"
+    );
+}
+
+#[test]
+fn repair_refuses_to_overwrite_the_input() {
+    let damaged = damaged_one_page_pdf();
+    let pdf = TempPdf::new(&damaged);
+    let output = run(&["repair", pdf.arg(), pdf.arg()]);
+    assert_eq!(output.status.code(), Some(1), "same path must be refused");
+    let message = stderr(&output);
+    assert!(
+        message.contains("refusing to overwrite") && message.contains("input"),
+        "stderr: {message}"
+    );
+    assert_eq!(
+        fs::read(&pdf.path).expect("input still readable"),
+        damaged,
+        "the input must never be modified"
+    );
+}
+
+#[test]
+fn repair_rejects_traversal_in_the_output_path() {
+    let pdf = TempPdf::new(&damaged_one_page_pdf());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sentinel = format!("pdfxi-cli-repair-traversal-{nanos}.pdf");
+    let outside = std::env::temp_dir().join(&sentinel);
+    assert!(!outside.exists(), "traversal sentinel must start absent");
+    let traversal = format!("../{sentinel}");
+    let output = run(&["repair", pdf.arg(), &traversal]);
+    assert_eq!(output.status.code(), Some(1), "traversal must be refused");
+    assert!(
+        stderr(&output).contains("traversal"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(!outside.exists(), "no file may be written via traversal");
+}
+
+#[test]
+fn repair_unrecoverable_input_exits_three_with_a_typed_report() {
+    let pdf = TempPdf::new(b"not a PDF at all");
+    let out = TempOut::new("pdf");
+    let output = run(&["repair", pdf.arg(), out.arg()]);
+    assert_eq!(output.status.code(), Some(3), "stderr: {}", stderr(&output));
+    assert!(stderr(&output).contains("repair failed"));
+    assert!(!out.path.exists(), "no output on unrecoverable input");
+
+    let json_out = TempOut::new("pdf");
+    let json = run(&["repair", pdf.arg(), json_out.arg(), "--json"]);
+    assert_eq!(json.status.code(), Some(3));
+    let value: Value = serde_json::from_str(stdout(&json).trim()).expect("failure JSON");
+    assert_eq!(value["ok"].as_bool(), Some(false));
+    assert_eq!(value["exit_code"].as_i64(), Some(3));
+    assert!(
+        value["error"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+    assert_eq!(value["warnings"].as_array().map_or(0, Vec::len), 0);
+}
+
+#[test]
+fn repair_missing_input_exits_one() {
+    let name = format!(
+        "pdfxi-cli-repair-missing-{}-{}.pdf",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let path = std::env::temp_dir().join(name);
+    assert!(!path.exists());
+    let display = path.to_string_lossy().into_owned();
+    let out = TempOut::new("pdf");
+    let output = run(&["repair", &display, out.arg()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("failed to read"));
+    assert!(!out.path.exists(), "no output when the input is missing");
+}
