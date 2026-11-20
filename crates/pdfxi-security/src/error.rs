@@ -352,6 +352,11 @@ pub enum SecurityError {
     /// The message names the failing stage and never contains document content
     /// or password material.
     DocumentRewriteFailed(String),
+    /// The operating system random number generator could not supply entropy.
+    ///
+    /// Encryption fails closed rather than falling back to a weaker or
+    /// deterministic key source.
+    RandomnessUnavailable,
 }
 
 impl fmt::Display for SecurityError {
@@ -707,6 +712,9 @@ impl fmt::Display for SecurityError {
             Self::DocumentNotEncrypted => write!(f, "the document is not encrypted"),
             Self::DocumentRewriteFailed(reason) => {
                 write!(f, "document rewrite failed: {reason}")
+            }
+            Self::RandomnessUnavailable => {
+                write!(f, "the operating system random number generator failed")
             }
         }
     }

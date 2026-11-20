@@ -15,6 +15,9 @@ pdfxi-core = { workspace = true }
 cms = { version = "0.2.3", features = ["builder"] }
 const-oid = "0.9"
 der = "0.7"
+# Vetted OS-entropy source for AES-256 file keys and R5/R6 salts (T-0256).
+# MIT OR Apache-2.0, already in the workspace lock graph through `rand`.
+getrandom = "0.2"
 rsa = { version = "0.9", features = ["sha2"] }
 sha2 = { version = "0.10", features = ["oid"] }
 spki = "0.7"

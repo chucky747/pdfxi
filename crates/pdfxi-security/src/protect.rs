@@ -68,11 +68,19 @@
 //!   text extraction refuse to run.
 //! - The owner password always bypasses the mask, per the PDF owner-password
 //!   semantics modelled by [`crate::Permissions`].
-//! - The AES-256 file key is derived deterministically from the document `/ID`
-//!   and the two passwords by the existing writer; it is not a fresh random
-//!   key. Reuse of the same document ID and passwords reproduces the same key.
-//!   Callers may supply a fresh [`ProtectOptions::id_seed`] for a source without
-//!   `/ID`.
+//! - The AES-256 file key is a fresh 32-byte value from the operating-system
+//!   CSPRNG (`getrandom`), wrapped separately for the user in `/UE` and for the
+//!   owner in `/OE` with fresh random salts, as ISO 32000-2 revisions 5 and 6
+//!   require. Two protects of the same document and passwords therefore produce
+//!   different key material and different output bytes. RC4 and AES-128 still
+//!   derive their key from the password, which is what those revisions specify.
+//! - Every AES stream and string receives its own fresh random 16-byte IV from
+//!   the same CSPRNG, prepended to the ciphertext, so two identical plaintexts
+//!   never share a ciphertext prefix.
+//! - The document information dictionary (`/Info`) is carried into the
+//!   protected trailer and back out of `remove_protection`, so a title and
+//!   producer survive protection. Other trailer keys that are structural
+//!   (`/Root`, `/Size`, `/ID`, `/Encrypt`) are regenerated.
 //! - Linearized and signed inputs are refused by the shared writer with
 //!   [`SecurityError::UnsupportedDocumentStructure`]. Protecting a signed file
 //!   would invalidate the signature, so it is not attempted silently.
@@ -232,7 +240,8 @@ pub struct ProtectOptions {
     pub revision: Option<u8>,
     /// Whether metadata strings and streams are encrypted.
     pub encrypt_metadata: bool,
-    /// Optional deterministic seed for sources that have no `/ID`.
+    /// Optional deterministic seed for the document `/ID` of a source without
+    /// one. It does not affect the AES-256 file key, which is always random.
     pub id_seed: Option<Vec<u8>>,
 }
 
@@ -298,7 +307,7 @@ impl ProtectOptions {
         self
     }
 
-    /// Supply a deterministic seed for sources without a document `/ID`.
+    /// Supply a deterministic seed for the document `/ID` of a source without one.
     pub fn with_id_seed(mut self, seed: Vec<u8>) -> Self {
         self.id_seed = Some(seed);
         self

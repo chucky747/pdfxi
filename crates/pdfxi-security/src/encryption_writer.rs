@@ -12,9 +12,21 @@
 //! Supported methods are RC4-40 (R2), RC4-128 (R3), AES-128 (R4) and AES-256
 //! (R5/R6). Signatures, linearized files and cross-reference-stream files are
 //! deliberately refused with [`SecurityError::UnsupportedDocumentStructure`].
-//! For AES streams the deterministic per-object IV derived by
-//! [`crate::Decryptor`] is used so that output is reproducible; writers that
-//! need fresh random IVs can seed the encryption differently.
+//! For AES streams and strings the writer draws a fresh random 16-byte IV from
+//! the operating-system CSPRNG for every encrypted value and prepends it to the
+//! ciphertext, as ISO 32000-2 requires; identical plaintexts therefore never
+//! share a ciphertext prefix. RC4 values have no IV.
+//!
+//! AES-256 (revisions 5 and 6) draws a fresh 32-byte file key and fresh
+//! validation/key salts from the operating-system CSPRNG on every call (T-0256).
+//! Two encrypting saves of identical input and passwords therefore produce
+//! different `/U`, `/O`, `/UE`, `/OE`, `/Perms`, and ciphertext. AES-128 keeps
+//! the password-derived key required by revision 4 but also uses random IVs, so
+//! its bytes differ per call. RC4 derives its key from the password and has no
+//! IV, so RC4 output remains deterministic.
+//!
+//! The newest trailer's `/Info` entry is carried into the output so document
+//! metadata is not lost by an encrypting save.
 //!
 //! Source documents are expected to use a classic cross-reference table with
 //! one `N G obj` header per line (the layout emitted by this crate and by the
@@ -26,7 +38,7 @@ use std::collections::BTreeMap;
 
 use pdfxi_core::{Dictionary, Document, Object, ObjectId};
 
-use crate::crypto::{md5, sha};
+use crate::crypto::sha;
 use crate::encryption::EncryptionMethod;
 use crate::error::{Result, SecurityError};
 use crate::permissions::{PasswordRole, Permission, Permissions};
@@ -51,7 +63,9 @@ pub struct EncryptOptions {
     pub permissions: Permission,
     /// Whether document metadata strings and streams are encrypted.
     pub encrypt_metadata: bool,
-    /// Optional deterministic seed used to derive the document ID and keys.
+    /// Optional deterministic seed used to derive the document `/ID` when the
+    /// source has none. It does not make AES-256 output reproducible; that path
+    /// draws a random file key and salts.
     pub id_seed: Option<Vec<u8>>,
     /// Optional security-handler revision override (2, 3, 4, 5, or 6).
     pub revision: Option<u8>,
@@ -100,9 +114,10 @@ impl EncryptOptions {
 
     /// Supply a deterministic seed used when the source has no document ID.
     ///
-    /// With the same seed and the same input, [`encrypt_document`] is
-    /// byte-for-byte reproducible. Production callers that require fresh keys
-    /// should pass a unique seed per document.
+    /// The seed controls only the trailer `/ID` derivation. AES-256 revisions
+    /// 5 and 6 draw a fresh random file key and salts on every call, and AES
+    /// streams/strings use fresh random IVs, so their output is not
+    /// byte-for-byte reproducible; RC4 has no IV and remains deterministic.
     pub fn with_id_seed(mut self, seed: Vec<u8>) -> Self {
         self.id_seed = Some(seed);
         self
@@ -204,36 +219,22 @@ fn derive_second_id(first: &[u8; 16]) -> [u8; 16] {
     derive_id(&seed)
 }
 
-fn salt(id: &[u8; 16], tag: &[u8]) -> [u8; 8] {
-    let mut seed = Vec::with_capacity(id.len() + tag.len());
-    seed.extend_from_slice(id);
-    seed.extend_from_slice(tag);
-    let digest = md5::md5(&seed);
-    let mut value = [0u8; 8];
-    value.copy_from_slice(&digest[..8]);
-    value
+/// Fill `bytes` with operating-system entropy.
+///
+/// AES-256 (revisions 5 and 6) requires a fresh random 32-byte file key and
+/// fresh random salts for every protected document. `getrandom` is a vetted
+/// OS-entropy binding (MIT OR Apache-2.0); this crate does not implement a
+/// pseudo-random generator. Failure is propagated as
+/// [`SecurityError::RandomnessUnavailable`] so encryption fails closed.
+fn fill_random(bytes: &mut [u8]) -> Result<()> {
+    getrandom::getrandom(bytes).map_err(|_| SecurityError::RandomnessUnavailable)
 }
 
-fn perms_padding(id: &[u8; 16], tag: &[u8]) -> [u8; 4] {
-    let mut seed = Vec::with_capacity(id.len() + tag.len());
-    seed.extend_from_slice(id);
-    seed.extend_from_slice(tag);
-    let digest = md5::md5(&seed);
-    let mut value = [0u8; 4];
-    value.copy_from_slice(&digest[..4]);
-    value
-}
-
-/// Derive a deterministic 32-byte AES-256 file key from the ID and passwords.
-fn derive_file_key(id: &[u8; 16], options: &EncryptOptions) -> Vec<u8> {
-    let mut input = Vec::new();
-    input.extend_from_slice(id);
-    input.extend_from_slice(&(options.user_password.len() as u32).to_le_bytes());
-    input.extend_from_slice(&options.user_password);
-    input.extend_from_slice(&(options.owner_password.len() as u32).to_le_bytes());
-    input.extend_from_slice(&options.owner_password);
-    input.extend_from_slice(options.method.as_id().as_bytes());
-    sha::sha256(&input).to_vec()
+/// Draw a fixed-size array from the operating-system entropy source.
+fn random_array<const N: usize>() -> Result<[u8; N]> {
+    let mut value = [0u8; N];
+    fill_random(&mut value)?;
+    Ok(value)
 }
 
 /// Locate the byte range of the newest trailer dictionary.
@@ -295,6 +296,66 @@ fn trailer_id(bytes: &[u8]) -> Option<[u8; 16]> {
     Some(id)
 }
 
+/// Parse one decimal integer from a PDF token stream.
+fn parse_unsigned(data: &[u8], cursor: &mut usize) -> Option<u64> {
+    while data.get(*cursor).is_some_and(u8::is_ascii_whitespace) {
+        *cursor += 1;
+    }
+    let start = *cursor;
+    while data.get(*cursor).is_some_and(u8::is_ascii_digit) {
+        *cursor += 1;
+    }
+    if *cursor == start {
+        return None;
+    }
+    std::str::from_utf8(&data[start..*cursor])
+        .ok()?
+        .parse()
+        .ok()
+}
+
+/// Parse a `N G R` indirect reference from the bytes after a trailer key.
+fn parse_reference(data: &[u8]) -> Option<ObjectId> {
+    let mut cursor = 0;
+    let number = parse_unsigned(data, &mut cursor)?;
+    let generation = parse_unsigned(data, &mut cursor)?;
+    while data.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    if data.get(cursor) != Some(&b'R') {
+        return None;
+    }
+    Some(ObjectId::new(
+        u32::try_from(number).ok()?,
+        u16::try_from(generation).ok()?,
+    ))
+}
+
+/// Return the newest trailer's `/Info` indirect reference, when present.
+///
+/// Only the trailer dictionary is inspected, and only the common indirect form
+/// is accepted; an inline dictionary is left alone rather than guessed at. The
+/// returned identifier is later filtered against the objects the output
+/// actually writes, so a stale reference cannot become a dangling pointer.
+fn trailer_info_reference(bytes: &[u8]) -> Option<ObjectId> {
+    let trailer = trailer_bytes(bytes)?;
+    let mut index = 0;
+    while index + 5 <= trailer.len() {
+        if &trailer[index..index + 5] == b"/Info" {
+            let before_ok = index == 0 || !trailer[index - 1].is_ascii_alphanumeric();
+            let after_ok = trailer
+                .get(index + 5)
+                .is_none_or(|byte| !byte.is_ascii_alphanumeric());
+            if before_ok && after_ok {
+                let value = trailer.get(index + 5..)?;
+                return parse_reference(value);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
 fn build_parameters(
     options: &EncryptOptions,
     revision: u8,
@@ -337,28 +398,35 @@ fn build_parameters(
             Ok(params)
         }
         EncryptionMethod::Aes256 => {
-            let file_key = derive_file_key(id_first, options);
+            // ISO 32000-2 revision 6 (and revision 5) requires a fresh random
+            // 32-byte file key and fresh random 8-byte salts for each document.
+            // The file key is wrapped for the user in /UE and for the owner in
+            // /OE; /U, /O and /Perms are derived per Algorithms 8-10. A
+            // deterministic key would make two protections of the same bytes
+            // share key material, so entropy failure is fatal here.
+            let file_key = random_array::<32>()?;
+            let u_validation_salt = random_array::<8>()?;
+            let u_key_salt = random_array::<8>()?;
+            let o_validation_salt = random_array::<8>()?;
+            let o_key_salt = random_array::<8>()?;
+            let perms_padding = random_array::<4>()?;
+
             let (u, ue) = compute_u_and_ue(
                 revision,
                 &options.user_password,
                 &file_key,
-                &salt(id_first, b"u-validation"),
-                &salt(id_first, b"u-key"),
+                &u_validation_salt,
+                &u_key_salt,
             )?;
             let (o, oe) = compute_o_and_oe(
                 revision,
                 &options.owner_password,
                 &u,
                 &file_key,
-                &salt(id_first, b"o-validation"),
-                &salt(id_first, b"o-key"),
+                &o_validation_salt,
+                &o_key_salt,
             )?;
-            let perms = compute_perms(
-                &file_key,
-                p,
-                options.encrypt_metadata,
-                &perms_padding(id_first, b"perms"),
-            )?;
+            let perms = compute_perms(&file_key, p, options.encrypt_metadata, &perms_padding)?;
             Ok(SecurityParameters {
                 revision,
                 version: 5,
@@ -445,7 +513,19 @@ fn transform_value(
 ) -> Result<Object> {
     let transform = |data: &[u8]| {
         if encrypt {
-            decryptor.encrypt_object(id.number, id.generation, data)
+            match decryptor.method() {
+                EncryptionMethod::Aes128 | EncryptionMethod::Aes256 => {
+                    // ISO 32000-2 requires a fresh, unpredictable IV for every
+                    // AES stream and string. Draw one per encrypted value and
+                    // prepend it via `encrypt_object_with_iv`; two identical
+                    // plaintexts therefore never share a ciphertext prefix.
+                    let iv = random_array::<16>()?;
+                    decryptor.encrypt_object_with_iv(id.number, id.generation, data, &iv)
+                }
+                EncryptionMethod::None | EncryptionMethod::Rc4_40 | EncryptionMethod::Rc4_128 => {
+                    decryptor.encrypt_object(id.number, id.generation, data)
+                }
+            }
         } else {
             decryptor.decrypt_object(id.number, id.generation, data)
         }
@@ -775,6 +855,14 @@ pub fn encrypt_document(
         ]),
     );
     trailer.insert("Encrypt".to_owned(), Object::Reference(encrypt_id));
+    if let Some(info) = trailer_info_reference(source.bytes())
+        && encrypted.iter().any(|(id, _)| *id == info)
+    {
+        // Preserve the document information dictionary across an encrypting
+        // save (T-0256). Only a reference to an object actually written is
+        // carried, so the trailer cannot point at a missing object.
+        trailer.insert("Info".to_owned(), Object::Reference(info));
+    }
 
     let bytes = write_pdf(&encrypted, source.root().map_err(core_error)?, &trailer)?;
     let report = EncryptionReport {
@@ -939,6 +1027,13 @@ pub fn open_encrypted(
             Object::String(second.to_vec()),
         ]),
     );
+    if let Some(info) = trailer_info_reference(bytes)
+        && decrypted.iter().any(|(id, _)| *id == info)
+    {
+        // Keep the decrypted /Info reference so a remove-protection rewrite
+        // preserves document metadata (T-0256).
+        trailer.insert("Info".to_owned(), Object::Reference(info));
+    }
     let plaintext = write_pdf(&decrypted, document.root().map_err(core_error)?, &trailer)?;
     let opened = Document::from_bytes(plaintext).map_err(core_error)?;
     let report = DecryptionReport {
@@ -1000,6 +1095,24 @@ mod tests {
         )
     }
 
+    /// A fixture with two extra streams whose plaintext is identical to the
+    /// page content stream, so AES IV isolation can be compared directly.
+    fn identical_stream_fixture() -> Vec<u8> {
+        build_pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+                "<< /Length 25 >>\nstream\nBT (Secret payload) Tj ET\nendstream",
+                "<< /Title (PDFXI Secret Title) /Author (QA) >>",
+                "<< /Producer (PDFXI fixture) >>",
+                "<< /Length 25 >>\nstream\nBT (Secret payload) Tj ET\nendstream",
+                "<< /Length 25 >>\nstream\nBT (Secret payload) Tj ET\nendstream",
+            ],
+            true,
+        )
+    }
+
     /// A fixture with an extra linearization dictionary object.
     fn linearized_fixture() -> Vec<u8> {
         let mut objects: Vec<&str> = vec![
@@ -1037,6 +1150,34 @@ mod tests {
 
     fn open(bytes: &[u8], password: &[u8]) -> (Document, DecryptionReport) {
         open_encrypted(bytes, Some(password)).expect("open with the correct password")
+    }
+
+    fn encrypt_dictionary_of(bytes: &[u8]) -> Dictionary {
+        let document = Document::from_bytes(bytes.to_vec()).expect("encrypted parses");
+        let ids = collect_object_ids(document.bytes());
+        find_encrypt_dictionary(&document, &ids)
+            .expect("encrypt dictionary")
+            .1
+    }
+
+    fn stream_data(bytes: &[u8], number: u32) -> Vec<u8> {
+        let document = Document::from_bytes(bytes.to_vec()).expect("document parses");
+        match document
+            .object(ObjectId::new(number, 0))
+            .expect("stream object")
+        {
+            Object::Stream { data, .. } => data,
+            other => panic!("object {number} was not a stream: {other:?}"),
+        }
+    }
+
+    fn stream_numbers(bytes: &[u8]) -> Vec<u32> {
+        let document = Document::from_bytes(bytes.to_vec()).expect("document parses");
+        collect_object_ids(document.bytes())
+            .into_iter()
+            .filter(|id| matches!(document.object(*id), Ok(Object::Stream { .. })))
+            .map(|id| id.number)
+            .collect()
     }
 
     #[test]
@@ -1238,34 +1379,96 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_output() {
+    fn aes256_output_is_randomized_but_rc4_stays_deterministic() {
         let source = Document::from_bytes(fixture(true)).expect("source");
-        let first = encrypt_document(&source, &options(EncryptionMethod::Aes256))
-            .expect("encrypt")
-            .0;
-        let second = encrypt_document(&source, &options(EncryptionMethod::Aes256))
-            .expect("encrypt")
-            .0;
-        assert_eq!(
+        let (first, first_report) =
+            encrypt_document(&source, &options(EncryptionMethod::Aes256)).expect("first encrypt");
+        let (second, second_report) =
+            encrypt_document(&source, &options(EncryptionMethod::Aes256)).expect("second encrypt");
+        assert_ne!(
             first, second,
-            "identical inputs must produce identical bytes"
+            "AES-256 must draw fresh key material for every save"
+        );
+        assert_eq!(
+            first_report.id_first, second_report.id_first,
+            "the source /ID is still preserved"
         );
 
-        // With no existing /ID the seed drives both the ID and the derived key.
-        let seed_source = Document::from_bytes(fixture(false)).expect("source");
-        let other = EncryptOptions::new(
-            EncryptionMethod::Aes256,
-            b"user-secret",
-            b"owner-secret",
-            Permission::ALL,
-        )
-        .expect("options")
-        .with_id_seed(b"a-different-seed".to_vec());
-        let changed = encrypt_document(&seed_source, &other).expect("encrypt").0;
-        let baseline = encrypt_document(&seed_source, &options(EncryptionMethod::Aes256))
-            .expect("encrypt")
-            .0;
-        assert_ne!(baseline, changed);
+        let first_dictionary = encrypt_dictionary_of(&first);
+        let second_dictionary = encrypt_dictionary_of(&second);
+        for key in ["U", "O", "UE", "OE", "Perms"] {
+            assert_ne!(
+                first_dictionary.get(key),
+                second_dictionary.get(key),
+                "/{key} must differ between two AES-256 saves"
+            );
+        }
+        let stream_ids = stream_numbers(source.bytes());
+        assert!(!stream_ids.is_empty(), "fixture must contain streams");
+        for number in stream_ids {
+            let first_stream = stream_data(&first, number);
+            let second_stream = stream_data(&second, number);
+            assert!(
+                first_stream.len() >= 32,
+                "stream {number} must include an IV"
+            );
+            assert_ne!(
+                &first_stream[..16],
+                &second_stream[..16],
+                "two saves reused the IV of stream {number}"
+            );
+            assert_ne!(first_stream, second_stream);
+        }
+
+        // RC4-128 derives its key from the password per the specification, so
+        // the same input and options still reproduce the same bytes.
+        let (rc4_first, _) =
+            encrypt_document(&source, &options(EncryptionMethod::Rc4_128)).expect("first rc4");
+        let (rc4_second, _) =
+            encrypt_document(&source, &options(EncryptionMethod::Rc4_128)).expect("second rc4");
+        assert_eq!(rc4_first, rc4_second);
+    }
+
+    #[test]
+    fn identical_streams_receive_distinct_random_ivs() {
+        let source = Document::from_bytes(identical_stream_fixture()).expect("source");
+        let (encrypted, _) =
+            encrypt_document(&source, &options(EncryptionMethod::Aes256)).expect("encrypt");
+
+        let content = stream_data(&encrypted, 4);
+        let first_extra = stream_data(&encrypted, 7);
+        let second_extra = stream_data(&encrypted, 8);
+        for stream in [&content, &first_extra, &second_extra] {
+            assert!(stream.len() >= 32, "ciphertext must include a 16-byte IV");
+        }
+        assert_ne!(
+            &content[..16],
+            &first_extra[..16],
+            "identical plaintexts must not reuse an IV"
+        );
+        assert_ne!(&content[..16], &second_extra[..16]);
+        assert_ne!(&first_extra[..16], &second_extra[..16]);
+        assert_ne!(content, first_extra);
+        assert_ne!(first_extra, second_extra);
+
+        // The same file key is in play for every object in AES-256, so the
+        // difference above is the IV, not a per-object key.
+        let (opened, _) = open(&encrypted, b"user-secret");
+        let plaintext = b"BT (Secret payload) Tj ET".to_vec();
+        for number in [4u32, 7, 8] {
+            assert_eq!(stream_data(opened.bytes(), number), plaintext);
+        }
+    }
+
+    #[test]
+    fn info_reference_survives_an_encrypting_save() {
+        let source = Document::from_bytes(fixture(true)).expect("source");
+        let (encrypted, _) =
+            encrypt_document(&source, &options(EncryptionMethod::Aes256)).expect("encrypt");
+        let (opened, _) = open(&encrypted, b"user-secret");
+        let info = opened.info().expect("info parses").expect("/Info present");
+        assert_eq!(info.title.as_deref(), Some("PDFXI Secret Title"));
+        assert_eq!(info.author.as_deref(), Some("QA"));
     }
 
     #[test]

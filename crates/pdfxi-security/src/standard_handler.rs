@@ -363,6 +363,11 @@ fn verify_perms(file_key: &[u8], params: &SecurityParameters) -> Result<()> {
     if &plain[9..12] != b"adb" {
         return Err(SecurityError::DecryptionFailed);
     }
+    if plain[4..8] != [0xff; 4] {
+        // Algorithm 10 requires the reserved bytes to be all ones; rejecting
+        // anything else keeps a tampered /Perms from being accepted.
+        return Err(SecurityError::DecryptionFailed);
+    }
     let stored_p = u32::from_le_bytes([plain[0], plain[1], plain[2], plain[3]]);
     if stored_p != params.p {
         return Err(SecurityError::DecryptionFailed);
@@ -1169,6 +1174,29 @@ mod tests {
                 Some(SecurityError::WrongPassword)
             );
         }
+    }
+
+    #[test]
+    fn perms_reserved_bytes_must_be_all_ones() {
+        // A /Perms block that is otherwise valid but has a cleared reserved
+        // byte must be rejected after the Algorithm 10 check.
+        let file_key = [0x5Au8; 32];
+        let mut block = [0u8; 16];
+        block[..4].copy_from_slice(&0xffff_f0d4u32.to_le_bytes());
+        block[4..8].copy_from_slice(&[0x00, 0xff, 0xff, 0xff]);
+        block[8] = b'T';
+        block[9..12].copy_from_slice(b"adb");
+        block[12..16].copy_from_slice(&[1, 2, 3, 4]);
+        let perms = aes::encrypt_ecb_block(&file_key, &block).expect("perms block");
+        let mut params = r5_r6_params(6);
+        params.perms = perms.to_vec();
+        assert_eq!(
+            StandardSecurityHandler::new(params)
+                .expect("handler")
+                .authenticate(b"open-sesame")
+                .err(),
+            Some(SecurityError::WrongPassword)
+        );
     }
 
     #[test]

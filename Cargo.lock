@@ -2829,6 +2829,7 @@ version = "0.1.0"
 name = "pdfxi-app"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "eframe",
  "egui",
  "pdfxi-core",

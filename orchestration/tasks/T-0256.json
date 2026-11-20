@@ -3,7 +3,7 @@
   "lane": "security",
   "title": "Use a CSPRNG file key for AES-256 encryption and preserve /Info on protect",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0238"
   ],

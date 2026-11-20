@@ -42,13 +42,55 @@ fn artifact(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn write_artifact(name: &str, bytes: &[u8]) {
-    let path = artifact(name);
+fn write_artifact_to(path: PathBuf, bytes: &[u8]) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create artifact directory");
     }
     fs::write(&path, bytes).expect("write artifact");
     assert!(path.is_file(), "artifact missing: {}", path.display());
+}
+
+fn write_artifact(name: &str, bytes: &[u8]) {
+    write_artifact_to(artifact(name), bytes);
+}
+
+fn write_t0256_artifact(name: &str, bytes: &[u8]) {
+    let path = workspace_root()
+        .join("target")
+        .join("lanes")
+        .join("security3")
+        .join("t0256-out")
+        .join(name);
+    write_artifact_to(path, bytes);
+}
+
+/// Decode the hex value of `/<name> <...>` in an encrypting writer's output.
+fn encrypt_hex_field(bytes: &[u8], name: &str) -> Vec<u8> {
+    let marker = format!("/{name} <");
+    let start = bytes
+        .windows(marker.len())
+        .position(|window| window == marker.as_bytes())
+        .expect("encrypt dictionary field")
+        + marker.len();
+    let end = start
+        + bytes[start..]
+            .iter()
+            .position(|byte| *byte == b'>')
+            .expect("hex string terminator");
+    let text = std::str::from_utf8(&bytes[start..end]).expect("hex string is ASCII");
+    let digits: Vec<u8> = text
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    let mut decoded = Vec::with_capacity(digits.len() / 2);
+    let mut index = 0;
+    while index + 1 < digits.len() {
+        let high = (digits[index] as char).to_digit(16).expect("hex digit");
+        let low = (digits[index + 1] as char).to_digit(16).expect("hex digit");
+        decoded.push(((high << 4) | low) as u8);
+        index += 2;
+    }
+    decoded
 }
 
 /// A consistent "print and fill, but do not copy or change" grant.
@@ -286,6 +328,138 @@ fn protection_errors_are_typed_and_never_silent() {
         decrypted.page_text(0).expect("decrypted text"),
         source.page_text(0).expect("source text")
     );
+}
+
+#[test]
+fn aes256_key_material_is_random_and_info_is_preserved() {
+    let source_bytes = fs::read(fixture(FIXTURE)).expect("read real-world fixture");
+    let mut source = Document::from_bytes(source_bytes).expect("fixture parses");
+    let mut info = source.info().expect("read info").unwrap_or_default();
+    info.title = Some("PDFXI T-0256 protected title".to_owned());
+    source.set_info(&info).expect("stage info title");
+    let source_text = source.page_text(0).expect("fixture first-page text");
+
+    let options = || {
+        ProtectOptions::new(USER_PASSWORD)
+            .with_owner_password(b"owner-t0256")
+            .with_permissions(restricted())
+    };
+    let first = protect_document(&source, options()).expect("first protect");
+    let second = protect_document(&source, options()).expect("second protect");
+
+    assert_ne!(
+        first, second,
+        "AES-256 must draw fresh key material for every protect"
+    );
+    for field in ["U", "O", "UE", "OE", "Perms"] {
+        assert_ne!(
+            encrypt_hex_field(&first, field),
+            encrypt_hex_field(&second, field),
+            "/{field} must differ between two protects"
+        );
+    }
+    write_t0256_artifact("protected-a.pdf", &first);
+    write_t0256_artifact("protected-b.pdf", &second);
+
+    // Both outputs open with the user password and round-trip the mask and text.
+    for bytes in [&first, &second] {
+        let (opened, report) =
+            open_encrypted(bytes, Some(USER_PASSWORD)).expect("open protected document");
+        assert_eq!(report.method, EncryptionMethod::Aes256);
+        assert_eq!(report.revision, 6);
+        assert_eq!(report.role, PasswordRole::User);
+        assert_permissions(report, restricted());
+        assert_eq!(
+            opened.page_text(0).expect("protected first-page text"),
+            source_text
+        );
+    }
+
+    // /Info survives the protected trailer and is readable after decryption.
+    let (opened, _) = open_encrypted(&first, Some(USER_PASSWORD)).expect("open first");
+    let opened_info = opened.info().expect("read protected info").expect("/Info");
+    assert_eq!(
+        opened_info.title.as_deref(),
+        Some("PDFXI T-0256 protected title")
+    );
+    assert!(opened_info.producer.is_some(), "producer must survive");
+
+    // The owner password still widens and a wrong password is typed.
+    let (_, owner) =
+        open_encrypted(&first, Some(b"owner-t0256")).expect("open with the owner password");
+    assert_eq!(owner.role, PasswordRole::Owner);
+    assert!(owner.permissions.allows(Permission::MODIFY));
+    assert_eq!(
+        open_encrypted(&first, Some(b"wrong-password")).err(),
+        Some(SecurityError::WrongPassword)
+    );
+
+    // Removing protection preserves the Info dictionary as well.
+    let unprotected = remove_protection(&first, USER_PASSWORD).expect("remove protection");
+    assert!(
+        !unprotected
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt")
+    );
+    let plain = Document::from_bytes(unprotected).expect("unprotected parses");
+    assert_eq!(
+        plain.page_text(0).expect("unprotected first-page text"),
+        source_text
+    );
+    let plain_info = plain.info().expect("read plain info").expect("/Info");
+    assert_eq!(
+        plain_info.title.as_deref(),
+        Some("PDFXI T-0256 protected title")
+    );
+}
+
+#[test]
+fn non_ascii_password_round_trips() {
+    let source_bytes = fs::read(fixture(FIXTURE)).expect("read real-world fixture");
+    let source = Document::from_bytes(source_bytes).expect("fixture parses");
+    let source_text = source.page_text(0).expect("source text");
+    let password = "pässwörd-测试";
+    let wrong = "passwörd-测试";
+
+    let protected = protect_document(
+        &source,
+        ProtectOptions::new(password.as_bytes()).with_permissions(restricted()),
+    )
+    .expect("protect with a non-ASCII password");
+    assert!(
+        protected
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt")
+    );
+
+    let (opened, report) =
+        open_encrypted(&protected, Some(password.as_bytes())).expect("open with the password");
+    assert_eq!(report.method, EncryptionMethod::Aes256);
+    assert_eq!(report.revision, 6);
+    assert_eq!(report.role, PasswordRole::User);
+    assert_eq!(
+        opened.page_text(0).expect("opened text"),
+        source_text,
+        "non-ASCII password must not corrupt the document"
+    );
+    assert_eq!(
+        open_encrypted(&protected, Some(wrong.as_bytes())).err(),
+        Some(SecurityError::WrongPassword)
+    );
+    assert_eq!(
+        open_encrypted(&protected, Some(b"")).err(),
+        Some(SecurityError::WrongPassword)
+    );
+
+    let unprotected =
+        remove_protection(&protected, password.as_bytes()).expect("remove with the password");
+    assert!(
+        !unprotected
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt")
+    );
+    let plain = Document::from_bytes(unprotected).expect("unprotected parses");
+    assert_eq!(plain.page_text(0).expect("plain text"), source_text);
 }
 
 #[test]

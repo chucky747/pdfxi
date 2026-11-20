@@ -25,3 +25,9 @@ default = []
 # Enable the PDFium-backed `PdfiumRenderer`. Requires a PDFium library at
 # runtime (see `PDFIUM_PATH` or the standard per-user install location).
 pdfium = ["dep:pdfium-render"]
+
+[dev-dependencies]
+# T-0256 independent-reader check: protect with the security library, then open
+# the result with PDFium through `tests/pdfium_protected.rs`.
+pdfxi-core = { workspace = true }
+pdfxi-security = { workspace = true }
