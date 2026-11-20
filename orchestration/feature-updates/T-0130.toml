@@ -1,0 +1,37 @@
+# T-0130 - app lane verification fragment (viewer panels).
+task = "T-0130"
+lane = "app"
+status = "verified"
+evidence = "CARGO_TARGET_DIR=target/integration: cargo test -p pdfxi-app --features ui => 236 passed, 0 failed (30 new), EXIT=0; cargo fmt -p pdfxi-app -- --check EXIT=0; cargo clippy -p pdfxi-app --all-targets --all-features --no-deps -- -D warnings EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-app --no-deps --all-features EXIT=0. Full output in docs/evidence/app/T-0130.md."
+docs = [
+    "crates/pdfxi-app/src/bookmarks.rs",
+    "crates/pdfxi-app/src/attachments.rs",
+    "crates/pdfxi-app/src/links.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/app/T-0130.md",
+]
+notes = "App-side bookmark/attachment/link registries and ui panels with deterministic ordering, per-tab isolation, typed errors, and host boundaries. The underlying VIEW-008/009/011 rows were already verified; this task adds the viewer surface."
+tests = [
+    "bookmarks::tests::preorder_nesting_and_collapse",
+    "bookmarks::tests::destination_fit_variants_resolve",
+    "bookmarks::tests::cycles_and_self_parents_are_rejected",
+    "attachments::tests::names_sort_case_insensitively",
+    "attachments::tests::selection_and_status_are_deterministic",
+    "links::tests::internal_uri_and_named_destinations_resolve",
+    "links::tests::hit_test_prefers_topmost_link",
+    "links::tests::per_tab_registries_are_isolated",
+]
+
+[[feature]]
+id = "VIEW-008"
+title = "Bookmarks destinations and article threads"
+domain = "View & Navigate"
+priority = "P2"
+status = "verified"
+evidence = "docs/evidence/app/T-0130.md"
+docs = "crates/pdfxi-app/src/bookmarks.rs, docs/evidence/app/T-0130.md"
+tests = [
+    "bookmarks::tests::preorder_nesting_and_collapse",
+    "bookmarks::tests::destination_fit_variants_resolve",
+]
+notes = "Validated bookmark outline tree and viewer panel; article-thread summary included."

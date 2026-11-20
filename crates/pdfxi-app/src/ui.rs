@@ -70,6 +70,17 @@
 //! renderer backend; actual optional-content rasterization depends on backend
 //! support that `pdfxi-render` does not yet provide.
 //!
+//! # Bookmarks, attachments, and links panels
+//!
+//! Three right-side panels list the active tab's outline bookmarks, embedded-file
+//! attachments, and per-page links. They are driven by the window-free
+//! [`crate::BookmarkRegistry`], [`crate::AttachmentRegistry`], and
+//! [`crate::LinkRegistry`] models: expand/collapse, selection, and link hit
+//! testing are pure in-memory operations exposed as `PdfxiApp` helpers and
+//! unit tested without a GUI. Activating an attachment builds an
+//! [`crate::AttachmentOpenRequest`] that a host with a stream backend must
+//! fulfil; the shell itself never reads embedded file bytes.
+//!
 //! # Split and tile panes
 //!
 //! A toolbar row and keyboard shortcuts drive the window-free
@@ -91,11 +102,14 @@ use egui::Key;
 use pdfxi_render::{Duplex, Orientation, PageScaleMode};
 
 use crate::{
-    AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
-    DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, LayerRegistry,
-    OcPropertiesSummary, OcgInfo, OpenOutcome, OwnedSpan, OwnedTextPage, PageSize, PaneCommand,
-    PaneKey, PaneManager, PaneRect, RadioGroup, SelectionModel, ShortcutKey, ShortcutModifiers,
-    TabId, ThumbnailPaneState, Toolset, ViewCommand, ViewMode, ViewSharing, VisibilityPlan, Zoom,
+    AppState, ArticleThread, AttachmentInfo, AttachmentOpenRequest, AttachmentRegistry,
+    AttachmentState, AttachmentSummary, BookmarkInfo, BookmarkRegistry, BookmarkSummary, CanvasHit,
+    CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision, DEFAULT_ZOOM, Destination,
+    DocumentTab, FindMatch, FindOptions, FindState, Fit, LayerRegistry, LinkId, LinkInfo,
+    LinkPoint, LinkRect, LinkRegistry, LinkSummary, LinkTarget, OcPropertiesSummary, OcgInfo,
+    OpenOutcome, OwnedSpan, OwnedTextPage, PageSize, PaneCommand, PaneKey, PaneManager, PaneRect,
+    RadioGroup, ResolvedLink, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
+    ThumbnailPaneState, Toolset, ViewCommand, ViewMode, ViewSharing, VisibilityPlan, Zoom,
     app_name, map_pane_shortcut, map_shortcut,
 };
 
@@ -238,6 +252,100 @@ pub fn demo_oc_properties() -> OcPropertiesSummary {
         .with_radio_group(RadioGroup::new(["oc-en", "oc-fr"]))
 }
 
+/// Build a deterministic demo outline tree for the shell.
+///
+/// It contains a root, two nested chapters (one expanded by default), and a
+/// top-level appendix, plus one article thread. A production loader would feed
+/// the caller's parsed summary through [`BookmarkRegistry::install`] instead.
+pub fn demo_bookmarks(page_count: usize) -> BookmarkSummary {
+    let last = page_count.saturating_sub(1);
+    BookmarkSummary::new()
+        .add_bookmark(
+            BookmarkInfo::new("bm-root", "Contents", Destination::new(0, Fit::Fit)).with_open(true),
+        )
+        .add_bookmark(
+            BookmarkInfo::new(
+                "bm-intro",
+                "Introduction",
+                Destination::new(0, Fit::FitH(Some(720.0))),
+            )
+            .with_parent("bm-root")
+            .with_open(true),
+        )
+        .add_bookmark(
+            BookmarkInfo::new(
+                "bm-body",
+                "Body",
+                Destination::new(
+                    last,
+                    Fit::Xyz {
+                        left: Some(0.0),
+                        top: None,
+                        zoom: None,
+                    },
+                ),
+            )
+            .with_parent("bm-root"),
+        )
+        .add_bookmark(BookmarkInfo::new(
+            "bm-refs",
+            "References",
+            Destination::new(last, Fit::FitB),
+        ))
+        .add_article(ArticleThread::new(
+            "art-main",
+            "Demo article",
+            (0..=last).collect::<Vec<_>>(),
+        ))
+}
+
+/// Build a deterministic demo embedded-file list for the shell.
+pub fn demo_attachments(page_count: usize) -> AttachmentSummary {
+    let last = page_count.saturating_sub(1);
+    AttachmentSummary::new()
+        .add(AttachmentInfo::new(
+            "notes.txt",
+            "Editor notes",
+            256,
+            Some(last),
+        ))
+        .add(AttachmentInfo::new("data.csv", "", 4096, Some(0)))
+        .add(AttachmentInfo::new(
+            "supplement.pdf",
+            "Supplement",
+            8192,
+            None,
+        ))
+}
+
+/// Build a deterministic demo link set for the shell.
+///
+/// One URI link and one internal link live on page 0; a named link lives on the
+/// last page and resolves through the registered `section.intro` name.
+pub fn demo_links(page_count: usize) -> LinkSummary {
+    let last = page_count.saturating_sub(1);
+    LinkSummary::new()
+        .add_link(LinkInfo::new(
+            "lnk-web",
+            0,
+            LinkRect::new(72.0, 700.0, 120.0, 16.0),
+            LinkTarget::Uri("https://example.test".into()),
+        ))
+        .add_link(LinkInfo::new(
+            "lnk-jump",
+            0,
+            LinkRect::new(220.0, 700.0, 120.0, 16.0),
+            LinkTarget::Internal { page: last },
+        ))
+        .add_link(LinkInfo::new(
+            "lnk-named",
+            last,
+            LinkRect::new(72.0, 100.0, 160.0, 16.0),
+            LinkTarget::Named("section.intro".into()),
+        ))
+        .add_name("section.intro", 0)
+}
+
 /// Build placeholder text pages so selection can be demonstrated without a
 /// renderer. Each page carries one short line of text near the top-left.
 pub fn demo_text_pages(count: usize) -> Vec<OwnedTextPage> {
@@ -331,6 +439,18 @@ pub fn pane_layout_label(layout: crate::PaneLayout) -> String {
             }
         },
         PaneLayout::Tile(grid) => format!("Tile {}x{}", grid.rows, grid.cols),
+    }
+}
+
+/// A short, human-readable label for a link target.
+///
+/// Pure and window-free so the Links panel and unit tests share one formatting
+/// path. Opening a URI is always the host's responsibility.
+pub fn link_target_label(target: &LinkTarget) -> String {
+    match target {
+        LinkTarget::Internal { page } => format!("Page {}", page + 1),
+        LinkTarget::Uri(uri) => format!("URI {uri}"),
+        LinkTarget::Named(name) => format!("Named {name}"),
     }
 }
 
@@ -587,6 +707,14 @@ pub struct PdfxiApp {
     thumb_follow_active: bool,
     /// Per-tab optional content layer models and viewing states.
     layers: LayerRegistry,
+    /// Per-tab outline bookmark trees and their expand/selection state.
+    bookmarks: BookmarkRegistry,
+    /// Per-tab embedded-file lists and their selection state.
+    attachments: AttachmentRegistry,
+    /// Per-tab link annotations, index, and named destinations.
+    links: LinkRegistry,
+    /// Most recent host attachment-open request (a metadata boundary).
+    last_open_request: Option<AttachmentOpenRequest>,
     /// Logical split/tile panes inside the single central canvas.
     panes: PaneManager,
     /// GPU textures for generated thumbnails, keyed by page.
@@ -684,6 +812,16 @@ impl PdfxiApp {
         // The demo summary is caller-controlled and always valid; a real loader
         // would install its parsed summary through the same registry method.
         let _ = self.layers.install(id, demo_oc_properties());
+        // The demo outline/attachments/links are caller-controlled and always
+        // valid; a real loader would install parsed data through the registries.
+        let _ = self
+            .bookmarks
+            .install(id, demo_bookmarks(page_count), page_count);
+        let _ = self
+            .attachments
+            .install(id, demo_attachments(page_count), page_count);
+        let _ = self.links.install(id, demo_links(page_count), page_count);
+        self.last_open_request = None;
         #[cfg(feature = "pdfium")]
         self.thumb_textures.clear();
     }
@@ -738,6 +876,9 @@ impl PdfxiApp {
         match outcome {
             crate::CloseOutcome::Closed { .. } => {
                 self.layers.remove(id);
+                self.bookmarks.remove(id);
+                self.attachments.remove(id);
+                self.links.remove(id);
                 // Tab close deterministically removes every pane bound to it;
                 // pane-local view state is discarded, never written back.
                 let _ = self.panes.close_tab(id);
@@ -1617,6 +1758,349 @@ impl PdfxiApp {
         }
     }
 
+    /// Reinstall the demo outline/attachment/link data on the active tab.
+    ///
+    /// Returns `false` with a status message when no document is open. A test
+    /// helper and a recovery path for a tab whose navigation data was cleared.
+    pub fn install_demo_navigation_data(&mut self) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        let page_count = self.demo_page_count();
+        // Each error type is handled in its own arm because the three models
+        // deliberately expose distinct typed errors.
+        if let Err(error) = self
+            .bookmarks
+            .install(tab, demo_bookmarks(page_count), page_count)
+        {
+            self.status = error.to_string();
+            return false;
+        }
+        if let Err(error) = self
+            .attachments
+            .install(tab, demo_attachments(page_count), page_count)
+        {
+            self.status = error.to_string();
+            return false;
+        }
+        if let Err(error) = self.links.install(tab, demo_links(page_count), page_count) {
+            self.status = error.to_string();
+            return false;
+        }
+        self.status = format!("Installed demo navigation data for tab {tab}");
+        true
+    }
+
+    /// Borrow the per-tab bookmark registry.
+    pub fn bookmarks(&self) -> &BookmarkRegistry {
+        &self.bookmarks
+    }
+
+    /// Borrow the per-tab attachment registry.
+    pub fn attachments(&self) -> &AttachmentRegistry {
+        &self.attachments
+    }
+
+    /// Borrow the per-tab link registry.
+    pub fn links(&self) -> &LinkRegistry {
+        &self.links
+    }
+
+    /// Visible bookmark rows for the active tab, in deterministic order.
+    pub fn bookmark_rows(&self) -> Vec<crate::VisibleBookmark> {
+        self.state
+            .active_tab_id()
+            .map_or_else(Vec::new, |tab| self.bookmarks.visible_rows(tab))
+    }
+
+    /// Article-thread summary for the active tab: `(id, title, page count)` rows.
+    pub fn article_summary(&self) -> Vec<(String, String, usize)> {
+        self.state
+            .active_tab_id()
+            .and_then(|tab| self.bookmarks.model(tab))
+            .map(|model| {
+                model
+                    .articles()
+                    .map(|article| {
+                        (
+                            article.id().to_string(),
+                            article.title().to_string(),
+                            article.pages().len(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Toggle a bookmark's expanded flag on the active tab.
+    ///
+    /// Returns `true` when the action succeeded (use
+    /// [`Self::bookmark_rows`] or the registry state to observe the new
+    /// expansion value); reports unknown ids and missing tabs through
+    /// [`Self::status`].
+    pub fn toggle_bookmark_expansion(&mut self, id: &str) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.bookmarks.toggle_expanded(tab, id) {
+            Ok(expanded) => {
+                self.status = format!(
+                    "Bookmark {id} {}",
+                    if expanded { "expanded" } else { "collapsed" }
+                );
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Select a bookmark on the active tab.
+    pub fn select_bookmark(&mut self, id: &str) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.bookmarks.select(tab, id) {
+            Ok(()) => {
+                self.status = format!("Selected bookmark {id}");
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Attachment rows for the active tab: `(name, description, size, page)`.
+    pub fn attachment_rows(&self) -> Vec<(String, String, u64, Option<usize>)> {
+        self.state
+            .active_tab_id()
+            .and_then(|tab| self.attachments.model(tab))
+            .map(|model| {
+                model
+                    .attachments()
+                    .map(|attachment| {
+                        (
+                            attachment.name().to_string(),
+                            attachment.description().to_string(),
+                            attachment.size(),
+                            attachment.page(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Select an attachment on the active tab.
+    pub fn select_attachment(&mut self, name: &str) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.attachments.select(tab, name) {
+            Ok(()) => {
+                self.status = format!("Selected attachment {name}");
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Request that the host open an attachment on the active tab.
+    ///
+    /// This is the host open boundary: the app records the request and its
+    /// status but never reads embedded file bytes or touches the filesystem. A
+    /// host with a stream backend consumes [`Self::last_open_request`] and
+    /// performs extraction/opening. Returns `false` when there is no active tab
+    /// or the attachment is unknown.
+    pub fn open_attachment(&mut self, name: &str) -> bool {
+        let Some(tab) = self.state.active_tab_id() else {
+            self.status = "No document open".to_string();
+            return false;
+        };
+        match self.attachments.open_request(tab, name) {
+            Ok(request) => {
+                self.status = format!("Open request for attachment {name} (host must fulfil)");
+                self.last_open_request = Some(request);
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// The most recent host open request produced by [`Self::open_attachment`].
+    pub fn last_open_request(&self) -> Option<&AttachmentOpenRequest> {
+        self.last_open_request.as_ref()
+    }
+
+    /// Link rows on `page` of the active tab: `(id, page, target label)`.
+    pub fn link_rows(&self, page: usize) -> Vec<(LinkId, usize, String)> {
+        self.state
+            .active_tab_id()
+            .and_then(|tab| self.links.model(tab))
+            .map(|model| {
+                model
+                    .links_for_page(page)
+                    .map(|link| {
+                        (
+                            link.id().to_string(),
+                            link.page(),
+                            link_target_label(link.target()),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Resolve a link on the active tab to its destination, if identifiable.
+    pub fn resolve_link(&self, id: &str) -> Option<ResolvedLink> {
+        self.state
+            .active_tab_id()
+            .and_then(|tab| self.links.model(tab))
+            .and_then(|model| model.resolve(id))
+    }
+
+    /// Hit-test a page-space point against the active tab's links.
+    ///
+    /// Returns the topmost link id at `(x, y)` on `page`, or `None`.
+    pub fn hit_test_link(&self, page: usize, x: f32, y: f32) -> Option<String> {
+        self.state
+            .active_tab_id()
+            .and_then(|tab| self.links.hit_test(tab, page, LinkPoint::new(x, y)))
+            .map(str::to_string)
+    }
+
+    /// Render the Bookmarks side panel for the active tab.
+    fn bookmarks_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(tab) = self.state.active_tab_id() else {
+            ui.label("No document open");
+            return;
+        };
+        let rows = self.bookmarks.visible_rows(tab);
+        if rows.is_empty() {
+            ui.heading("Bookmarks");
+            ui.label("No bookmarks in this document");
+            return;
+        }
+
+        ui.heading("Bookmarks");
+        for row in &rows {
+            let indent = (row.depth() * 12) as f32;
+            ui.horizontal(|ui| {
+                ui.add_space(indent);
+                let marker = if row.has_children() {
+                    if row.expanded() { "▾" } else { "▸" }
+                } else {
+                    "·"
+                };
+                let mut label = format!("{marker} {} (p. {})", row.title(), row.page() + 1);
+                if row.selected() {
+                    label.push_str(" ◀");
+                }
+                if ui.button(label).clicked() {
+                    let id = row.id().to_string();
+                    if row.has_children() {
+                        let _ = self.toggle_bookmark_expansion(&id);
+                    }
+                    let _ = self.select_bookmark(&id);
+                }
+            });
+        }
+
+        let articles = self.article_summary();
+        if !articles.is_empty() {
+            ui.separator();
+            ui.label("Articles");
+            for (id, title, pages) in articles {
+                ui.label(format!("{title} [{id}] — {pages} page(s)"));
+            }
+        }
+    }
+
+    /// Render the Attachments side panel for the active tab.
+    fn attachments_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(tab) = self.state.active_tab_id() else {
+            ui.label("No document open");
+            return;
+        };
+        let rows = self.attachment_rows();
+        ui.heading("Attachments");
+        if rows.is_empty() {
+            ui.label("No embedded attachments");
+            return;
+        }
+
+        let selected = self
+            .attachments
+            .state(tab)
+            .and_then(AttachmentState::selected)
+            .map(str::to_string);
+        for (name, description, size, page) in rows {
+            let label = if description.is_empty() {
+                format!("{name} ({size} B)")
+            } else {
+                format!("{name} — {description} ({size} B)")
+            };
+            let page_hint = page.map_or("page n/a".to_string(), |page| format!("p. {}", page + 1));
+            ui.horizontal(|ui| {
+                let mut text = label;
+                if selected.as_deref() == Some(name.as_str()) {
+                    text.push_str(" ◀");
+                }
+                if ui.button(text).clicked() {
+                    let _ = self.select_attachment(&name);
+                }
+                ui.label(page_hint);
+            });
+        }
+        ui.separator();
+        ui.label("Opening bytes is delegated to the host (metadata only here).");
+        if let Some(request) = self.last_open_request() {
+            ui.label(format!("Requested: {}", request.name()));
+        }
+    }
+
+    /// Render the Links side panel for the active tab's current page.
+    fn links_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(tab) = self.state.active_tab_id() else {
+            ui.label("No document open");
+            return;
+        };
+        let page = self
+            .state
+            .active_tab()
+            .map_or(0, |active| active.current_page());
+        let rows = self.link_rows(page);
+        ui.heading(format!("Links — page {}", page + 1));
+        if rows.is_empty() {
+            ui.label("No links on this page");
+            return;
+        }
+        for (id, link_page, target) in rows {
+            let resolved = self
+                .links
+                .model(tab)
+                .and_then(|model| model.resolve(&id))
+                .map_or(String::new(), |target| format!(" → {target:?}"));
+            ui.label(format!("{id} (p. {}) {target}{resolved}", link_page + 1));
+        }
+    }
+
     /// Render the in-document find bar.
     ///
     /// The query field mirrors into [`FindState`] on change; the two toggles
@@ -2314,6 +2798,18 @@ impl eframe::App for PdfxiApp {
             .resizable(true)
             .default_width(168.0)
             .show(ctx, |ui| self.layers_ui(ui));
+        egui::SidePanel::right("pdfxi_bookmarks")
+            .resizable(true)
+            .default_width(168.0)
+            .show(ctx, |ui| self.bookmarks_ui(ui));
+        egui::SidePanel::right("pdfxi_attachments")
+            .resizable(true)
+            .default_width(168.0)
+            .show(ctx, |ui| self.attachments_ui(ui));
+        egui::SidePanel::right("pdfxi_links")
+            .resizable(true)
+            .default_width(150.0)
+            .show(ctx, |ui| self.links_ui(ui));
         egui::TopBottomPanel::top("pdfxi_toolbar").show(ctx, |ui| self.toolbar_ui(ui));
         egui::TopBottomPanel::top("pdfxi_tabs").show(ctx, |ui| self.tabs_ui(ui));
         if self.find_open {
@@ -3440,5 +3936,149 @@ mod open_print_tests {
             "{}",
             app.pane_status()
         );
+    }
+}
+
+/// Window-free tests for the bookmarks, attachments, and links viewer panels.
+#[cfg(test)]
+mod navigation_viewer_tests {
+    use super::*;
+
+    #[test]
+    fn demo_tab_installs_navigation_models_and_article_summary() {
+        let mut app = PdfxiApp::default();
+        assert!(app.bookmark_rows().is_empty());
+        assert!(app.attachment_rows().is_empty());
+        assert!(app.link_rows(0).is_empty());
+
+        let id = app.open_demo_tab();
+        assert!(app.bookmarks().contains(id));
+        assert!(app.attachments().contains(id));
+        assert!(app.links().contains(id));
+        assert_eq!(app.bookmark_rows().len(), 4);
+        let articles = app.article_summary();
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].0, "art-main");
+    }
+
+    #[test]
+    fn bookmark_collapse_and_selection_via_ui_helpers() {
+        let mut app = PdfxiApp::default();
+        app.open_demo_tab();
+        // bm-root and bm-intro are open by default: all four nodes visible.
+        assert_eq!(app.bookmark_rows().len(), 4);
+        // bm-root has children; collapsing it hides bm-intro and bm-body.
+        // The helper returns whether the action succeeded; inspect the rows for
+        // the resulting expansion state.
+        assert!(app.toggle_bookmark_expansion("bm-root"));
+        assert_eq!(app.bookmark_rows().len(), 2, "children collapsed");
+        assert!(
+            !app.bookmarks()
+                .state(app.state().active_tab_id().expect("tab"))
+                .expect("state")
+                .is_expanded("bm-root")
+        );
+        assert!(app.toggle_bookmark_expansion("bm-root"));
+        assert_eq!(app.bookmark_rows().len(), 4, "children re-expanded");
+        assert!(app.select_bookmark("bm-refs"));
+        assert!(
+            app.bookmark_rows()
+                .iter()
+                .any(|row| row.id() == "bm-refs" && row.selected())
+        );
+        assert!(!app.select_bookmark("ghost"));
+        assert!(app.status().contains("no bookmark"), "{}", app.status());
+    }
+
+    #[test]
+    fn attachment_rows_order_open_boundary_and_empty_state() {
+        let mut app = PdfxiApp::default();
+        app.open_demo_tab();
+        let rows = app.attachment_rows();
+        let names: Vec<&str> = rows.iter().map(|row| row.0.as_str()).collect();
+        assert_eq!(names, vec!["data.csv", "notes.txt", "supplement.pdf"]);
+        assert!(app.select_attachment("notes.txt"));
+        let tab = app.state().active_tab_id().expect("active tab");
+        assert_eq!(
+            app.attachments()
+                .model(tab)
+                .and_then(|model| model.get("notes.txt"))
+                .map(|attachment| attachment.size()),
+            Some(256)
+        );
+        // Host open boundary: request recorded, no bytes read here.
+        assert!(app.open_attachment("notes.txt"));
+        assert_eq!(
+            app.last_open_request().map(AttachmentOpenRequest::name),
+            Some("notes.txt")
+        );
+        assert!(!app.open_attachment("missing"));
+        assert_eq!(app.attachment_rows().len(), 3);
+    }
+
+    #[test]
+    fn link_rows_resolution_and_hit_test_via_ui_helpers() {
+        let mut app = PdfxiApp::default();
+        app.open_demo_tab();
+        let rows = app.link_rows(0);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "lnk-web");
+        assert!(rows[0].2.starts_with("URI"));
+        assert_eq!(rows[1].0, "lnk-jump");
+        assert_eq!(
+            app.resolve_link("lnk-web"),
+            Some(ResolvedLink::Uri("https://example.test".into()))
+        );
+        assert!(matches!(
+            app.resolve_link("lnk-named"),
+            Some(ResolvedLink::NamedPage { page: Some(0), .. })
+        ));
+        assert_eq!(app.resolve_link("ghost"), None);
+        assert_eq!(app.hit_test_link(0, 80.0, 705.0), Some("lnk-web".into()));
+        assert_eq!(app.hit_test_link(0, 230.0, 705.0), Some("lnk-jump".into()));
+        assert_eq!(app.hit_test_link(0, 0.0, 0.0), None);
+        assert_eq!(
+            link_target_label(&LinkTarget::Internal { page: 2 }),
+            "Page 3"
+        );
+    }
+
+    #[test]
+    fn navigation_data_is_isolated_per_tab_and_removed_with_tab() {
+        let mut app = PdfxiApp::default();
+        let a = app.open_demo_tab();
+        let b = app.open_demo_tab();
+        // The active tab is `b`; selecting there must not touch `a`.
+        assert!(app.select_bookmark("bm-refs"));
+        assert!(
+            app.bookmarks()
+                .state(b)
+                .expect("tab b")
+                .is_expanded("bm-intro")
+        );
+        assert_eq!(
+            app.bookmarks().state(b).expect("tab b").selected(),
+            Some("bm-refs")
+        );
+        assert_eq!(app.bookmarks().state(a).expect("tab a").selected(), None);
+        assert!(app.close_tab_by_id(b));
+        assert!(!app.bookmarks().contains(b));
+        assert!(!app.attachments().contains(b));
+        assert!(!app.links().contains(b));
+        assert!(app.bookmarks().contains(a));
+    }
+
+    #[test]
+    fn reinstall_restores_navigation_data_after_clear() {
+        let mut app = PdfxiApp::default();
+        let id = app.open_demo_tab();
+        assert!(app.bookmarks.remove(id));
+        assert!(app.bookmark_rows().is_empty());
+        assert!(app.install_demo_navigation_data());
+        assert!(app.bookmarks().contains(id));
+        assert_eq!(app.bookmark_rows().len(), 4);
+        let mut empty = PdfxiApp::default();
+        assert!(!empty.install_demo_navigation_data());
+        assert!(empty.status().contains("No document open"));
     }
 }
