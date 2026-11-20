@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Portfolio browsing and local manage workflows",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0150"],
   "owns": [
     "crates/pdfxi-app/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0155.toml"
   ],
   "acceptance": "cargo test -p pdfxi-app --features ui",
-  "evidence": ""
+  "evidence": "docs/evidence/app/T-0155.md"
 }

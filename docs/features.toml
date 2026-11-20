@@ -445,14 +445,40 @@ tests = []
 title = "Reflow and read aloud"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/portfolio.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0155.md",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "docs/evidence/app/T-0155.md: 9 new portfolio::tests pass; cargo test -p pdfxi-app 321 passed/0 failed, --features ui 384 passed/0 failed; fmt/clippy/doc EXIT=0."
 id = "VIEW-014"
-notes = ""
+notes = """
+Adds pdfxi_app::portfolio over a caller-supplied embedded-file collection summary
+(name, description, size, MIME/extension, optional modified time, internal folder
+path). PortfolioPath validates internal paths as traversal-free (no . or .., no
+empty components, no absolute/drive prefixes, no backslashes, no control chars,
+no ':' stream markers). PortfolioModel::from_summary returns a deterministic,
+nested PortfolioTree (folders before files, case-insensitive then raw-name sort)
+plus a typed PortfolioReport that records unsupported/malformed entries and
+duplicate full paths (first entry wins); the flat rows() view carries depth for a
+host tree widget. No extraction, no filesystem, and no UI. Host boundary: a tree
+view widget and the embedded-file byte extractor are not wired, so the
+user-visible browsing row stays in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "portfolio::tests::empty_portfolio_produces_a_root_only_tree",
+    "portfolio::tests::tree_construction_nests_folders",
+    "portfolio::tests::sorting_is_folders_first_and_case_insensitive",
+    "portfolio::tests::traversal_folder_is_reported_and_skipped",
+    "portfolio::tests::duplicate_full_paths_are_reported_and_first_wins",
+    "portfolio::tests::malformed_entries_are_reported_and_skipped",
+    "portfolio::tests::build_is_deterministic_regardless_of_input_order",
+    "portfolio::tests::path_validation_rejects_absolute_drive_backslash_and_dotdot",
+    "portfolio::tests::too_many_entries_is_a_global_typed_error",
+]
 title = "PDF Portfolio browsing"
 
 [[feature]]
@@ -3378,14 +3404,38 @@ tests = [
 title = "Cross-file search and index"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/portfolio_manage.rs",
+    "crates/pdfxi-app/src/portfolio.rs",
+    "docs/evidence/app/T-0155.md",
+]
 domain = "Document Management"
-evidence = ""
+evidence = "docs/evidence/app/T-0155.md: 9 new portfolio_manage::tests pass; cargo test -p pdfxi-app 321/0 and --features ui 384/0; fmt/clippy/doc EXIT=0."
 id = "MANAGE-004"
-notes = ""
+notes = """
+Adds pdfxi_app::portfolio_manage: PortfolioManager owns entries keyed by validated
+full PortfolioPath and exposes deterministic add/remove/rename/move operations.
+Each operation validates paths and names, rejects duplicate targets and missing
+sources with typed ManageError variants, restores state on a failed rename/move,
+and returns a ManagePlan whose ops the host can serialize via to_lines()/serialize()
+with field escaping (add can also be seeded from a VIEW-014 PortfolioModel). No
+UI and no file writes. Host boundary: a management UI and applying the serialized
+plan to a real embedded-file collection are not wired, so the row stays
+in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "portfolio_manage::tests::add_produces_plan_and_updates_manager",
+    "portfolio_manage::tests::add_duplicate_is_rejected",
+    "portfolio_manage::tests::add_invalid_path_is_rejected",
+    "portfolio_manage::tests::rename_plan_repaths_entry",
+    "portfolio_manage::tests::rename_to_existing_name_is_rejected_without_losing_source",
+    "portfolio_manage::tests::move_plan_repaths_entry",
+    "portfolio_manage::tests::remove_plan_drops_entry",
+    "portfolio_manage::tests::plan_serializes_deterministically_and_escapes_fields",
+    "portfolio_manage::tests::from_model_seeds_managed_entries",
+]
 title = "PDF Portfolio management"
 
 [[feature]]
@@ -3408,14 +3458,35 @@ tests = [
 title = "Version compare and history"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/shared_folder.rs",
+    "docs/decisions/0008-local-replacements.md",
+    "docs/evidence/app/T-0155.md",
+]
 domain = "Document Management"
-evidence = ""
+evidence = "docs/evidence/app/T-0155.md: 6 new shared_folder::tests pass; cargo test -p pdfxi-app 321/0 and --features ui 384/0; fmt/clippy/doc EXIT=0."
 id = "MANAGE-006"
-notes = ""
+notes = """
+ADR 0008 local, file-based equivalent (replacement named: pdfxi_app::shared_folder
+SharedFolderSource). It validates a caller-supplied local root path (absolute or
+relative) and rejects UNC shares, URIs, .. traversal, doubled separators, control
+characters and over-long roots with typed SharedFolderError variants. It produces
+a deterministic SharedFolderListingPlan (normalized root, recursion flag, bounded
+entry cap, sorted/deduped extension filter, stable serialize()) and validates
+traversal-free relative child paths. No credentials, no network, and no filesystem
+access. Host boundary: the host must enumerate the local folder and feed results
+back, and no UI is wired, so the row stays in-progress rather than replaced.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "shared_folder::tests::valid_local_roots_are_accepted",
+    "shared_folder::tests::traversal_and_network_roots_are_rejected",
+    "shared_folder::tests::malformed_roots_are_rejected",
+    "shared_folder::tests::child_path_traversal_and_absolute_are_rejected",
+    "shared_folder::tests::listing_plan_is_deterministic_and_extensions_are_sorted",
+    "shared_folder::tests::extension_cap_is_bounded",
+]
 title = "Network and SharePoint-style integration"
 
 [[feature]]

@@ -61,6 +61,14 @@
 //! deterministic accessibility node tree, focus announcements, and a screen-
 //! reader host adapter from a caller-supplied state snapshot; with the `ui`
 //! feature it registers that tree through `egui`'s AccessKit re-export.
+//! The [`portfolio`] module models PDF Portfolio browsing over a caller-supplied
+//! embedded-file collection summary: traversal-free internal paths, a
+//! deterministic sorted folder/file tree, and a typed report of unsupported or
+//! duplicate entries. [`portfolio_manage`] adds deterministic add/remove/rename/
+//! move operations with a serializable plan, and [`shared_folder`] supplies the
+//! ADR 0008 local, file-based equivalent of a network/SharePoint library: a
+//! validated shared-folder root and a deterministic enumeration plan. None of
+//! these three modules reads file bytes or touches the network.
 //! [`AppState`] is the tabbed document workspace: it owns an insertion-ordered
 //! set of stable-id tabs, each with its own path, dirty flag, and per-tab view
 //! state (page, zoom, layout, rotation, and scroll offset). Open, close,
@@ -89,11 +97,14 @@ pub mod loupe;
 pub mod nav;
 pub mod open;
 pub mod page_text;
+pub mod portfolio;
+pub mod portfolio_manage;
 pub mod presentation;
 pub mod print;
 pub mod raster;
 pub mod read_aloud;
 pub mod selection;
+pub mod shared_folder;
 pub mod split;
 mod state;
 mod tabs;
@@ -162,6 +173,14 @@ pub use open::{
     TabOpenState,
 };
 pub use page_text::PageText;
+pub use portfolio::{
+    DuplicateEntry, MAX_PORTFOLIO_DESCRIPTION_LEN, MAX_PORTFOLIO_ENTRIES, MAX_PORTFOLIO_MIME_LEN,
+    MAX_PORTFOLIO_NAME_LEN, MAX_PORTFOLIO_PATH_DEPTH, MAX_PORTFOLIO_PATH_LEN, PortfolioEntry,
+    PortfolioError, PortfolioFile, PortfolioFolder, PortfolioModel, PortfolioNode, PortfolioPath,
+    PortfolioPathError, PortfolioReport, PortfolioRow, PortfolioRowKind, PortfolioSummary,
+    PortfolioTree, UnsupportedEntry, UnsupportedReason,
+};
+pub use portfolio_manage::{ManageError, ManageOp, ManagePlan, PortfolioManager};
 pub use presentation::{
     AdvanceState, FitMode, FullscreenLayout, PresentationCommand, PresentationError,
     PresentationGesture, PresentationKey, PresentationModel, PresentationModifiers,
@@ -184,6 +203,10 @@ pub use read_aloud::{
 };
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
+};
+pub use shared_folder::{
+    DEFAULT_SHARED_FOLDER_MAX_ENTRIES, MAX_SHARED_FOLDER_EXTENSIONS, MAX_SHARED_FOLDER_ROOT_LEN,
+    SharedFolderError, SharedFolderListingPlan, SharedFolderPath, SharedFolderSource,
 };
 pub use split::{
     DEFAULT_DIVIDER_THICKNESS, DEFAULT_MINIMUM_PANE, DEFAULT_SPLIT_RATIO, Divider, DividerAxis,
