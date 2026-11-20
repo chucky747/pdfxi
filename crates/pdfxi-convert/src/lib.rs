@@ -107,6 +107,15 @@
 //! - [`portfolio`] models a customizable PDF Portfolio manifest (CREATE-010):
 //!   named, described, ordered entries with traversal/duplicate validation and
 //!   a deterministic XML descriptor serialized through the Office XML helpers.
+//! - [`scan_capture`] is the local scan-to-PDF ingestion contract (CREATE-007):
+//!   caller-supplied TWAIN/WIA-equivalent page images with resolution, geometry,
+//!   duplex/page-order, and deterministic assembly planning that reuses
+//!   [`print_capture`], [`image`], and [`create`]. No device API is used.
+//! - [`ocr_pipeline`] closes the OCR-to-searchable-PDF flow (CREATE-008): a
+//!   caller-supplied [`ocr_pipeline::OcrEngine`] returns text, per-word boxes,
+//!   and confidence; the module deterministically assembles page text, maps
+//!   boxes into invisible text positions, thresholds confidence, and reports
+//!   kept/rejected/suspect words. No Tesseract dependency is added.
 //!
 //! The text/JSON modules are always compiled and add no dependencies, so a
 //! `--no-default-features` build stays dependency-free.
@@ -149,6 +158,7 @@ pub mod html_export;
 pub mod image;
 mod json;
 mod mime;
+pub mod ocr_pipeline;
 pub mod office_export;
 pub mod office_import;
 mod options;
@@ -161,6 +171,7 @@ pub mod preflight;
 pub mod print_capture;
 pub mod print_job;
 mod rtf;
+pub mod scan_capture;
 mod source;
 mod tagged_text;
 mod text;
@@ -204,6 +215,12 @@ pub use image::{
     encode_png, encode_ppm, encode_tiff,
 };
 pub use json::{DocumentJson, DocumentMetadata, JSON_SCHEMA_VERSION, JsonPage, JsonSpan};
+pub use ocr_pipeline::{
+    ConfidencePolicy, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_SUSPECT_THRESHOLD, OCR_MAX_IMAGE_DPI,
+    OCR_MAX_PAGES, OCR_MAX_WORDS_PER_PAGE, OCR_MIN_IMAGE_DPI, OcrBox, OcrEngine, OcrImage,
+    OcrOptions, OcrPageText, OcrPipelineError, OcrWord, PixelFormat, PlacedWord,
+    SearchableTextLayer, SearchableTextPlan, TextPosition, run_ocr_pipeline,
+};
 pub use office_export::{
     CellValue, DocxExportError, DocxExporter, ModelError, OfficeBlock, OfficeCell, OfficeDocument,
     OfficeExport, OfficeExportError, OfficeExportReport, OfficeExporter, OfficeFormat, OfficePage,
@@ -254,6 +271,10 @@ pub use print_job::{
     parse_page_range,
 };
 pub use rtf::{RtfOptions, RtfPage, export_rtf, export_rtf_string};
+pub use scan_capture::{
+    DuplexMode, PlannedScanPage, SCAN_MAX_DPI, SCAN_MAX_LABEL_BYTES, SCAN_MAX_PAGES, SCAN_MIN_DPI,
+    ScanAssemblyPlan, ScanError, ScanOptions, ScanReport, ScanSide, ScanSource, build_scan_plan,
+};
 pub use source::SourceKind;
 pub use tagged_text::{
     TaggedExport, TaggedTextOptions, export_plain_text, export_structured_text, export_tagged_text,

@@ -759,81 +759,94 @@ tests = [
 title = "Create PDF from Microsoft Office via adapter"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/scan_capture.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0165.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 322 unit + 31 integration tests passed, 0 failed, TEST_EXIT=0. All 9 scan_capture::tests green, including simplex_plan_orders_sheets_and_rejects_back_images, duplex_front_first_page_order_is_sheet_then_front_back, duplex_back_first_page_order_is_sheet_then_back_front, invalid_dpi_and_page_limits_are_rejected and assembly_is_deterministic_and_reuses_print_capture_plan. Clippy/doc/fmt scoped to pdfxi-convert EXIT=0. Full output in docs/evidence/convert/T-0165.md."
 id = "CREATE-007"
-notes = ""
+notes = """
+ADR 0008 local equivalent for TWAIN/WIA: `scan_capture` accepts caller-supplied
+rendered page images from any TWAIN/WIA-equivalent host facility and never opens
+a device. It delivers a `ScanSource` model (sheet/side/label/pixels/DPI/format),
+resolution validation (finite DPI in 50..=1200, pixel bounds via the shared
+image constants, page geometry via create::PageSize), a duplex/page-order plan
+(simplex, duplex front-first, duplex back-first with duplicate/missing-side
+typed errors), a PDF assembly plan that reuses `print_capture::build_print_capture_plan`
+and `image::ImageFormat`, a deterministic `ScanReport` summary, and typed
+`ScanError` variants. Nine tests cover source validation, DPI/page limits,
+duplex ordering, reuse and byte-for-byte determinism.
+
+Verified at library level only. Exact remaining scope (outside this task's
+claim): a host-side TWAIN/WIA device adapter that produces the rendered images,
+UI wiring to emit PDF bytes from caller-held pixels via create::create_from_image,
+an integrator-owned mdBook page, and the integrator merge into docs/features.toml.
+No device, driver, process, network, or GUI code exists in this crate.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "scan_capture::tests::simplex_plan_orders_sheets_and_rejects_back_images",
+    "scan_capture::tests::duplex_front_first_page_order_is_sheet_then_front_back",
+    "scan_capture::tests::duplex_back_first_page_order_is_sheet_then_back_front",
+    "scan_capture::tests::invalid_dpi_and_page_limits_are_rejected",
+    "scan_capture::tests::label_sheet_and_geometry_validation_reuses_image_bounds",
+    "scan_capture::tests::empty_duplicate_and_missing_sides_have_typed_errors",
+    "scan_capture::tests::assembly_is_deterministic_and_reuses_print_capture_plan",
+    "scan_capture::tests::resolved_page_size_is_derived_from_pixels_and_dpi",
+    "scan_capture::tests::error_messages_are_actionable",
+]
 title = "Scan to PDF with TWAIN and WIA"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-text/src/ocr.rs",
-    "crates/pdfxi-text/src/lib.rs",
-    "crates/pdfxi-text/src/sidecar.rs",
-    "crates/pdfxi-text/src/bin/fake_sidecar.rs",
-    "crates/pdfxi-text/tests/sidecar_bridge.rs",
-    "docs/evidence/render/T-0071.md",
+    "crates/pdfxi-convert/src/ocr_pipeline.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0165.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-text (CARGO_TARGET_DIR=target/lanes/render): 68 unit + 15 integration + 0 doc tests passed, 0 failed; TEST_EXIT=0. fmt/clippy/doc clean (FMT_EXIT=0, CLIPPY_EXIT=0, DOC_EXIT=0). Full output in docs/evidence/render/T-0071.md."
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 322 unit + 31 integration tests passed, 0 failed, TEST_EXIT=0. All 12 ocr_pipeline::tests green, including engine_is_invoked_once_per_page, word_boxes_map_to_pdf_points_with_top_left_inversion, confidence_threshold_filters_and_flags_suspect_words, empty_ocr_result_yields_an_empty_searchable_layer and plan_and_report_are_byte_deterministic. Clippy/doc/fmt scoped to pdfxi-convert EXIT=0. Full output in docs/evidence/convert/T-0165.md."
 id = "CREATE-008"
 notes = """
-T-0057 delivered the pure OCR contract (OcrEngine, OcrImage/OcrPage,
-LanguageRouter with script-based auto detection, the SidecarRequest/Response
-JSON codec, and the ConfidencePolicy suspect report). T-0071 adds the
-SidecarOcrEngine process bridge: validated configuration, no-shell spawn with a
-fixed literal argv, cleared environment with an explicit allowlist, bounded
-stdout, and a supervisor that kills/reaps the child on timeout, cancellation, or
-pipe I/O errors, with typed SidecarError variants mapped onto OcrError. Review
-fixes cover a non-draining-stdin deadlock, child reaping on early exit, strict
-executable-path validation, and JSON surrogate pairs. The row remains
-in-progress because a real Tesseract binary and the end-to-end
-scanned-page-to-searchable-PDF flow are future work; only the bridge contract
-and its security/timeout behaviour are verified here.
+ADR 0008 local equivalent for the retired Tesseract-hosted OCR flow:
+`ocr_pipeline` defines a caller-supplied `OcrEngine` trait returning text,
+per-word boxes and confidence, with no Tesseract dependency and no process
+spawn. It mirrors (and documents how to bridge to) the existing pdfxi-text
+sidecar contract shape — OcrImage/OcrBox/OcrSpan/OcrPage/OcrOptions and
+ConfidencePolicy — without adding a crate dependency, per docs/ARCHITECTURE.md.
+It validates inputs, invokes the engine once per page in ascending page order,
+assembles deterministic page text, maps clamped pixel boxes into invisible
+PDF-point text positions (top-left pixel origin to bottom-left PDF origin),
+applies a confidence policy that reports kept/rejected/suspect words and empty
+pages, and returns a typed-error `SearchableTextPlan` plus a stable `OcrReport`.
+
+This closes the convert-lane half of CREATE-008; the render lane's pure OCR
+contract in pdfxi-text (T-0057/T-0071) is unchanged and still green.
+
+Verified at library level only. Exact remaining scope (outside this task's
+claim): a real OCR backend implementation of `OcrEngine`, emission of the
+planned invisible OcrText layer into final PDF bytes by the PDF writer,
+UI wiring, an integrator-owned mdBook page, and the integrator merge into
+docs/features.toml. No Tesseract binary, sidecar process, network, or GUI code
+is added here.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "ocr::tests::mock_engine_recognizes_image_and_reports_metadata",
-    "ocr::tests::router_routes_exact_fallback_and_auto",
-    "ocr::tests::strict_router_rejects_unsupported_language",
-    "ocr::tests::sidecar_request_json_round_trip",
-    "ocr::tests::sidecar_response_json_round_trip_and_conversion",
-    "ocr::tests::sidecar_json_rejects_malformed_inputs",
-    "ocr::tests::sidecar_json_accepts_surrogate_pairs_and_rejects_lone_surrogates",
-    "ocr::tests::ocr_image_rejects_out_of_range_dpi",
-    "ocr::tests::confidence_policy_filters_low_confidence_spans",
-    "ocr::tests::suspect_report_flags_low_confidence_and_unusual_characters",
-    "ocr::tests::ocr_page_sorts_spans_deterministically",
-    "ocr::tests::ocr_operations_leave_cancellation_and_progress_untouched",
-    "sidecar::tests::config_rejects_empty_paths_and_empty_language_sets",
-    "sidecar::tests::config_builders_validate_limits_and_environment_names",
-    "sidecar::tests::arguments_are_validated_but_shell_looking_text_is_allowed",
-    "sidecar::tests::environment_filter_forwards_only_allowlisted_names",
-    "sidecar::tests::engine_rejects_unsupported_language_before_spawning",
-    "sidecar::tests::engine_exposes_documented_defaults",
-    "sidecar::tests::executable_validation_requires_absolute_existing_regular_file",
-    "sidecar::tests::executable_validation_rejects_symlinks_when_creation_is_permitted",
-    "sidecar::tests::working_directory_validation_requires_existing_directory",
-    "round_trip_request_and_response_through_bridge",
-    "spawn_failure_is_typed",
-    "non_zero_exit_is_typed_with_stderr",
-    "malformed_json_is_typed",
-    "version_mismatch_is_typed",
-    "oversized_stdout_is_typed_and_kills_child",
-    "timeout_kills_child_and_returns_promptly",
-    "child_that_never_drains_stdin_still_times_out",
-    "early_nonzero_exit_with_partial_response_is_typed",
-    "cancellation_kills_child_and_returns_promptly",
-    "trait_recognize_maps_cancellation_to_contract_error",
-    "arguments_are_passed_verbatim_without_shell_interpretation",
-    "no_ambient_secret_environment_is_forwarded",
-    "fixed_working_directory_policy_is_applied",
-    "config_rejects_bare_relative_nonexistent_and_traversal_paths",
+    "ocr_pipeline::tests::engine_is_invoked_once_per_page",
+    "ocr_pipeline::tests::word_boxes_map_to_pdf_points_with_top_left_inversion",
+    "ocr_pipeline::tests::out_of_range_boxes_are_clamped_to_the_raster",
+    "ocr_pipeline::tests::confidence_threshold_filters_and_flags_suspect_words",
+    "ocr_pipeline::tests::empty_ocr_result_yields_an_empty_searchable_layer",
+    "ocr_pipeline::tests::pages_are_processed_in_deterministic_page_order",
+    "ocr_pipeline::tests::page_text_assembly_is_stable_under_input_word_order",
+    "ocr_pipeline::tests::invalid_image_options_and_policy_are_typed_errors",
+    "ocr_pipeline::tests::engine_failure_page_mismatch_and_duplicate_pages_are_typed",
+    "ocr_pipeline::tests::malformed_boxes_and_confidences_are_typed_errors",
+    "ocr_pipeline::tests::plan_and_report_are_byte_deterministic",
+    "ocr_pipeline::tests::image_bounds_constants_are_reused",
 ]
 title = "OCR scanned pages to searchable PDF"
 
