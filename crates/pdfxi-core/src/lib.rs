@@ -29,9 +29,12 @@ pub mod objstm;
 pub mod optimizer;
 pub mod page;
 pub mod pages;
+pub mod preservation;
 pub mod printer_marks;
 pub mod repair;
+pub mod transparency;
 pub mod unicode;
+pub mod xref_stream;
 
 mod lexer;
 mod parser;
@@ -75,15 +78,30 @@ pub use optimizer::{CancellationToken, OptimizationReport, OptimizationResult, O
 pub use page::{Page, Rectangle};
 pub use pages::{PageOperation, PagePlan, RotationTarget};
 pub use parser::{XrefReport, XrefSectionKind, XrefSectionReport, inspect_xref};
+pub use preservation::{
+    MAX_KEY_LEN, MAX_PRESERVED_KEYS, MAX_REVISIONS, PageTextSource, PreservationError,
+    PreservationOperation, PreservationPolicy, PreservationValidationReport, RevisionInfo,
+    validate_incremental_preservation,
+};
 pub use printer_marks::{
     MarkCircle, MarkGeometry, MarkSegment, PrinterMarkApplication, PrinterMarkOptions,
     PrinterMarks, generate_printer_marks,
 };
 pub use repair::{RepairError, RepairReport, RepairWarning, RepairedDocument, repair_document};
+pub use transparency::{
+    BackendRequirement, BlendBackend, BlendCategory, BlendMode, BlendPlan, BlendSpec,
+    GroupIsolation, GroupKnockout, MAX_ALPHA, MAX_STACK_DEPTH, MAX_TOKEN_LEN, NoBackend,
+    TransparencyError, TransparencyGroup, TransparencyStack,
+};
 pub use unicode::{
     BidiRun, Direction, Script, ShapingPlan, TextError, bidi_runs, classify_char, dominant_script,
     is_strong_direction, resolve_base_direction, shaping_plan, shaping_plan_with_boundaries,
     validate_grapheme_boundaries, validate_utf8,
+};
+pub use xref_stream::{
+    MAX_XREF_FIELD_BYTES, MAX_XREF_INDEX_SUBSECTIONS, MAX_XREF_STREAM_ENTRIES, XrefEntryKind,
+    XrefStreamEntry, XrefStreamError, XrefStreamOptions, XrefStreamPlan, XrefStreamSaveResult,
+    write_xref_stream_document,
 };
 
 use std::collections::BTreeMap;
@@ -320,6 +338,12 @@ pub enum Error {
     /// No fresh object number remains in the `u32` object-number space.
     #[error("object number space is exhausted")]
     ObjectNumberExhausted,
+    /// A standalone xref-stream write plan was rejected.
+    #[error("invalid xref stream write plan: {0}")]
+    XrefStreamPlan(#[from] xref_stream::XrefStreamError),
+    /// An incremental preservation check failed.
+    #[error("preservation validation failed: {0}")]
+    Preservation(#[from] preservation::PreservationError),
 }
 
 /// Result type used by the core crate.

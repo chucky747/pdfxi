@@ -460,7 +460,10 @@ fn zlib_stored(data: &[u8]) -> Vec<u8> {
 }
 
 /// Return `data` verbatim or wrapped in a stored-block zlib stream.
-fn encode_payload(data: &[u8], compress: bool) -> Vec<u8> {
+///
+/// Shared with the general xref-stream writer so both paths produce the same
+/// deterministic Flate wrapper and use the same reader-visible filter name.
+pub(crate) fn encode_payload(data: &[u8], compress: bool) -> Vec<u8> {
     if compress {
         zlib_stored(data)
     } else {

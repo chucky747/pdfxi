@@ -3901,34 +3901,31 @@ title = "PDF 1.0 through 2.0 compatibility"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-core/src/parser.rs",
+    "crates/pdfxi-core/src/xref_stream.rs",
     "crates/pdfxi-core/src/lib.rs",
-    "crates/pdfxi-core/src/xref_tests.rs",
-    "docs/evidence/core/T-0092.md",
+    "docs/evidence/core/T-0152.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core -p pdfxi-cli (CARGO_TARGET_DIR=target/lanes/core): 242 passed, 0 failed (18 xref_tests incl. 10 new); fmt/clippy -D warnings/rustdoc -D warnings all EXIT=0. Full output in docs/evidence/core/T-0092.md."
+evidence = "cargo test -p pdfxi-core -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core): 300 core unit + 6 core integration + 74 standards passed, 0 failed; 11 xref_stream::tests and 18 xref_tests green; fmt/clippy -D warnings/rustdoc -D warnings EXIT=0. Full output in docs/evidence/core/T-0152.md."
 id = "STD-002"
 notes = """
-Classic xref tables and xref streams are fully parsed and merged newest-wins
-across /Prev chains with cycle detection. Hybrid /XRefStm files now parse the
-companion xref stream at the same revision; its entries supersede the classic
-placeholders. /W widths are validated (per field <= 8, sum 1..=16), /Index
-subsections and /Size fallback are bounded, and a typed public report exposes
-section kind, entries and /Prev pointer via inspect_xref and
-Document::xref_report. FlateDecode with PNG predictors handles compressed
-xref data, and type-2 entries resolve /ObjStm members through the bounded
-parser reader. Ten new tests cover widths 1-4, multiple /Index subsections,
-compressed retrieval, mixed /Prev chains, hybrid fallback and cycle, bad and
-out-of-range widths/offsets/indexes, predictor, and a writer round-trip.
+General, deterministic xref-stream writing is now implemented in
+pdfxi-core::xref_stream. XrefStreamPlan::build derives entry order, /Index
+ranges, minimal /W widths and payload size purely from its inputs; it rejects
+empty sets, reserved object zero, conflicting duplicates, an absent catalog or
+xref-stream entry, hostile sizes, over-fragmented inputs, offsets that cannot
+fit a bounded field and row widths beyond the reader bound.
+write_xref_stream_document and Document::save_with_xref_stream emit a standalone
+/Type /XRef stream that round-trips through the parser (page count and text
+preserved) for both compressed and uncompressed payloads, from classic and
+object-stream sources. The previous in-progress reason (no general stream
+writer) is resolved; parsing and writing are both covered.
 
-Row stays in-progress: general xref-stream *writing* for Document::save /
-save_incremental is not implemented by this task; only the pre-existing
-object-stream writer produces xref streams, and classic save paths still
-decline stream-based sources.
+The default Document::save / save_incremental paths still decline stream-based
+sources by design; callers use the dedicated save_with_xref_stream method.
 """
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
     "xref_tests::xref_stream_parses_page_tree_content_and_decode_parms",
     "xref_tests::xref_stream_accepts_field_widths_one_through_four",
@@ -3948,6 +3945,17 @@ tests = [
     "xref_tests::public_inspect_xref_matches_document_report",
     "xref_tests::absurd_object_stream_count_is_rejected",
     "xref_tests::truncated_xref_stream_is_a_structured_error",
+    "xref_stream::tests::plan_is_deterministic_and_insertion_order_independent",
+    "xref_stream::tests::plan_validation_rejects_reserved_duplicate_and_missing_root",
+    "xref_stream::tests::plan_rejects_hostile_size_and_index_counts",
+    "xref_stream::tests::field_widths_follow_offset_boundaries",
+    "xref_stream::tests::payload_round_trips_with_and_without_flate",
+    "xref_stream::tests::document_save_with_xref_stream_round_trips_structure_and_text",
+    "xref_stream::tests::save_is_byte_deterministic_and_uncompressed_output_parses",
+    "xref_stream::tests::sparse_objects_are_written_with_free_gaps_and_valid_index",
+    "xref_stream::tests::xref_stream_source_can_be_rewritten_as_a_general_stream",
+    "xref_stream::tests::encrypted_input_is_declined_with_a_typed_error",
+    "xref_stream::tests::malformed_header_is_a_typed_error",
 ]
 title = "Cross-reference tables and streams"
 
@@ -4032,27 +4040,31 @@ title = "Font embedding and CID fonts"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-core/src/transparency.rs",
     "crates/pdfxi-render/src/blend.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0113.md",
+    "docs/evidence/core/T-0152.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-render (CARGO_TARGET_DIR=target/lanes/render): 120 passed, 0 failed; 8 new blend::tests cover all standard blend-mode tokens, separable/non-separable categories, isolation/knockout parsing, transparency-group validation, alpha validation, deterministic plans with honest CMM/alpha warnings, the no-backend default case, and bit encoding. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0113.md. Existing STD-005 tests (mock_renderer_produces_expected_raster_and_progress and the two pdfxi-text search tests) remain green in their crates."
+evidence = "cargo test -p pdfxi-core -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core): 300 core unit + 6 core integration + 74 standards passed, 0 failed; all 12 transparency::tests green; fmt/clippy -D warnings/rustdoc -D warnings EXIT=0. Full output in docs/evidence/core/T-0152.md."
 id = "STD-005"
 notes = """
-Extends the raster/color contract with `pdfxi_render::blend`: BlendMode covers
-all ISO 32000 extended blend modes with tolerant token parsing and canonical
-names; BlendCategory marks Hue/Saturation/Color/Luminosity as non-separable;
-GroupIsolation and GroupKnockout describe transparency-group behaviour and a
-validated TransparencyGroup combines them. BlendSpec validates source/backdrop
-alpha, and BlendPlan::build is pure and deterministic, packing categorical
-choices into `bits`. Honest backend delegation: non-separable modes set
-needs_backend_cmm, partial alpha / isolated / knockout groups set
-needs_backend_alpha, and warnings name each requirement. The crate never
-composites pixels -- a native renderer must consume the plan. Status stays
-in-progress for the same reason as before: real blend-mode rasterization is
-deferred to the native backend milestone; this task adds the deterministic
-descriptor/plan layer only.
+Adds a rendering-free, deterministic transparency/blend planning contract in
+pdfxi-core::transparency (the render crate keeps pixel compositing). All 16 ISO
+32000 blend modes parse and round-trip; Hue/Saturation/Color/Luminosity are
+NonSeparable and require a ColorManagement backend capability. Group
+isolation/knockout, 9-bit alpha bounds (0..=256) and token-length limits are
+validated. BlendPlan packs mode/alpha/group flags into a stable u64, declares
+ordered backend requirements and records unsupported ones honestly instead of
+dropping them; check_support returns a typed UnsupportedBackend. The stack is
+bounded at MAX_STACK_DEPTH and plans preserve insertion order.
+
+The test double that previously claimed to support colour management was
+replaced with one that isolates that single missing capability, so the CMM
+requirement and error are actually exercised.
+
+Status stays in-progress honestly: real blend-mode rasterization is still
+deferred to the native backend milestone. This task adds the library-level
+planning layer only; it does not composite pixels.
 """
 priority = "P2"
 status = "in-progress"
@@ -4065,6 +4077,18 @@ tests = [
     "blend::tests::plan_is_deterministic_and_delegates_honestly",
     "blend::tests::opaque_normal_without_group_needs_no_backend",
     "blend::tests::plan_bits_encode_categorical_choices",
+    "transparency::tests::every_standard_mode_round_trips_name_and_category",
+    "transparency::tests::group_tokens_round_trip_and_default_to_spec_values",
+    "transparency::tests::descriptor_round_trips_with_and_without_a_group",
+    "transparency::tests::alpha_boundaries_are_valid_and_overflow_is_typed",
+    "transparency::tests::over_long_tokens_are_rejected_with_a_typed_error",
+    "transparency::tests::plan_is_deterministic_for_a_spec_and_backend",
+    "transparency::tests::plan_bits_encode_mode_alpha_and_group_flags",
+    "transparency::tests::nonseparable_mode_requires_color_management",
+    "transparency::tests::partial_alpha_and_group_flags_declare_their_requirements",
+    "transparency::tests::no_backend_returns_an_honest_typed_error",
+    "transparency::tests::stack_depth_is_bounded_and_plans_keep_order",
+    "transparency::tests::malformed_descriptors_return_typed_errors",
 ]
 title = "Transparency and blend modes"
 
@@ -4173,24 +4197,27 @@ title = "PDF/UA conformance"
 [[feature]]
 docs = [
     "crates/pdfxi-core/src/incremental.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0108.md",
+    "crates/pdfxi-core/src/preservation.rs",
+    "docs/evidence/core/T-0152.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 242 unit + 6 integration passed, 0 failed, TEST_EXIT=0, including 18 incremental::tests covering single/multi-object updates, allocation and reuse rejection, exact prefix preservation, /Prev and second-save chains, /ID first-preserved/second-regenerated, metadata and page-label preservation, reparse round-trip, determinism, xref-stream sections, malformed prior xref and encrypted rejection. fmt/clippy(doc -D warnings)/doc all EXIT=0. Full output in docs/evidence/core/T-0108.md."
+evidence = "cargo test -p pdfxi-core -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core): 300 core unit + 6 core integration + 74 standards passed, 0 failed; all 10 preservation::tests green; fmt/clippy -D warnings/rustdoc -D warnings EXIT=0. Full output in docs/evidence/core/T-0152.md."
 id = "STD-010"
 notes = """
-Adds configurable incremental save and preservation reporting in a new
-pdfxi-core::incremental module. Document::save_incremental_with appends a
-classic-table or xref-stream section with /Prev to the prior startxref, carries
-over /Root, /Info, the first /ID element and unknown trailer keys, and
-regenerates /Size, /Prev and a deterministic second /ID element. Object-number
-allocation never reuses an existing number; a typed PreservationReport states
-what was preserved versus regenerated, and typed errors cover encrypted input
-and malformed prior xrefs. Existing Document::save and save_incremental remain
-unchanged for compatibility. The broader digital-preservation row stays
-in-progress because validation, signing and long-term packaging are not part
-of this task.
+Adds preservation validation for incrementally updated PDFs in
+pdfxi-core::preservation. validate_incremental_preservation and
+Document::validate_incremental check the exact original byte prefix, that a new
+revision exists and its /Prev chain reaches the original startxref, policy
+trailer keys, page count and optionally caller-supplied page text. A
+caller-supplied PageTextSource keeps the core text-extractor-agnostic. Every
+bound (revision count, policy keys, key length) is checked before work and all
+failures are typed PreservationError variants. Document::save_incremental_with
+remains the writer side from T-0108.
+
+Status stays in-progress honestly: cryptographic signing and long-term archival
+packaging are still out of scope and are reported as UnsupportedOperation rather
+than pretended. Validation - the previously missing piece - is now implemented
+and tested.
 """
 priority = "P1"
 status = "in-progress"
@@ -4213,6 +4240,16 @@ tests = [
     "incremental::tests::encrypted_document_is_rejected_with_a_typed_error",
     "incremental::tests::empty_change_set_appends_a_valid_revision",
     "incremental::tests::first_id_element_helper_handles_absent_and_malformed_ids",
+    "preservation::tests::valid_incremental_save_is_accepted",
+    "preservation::tests::validation_is_deterministic_for_the_same_inputs",
+    "preservation::tests::changed_prefix_is_rejected_before_any_parsing",
+    "preservation::tests::corrupt_updated_xref_is_a_typed_error",
+    "preservation::tests::broken_prev_chain_is_detected",
+    "preservation::tests::changed_preserved_trailer_key_is_detected",
+    "preservation::tests::caller_supplied_text_change_is_detected",
+    "preservation::tests::revision_and_key_limits_are_bounded",
+    "preservation::tests::two_incremental_revisions_form_a_valid_chain",
+    "preservation::tests::signing_and_packaging_are_honestly_unsupported",
 ]
 title = "Incremental update and digital preservation"
 
