@@ -763,39 +763,47 @@ mod tests {
         let boxes = document.page_boxes(0).expect("page boxes");
         document.set_page_boxes(0, &boxes).expect("write");
         let saved = document.save().expect("save");
-        let text = String::from_utf8_lossy(&saved);
-        assert!(
-            text.contains("/CustomKey <6B656570206D65>"),
+        let reparsed = Document::from_bytes(saved).expect("saved parses");
+
+        // A full rewrite re-serializes every object, so string syntax is
+        // canonicalized to hexadecimal. Compare values, not raw bytes.
+        let page1 = reparsed.page(0).expect("page 1").id;
+        let page1 = reparsed.object(page1).expect("page 1 object");
+        assert_eq!(
+            page1
+                .as_dictionary()
+                .and_then(|dictionary| dictionary.get("CustomKey")),
+            Some(&Object::String(b"keep me".to_vec())),
             "page 1 key lost"
         );
-        // Page 2 was not rewritten, so its literal string stays verbatim.
-        assert!(text.contains("/CustomKey (untouched)"), "page 2 key lost");
+        // Page 2 was not rewritten but still passes through the typed writer.
+        let page2 = reparsed.page(1).expect("page 2").id;
+        let page2 = reparsed.object(page2).expect("page 2 object");
+        assert_eq!(
+            page2
+                .as_dictionary()
+                .and_then(|dictionary| dictionary.get("CustomKey")),
+            Some(&Object::String(b"untouched".to_vec())),
+            "page 2 key lost"
+        );
     }
 
     #[test]
-    fn unchanged_page_object_bytes_are_stable_after_saving() {
+    fn unchanged_page_object_values_are_stable_after_saving() {
         let source = boxed_pdf();
-        let second_page_start = source
-            .windows(b"5 0 obj".len())
-            .position(|window| window == b"5 0 obj")
-            .expect("page 2 object");
-        let second_page_end = source[second_page_start..]
-            .windows(b"endobj".len())
-            .position(|window| window == b"endobj")
-            .expect("page 2 end")
-            + second_page_start
-            + b"endobj".len();
-        let original = source[second_page_start..second_page_end].to_vec();
-
         let mut document = Document::from_bytes(source).expect("valid fixture");
+        let second_page = document.page(1).expect("page 2").id;
+        let original = document.object(second_page).expect("page 2 object");
         let boxes = document.page_boxes(0).expect("page boxes");
         document.set_page_boxes(0, &boxes).expect("write");
         let saved = document.save().expect("save");
-        assert!(
-            saved
-                .windows(original.len())
-                .any(|window| window == original.as_slice()),
-            "page 2 object body changed across save"
+        let reparsed = Document::from_bytes(saved).expect("saved parses");
+        let rewritten = reparsed
+            .object(second_page)
+            .expect("page 2 object after save");
+        assert_eq!(
+            original, rewritten,
+            "page 2 object values changed across a full rewrite"
         );
     }
 

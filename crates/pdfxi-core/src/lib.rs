@@ -618,7 +618,7 @@ impl Document {
             ));
         }
         let mut objects = Vec::new();
-        for number in structure.xref.all_object_numbers() {
+        for number in structure.xref.live_object_numbers() {
             if number == 0 {
                 continue;
             }
@@ -628,10 +628,15 @@ impl Document {
                 Some(changed) => changed.clone(),
                 None => parser::load_object(&self.bytes, &structure.xref, id)?,
             };
+            if parser::is_structural_stream(&object) {
+                continue;
+            }
             objects.push((id, object));
         }
         for (id, object) in &self.changes {
-            if !objects.iter().any(|(existing, _)| existing == id) {
+            if !parser::is_structural_stream(object)
+                && !objects.iter().any(|(existing, _)| existing == id)
+            {
                 objects.push((*id, object.clone()));
             }
         }
@@ -669,7 +674,7 @@ impl Document {
             ));
         }
         let mut objects = Vec::new();
-        for number in structure.xref.all_object_numbers() {
+        for number in structure.xref.live_object_numbers() {
             if number == 0 {
                 continue;
             }
@@ -679,10 +684,15 @@ impl Document {
                 Some(changed) => changed.clone(),
                 None => parser::load_object(&self.bytes, &structure.xref, id)?,
             };
+            if parser::is_structural_stream(&object) {
+                continue;
+            }
             objects.push((id, object));
         }
         for (id, object) in &self.changes {
-            if !objects.iter().any(|(existing, _)| existing == id) {
+            if !parser::is_structural_stream(object)
+                && !objects.iter().any(|(existing, _)| existing == id)
+            {
                 objects.push((*id, object.clone()));
             }
         }
@@ -740,60 +750,83 @@ impl Document {
 
     /// Serialize the whole document as a standalone PDF byte stream.
     ///
-    /// Object numbers are preserved and unchanged objects are copied from the
-    /// source verbatim, so stream bytes are not re-compressed or rewritten.
+    /// This is a full rewrite: every live object — including objects stored
+    /// compressed inside `/ObjStm` streams and sources whose final
+    /// cross-reference section is a `/Type /XRef` stream or a hybrid
+    /// `/XRefStm` table — is loaded through the typed reader and written to a
+    /// fresh file as a plain indirect object. Stream dictionaries keep their
+    /// filters and encoded bytes untouched; only `/Length` is recomputed. A
+    /// single classic `xref` table, trailer, `startxref` and `%%EOF` are
+    /// regenerated with byte-accurate offsets, and object numbers and
+    /// generation numbers are preserved so existing references stay valid.
+    ///
     /// Staged changes from [`Document::set_object`] replace or extend the
-    /// object set. A single classic xref table, trailer, `startxref` and
-    /// `%%EOF` are regenerated with byte-accurate offsets.
+    /// object set. Revision history, linearization hints, `/Prev`, `/XRefStm`
+    /// and the old xref/object stream objects are dropped, so the output is a
+    /// single-revision file. A full rewrite invalidates any existing digital
+    /// signature and encryption dictionary; encrypted sources are declined
+    /// before any bytes are written and must be decrypted by the session layer
+    /// first.
     ///
     /// # Errors
     ///
     /// Returns the stored structural error when the source is malformed,
-    /// [`Error::UnsupportedState`] for encrypted documents or cross-reference
-    /// streams, and serialization errors when a staged object cannot be
-    /// encoded (see [`Error::CannotSerialize`]).
+    /// [`Error::UnsupportedState`] for encrypted documents, and serialization
+    /// errors when an object cannot be encoded (see [`Error::CannotSerialize`]).
     pub fn save(&self) -> Result<Vec<u8>> {
         let structure = self.supported_structure()?;
+        // Validate that every physical object terminates with `endobj`. A
+        // rewrite re-serializes the parsed value, so without this check a
+        // malformed source would be silently repaired instead of reported.
+        for (_number, offset) in structure.xref.in_use_entries() {
+            let _ = parser::object_range(&self.bytes, offset)?;
+        }
         let mut out = Vec::with_capacity(self.bytes.len() + 64);
         out.extend_from_slice(format!("%PDF-{}\n%PDFXI\n", self.version).as_bytes());
 
-        let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
-        for (number, offset) in structure.xref.in_use_entries() {
-            if self.changes.keys().any(|id| id.number == number) {
+        // Resolve every live object through the typed reader. This is what
+        // expands `/ObjStm` members; a raw byte copy would lose them.
+        let mut objects: BTreeMap<u32, (u16, Object)> = BTreeMap::new();
+        for number in structure.xref.live_object_numbers() {
+            if number == 0 {
                 continue;
             }
-            let range = parser::object_range(&self.bytes, offset)?;
-            let raw = self
-                .bytes
-                .get(range)
-                .ok_or_else(|| Error::MalformedObject {
-                    number,
-                    reason: "object range lies outside the source".to_owned(),
-                })?;
-            objects.push((number, raw.to_vec()));
+            let generation = parser::object_generation(&self.bytes, &structure.xref, number)?;
+            let id = ObjectId::new(number, generation);
+            let object = match self.changes.get(&id) {
+                Some(changed) => changed.clone(),
+                None => parser::load_object(&self.bytes, &structure.xref, id)?,
+            };
+            // The old xref and object streams are structural; their contents
+            // are expanded above and must not appear in the output.
+            if parser::is_structural_stream(&object) {
+                continue;
+            }
+            objects.insert(number, (generation, object));
         }
         for (id, object) in &self.changes {
-            let mut body = Vec::new();
-            writer::serialize_indirect(*id, object, &mut body)?;
-            objects.push((id.number, body));
+            if parser::is_structural_stream(object) {
+                continue;
+            }
+            objects.insert(id.number, (id.generation, object.clone()));
         }
-        objects.sort_by_key(|(number, _)| *number);
 
-        let mut offsets = BTreeMap::new();
-        for (number, body) in &objects {
-            offsets.insert(*number, out.len());
-            out.extend_from_slice(body);
+        let mut entries = BTreeMap::new();
+        for (number, (generation, object)) in &objects {
+            entries.insert(*number, (out.len(), *generation));
+            writer::serialize_indirect(ObjectId::new(*number, *generation), object, &mut out)?;
             out.push(b'\n');
         }
 
         let xref_offset = out.len();
-        writer::write_xref_section(&mut out, &offsets, true);
+        writer::write_xref_section_with_generations(&mut out, &entries, true);
 
-        let highest = objects.last().map_or(0, |(number, _)| *number);
+        let highest = objects.keys().next_back().copied().unwrap_or(0);
         let mut trailer = structure.xref.trailer();
         for (key, value) in &self.trailer_entries {
             trailer.insert(key.clone(), value.clone());
         }
+        writer::sanitize_trailer(&mut trailer);
         let size = trailer_size(&trailer, highest);
         trailer.insert("Size".to_owned(), Object::Integer(i64::from(size)));
         trailer.insert("Root".to_owned(), Object::Reference(structure.root_id));
@@ -870,9 +903,14 @@ impl Document {
     /// Returns [`Error::EmptyPageSelection`], [`Error::InvalidPageIndex`],
     /// [`Error::InvalidSourceDocument`], [`Error::DuplicatePageIndex`] or
     /// [`Error::InvalidPageRotation`] for invalid plans,
-    /// [`Error::UnsupportedState`] for encrypted or xref-stream sources, and
-    /// any structural or serialization error from the underlying parser and
-    /// writer.
+    /// [`Error::UnsupportedState`] for encrypted sources, and any structural
+    /// or serialization error from the underlying parser and writer.
+    ///
+    /// Sources that use cross-reference streams, objects compressed in
+    /// `/ObjStm` streams, or a hybrid `/XRefStm` table are fully supported.
+    /// Every live object is resolved through the typed reader and written as a
+    /// fresh single-revision classic-table file, so a full rewrite flattens
+    /// revision history, drops linearization hints and invalidates signatures.
     pub fn apply_page_plan(&self, plan: &PagePlan) -> Result<Vec<u8>> {
         pages::apply(self, plan)
     }
@@ -889,13 +927,13 @@ impl Document {
     /// and skipped item. Progress can be cancelled through `cancel`.
     ///
     /// The source document is never mutated, and unknown dictionary keys are
-    /// preserved. Incremental-save inputs (classic tables with `/Prev` chains)
-    /// are fully supported; the result is always a single-revision standalone
-    /// file.
+    /// preserved. Incremental-save inputs (classic tables with `/Prev` chains),
+    /// xref streams, object streams and hybrid `/XRefStm` files are fully
+    /// supported; the result is always a single-revision standalone file.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedState`] for encrypted or xref-stream inputs,
+    /// Returns [`Error::UnsupportedState`] for encrypted inputs,
     /// [`Error::Cancelled`] when `cancel` is signalled, and structural or
     /// serialization errors for malformed documents.
     pub fn optimize(
@@ -906,13 +944,14 @@ impl Document {
         optimizer::optimize(self, options, cancel)
     }
 
-    /// Return the parsed structure only when the document can be saved.
+    /// Return the parsed structure only when the document can be rewritten.
     ///
-    /// Xref-stream inputs (including documents that reach one through a
-    /// `/Prev` chain) are declined with [`Error::UnsupportedState`] rather than
-    /// silently rewritten: the writer emits only classic tables and would drop
-    /// objects held in object streams. Encrypted documents are declined for the
-    /// same reason — the writer does not encrypt its output.
+    /// Full rewrites now support every source the reader can parse, including
+    /// xref streams, `/ObjStm` members and hybrid `/XRefStm` files: the write
+    /// path resolves each live object through the typed reader before emitting
+    /// a classic table. Encrypted documents are still declined because the
+    /// writer does not encrypt its output; the session layer must decrypt
+    /// first.
     pub(crate) fn supported_structure(&self) -> Result<&Structure> {
         match &self.structure {
             Ok(structure) => {
@@ -921,23 +960,9 @@ impl Document {
                         "encrypted documents cannot be saved",
                     ));
                 }
-                if structure.xref.uses_xref_stream {
-                    return Err(Error::UnsupportedState(
-                        "cross-reference streams are not supported",
-                    ));
-                }
                 Ok(structure)
             }
-            Err(error) => {
-                if let Ok(offset) = parser::startxref_offset(&self.bytes)
-                    && parser::looks_like_xref_stream(&self.bytes, offset)
-                {
-                    return Err(Error::UnsupportedState(
-                        "cross-reference streams are not supported",
-                    ));
-                }
-                Err(error.clone())
-            }
+            Err(error) => Err(error.clone()),
         }
     }
 }
@@ -1576,18 +1601,17 @@ mod tests {
     }
 
     #[test]
-    fn save_rejects_xref_stream_with_structured_error() {
+    fn save_reports_a_structural_error_for_a_bogus_xref_offset() {
         let source = pdfxi_testkit::minimal_pdf();
         let first_object = find_bytes(&source, b"1 0 obj");
         assert_ne!(first_object, 0, "fixture must contain object 1");
         let stream_like = set_startxref(&source, &first_object.to_string());
         let doc = Document::from_bytes(stream_like).expect("header is still valid");
-        assert!(matches!(
-            doc.save(),
-            Err(Error::UnsupportedState(
-                "cross-reference streams are not supported"
-            ))
-        ));
+        let error = doc.save().expect_err("a bogus startxref must fail");
+        assert!(
+            !matches!(error, Error::UnsupportedState(_)),
+            "xref-stream support must not turn a structural failure into an unsupported-state error: {error:?}"
+        );
     }
 
     #[test]

@@ -111,44 +111,76 @@ fn is_name_byte_safe(byte: u8) -> bool {
 
 /// Append a classic cross-reference section covering `offsets`.
 ///
-/// When `include_free_zero` is set, object 0 is emitted first as the head of
-/// the free-object list, as required by the PDF specification. Consecutive
-/// object numbers are grouped into subsections to avoid writing a huge table
-/// for documents with sparse object numbers.
+/// Generation numbers are written as zero. When `include_free_zero` is set,
+/// object 0 is emitted first as the head of the free-object list, as required
+/// by the PDF specification. Consecutive object numbers are grouped into
+/// subsections to avoid writing a huge table for documents with sparse object
+/// numbers.
 pub(crate) fn write_xref_section(
     out: &mut Vec<u8>,
     offsets: &BTreeMap<u32, usize>,
     include_free_zero: bool,
 ) {
+    let entries: BTreeMap<u32, (usize, u16)> = offsets
+        .iter()
+        .map(|(number, offset)| (*number, (*offset, 0)))
+        .collect();
+    write_xref_section_with_generations(out, &entries, include_free_zero);
+}
+
+/// Append a classic cross-reference section preserving per-object generations.
+///
+/// Each entry maps an object number to its byte offset and generation number.
+/// This is used by the full-rewrite save path, which keeps the source's object
+/// numbers and generations so that existing references stay valid.
+pub(crate) fn write_xref_section_with_generations(
+    out: &mut Vec<u8>,
+    entries: &BTreeMap<u32, (usize, u16)>,
+    include_free_zero: bool,
+) {
     out.extend_from_slice(b"xref\n");
-    let mut entries: Vec<(u32, Option<usize>)> =
-        Vec::with_capacity(offsets.len() + usize::from(include_free_zero));
+    let mut rows: Vec<(u32, Option<(usize, u16)>)> =
+        Vec::with_capacity(entries.len() + usize::from(include_free_zero));
     if include_free_zero {
-        entries.push((0, None));
+        rows.push((0, None));
     }
-    for (number, offset) in offsets {
-        entries.push((*number, Some(*offset)));
+    for (number, entry) in entries {
+        rows.push((*number, Some(*entry)));
     }
 
     let mut index = 0;
-    while index < entries.len() {
-        let first = entries[index].0;
+    while index < rows.len() {
+        let first = rows[index].0;
         let mut count = 1usize;
-        while index + count < entries.len()
-            && first.checked_add(count as u32) == Some(entries[index + count].0)
+        while index + count < rows.len()
+            && first.checked_add(count as u32) == Some(rows[index + count].0)
         {
             count += 1;
         }
         out.extend_from_slice(format!("{first} {count}\n").as_bytes());
-        for entry in &entries[index..index + count] {
-            match entry.1 {
+        for row in &rows[index..index + count] {
+            match row.1 {
                 None => out.extend_from_slice(b"0000000000 65535 f \n"),
-                Some(offset) => {
-                    out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+                Some((offset, generation)) => {
+                    out.extend_from_slice(format!("{offset:010} {generation:05} n \n").as_bytes());
                 }
             }
         }
         index += count;
+    }
+}
+
+/// Remove revision-specific and xref-stream-only keys from a trailer.
+///
+/// A full rewrite emits one classic table and one trailer, so `/Prev`,
+/// `/XRefStm`, `/Encrypt` and the xref-stream fields (`/Type`, `/W`, `/Index`,
+/// `/Length`, `/Filter`) from the source no longer apply. `/Size` and `/Root`
+/// are re-inserted by the caller.
+pub(crate) fn sanitize_trailer(trailer: &mut Dictionary) {
+    for key in [
+        "Size", "Root", "Prev", "Encrypt", "XRefStm", "Length", "Filter", "W", "Index", "Type",
+    ] {
+        trailer.remove(key);
     }
 }
 

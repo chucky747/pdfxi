@@ -138,11 +138,6 @@ struct XrefSection {
 pub(crate) struct XrefTable {
     entries: HashMap<u32, XrefEntry>,
     trailer: Dictionary,
-    /// `true` when any section in the `/Prev` chain was an xref stream.
-    ///
-    /// The write path uses this to decline such documents explicitly instead of
-    /// dropping compressed objects during a save.
-    pub(crate) uses_xref_stream: bool,
     /// Typed structural report captured while the sections were parsed.
     pub(crate) report: XrefReport,
 }
@@ -171,6 +166,25 @@ impl XrefTable {
     /// a free-list head.
     pub(crate) fn all_object_numbers(&self) -> Vec<u32> {
         let mut numbers: Vec<u32> = self.entries.keys().copied().collect();
+        numbers.sort_unstable();
+        numbers
+    }
+
+    /// Return every object number that is in use or stored in an `/ObjStm`.
+    ///
+    /// Free entries are omitted. Unlike [`Self::in_use_entries`], compressed
+    /// objects are included: a full rewrite resolves them through
+    /// [`load_object`] and emits them as standalone indirect objects, so
+    /// dropping them would lose part of the document.
+    pub(crate) fn live_object_numbers(&self) -> Vec<u32> {
+        let mut numbers: Vec<u32> = self
+            .entries
+            .iter()
+            .filter_map(|(number, entry)| match entry {
+                XrefEntry::Free => None,
+                XrefEntry::InUse { .. } | XrefEntry::Compressed { .. } => Some(*number),
+            })
+            .collect();
         numbers.sort_unstable();
         numbers
     }
@@ -213,6 +227,21 @@ pub(crate) fn object_generation(data: &[u8], xref: &XrefTable, number: u32) -> R
         }
         Some(XrefEntry::Compressed { .. }) | Some(XrefEntry::Free) | None => Ok(0),
     }
+}
+
+/// Return `true` when `object` is a cross-reference or object stream.
+///
+/// Neither kind survives a full rewrite: their contents are expanded into
+/// standalone indirect objects and their xref section is regenerated as a
+/// classic table.
+pub(crate) fn is_structural_stream(object: &Object) -> bool {
+    let Object::Stream { dictionary, .. } = object else {
+        return false;
+    };
+    matches!(
+        dictionary.get("Type").and_then(Object::as_name),
+        Some("XRef" | "ObjStm")
+    )
 }
 
 /// Fully resolved structural information about a document.
@@ -829,7 +858,6 @@ fn load_xref(data: &[u8], start: usize) -> Result<XrefTable> {
     Ok(XrefTable {
         entries,
         trailer,
-        uses_xref_stream,
         report: XrefReport {
             sections: reports,
             merged_entries,
@@ -1158,6 +1186,8 @@ pub(crate) fn xref_offsets(data: &[u8]) -> Option<Vec<(u32, usize)>> {
 /// The range starts at the xref offset and ends just after the `endobj`
 /// keyword. Stream bodies are skipped using their declared `/Length`, so an
 /// `endobj` byte sequence inside binary stream data cannot truncate the copy.
+/// A source object without a terminating `endobj` is reported as
+/// [`Error::UnexpectedToken`] instead of being silently repaired.
 pub(crate) fn object_range(data: &[u8], offset: usize) -> Result<Range<usize>> {
     let mut lexer = Lexer::new(data, offset)?;
     lexer.skip_ws();

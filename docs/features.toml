@@ -1085,7 +1085,7 @@ priority = "P1"
 status = "library"
 tests = [
     "pages::tests::split_into_chunks_produces_independent_pdfs",
-    "pages::tests::encrypted_and_xref_stream_sources_are_rejected",
+    "pages::tests::encrypted_sources_are_rejected",
     "pages::tests::empty_document_selection_is_rejected",
     "pages::tests::invalid_source_document_index_is_rejected",
 ]
@@ -4380,7 +4380,5 @@ the xtask wiring stay in place and does not perform an installation itself.
 """
 priority = "P1"
 status = "verified"
-tests = [
-    "packaging::installer_test_script_contract",
-]
+tests = ["packaging::installer_test_script_contract"]
 title = "Per-user Inno Setup installer (build, silent install, uninstall)"

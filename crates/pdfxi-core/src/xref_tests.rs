@@ -400,14 +400,27 @@ fn xref_stream_parses_page_tree_content_and_decode_parms() {
         document.page_text(0).expect("decoded page text"),
         "Stream XRef!"
     );
-    // A full rewrite still declines xref-stream input, but an incremental
-    // update is supported and must append a matching stream section.
-    assert!(matches!(
-        document.save(),
-        Err(Error::UnsupportedState(
-            "cross-reference streams are not supported"
-        ))
-    ));
+    // A full rewrite now supports xref-stream input and emits a classic table
+    // with every compressed object expanded; an incremental update still
+    // appends a matching stream section.
+    let rewritten = document
+        .save()
+        .expect("a full rewrite must support xref-stream sources");
+    let text = String::from_utf8_lossy(&rewritten);
+    assert!(
+        text.contains("\nxref\n"),
+        "output must carry a classic table"
+    );
+    assert!(
+        !text.contains("/Type /XRef"),
+        "the old xref stream must not be copied into the output"
+    );
+    let reparsed = Document::from_bytes(rewritten).expect("rewritten classic PDF parses");
+    assert_eq!(reparsed.page_count().expect("page count"), 1);
+    assert_eq!(
+        reparsed.page_text(0).expect("rewritten page text"),
+        "Stream XRef!"
+    );
     let saved = document
         .save_incremental()
         .expect("incremental save must support xref-stream sources");

@@ -27,14 +27,16 @@
 //! Every index is bounds-checked before use and every arithmetic operation on
 //! page numbers and rotations uses checked or modular arithmetic. Empty
 //! selections, out-of-range indices, duplicate entries in an order plan,
-//! non-multiple-of-90 `/Rotate` values, encrypted documents and xref-stream
-//! documents are all rejected with structured [`Error`] variants. No code in
-//! this module can panic on hostile indices.
+//! non-multiple-of-90 `/Rotate` values and encrypted documents are all rejected
+//! with structured [`Error`] variants. Sources that use cross-reference
+//! streams, object streams or a hybrid `/XRefStm` table are fully supported:
+//! their objects are resolved through the typed reader and written as a
+//! classic-table PDF. No code in this module can panic on hostile indices.
 
 use std::collections::{BTreeMap, HashSet};
 
 use crate::object::{Dictionary, Object, ObjectId};
-use crate::parser::load_object;
+use crate::parser::{is_structural_stream, load_object, object_generation};
 use crate::writer::{serialize_indirect, write_trailer, write_xref_section};
 use crate::{Document, Error, Result};
 
@@ -431,14 +433,25 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
     for (source_index, source) in sources.iter().enumerate() {
         let structure = source.supported_structure()?;
         let mut store = BTreeMap::new();
-        for (number, _offset) in structure.xref.in_use_entries() {
-            if structural
-                .get(source_index)
-                .is_some_and(|ids| ids.contains(&number))
+        for number in structure.xref.live_object_numbers() {
+            if number == 0
+                || structural
+                    .get(source_index)
+                    .is_some_and(|ids| ids.contains(&number))
             {
                 continue;
             }
-            let object = load_object(source.bytes(), &structure.xref, ObjectId::new(number, 0))?;
+            let generation = object_generation(source.bytes(), &structure.xref, number)?;
+            let object = load_object(
+                source.bytes(),
+                &structure.xref,
+                ObjectId::new(number, generation),
+            )?;
+            // The source's xref and object streams are expanded into the
+            // store above and must never be copied into the output.
+            if is_structural_stream(&object) {
+                continue;
+            }
             store.insert(number, object);
         }
         object_store.push(store);
@@ -1295,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_and_xref_stream_sources_are_rejected() {
+    fn encrypted_sources_are_rejected() {
         let mut encrypted = String::from_utf8(pages_pdf(1)).expect("ASCII PDF");
         encrypted = encrypted.replacen("trailer\n<<", "trailer\n<< /Encrypt 9 0 R", 1);
         let document = Document::from_bytes(encrypted.into_bytes()).expect("parses");
@@ -1304,6 +1317,8 @@ mod tests {
             Err(Error::UnsupportedState(_))
         ));
 
+        // A bogus startxref is still a structural error, not an unsupported
+        // xref-stream source: real streams are rewritten by the page renderer.
         let source = pages_pdf(1);
         let object_offset = String::from_utf8_lossy(&source)
             .find("1 0 obj")
@@ -1314,9 +1329,12 @@ mod tests {
         let end = at + text[at..].find('\n').expect("line end");
         let stream_like = format!("{}{}{}", &text[..at], object_offset, &text[end..]);
         let document = Document::from_bytes(stream_like.into_bytes()).expect("header parses");
-        assert!(matches!(
-            document.apply_page_plan(&PagePlan::identity()),
-            Err(Error::UnsupportedState(_))
-        ));
+        let error = document
+            .apply_page_plan(&PagePlan::identity())
+            .expect_err("a bogus startxref must fail");
+        assert!(
+            !matches!(error, Error::UnsupportedState(_)),
+            "a structural failure must not be reported as unsupported state: {error:?}"
+        );
     }
 }

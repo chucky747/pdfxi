@@ -3,7 +3,7 @@
   "lane": "core",
   "title": "Full rewrite save, optimize and page plans for xref-stream and hybrid sources",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [],
   "owns": [
     "crates/pdfxi-core/src/**",

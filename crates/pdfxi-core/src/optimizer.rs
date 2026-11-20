@@ -24,12 +24,14 @@
 //!
 //! # Hostile input and cancellation
 //!
-//! Every graph walk is depth-bounded and cycle-safe. Encrypted documents and
-//! xref-stream inputs are declined through the document's save gate before any
-//! object is rewritten. A [`CancellationToken`] is checked between objects in
-//! each pass; a cancelled run returns [`Error::Cancelled`] and no partial bytes
-//! are produced. The module contains no `unsafe`, no panics on untrusted input,
-//! and no external dependencies.
+//! Every graph walk is depth-bounded and cycle-safe. Encrypted documents are
+//! declined through the document's save gate before any object is rewritten;
+//! xref-stream, object-stream and hybrid sources are fully supported because
+//! every live object is resolved through the typed reader. A
+//! [`CancellationToken`] is checked between objects in each pass; a cancelled
+//! run returns [`Error::Cancelled`] and no partial bytes are produced. The
+//! module contains no `unsafe`, no panics on untrusted input, and no external
+//! dependencies.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -37,7 +39,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::object::{Dictionary, Object, ObjectId};
 use crate::parser::load_object;
-use crate::writer::{serialize_indirect, serialize_object, write_trailer, write_xref_section};
+use crate::writer::{
+    sanitize_trailer, serialize_indirect, serialize_object, write_trailer, write_xref_section,
+};
 use crate::{Document, Error, Filter, Result};
 
 /// Maximum depth permitted while walking or rewriting the object graph.
@@ -163,7 +167,7 @@ pub struct OptimizationResult {
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnsupportedState`] for encrypted or xref-stream inputs,
+/// Returns [`Error::UnsupportedState`] for encrypted inputs,
 /// [`Error::Cancelled`] when the token is signalled, and structural or
 /// serialization errors for malformed documents.
 pub(crate) fn optimize(
@@ -174,17 +178,31 @@ pub(crate) fn optimize(
     let structure = document.supported_structure()?;
     let root_number = structure.root_id.number;
 
-    // 1. Load every in-use object, then overlay staged changes.
+    // 1. Load every live object (including `/ObjStm` members), then overlay
+    // staged changes. Structural xref/object streams are expanded above and
+    // never copied.
     let mut objects: BTreeMap<u32, Object> = BTreeMap::new();
-    for (number, _offset) in structure.xref.in_use_entries() {
+    for number in structure.xref.live_object_numbers() {
+        if number == 0 {
+            continue;
+        }
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let object = load_object(document.bytes(), &structure.xref, ObjectId::new(number, 0))?;
+        let generation =
+            crate::parser::object_generation(document.bytes(), &structure.xref, number)?;
+        let object = load_object(
+            document.bytes(),
+            &structure.xref,
+            ObjectId::new(number, generation),
+        )?;
+        if crate::parser::is_structural_stream(&object) {
+            continue;
+        }
         objects.insert(number, object);
     }
     for (id, object) in &document.changes {
-        if id.generation == 0 {
+        if id.generation == 0 && !crate::parser::is_structural_stream(object) {
             objects.insert(id.number, object.clone());
         }
     }
@@ -610,15 +628,6 @@ fn renumber(
     }
     *objects = renamed;
     Ok(map)
-}
-
-/// Remove revision-specific and xref-stream-only keys from the output trailer.
-fn sanitize_trailer(trailer: &mut Dictionary) {
-    for key in [
-        "Size", "Root", "Prev", "Encrypt", "XRefStm", "Length", "Filter", "W", "Index", "Type",
-    ] {
-        trailer.remove(key);
-    }
 }
 
 /// A small, self-contained DEFLATE/zlib encoder used by stream compression.
