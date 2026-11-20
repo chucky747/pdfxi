@@ -52,7 +52,9 @@
 //!   malformed XML with typed errors, and verifies the scrub (SEC-009).
 //! - [`der`] — a strict, dependency-free ASN.1 DER encoder/decoder subset.
 //! - [`cms`] — CMS/PKCS#7 `SignedData` creation and validation behind the
-//!   [`SignatureProvider`] trait, with a deterministic in-memory test provider.
+//!   [`SignatureProvider`] trait, with a deterministic in-memory test double
+//!   ([`InMemorySignatureProvider`]) whose toy RSA is crate-private and is not
+//!   a production signature backend.
 //! - [`x509`] — X.509 certificate parsing, deterministic name display,
 //!   extensions, caller-clocked chain validation, and digital IDs whose private
 //!   keys stay behind an opaque [`KeyHandle`] trait.
@@ -110,6 +112,9 @@ pub mod encryption_writer;
 mod error;
 /// End-to-end password and permission planning with conflict validation (SEC-001).
 pub mod password_policy;
+/// Real PDF signatures: a CMS `SignedData` blob over a PDF `/ByteRange`
+/// (T-0241, acceptance item A-20).
+pub mod pdf_signature;
 mod permissions;
 pub mod policy;
 mod protector;
@@ -137,7 +142,7 @@ pub use certificate_encryption::{
 };
 pub use cms::{
     InMemorySignatureProvider, SignatureProvider, SignedDataParams, SignerIdentifier,
-    build_signed_data, digest, modpow_u128, verify_signed_data, verify_signed_data_detached,
+    build_signed_data, digest, verify_signed_data, verify_signed_data_detached,
 };
 pub use digital_id_lifecycle::{
     DigitalIdLifecycleStore, ExportedKeyPair, IdListing, KeyCertificatePair, PrivateKeyPkcs8,
@@ -153,6 +158,11 @@ pub use password_policy::{
     AppliedPasswordPlan, EncryptionPlan, PasswordCredentials, PasswordPlanInput,
     PasswordResolution, SecurityHandler, apply_password_plan, plan_encryption,
     resolve_open_credentials,
+};
+pub use pdf_signature::{
+    DEFAULT_CONTENTS_RESERVATION, DEFAULT_FIELD_NAME, MIN_CONTENTS_RESERVATION, SignOptions,
+    SignatureReport, SignatureVerification, SignedDocument, SigningIdentity, sign_pdf,
+    verify_signature,
 };
 pub use permissions::{PasswordRole, Permission, Permissions};
 pub use policy::{

@@ -59,6 +59,26 @@ pub enum SecurityError {
     EncryptedDocumentInvalid(String),
     /// A signature was structurally invalid or could not be parsed.
     SignatureInvalid,
+    /// No `/ByteRange` signature with a usable `/Contents` window was found.
+    SignatureNotFound,
+    /// A PEM private key or certificate chain could not be loaded.
+    ///
+    /// The static label names the failing step; no key or certificate bytes
+    /// are carried in the value.
+    SigningIdentityInvalid(&'static str),
+    /// The signing key is not usable for PDF signatures in this round.
+    SigningKeyUnsupported(String),
+    /// The reserved `/Contents` window is smaller than the CMS blob.
+    SignatureContentsTooSmall {
+        /// Hex-decoded bytes reserved in the placeholder.
+        reserved: usize,
+        /// Bytes the DER CMS blob needs.
+        required: usize,
+    },
+    /// A PDF signature field, page annotation list, or AcroForm is unusable.
+    SignatureFieldInvalid(&'static str),
+    /// A core document operation failed while staging a signature.
+    SignatureDocumentInvalid(String),
     /// Signed content was modified after the signature was created.
     TamperedContent,
     /// A certificate or signature had expired at validation time.
@@ -357,6 +377,23 @@ impl fmt::Display for SecurityError {
                 write!(f, "encrypted document is malformed: {reason}")
             }
             Self::SignatureInvalid => write!(f, "signature is invalid"),
+            Self::SignatureNotFound => write!(f, "no PDF signature was found"),
+            Self::SigningIdentityInvalid(reason) => {
+                write!(f, "signing identity could not be loaded: {reason}")
+            }
+            Self::SigningKeyUnsupported(reason) => {
+                write!(f, "signing key is not supported: {reason}")
+            }
+            Self::SignatureContentsTooSmall { reserved, required } => write!(
+                f,
+                "reserved /Contents window of {reserved} bytes is smaller than the {required}-byte CMS blob"
+            ),
+            Self::SignatureFieldInvalid(reason) => {
+                write!(f, "PDF signature field is unusable: {reason}")
+            }
+            Self::SignatureDocumentInvalid(reason) => {
+                write!(f, "document could not be signed: {reason}")
+            }
             Self::TamperedContent => write!(f, "signed content was tampered with"),
             Self::SignatureExpired => write!(f, "signature or certificate has expired"),
             Self::CertificateRevoked => write!(f, "signing certificate was revoked"),

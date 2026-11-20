@@ -12,10 +12,11 @@
 //!   over the DER `SET OF` encoding of those attributes.
 //!
 //! All signing and verifying key material stays behind the [`SignatureProvider`]
-//! trait, so this crate never stores or logs a private key. [`modpow_u128`] is a
-//! small documented raw-modular-exponentiation primitive used by the test
-//! provider; it is **not** a production RSA implementation and must not be used
-//! with real keys.
+//! trait, so this crate never stores or logs a private key. The small
+//! crate-private `insecure_test_modpow` primitive is used only by the
+//! [`InMemorySignatureProvider`] test double; it is **not** a production RSA
+//! implementation, is not re-exported, and must not be used with real keys.
+//! Production PDF signatures live in [`crate::pdf_signature`] and use `rsa`.
 //!
 //! The builder is deterministic: attribute sets are DER-sorted and every field
 //! has a canonical encoding, so identical inputs always produce identical bytes.
@@ -275,9 +276,15 @@ pub trait SignatureProvider {
 /// This is a square-and-multiply implementation over `u128`. It returns `None`
 /// when `modulus <= 1` or when an intermediate product overflows `u128`; callers
 /// with large RSA keys must use a real big-integer backend instead. It exists
-/// to give the in-memory test provider a deterministic raw-RSA path with
-/// published small-key vectors; it is **not** safe for production keys.
-pub fn modpow_u128(base: u128, exponent: u128, modulus: u128) -> Option<u128> {
+/// only to give [`InMemorySignatureProvider`] a deterministic raw-RSA path with
+/// published small-key vectors.
+///
+/// **Not a production primitive.** The name says so deliberately: the ~40-bit
+/// toy modulus, textbook (unpadded) RSA, and `u128` arithmetic are all
+/// unsuitable for real signatures. It is `pub(crate)` on purpose and is not
+/// re-exported from the crate root. Real PDF signatures use `rsa`'
+/// PKCS#1 v1.5 in [`crate::pdf_signature`].
+pub(crate) fn insecure_test_modpow(base: u128, exponent: u128, modulus: u128) -> Option<u128> {
     if modulus <= 1 {
         return None;
     }
@@ -351,10 +358,18 @@ fn message_representative(digest_bytes: &[u8], modulus: u128) -> u128 {
     value
 }
 
-/// Deterministic in-memory [`SignatureProvider`] used for contract tests.
+/// Deterministic in-memory [`SignatureProvider`] **test double**.
+///
+/// This type exists only so tests and fuzzing can exercise the CMS builder and
+/// verifier end to end without touching a real private key. It is a test
+/// double, not a signature backend: do not use it in the viewer, in an export
+/// path, or anywhere a signature is meant to prove authorship. Real document
+/// signatures belong to [`crate::pdf_signature`], which uses `rsa` PKCS#1 v1.5
+/// with a 2048-bit minimum key.
 ///
 /// It performs textbook (unpadded) RSA with the small public primes
-/// `1_000_003` and `1_000_033` through [`modpow_u128`]. The message
+/// `1_000_003` and `1_000_033` through the crate-private
+/// `insecure_test_modpow`. The message
 /// representative is the digest reduced modulo the toy modulus, so signatures
 /// are fixed-length, deterministic, and sensitive to every input byte. This is
 /// a **test double**: it provides no authenticity against an adversary and must
@@ -404,10 +419,10 @@ impl SignatureProvider for InMemorySignatureProvider {
     fn sign(&self, algorithm: DigestAlgorithm, tbs: &[u8]) -> Result<Vec<u8>> {
         let digest_bytes = digest(algorithm, tbs)?;
         let representative = message_representative(&digest_bytes, self.modulus);
-        let signature = modpow_u128(representative, self.private_exponent, self.modulus)
+        let signature = insecure_test_modpow(representative, self.private_exponent, self.modulus)
             .ok_or_else(|| {
-                SecurityError::Configuration("in-memory toy RSA signing overflowed".to_string())
-            })?;
+            SecurityError::Configuration("in-memory toy RSA signing overflowed".to_string())
+        })?;
         Ok(signature.to_be_bytes().to_vec())
     }
 
@@ -425,8 +440,8 @@ impl SignatureProvider for InMemorySignatureProvider {
         if value >= self.modulus {
             return Ok(false);
         }
-        let recovered =
-            modpow_u128(value, self.public_exponent, self.modulus).ok_or_else(|| {
+        let recovered = insecure_test_modpow(value, self.public_exponent, self.modulus)
+            .ok_or_else(|| {
                 SecurityError::Configuration(
                     "in-memory toy RSA verification overflowed".to_string(),
                 )
@@ -981,17 +996,18 @@ mod tests {
 
     #[test]
     fn modpow_matches_published_small_key_vectors() {
-        assert_eq!(modpow_u128(3, 7, 13), Some(3));
-        assert_eq!(modpow_u128(2, 10, 17), Some(4));
-        assert_eq!(modpow_u128(7, 0, 11), Some(1));
-        assert_eq!(modpow_u128(2, 3, 1), None);
+        assert_eq!(insecure_test_modpow(3, 7, 13), Some(3));
+        assert_eq!(insecure_test_modpow(2, 10, 17), Some(4));
+        assert_eq!(insecure_test_modpow(7, 0, 11), Some(1));
+        assert_eq!(insecure_test_modpow(2, 3, 1), None);
 
         let provider = provider(7, "PDFXI Test Signer");
         let representative = 123_456u128;
-        let signature = modpow_u128(representative, provider.private_exponent, provider.modulus)
-            .expect("toy exponentiation");
+        let signature =
+            insecure_test_modpow(representative, provider.private_exponent, provider.modulus)
+                .expect("toy exponentiation");
         assert_eq!(
-            modpow_u128(signature, provider.public_exponent, provider.modulus),
+            insecure_test_modpow(signature, provider.public_exponent, provider.modulus),
             Some(representative)
         );
     }
