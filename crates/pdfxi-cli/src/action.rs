@@ -37,8 +37,8 @@
 
 use anyhow::{Context, bail};
 use pdfxi_automation::{
-    ActionLibrary, Artifact, BatchJob, BatchQueue, DocumentExecutor, DocumentOperations, JobState,
-    OperationError, OperationOutcome,
+    Action, ActionLibrary, Artifact, BatchJob, BatchQueue, DocumentExecutor, DocumentOperations,
+    JobState, OperationError, OperationOutcome,
 };
 use serde::Serialize;
 use std::path::{Component, Path, PathBuf};
@@ -389,34 +389,28 @@ pub fn show_action(file: &Path, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Validates inputs, runs a named action, and prints deterministic outcomes.
+/// The result of one staged batch run plus its terminal counts.
+struct RunReport {
+    /// Stable JSON/text projection of every job.
+    output: RunOutput,
+    /// Number of jobs that failed or were cancelled.
+    failed: usize,
+    /// Total number of jobs that ran.
+    total: usize,
+}
+
+/// Validates inputs and runs an already-loaded action through the staging
+/// executor, returning the deterministic report without printing anything.
 ///
-/// The action file, action name, action structure, and every input path are
-/// checked before any job is created or executed. Jobs then run in input order
-/// through [`DocumentExecutor`] driven by [`BatchQueue::run_with`]. One failing
-/// input is isolated to its own outcome. Text mode prints one
-/// `id<TAB>input<TAB>state<TAB>summary` line per job; `--json` prints the stable
-/// [`RunOutput`] shape. In both modes the command exits non-zero when any job
-/// failed.
-pub fn run_action(
-    file: &Path,
-    name: &str,
+/// This is the shared implementation behind `action run`, `droplet`, and the
+/// JSON API's `run-batch`/`run-toolset` commands. Failed jobs are reported in
+/// the returned outcome rather than as an error so callers decide how to
+/// surface them.
+fn build_run_report(
+    action: &Action,
     inputs: &[PathBuf],
     output_dir: Option<&Path>,
-    json: bool,
-) -> anyhow::Result<()> {
-    let library = load_library(file)?;
-    let action = library.get(name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no action named '{name}' in '{}'; available actions: {}",
-            file.display(),
-            available_names(&library)
-        )
-    })?;
-    action
-        .validate()
-        .with_context(|| format!("action '{name}' in '{}' failed validation", file.display()))?;
-
+) -> anyhow::Result<RunReport> {
     if inputs.is_empty() {
         bail!("at least one --input path is required; no jobs were run");
     }
@@ -447,15 +441,62 @@ pub fn run_action(
         .count();
     let jobs: Vec<JobOutput> = queue.jobs().map(build_job_output).collect();
     let total = jobs.len();
-
-    if json {
-        let output = RunOutput {
-            action: name.to_owned(),
+    Ok(RunReport {
+        output: RunOutput {
+            action: action.name().to_owned(),
             jobs,
-        };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        },
+        failed,
+        total,
+    })
+}
+
+/// Runs a loaded action and returns its stable JSON projection as one line.
+///
+/// Used by the `pdfxi api` host so the API reuses the exact same executor and
+/// outcome shape as `action run --json`.
+pub fn run_loaded_action_json(
+    action: &Action,
+    inputs: &[PathBuf],
+    output_dir: Option<&Path>,
+) -> anyhow::Result<String> {
+    let report = build_run_report(action, inputs, output_dir)?;
+    Ok(serde_json::to_string(&report.output)?)
+}
+
+/// Validates inputs, runs a named action, and prints deterministic outcomes.
+///
+/// The action file, action name, action structure, and every input path are
+/// checked before any job is created or executed. Jobs then run in input order
+/// through [`DocumentExecutor`] driven by [`BatchQueue::run_with`]. One failing
+/// input is isolated to its own outcome. Text mode prints one
+/// `id<TAB>input<TAB>state<TAB>summary` line per job; `--json` prints the stable
+/// [`RunOutput`] shape. In both modes the command exits non-zero when any job
+/// failed.
+pub fn run_action(
+    file: &Path,
+    name: &str,
+    inputs: &[PathBuf],
+    output_dir: Option<&Path>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let library = load_library(file)?;
+    let action = library.get(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no action named '{name}' in '{}'; available actions: {}",
+            file.display(),
+            available_names(&library)
+        )
+    })?;
+    action
+        .validate()
+        .with_context(|| format!("action '{name}' in '{}' failed validation", file.display()))?;
+
+    let report = build_run_report(action, inputs, output_dir)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report.output)?);
     } else {
-        for job in &jobs {
+        for job in &report.output.jobs {
             println!(
                 "{}\t{}\t{}\t{}",
                 job.id, job.input, job.state, job.outcome.summary
@@ -463,8 +504,8 @@ pub fn run_action(
         }
     }
 
-    if failed > 0 {
-        bail!("{failed} of {total} job(s) failed");
+    if report.failed > 0 {
+        bail!("{} of {} job(s) failed", report.failed, report.total);
     }
     Ok(())
 }

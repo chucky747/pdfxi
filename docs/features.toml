@@ -2317,25 +2317,50 @@ tests = [
 title = "ICC color management and output intents"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/preview.rs",
+    "docs/evidence/render/T-0103.md",
+]
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-render: 97 passed, 0 failed; preview mode parsing, plate visibility toggles, soft-proof intent parsing/mapping from ICC rendering intent, deterministic plan, and honest unsupported-conversion warnings all covered by 17 preview::tests. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0103.md."
 id = "PRINT-004"
-notes = ""
+notes = "Adds the Output Preview model: PreviewMode (composite / single separation / all separations), per-plate visibility toggles, an overprint-simulation flag, and SoftProofIntent selection (with Auto derivation from the output profile's ICC rendering intent). PreviewPlan::build yields a deterministic, backend-consumable description with resolved intent, output condition label, visible inks, warnings, and needs_backend_cmm. Process-ink and soft-proof metadata derive from the existing color.rs ICC/OutputIntent structures. Status stays in-progress: real separation/soft-proof rasterization needs the native CMM backend, out of this lane's scope."
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "preview::tests::preview_mode_parsing",
+    "preview::tests::plate_list_and_toggles",
+    "preview::tests::soft_proof_intent_parsing_and_mapping",
+    "preview::tests::plan_is_deterministic",
+    "preview::tests::plan_resolves_soft_proof_and_reports_unsupported_conversion",
+    "preview::tests::plan_respects_mode_overprint_and_visibility",
+    "preview::tests::empty_inputs_produce_valid_plan",
+    "preview::tests::bad_destination_profile_is_reported_as_warning",
+]
 title = "Output preview and separations"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/preview.rs",
+    "docs/evidence/render/T-0103.md",
+]
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-render: 97 passed, 0 failed; ink ordering/totals, spot vs process, enable/disable, overprint policy flags/bits, typed errors, empty/bounded inputs covered by 17 preview::tests. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0103.md."
 id = "PRINT-005"
-notes = ""
+notes = "Adds the InkManager: InkEntry records carry name, process-CMYK-vs-spot indicator, normalised coverage/density, and an enabled flag. Entries are kept in canonical order (C, M, Y, K, then spots by name); totals accumulate in f64 and round to f32 once for determinism. Supports enable/disable, coverage updates, process/spot queries, and derivation from an ICC colour space or OutputIntent. OverprintPolicy carries overprint-preview policy flags with a deterministic bit encoding. Unsupported colour spaces yield typed UnsupportedConversion errors. Status stays in-progress: true overprint simulation is applied only by the native backend, which consumes needs_backend_cmm and the policy bits."
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "preview::tests::ink_ordering_and_totals",
+    "preview::tests::spot_vs_process_and_enabling",
+    "preview::tests::coverage_updates_are_validated",
+    "preview::tests::overprint_policy_flags_and_bits",
+    "preview::tests::process_plate_derivation_from_icc_space",
+    "preview::tests::derive_from_output_intent",
+    "preview::tests::plan_honours_policy_and_disabled_inks",
+    "preview::tests::typed_errors",
+    "preview::tests::bounded_ink_and_visible_plate_counts",
+]
 title = "Ink manager and overprint preview"
 
 [[feature]]
@@ -2652,25 +2677,97 @@ tests = [
 title = "CLI for every scriptable operation"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-automation/src/api.rs",
+    "crates/pdfxi-automation/src/json.rs",
+    "crates/pdfxi-automation/src/lib.rs",
+    "crates/pdfxi-cli/src/api.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/evidence/automation/T-0105.md",
+]
 domain = "Automation"
-evidence = ""
+evidence = "cargo test -p pdfxi-automation -p pdfxi-cli: 13 new api tests plus 5 new JSON-codec tests pass (125 automation unit, 5 CLI unit, 48 CLI integration total). CLI integration tests api_once_answers_one_canonical_json_line, api_stream_answers_every_nonblank_line_in_order and api_reports_errors_without_exiting_the_process drive the real binary over stdin. output_is_deterministic_and_keys_are_sorted asserts byte-identical responses and alphabetic key order. Full output in docs/evidence/automation/T-0105.md."
 id = "AUTO-006"
-notes = ""
+notes = """
+Implements `pdfxi api [--once]` over stdio: one request line produces one
+canonical JSON response line. The request envelope is
+{version, id, command, params}; the response always carries {error, id, ok,
+result, version}. Commands: version, commands, list-actions, show-action,
+dry-run, run-batch, list-toolsets, show-toolset, validate-toolset,
+run-toolset. Protocol version is 1 and must match exactly; lines are capped at
+1 MiB before parsing; the hand-written JSON parser bounds nesting to 64 and
+node count to 65,536, rejects duplicate keys, malformed numbers/strings,
+lone surrogates and trailing text, and returns typed errors instead of
+panicking. File access and execution are injected through ApiHost; the CLI
+host reuses the existing staging DocumentExecutor so API runs share
+`action run --json` semantics. Honest scope: local stdio only, no socket or
+network transport; runs are the documented staging (no real PDF mutation).
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "api::tests::request_and_response_round_trip",
+    "api::tests::unknown_command_returns_a_typed_error",
+    "api::tests::malformed_json_is_robust",
+    "api::tests::oversize_line_is_rejected_before_parsing",
+    "api::tests::version_mismatch_is_rejected",
+    "api::tests::dry_run_validates_without_executing",
+    "api::tests::list_and_show_actions_use_saved_files",
+    "api::tests::run_batch_delegates_to_the_host",
+    "api::tests::output_is_deterministic_and_keys_are_sorted",
+    "api::tests::host_and_parameter_errors_are_typed",
+    "json::tests::parse_and_serialize_round_trip_is_canonical",
+    "json::tests::malformed_inputs_are_rejected_without_panicking",
+    "json::tests::depth_and_trailing_input_are_bounded",
+    "json::tests::unicode_escapes_and_control_characters_are_handled",
+    "json::tests::numeric_and_string_spelling_are_preserved",
+    "api::tests::bounded_reader_caps_a_long_line_and_keeps_stream_framing",
+    "api::tests::bounded_reader_returns_a_line_without_a_trailing_newline",
+    "api_once_answers_one_canonical_json_line",
+    "api_stream_answers_every_nonblank_line_in_order",
+    "api_reports_errors_without_exiting_the_process",
+    "api_dry_run_batch_and_toolset_use_local_files",
+]
 title = "Local JSON API for automation"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-automation/src/toolset.rs",
+    "crates/pdfxi-automation/src/api.rs",
+    "crates/pdfxi-automation/src/action.rs",
+    "crates/pdfxi-cli/src/api.rs",
+    "docs/evidence/automation/T-0105.md",
+]
 domain = "Automation"
-evidence = ""
+evidence = "cargo test -p pdfxi-automation -p pdfxi-cli: 4 toolset tests plus api::tests::alias_rejection_covers_unknown_dangerous_and_wrapped_operations, api::tests::toolset_parse_validate_list_and_run and CLI integration api_rejects_dangerous_aliased_operations pass. Toolset serialization round-trips byte-for-byte; validate/list/show/run share the AUTO-006 dispatcher. Full output in docs/evidence/automation/T-0105.md."
 id = "AUTO-007"
-notes = ""
+notes = """
+A toolset is a versioned JSON document mapping a friendly alias to an action
+file, an action name, and optional string parameter defaults. Aliases are
+listed in sorted order and toolset JSON serializes canonically. Validation
+rejects empty names/toolsets/aliases/file/action values, empty default keys,
+unsupported versions, malformed shapes, and aliases in DANGEROUS_ALIASES
+(case-insensitive, '-'/'_' equivalent: exec, shell, cmd, powershell, bash,
+delete, format, security, custom-command, ...). Running an alias also rejects
+target actions containing a Security or CustomCommand step
+(dangerous_operation) so a friendly name cannot launder an unchecked
+operation. Defaults are applied to steps that lack that parameter key;
+existing values win. Honest scope: aliases select saved actions and stage
+them through the same no-mutation executor; no shell/process execution and no
+WASM plugin host (AUTO-008 remains out of scope).
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "toolset::tests::parse_validate_and_serialize_are_deterministic",
+    "toolset::tests::defaults_are_sorted_and_preserved",
+    "toolset::tests::dangerous_aliases_are_rejected_case_insensitively",
+    "toolset::tests::structural_errors_have_stable_codes",
+    "api::tests::toolset_parse_validate_list_and_run",
+    "api::tests::alias_rejection_covers_unknown_dangerous_and_wrapped_operations",
+    "api::tests::defaults_are_applied_only_to_missing_step_parameters",
+    "api_rejects_dangerous_aliased_operations",
+]
 title = "Custom toolsets and commands"
 
 [[feature]]

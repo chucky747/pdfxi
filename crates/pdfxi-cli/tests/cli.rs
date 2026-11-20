@@ -1550,3 +1550,217 @@ fn export_tagged_rejects_a_non_pdf_input() {
     );
     assert!(!out.path.exists(), "no output should be written on failure");
 }
+
+// ---------------------------------------------------------------------------
+// api (AUTO-006 local JSON API, AUTO-007 custom toolsets)
+// ---------------------------------------------------------------------------
+
+use std::io::Write;
+use std::process::Stdio;
+
+/// Runs the real binary with `args`, writing `input` to its stdin.
+fn run_with_stdin(args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pdfxi"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn pdfxi binary");
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(input.as_bytes())
+            .expect("write request lines");
+    }
+    child.wait_with_output().expect("collect api output")
+}
+
+/// Writes a deterministic two-action file used by the API tests.
+fn api_action_file() -> TempPath {
+    let file = TempPath::new("txt");
+    file.write(
+        b"ACTION\tnightly\tNightly staging\n\
+STEP\tload\timport\n\
+STEP\tsave\texport\n\
+PARAM\ttarget\tout.pdf\n\
+\n\
+ACTION\tdanger\tUnsafe\n\
+STEP\tsec\tsecurity\n\
+PARAM\tpassword\tsecret\n",
+    );
+    file
+}
+
+#[test]
+fn api_once_answers_one_canonical_json_line() {
+    let request =
+        serde_json::json!({"version": 1, "id": "one", "command": "version", "params": {}})
+            .to_string();
+    let mut input = request.clone();
+    input.push('\n');
+    input.push_str("{\"version\":1,\"id\":\"two\",\"command\":\"version\",\"params\":{}}\n");
+    let output = run_with_stdin(&["api", "--once"], &input);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "--once must answer exactly one request");
+    let value: Value = serde_json::from_str(lines[0]).expect("canonical JSON response");
+    assert_eq!(value["id"].as_str(), Some("one"));
+    assert_eq!(value["ok"].as_bool(), Some(true));
+    assert_eq!(value["version"].as_u64(), Some(1));
+    assert!(value["result"]["engine"].as_str().is_some());
+    assert!(value["error"].is_null());
+}
+
+#[test]
+fn api_stream_answers_every_nonblank_line_in_order() {
+    let first =
+        serde_json::json!({"version": 1, "id": 1, "command": "commands", "params": {}}).to_string();
+    let second =
+        serde_json::json!({"version": 1, "id": 2, "command": "version", "params": {}}).to_string();
+    let input = format!("\n{first}\n   \n{second}\n");
+    let output = run_with_stdin(&["api"], &input);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "blank lines must not produce responses");
+    let ids: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            let value: Value = serde_json::from_str(line).expect("JSON line");
+            value["id"].as_str().unwrap_or("").to_owned()
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        ["1", "2"],
+        "numeric ids echo as strings in request order"
+    );
+}
+
+#[test]
+fn api_reports_errors_without_exiting_the_process() {
+    let valid = serde_json::json!({"version": 1, "id": "ok", "command": "version", "params": {}})
+        .to_string();
+    let bad = serde_json::json!({"version": 9, "id": "bad", "command": "version"}).to_string();
+    let input = format!("not json\n{valid}\n{bad}\n");
+    let output = run_with_stdin(&["api"], &input);
+    assert!(
+        output.status.success(),
+        "protocol errors are responses, not crashes"
+    );
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3);
+    let values: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("JSON line"))
+        .collect();
+    assert_eq!(values[0]["error"]["code"].as_str(), Some("invalid_json"));
+    assert_eq!(values[1]["ok"].as_bool(), Some(true));
+    assert_eq!(
+        values[2]["error"]["code"].as_str(),
+        Some("version_mismatch")
+    );
+}
+
+#[test]
+fn api_dry_run_batch_and_toolset_use_local_files() {
+    let actions = api_action_file();
+    let input_pdf = TempPath::new("pdf");
+    input_pdf.write(b"not a real PDF, only staged");
+    let toolset = TempPath::new("json");
+    toolset.write(
+        serde_json::json!({
+            "version": 1,
+            "name": "maintenance",
+            "tools": {
+                "daily": {
+                    "file": actions.arg(),
+                    "action": "nightly",
+                    "defaults": {"note": "daily"}
+                }
+            }
+        })
+        .to_string()
+        .as_bytes(),
+    );
+
+    let dry = serde_json::json!({
+        "version": 1, "id": "dry", "command": "dry-run",
+        "params": {"file": actions.arg(), "action": "nightly"}
+    })
+    .to_string();
+    let batch = serde_json::json!({
+        "version": 1, "id": "batch", "command": "run-batch",
+        "params": {
+            "file": actions.arg(), "action": "nightly",
+            "inputs": [input_pdf.arg()]
+        }
+    })
+    .to_string();
+    let run_tool = serde_json::json!({
+        "version": 1, "id": "tool", "command": "run-toolset",
+        "params": {
+            "file": toolset.arg(), "tool": "daily",
+            "inputs": [input_pdf.arg()]
+        }
+    })
+    .to_string();
+    let input = format!("{dry}\n{batch}\n{run_tool}\n");
+    let output = run_with_stdin(&["api"], &input);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3);
+    let values: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("JSON line"))
+        .collect();
+    assert_eq!(values[0]["ok"].as_bool(), Some(true));
+    assert_eq!(values[0]["result"]["steps"].as_u64(), Some(2));
+    assert_eq!(values[1]["ok"].as_bool(), Some(true));
+    assert_eq!(
+        values[1]["result"]["run"]["jobs"][0]["state"].as_str(),
+        Some("succeeded")
+    );
+    assert_eq!(
+        values[2]["ok"].as_bool(),
+        Some(true),
+        "response: {}",
+        lines[2]
+    );
+    assert_eq!(values[2]["result"]["tool"].as_str(), Some("daily"));
+}
+
+#[test]
+fn api_rejects_dangerous_aliased_operations() {
+    let actions = api_action_file();
+    let wrapped = TempPath::new("json");
+    wrapped.write(
+        serde_json::json!({
+            "version": 1,
+            "name": "maintenance",
+            "tools": {
+                "daily": {"file": actions.arg(), "action": "danger"}
+            }
+        })
+        .to_string()
+        .as_bytes(),
+    );
+    let input_pdf = TempPath::new("pdf");
+    input_pdf.write(b"staged");
+    let request = serde_json::json!({
+        "version": 1, "id": "wrapped", "command": "run-toolset",
+        "params": {
+            "file": wrapped.arg(), "tool": "daily",
+            "inputs": [input_pdf.arg()]
+        }
+    })
+    .to_string();
+    let output = run_with_stdin(&["api", "--once"], &(request + "\n"));
+    assert!(output.status.success());
+    let value: Value = serde_json::from_str(stdout(&output).trim()).expect("JSON response");
+    assert_eq!(value["ok"].as_bool(), Some(false));
+    assert_eq!(value["error"]["code"].as_str(), Some("dangerous_operation"));
+}

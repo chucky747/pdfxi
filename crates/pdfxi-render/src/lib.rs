@@ -37,6 +37,11 @@
 //! carry an explicit colour space, and analytic matrix/TRC and gray-gamma plans
 //! are derived from profiles; full ICC/CMM rendering is delegated to the native
 //! renderer backend.
+//!
+//! The [`mod@preview`] module models output preview, separations, ink
+//! management, and overprint policy. It produces a deterministic [`PreviewPlan`]
+//! a backend can consume, derives process plates from the colour structures in
+//! [`mod@color`], and reports unsupported conversions honestly.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -72,11 +77,23 @@ pub use export::{
 /// delegated to the renderer backend.
 pub mod color;
 
+/// Output preview, separations, ink management, and overprint policy.
+///
+/// Produces a deterministic [`PreviewPlan`] for a backend to consume, derives
+/// process plates from the colour structures in [`mod@color`], and reports
+/// unsupported conversions honestly.
+pub mod preview;
+
 pub use color::{
     ColorError, ConversionPlan, DeviceClass, DeviceColor, DeviceColorSpace, ICC_HEADER_SIZE,
     IccColorSpace, IccHeader, IccProfile, MAX_ICC_PROFILE_BYTES, MAX_ICC_TAG_COUNT,
     MIN_ICC_PROFILE_BYTES, OutputIntent, OutputIntentIssue, OutputIntentSet, OutputIntentSubtype,
     Pcs, RawOutputIntent, RenderingIntent, RgbMatrix, RgbMatrixTrc, TagEntry, Trc, Xyz,
+};
+
+pub use preview::{
+    InkEntry, InkKind, InkManager, InkSummary, MAX_INK_NAME_BYTES, MAX_INKS, OverprintPolicy,
+    PreviewConfig, PreviewError, PreviewMode, PreviewPlan, SoftProofIntent,
 };
 
 pub use print::{

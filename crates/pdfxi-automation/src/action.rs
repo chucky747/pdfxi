@@ -268,6 +268,24 @@ impl Action {
         self.steps.iter().find(|step| step.id == id)
     }
 
+    /// Applies toolset parameter defaults to every step that lacks the key.
+    ///
+    /// Existing step parameters always win: a default is only added when the
+    /// step has no parameter with that key. Pairs are applied in order, and the
+    /// action remains valid because defaults always have non-empty keys when
+    /// they come from a validated [`Toolset`](crate::Toolset). This gives
+    /// named toolsets a deterministic way to supply common action parameters
+    /// without editing the saved action file.
+    pub fn apply_defaults(&mut self, defaults: &[(String, String)]) {
+        for step in &mut self.steps {
+            for (key, value) in defaults {
+                if step.parameter(key).is_none() {
+                    step.add_parameter(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
     /// Returns the number of steps.
     pub fn len(&self) -> usize {
         self.steps.len()

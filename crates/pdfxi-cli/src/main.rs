@@ -24,6 +24,11 @@
 //! plain text or a small Markdown subset. The `export tagged` command writes a
 //! structured text representation of a PDF's accessible content (roles, reading
 //! order and text); it is not a tagged-PDF producer or a PDF/UA certification.
+//!
+//! The `api` command exposes the same automation operations as a local,
+//! versioned, line-delimited JSON protocol on stdin/stdout. It opens no sockets
+//! and shares the action executor with `action run`; `--once` answers a single
+//! request so scripts can use it as a one-shot filter.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -35,6 +40,9 @@ mod image;
 
 // Action-file commands (`action` and `droplet`) built on pdfxi-automation.
 mod action;
+
+// Local line-delimited JSON automation API over stdin/stdout (`api`).
+mod api;
 
 // PDF creation (`create`) and accessible-text export (`export`) built on
 // pdfxi-convert and the accessibility tree builder.
@@ -177,6 +185,17 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Run a local, line-delimited JSON automation API over stdin and stdout.
+    ///
+    /// Each input line is one typed request and produces one canonical JSON
+    /// response line. No sockets are opened. Commands can point at saved
+    /// action files, run batches, validate with a dry run, and use named
+    /// toolsets. `--once` answers exactly one request and exits.
+    Api {
+        /// Read and answer one request, then exit instead of looping to EOF.
+        #[arg(long)]
+        once: bool,
     },
 }
 
@@ -458,6 +477,7 @@ fn main() -> anyhow::Result<()> {
             inputs,
             json,
         } => action::run_action(&action_file, &name, &inputs, None, json),
+        Command::Api { once } => api::run_api(once),
     }
 }
 

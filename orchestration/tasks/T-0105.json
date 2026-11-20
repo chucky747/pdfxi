@@ -3,7 +3,7 @@
   "lane": "automation",
   "title": "Local JSON automation API and custom toolsets",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0094"],
   "owns": [
     "crates/pdfxi-automation/**",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0105.toml"
   ],
   "acceptance": "cargo test -p pdfxi-automation -p pdfxi-cli",
-  "evidence": ""
+  "evidence": "docs/evidence/automation/T-0105.md"
 }

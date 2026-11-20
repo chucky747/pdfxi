@@ -19,6 +19,14 @@
 //!   `action list`, `action show`, `action run`, and `droplet` commands.
 //! - [`AutomationError`] — actionable, self-describing errors for every
 //!   rejection path.
+//! - [`ApiEngine`] / [`Request`] / [`Response`] — a versioned, line-delimited
+//!   JSON API over a bounded, socket-free text protocol. Commands point at
+//!   saved action files, run batches, and perform dry-run validation through
+//!   an injected [`ApiHost`]. [`JsonValue`] provides canonical parsing and
+//!   serialization with no external dependency.
+//! - [`Toolset`] / [`Tool`] — named JSON files mapping friendly aliases to
+//!   saved actions plus parameter defaults, validated and runnable through the
+//!   same API, with dangerous aliases and step kinds rejected.
 //! - [`Script`] / [`Limits`] / [`run_script`] — a dependency-free, deterministic
 //!   JavaScript subset for document actions, with explicit CPU-step, call,
 //!   iteration, size, wall-clock, and cancellation budgets. The [`HostObject`]
@@ -40,13 +48,20 @@
 #![forbid(unsafe_code)]
 
 mod action;
+mod api;
 mod batch;
 mod document;
 mod error;
 mod js;
+mod json;
 mod library;
+mod toolset;
 
 pub use action::{Action, ActionStep, StepKind};
+pub use api::{
+    API_VERSION, ApiEngine, ApiError, ApiHost, MAX_LINE_BYTES, MemoryHost, Request, Response,
+    SUPPORTED_COMMANDS,
+};
 pub use batch::{
     BatchJob, BatchQueue, CancelToken, JobOutcome, JobState, MockExecutor, StepExecutor,
 };
@@ -60,7 +75,9 @@ pub use js::{
     AcrobatContext, BuiltinFn, EventData, FieldStore, HostObject, HostRegistry, JsError,
     JsFunction, Limits, NoHostObject, Pos, Script, Value, run_acrobat_script, run_script,
 };
+pub use json::{JsonError, JsonValue, MAX_DEPTH, MAX_NODES};
 pub use library::ActionLibrary;
+pub use toolset::{TOOLSET_VERSION, Tool, Toolset, ToolsetError};
 
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {
