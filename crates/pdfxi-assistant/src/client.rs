@@ -15,6 +15,10 @@ use crate::endpoint::ServiceEndpoint;
 use crate::error::AssistantError;
 use crate::events::EventStream;
 use crate::http::Http;
+use crate::lockdown::{
+    ASSISTANT_MCP_NAME, GeneratedText, LockedSession, OneShotRequest, PermissionDecision,
+    locked_ruleset, verify_locked_ruleset,
+};
 use crate::mcp::{self, McpOptions, McpReport, McpSession, ToolProvider};
 use crate::models::{
     Answer, DataEnvelope, ListEnvelope, MessageItem, MessagePage, Model, ModelRef, PromptAccepted,
@@ -32,6 +36,7 @@ const PROVIDER_ROUTE: &str = "/api/provider";
 const MODEL_ROUTE: &str = "/api/model";
 const SESSION_ROUTE: &str = "/api/session";
 const EVENT_ROUTE: &str = "/api/event";
+const GENERATE_TEXT_ROUTE: &str = "/api/experimental/generate/text";
 
 /// A client for one OpenCode service.
 pub struct Assistant {
@@ -114,6 +119,125 @@ impl Assistant {
         let envelope: DataEnvelope<Session> =
             self.http.post_json(SESSION_ROUTE, request, cancel)?;
         Ok(envelope.data)
+    }
+
+    /// `GET /api/session/{id}`.
+    ///
+    /// Used to read back the effective permission ruleset after a locked
+    /// session is created; the returned [`Session`] carries `permissions`.
+    pub fn session(
+        &self,
+        session_id: &str,
+        cancel: &CancelFlag,
+    ) -> Result<Session, AssistantError> {
+        let route = session_route(session_id)?;
+        let envelope: DataEnvelope<Session> = self.http.get_json(&route, cancel)?;
+        Ok(envelope.data)
+    }
+
+    /// `DELETE /api/session/{id}`.
+    pub fn delete_session(
+        &self,
+        session_id: &str,
+        cancel: &CancelFlag,
+    ) -> Result<(), AssistantError> {
+        let route = session_route(session_id)?;
+        self.http.delete_empty(&route, cancel)
+    }
+
+    /// Creates a session locked to PDFXI's five read-only document tools.
+    ///
+    /// The service version is checked first. The ruleset shape was only
+    /// observed on the pinned `2.3.x` range, so an unknown service is refused
+    /// before any session exists: no create request is sent and there is
+    /// nothing to delete.
+    ///
+    /// The request is created with a wildcard deny rule followed by the five
+    /// allow rules, then `GET /api/session/{id}` is read back and compared with
+    /// the expected ruleset. A missing, widened, narrowed or `ask` ruleset is a
+    /// typed [`AssistantError::LockdownUnverified`], and the session is deleted
+    /// before the error is returned. No prompt is sent by this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssistantError::IncompatibleVersion`] when `/api/info` reports
+    /// a version outside `2.3.x`, any create/read-back transport error, or
+    /// [`AssistantError::LockdownUnverified`] when the service does not echo
+    /// back exactly the locked ruleset.
+    pub fn create_locked_session(
+        &self,
+        request: &SessionRequest,
+        cancel: &CancelFlag,
+    ) -> Result<LockedSession, AssistantError> {
+        self.check_compatible(cancel)?;
+        let mut locked_request = request.clone();
+        locked_request.permissions = Some(locked_ruleset());
+        let created = self.create_session(&locked_request, cancel)?;
+        let read_back = match self.session(&created.id, cancel) {
+            Ok(session) => session,
+            Err(error) => {
+                // Best effort cleanup; the original error is returned.
+                let _ = self.delete_session(&created.id, cancel);
+                return Err(error);
+            }
+        };
+        let rules = read_back.permissions.as_deref().unwrap_or(&[]);
+        if let Err(detail) = verify_locked_ruleset(rules) {
+            let _ = self.delete_session(&created.id, cancel);
+            return Err(AssistantError::LockdownUnverified { detail });
+        }
+        Ok(LockedSession::new(read_back))
+    }
+
+    /// Evaluates one action/resource pair against a session's ruleset.
+    ///
+    /// `POST /api/session/{id}/permission` returns the effective effect without
+    /// executing the action. The security review uses it to prove that an
+    /// action such as `shell` is denied and a document tool is allowed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssistantError::InvalidArgument`] for an invalid action or
+    /// resource, and the usual transport errors.
+    pub fn evaluate_permission(
+        &self,
+        session_id: &str,
+        action: &str,
+        resources: &[&str],
+        cancel: &CancelFlag,
+    ) -> Result<PermissionDecision, AssistantError> {
+        validate_permission_action(action)?;
+        if resources.is_empty() {
+            return Err(AssistantError::InvalidArgument {
+                message: "a permission evaluation needs at least one resource".to_owned(),
+            });
+        }
+        for resource in resources {
+            if resource.len() > 512 || resource.bytes().any(|byte| !(0x20..=0x7e).contains(&byte)) {
+                return Err(AssistantError::InvalidArgument {
+                    message: "permission resource is not a short printable ASCII string".to_owned(),
+                });
+            }
+        }
+        let route = format!("{}/permission", session_route(session_id)?);
+        let body = PermissionCheck { action, resources };
+        let envelope: DataEnvelope<PermissionDecision> =
+            self.http.post_json(&route, &body, cancel)?;
+        Ok(envelope.data)
+    }
+
+    /// `POST /api/experimental/generate/text`.
+    ///
+    /// Stateless fallback: no session, no MCP server and no tools. Used only if
+    /// the service cannot enforce a locked session on this host.
+    pub fn generate_text(
+        &self,
+        request: &OneShotRequest,
+        cancel: &CancelFlag,
+    ) -> Result<String, AssistantError> {
+        let envelope: DataEnvelope<GeneratedText> =
+            self.http.post_json(GENERATE_TEXT_ROUTE, request, cancel)?;
+        Ok(envelope.data.text)
     }
 
     /// `POST /api/session/{id}/prompt`. The route enqueues the turn and returns.
@@ -254,6 +378,21 @@ impl Assistant {
             .serve(provider)
     }
 
+    /// Attaches the read-only MCP server for a verified locked session.
+    ///
+    /// The name is fixed to [`ASSISTANT_MCP_NAME`] so the ruleset actions
+    /// (`pdfxi_*`) match. This method does not verify the session again; use
+    /// [`Self::create_locked_session`] to obtain the value.
+    pub fn attach_locked_mcp(
+        &self,
+        _locked: &LockedSession,
+        provider: &dyn ToolProvider,
+        options: McpOptions,
+        cancel: &CancelFlag,
+    ) -> Result<McpReport, AssistantError> {
+        self.attach_client_mcp(ASSISTANT_MCP_NAME, provider, options, cancel)
+    }
+
     /// Opens `GET /api/event` with the configured idle timeout.
     pub fn events(&self, cancel: &CancelFlag) -> Result<EventStream, AssistantError> {
         self.events_with_types(&[], cancel)
@@ -303,9 +442,30 @@ struct ModelBody<'a> {
     model: &'a ModelRef,
 }
 
+#[derive(Serialize)]
+struct PermissionCheck<'a> {
+    action: &'a str,
+    resources: &'a [&'a str],
+}
+
 fn session_route(session_id: &str) -> Result<String, AssistantError> {
     validate_token(session_id, "session id")?;
     Ok(format!("{SESSION_ROUTE}/{session_id}"))
+}
+
+fn validate_permission_action(value: &str) -> Result<(), AssistantError> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'*' | b'_' | b'-' | b'.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(AssistantError::InvalidArgument {
+            message: format!("invalid permission action {value:?}"),
+        })
+    }
 }
 
 fn validate_event_type(value: &str) -> Result<(), AssistantError> {

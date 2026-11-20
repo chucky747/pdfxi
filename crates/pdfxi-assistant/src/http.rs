@@ -121,6 +121,27 @@ impl Http {
         Ok(())
     }
 
+    /// Performs `DELETE route`, accepting a response with no body.
+    pub(crate) fn delete_empty(
+        &self,
+        route: &str,
+        cancel: &CancelFlag,
+    ) -> Result<(), AssistantError> {
+        check_cancel(cancel)?;
+        let response = self
+            .agent
+            .delete(&self.url(route))
+            .header("Authorization", &self.authorization)
+            .header("Accept", "application/json")
+            .call()
+            .map_err(|error| self.transport_error(error, route))?;
+        let (status, text) = self.read_body(response, route)?;
+        if !(200..300).contains(&status) {
+            return Err(self.status_error(status, route, &text));
+        }
+        Ok(())
+    }
+
     /// Opens `GET route` as a server-sent event stream.
     pub(crate) fn open_event_stream(
         &self,

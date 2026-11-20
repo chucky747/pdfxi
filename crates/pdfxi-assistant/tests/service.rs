@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use common::{Request, Response, Stub};
 use pdfxi_assistant::{
-    Assistant, BODY_SNIPPET_LIMIT, CancelFlag, ClientConfig, ModelRef, Provider, ServiceEndpoint,
-    SessionRequest, Timeouts,
+    Assistant, AssistantError, BODY_SNIPPET_LIMIT, CancelFlag, ClientConfig, ModelRef,
+    PermissionEffect, PermissionRule, Provider, ServiceEndpoint, SessionRequest, Timeouts,
+    locked_ruleset,
 };
 
 const PASSWORD: &str = "test-secret";
@@ -501,4 +502,165 @@ fn event_type_filter_is_validated_and_forwarded() {
             .events_with_types(&["session.idle\r\nX: y"], &cancel)
             .is_err()
     );
+}
+
+fn locked_session_json(rules: &[PermissionRule]) -> String {
+    serde_json::json!({
+        "data": {
+            "id": "ses_test",
+            "projectID": "prj_1",
+            "model": {"providerID": "opencode-go", "id": "hy4-flash-free", "variant": "default"},
+            "cost": 0,
+            "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+            "time": {"created": 1000, "updated": 1000},
+            "title": "PDFXI locked test",
+            "subpath": "",
+            "location": {"directory": "/tmp"},
+            "permissions": rules
+        }
+    })
+    .to_string()
+}
+
+#[test]
+fn locked_session_is_read_back_and_verified() {
+    let rules = locked_ruleset();
+    let body = locked_session_json(&rules);
+    let stub = Stub::start(move |request: &Request| {
+        if !authorized(request) {
+            return Response::empty(401);
+        }
+        match (request.method.as_str(), request.route()) {
+            ("GET", "/api/info") => Response::json(INFO),
+            ("POST", "/api/session") => Response::json(body.clone()),
+            ("GET", "/api/session/ses_test") => Response::json(body.clone()),
+            _ => Response::empty(404),
+        }
+    });
+    let assistant = client(&stub, test_config());
+    let cancel = CancelFlag::new();
+    let request = SessionRequest::new(
+        "PDFXI locked test",
+        ModelRef::new("opencode-go", "hy4-flash-free"),
+        std::env::temp_dir(),
+    )
+    .expect("request");
+    let locked = assistant
+        .create_locked_session(&request, &cancel)
+        .expect("verified locked session");
+    assert_eq!(locked.rules(), rules.as_slice());
+
+    let requests = stub.requests();
+    let created = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.route() == "/api/session")
+        .expect("create request");
+    let sent = created.json();
+    let sent_rules = sent["permissions"].as_array().expect("permissions array");
+    assert_eq!(sent_rules.len(), 6);
+    assert_eq!(sent_rules[0]["action"], "*");
+    assert_eq!(sent_rules[0]["effect"], "deny");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.method == "GET" && request.route() == "/api/session/ses_test")
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "POST" && request.route() == "/api/session")
+            .count(),
+        1,
+        "exactly one create request"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.route() == "/api/session/ses_test")
+            .count(),
+        1,
+        "exactly one read-back request"
+    );
+    assert_eq!(
+        requests[0].route(),
+        "/api/info",
+        "the version gate runs before any session is created"
+    );
+}
+
+#[test]
+fn locked_session_refuses_an_incompatible_service_before_creating_a_session() {
+    for version in ["2.4.0", "9.9.9"] {
+        let body = format!(r#"{{"version":"{version}","pid":1}}"#);
+        let stub = Stub::start(move |request: &Request| {
+            if !authorized(request) {
+                return Response::empty(401);
+            }
+            match (request.method.as_str(), request.route()) {
+                ("GET", "/api/info") => Response::json(body.clone()),
+                _ => Response::empty(404),
+            }
+        });
+        let assistant = client(&stub, test_config());
+        let cancel = CancelFlag::new();
+        let request = SessionRequest::new(
+            "PDFXI locked test",
+            ModelRef::new("opencode-go", "hy4-flash-free"),
+            std::env::temp_dir(),
+        )
+        .expect("request");
+        match assistant
+            .create_locked_session(&request, &cancel)
+            .expect_err("an incompatible service must be refused")
+        {
+            AssistantError::IncompatibleVersion { version: reported } => {
+                assert_eq!(reported, version);
+            }
+            other => panic!("expected IncompatibleVersion, got {other:?}"),
+        }
+        let requests = stub.requests();
+        assert_eq!(requests.len(), 1, "only /api/info is requested");
+        assert_eq!(requests[0].route(), "/api/info");
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.method == "POST" && request.route() == "/api/session"),
+            "no session is created for {version}"
+        );
+    }
+}
+
+#[test]
+fn widened_read_back_deletes_the_session_and_fails_closed() {
+    let mut widened = locked_ruleset();
+    widened.push(PermissionRule::new("shell", "*", PermissionEffect::Allow));
+    let body = locked_session_json(&widened);
+    let stub = Stub::start(move |request: &Request| {
+        if !authorized(request) {
+            return Response::empty(401);
+        }
+        match (request.method.as_str(), request.route()) {
+            ("GET", "/api/info") => Response::json(INFO),
+            ("POST", "/api/session") => Response::json(body.clone()),
+            ("GET", "/api/session/ses_test") => Response::json(body.clone()),
+            ("DELETE", "/api/session/ses_test") => Response::empty(204),
+            _ => Response::empty(404),
+        }
+    });
+    let assistant = client(&stub, test_config());
+    let cancel = CancelFlag::new();
+    let request = SessionRequest::new(
+        "PDFXI locked test",
+        ModelRef::new("opencode-go", "hy4-flash-free"),
+        std::env::temp_dir(),
+    )
+    .expect("request");
+    let error = assistant
+        .create_locked_session(&request, &cancel)
+        .expect_err("widened read-back must fail");
+    assert!(matches!(error, AssistantError::LockdownUnverified { .. }));
+    assert!(stub
+        .requests()
+        .iter()
+        .any(|request| request.method == "DELETE" && request.route() == "/api/session/ses_test"));
 }

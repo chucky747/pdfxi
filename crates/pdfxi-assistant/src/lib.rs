@@ -58,6 +58,7 @@ mod endpoint;
 mod error;
 mod events;
 mod http;
+mod lockdown;
 mod mcp;
 mod models;
 mod secret;
@@ -68,6 +69,13 @@ pub use config::{ClientConfig, Timeouts};
 pub use endpoint::{EndpointSource, ServiceEndpoint, default_registration_path};
 pub use error::{AssistantError, BODY_SNIPPET_LIMIT, redact};
 pub use events::{Event, EventStream};
+pub use lockdown::{
+    ASSISTANT_MCP_NAME, BudgetedTools, GeneratedText, LOCKED_TOOL_NAMES, LockedSession,
+    MAX_DOCUMENT_TEXT_CHARS_PER_CALL, MAX_DOCUMENT_TEXT_CHARS_PER_CONVERSATION, OneShotRequest,
+    PermissionDecision, PermissionEffect, PermissionRule, PermissionRuleset, TextBudget,
+    UNTRUSTED_TEXT_CLOSE, UNTRUSTED_TEXT_OPEN, fence_document_text, locked_actions, locked_ruleset,
+    read_only_tool_definitions, verify_locked_ruleset,
+};
 pub use mcp::{
     MAX_TOOL_TEXT_CHARS, MCP_PROTOCOL_VERSION, MCP_SERVER_NAME, McpOptions, McpReport, McpSession,
     McpTransport, ToolProvider, tool_definitions,
@@ -76,5 +84,5 @@ pub use models::{
     Answer, AssistantMessage, CacheCost, CacheUsage, ContentPart, CostTier, Cursor, IdleMessage,
     Location, MessageItem, MessagePage, MessageTime, Model, ModelCapabilities, ModelLimit,
     ModelRef, ModelVariant, PromptAccepted, Provider, ServiceInfo, Session, SessionRequest,
-    SessionTime, TextPart, TokenUsage, UserMessage, UserPayload,
+    SessionTime, TextPart, TokenUsage, ToolPart, UserMessage, UserPayload,
 };

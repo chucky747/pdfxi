@@ -2424,6 +2424,38 @@ title = "Protect PDF: apply and remove password protection"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-assistant/src/lockdown.rs",
+    "crates/pdfxi-assistant/src/client.rs",
+    "crates/pdfxi-assistant/tests/service.rs",
+    "crates/pdfxi-assistant/tests/lockdown_live.rs",
+    "docs/evidence/hardening/T-0254.md",
+]
+domain = "Security"
+evidence = "docs/evidence/hardening/T-0254.md"
+id = "SEC-013"
+notes = """
+Session-scoped assistant lockdown and untrusted-document handling. The session
+ruleset is a wildcard deny followed by five read-only document allows, verified
+by exact read-back; create_locked_session refuses a service outside 2.3.x with
+IncompatibleVersion before any session exists. BudgetedTools caps per-call and
+per-conversation document text and fences it as untrusted data, with forged
+fence markers neutralized. Offline stub tests cover the ruleset, the version
+gate, and delete-on-mismatch; the ignored live test on 2.3.2 proves the deny
+matrix and that an injected document cannot run a non-document tool or write a
+sentinel file. Library only; the UI contract is in the evidence.
+"""
+priority = "P0"
+status = "library"
+tests = [
+    "crates/pdfxi-assistant/tests/service.rs::locked_session_is_read_back_and_verified",
+    "crates/pdfxi-assistant/tests/service.rs::locked_session_refuses_an_incompatible_service_before_creating_a_session",
+    "crates/pdfxi-assistant/tests/service.rs::widened_read_back_deletes_the_session_and_fails_closed",
+    "crates/pdfxi-assistant/tests/lockdown_live.rs::hostile_document_cannot_escape_the_five_read_only_tools",
+]
+title = "Assistant tool lockdown and hostile-document hardening"
+
+[[feature]]
+docs = [
     "crates/pdfxi-edit/src/document_annotations.rs",
     "crates/pdfxi-edit/src/lib.rs",
     "docs/evidence/hardening/T-0230.md",

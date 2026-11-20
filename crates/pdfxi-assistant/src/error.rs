@@ -121,6 +121,16 @@ pub enum AssistantError {
         body: String,
     },
 
+    /// A locked assistant session could not be verified from the service.
+    ///
+    /// The session is deleted before this error is returned. The detail names
+    /// the mismatch and never contains document text or a credential.
+    #[error("assistant lockdown could not be verified: {detail}")]
+    LockdownUnverified {
+        /// Why the read-back ruleset was rejected.
+        detail: String,
+    },
+
     /// The service version is outside the pinned range.
     #[error("OpenCode service version {version} is not compatible with the pinned 2.3.x routes")]
     IncompatibleVersion {

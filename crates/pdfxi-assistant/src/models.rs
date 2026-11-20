@@ -312,6 +312,9 @@ pub struct Session {
     /// Session location.
     #[serde(default)]
     pub location: Option<Location>,
+    /// Session permission ruleset read back from the service.
+    #[serde(default)]
+    pub permissions: Option<crate::lockdown::PermissionRuleset>,
 }
 
 /// Body of `POST /api/session`.
@@ -323,6 +326,11 @@ pub struct SessionRequest {
     pub model: ModelRef,
     /// Directory the session is rooted in.
     pub location: Location,
+    /// Optional permission ruleset. `None` leaves the service default, which
+    /// the assistant never does: use
+    /// [`crate::Assistant::create_locked_session`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::lockdown::PermissionRuleset>,
 }
 
 impl SessionRequest {
@@ -344,6 +352,7 @@ impl SessionRequest {
             location: Location {
                 directory: directory.to_string_lossy().into_owned(),
             },
+            permissions: None,
         })
     }
 }
@@ -412,6 +421,8 @@ pub enum ContentPart {
     Text(TextPart),
     /// Model reasoning. Never rendered as the answer.
     Reasoning(TextPart),
+    /// A tool call reported in the assistant message.
+    Tool(ToolPart),
     /// Any other content kind reported by a newer service.
     #[serde(other)]
     Other,
@@ -422,9 +433,23 @@ impl ContentPart {
     pub fn text(&self) -> Option<&str> {
         match self {
             Self::Text(part) | Self::Reasoning(part) => Some(part.text.as_str()),
-            Self::Other => None,
+            Self::Tool(_) | Self::Other => None,
         }
     }
+}
+
+/// A tool call carried by an assistant message.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ToolPart {
+    /// Tool call id.
+    #[serde(default)]
+    pub id: String,
+    /// Tool name, for example `pdfxi_page_text`.
+    #[serde(default)]
+    pub name: String,
+    /// Whether the service actually executed the call.
+    #[serde(default)]
+    pub executed: bool,
 }
 
 /// Text carried by a content item.
@@ -490,6 +515,19 @@ impl AssistantMessage {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+    /// Tool names reported in this message, in content order.
+    ///
+    /// This is an audit surface: an assistant turn that ran any tool other than
+    /// the five locked document tools must be visible to the caller.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.content
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Tool(tool) => Some(tool.name.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Creation time in milliseconds.
