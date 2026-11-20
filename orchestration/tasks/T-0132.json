@@ -3,7 +3,7 @@
   "lane": "qa",
   "title": "Bootstrap dry-run record for AC-01",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0123"],
   "owns": [
     "scripts/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0132.toml"
   ],
   "acceptance": "powershell -File scripts/bootstrap.ps1 -Check",
-  "evidence": ""
+  "evidence": "docs/evidence/qa/T-0132.md"
 }
