@@ -1,0 +1,15 @@
+{
+  "id": "T-0136",
+  "lane": "automation",
+  "title": "Local plugin host contract and presets",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0122"],
+  "owns": [
+    "crates/pdfxi-automation/**",
+    "docs/evidence/automation/T-0136.md",
+    "orchestration/feature-updates/T-0136.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-automation",
+  "evidence": ""
+}

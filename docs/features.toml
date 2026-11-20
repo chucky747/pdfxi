@@ -1668,16 +1668,20 @@ tests = [
 title = "Flatten forms and preserve appearance"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/reader_enable.rs, docs/evidence/forms/T-0115.md"
+docs = "crates/pdfxi-forms/src/reader_enable.rs, docs/evidence/forms/T-0135.md"
 domain = "Forms"
-evidence = "docs/evidence/forms/T-0115.md"
+evidence = "docs/evidence/forms/T-0135.md"
 id = "FORMS-008"
-notes = "Local usage-rights metadata plan with a placeholder signature; explicitly not Adobe certification and no cryptography. Reader-enable form filling/saving itself remains unverified, so the row stays in-progress."
+notes = "Local replacement per ADR 0008: ReaderEnablePlan + FillSavePolicy + parse_rights_dictionary provide /Perms /UR compatibility metadata with a local signature placeholder, can_fill/can_save decisions, and typed validation of existing rights dictionaries. No cryptography and no Adobe certification claim."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "reader_enable::tests::plan_emits_local_usage_rights_metadata",
-    "reader_enable::tests::report_is_deterministic_and_not_certified",
+    "reader_enable::tests::rights_round_trip_through_dictionary",
+    "reader_enable::tests::can_fill_allowed_when_fill_in_granted",
+    "reader_enable::tests::can_save_allowed_when_save_granted",
+    "reader_enable::tests::placeholder_contents_validated_on_parse",
+    "reader_enable::tests::malformed_rights_dictionary_is_a_typed_error",
+    "reader_enable::tests::policy_report_wording_is_stable",
 ]
 title = "Reader-enable form filling and saving"
 

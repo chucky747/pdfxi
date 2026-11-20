@@ -14,9 +14,17 @@
 //! certification or as proof of document integrity. [`ReaderEnablePlan::is_certification`]
 //! always returns `false` to make that boundary explicit in code.
 //!
+//! A [`FillSavePolicy`] derives explicit fill/save decisions from a rights set:
+//! a form-fill flag, a save flag, and the full set of allowed operations, with
+//! [`Permission`] outcomes returned by [`ReaderEnablePlan::can_fill`] and
+//! [`ReaderEnablePlan::can_save`]. [`parse_rights_dictionary`] validates an
+//! existing `/Perms /UR` dictionary, rejecting malformed structure, foreign
+//! filters, non-placeholder `/Contents`, and unknown `/Ff` bits. A
+//! [`PolicyReport`] renders those decisions deterministically.
+//!
 //! All inputs are bounded and deterministic; unsupported rights, empty or
-//! over-long filters, and out-of-range placeholder sizes yield a typed
-//! [`ReaderEnableError`].
+//! over-long filters, foreign filters, and out-of-range placeholder sizes
+//! yield a typed [`ReaderEnableError`].
 
 use crate::acroform::PdfValue;
 use std::collections::BTreeMap;
@@ -266,8 +274,9 @@ impl ReaderEnablePlan {
     ///
     /// # Errors
     ///
-    /// Returns [`ReaderEnableError`] for an empty or over-long filter, an
-    /// over-long reason, or a placeholder size outside `1..=READER_MAX_PLACEHOLDER_SIZE`.
+    /// Returns [`ReaderEnableError`] for an empty, over-long, or foreign
+    /// (non-local) filter, an over-long reason, or a placeholder size outside
+    /// `1..=READER_MAX_PLACEHOLDER_SIZE`.
     pub fn validate(&self) -> Result<(), ReaderEnableError> {
         let filter = &self.signature.filter;
         if filter.is_empty() {
@@ -285,6 +294,11 @@ impl ReaderEnablePlan {
             return Err(ReaderEnableError::ReasonTooLong {
                 len: reason.chars().count(),
                 max: READER_MAX_TEXT_LEN,
+            });
+        }
+        if filter != LOCAL_FILTER {
+            return Err(ReaderEnableError::NonLocalFilter {
+                filter: filter.clone(),
             });
         }
         if self.signature.placeholder_bytes == 0
@@ -345,6 +359,52 @@ impl ReaderEnablePlan {
             placeholder_bytes: self.signature.placeholder_bytes,
             certified: false,
         }
+    }
+
+    /// Derives the fill-and-save policy from this plan's rights.
+    pub const fn policy(&self) -> FillSavePolicy {
+        FillSavePolicy::from_rights(self.rights)
+    }
+
+    /// Returns the fill decision after validating the plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReaderEnableError`] when [`ReaderEnablePlan::validate`] fails,
+    /// so a malformed, foreign, or out-of-bounds plan never grants a decision.
+    pub fn can_fill(&self) -> Result<Permission, ReaderEnableError> {
+        self.validate()?;
+        Ok(self.policy().can_fill())
+    }
+
+    /// Returns the save decision after validating the plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReaderEnableError`] when [`ReaderEnablePlan::validate`] fails.
+    pub fn can_save(&self) -> Result<Permission, ReaderEnableError> {
+        self.validate()?;
+        Ok(self.policy().can_save())
+    }
+
+    /// Returns a deterministic fill/save policy report after validating.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReaderEnableError`] when [`ReaderEnablePlan::validate`] fails.
+    pub fn policy_report(&self) -> Result<PolicyReport, ReaderEnableError> {
+        self.validate()?;
+        Ok(self.policy().report())
+    }
+
+    /// Parses and validates an existing `/Perms /UR` reader-enable dictionary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReaderEnableError`] when the dictionary is malformed, carries
+    /// a foreign filter or non-placeholder contents, or grants unknown rights.
+    pub fn from_dictionary(value: &PdfValue) -> Result<Self, ReaderEnableError> {
+        parse_rights_dictionary(value)
     }
 }
 
@@ -426,6 +486,282 @@ pub enum ReaderEnableError {
         /// The maximum accepted.
         max: usize,
     },
+    /// An existing `/Perms /UR` dictionary was structurally malformed.
+    #[error("malformed usage-rights dictionary: {detail}")]
+    MalformedDictionary {
+        /// A short, stable description of the structural problem.
+        detail: &'static str,
+    },
+    /// The `/Ff` usage-rights flag was not a finite, non-negative integer.
+    #[error("invalid /Ff usage-rights flag value: {value}")]
+    InvalidFf {
+        /// The rejected value, formatted for display.
+        value: String,
+    },
+    /// The filter was not the PDFXI local filter, so a foreign certification
+    /// claim is refused.
+    #[error("foreign usage-rights filter rejected: {filter}")]
+    NonLocalFilter {
+        /// The foreign filter name.
+        filter: String,
+    },
+    /// `/Contents` was not a local placeholder (a run of ASCII `0`).
+    #[error("/Contents is not a local placeholder signature")]
+    NonPlaceholderContent,
+}
+
+/// The outcome of a fill or save permission decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    /// The local policy allows the operation.
+    Allowed,
+    /// The local policy denies the operation.
+    Denied,
+}
+
+impl Permission {
+    /// Returns `true` for [`Permission::Allowed`].
+    pub const fn is_allowed(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+/// A fill-and-save policy derived from a local [`DocumentRights`] set.
+///
+/// The policy carries three pieces of state: the set of allowed operations,
+/// an explicit form-fill flag (set by [`UsageRight::FillIn`]), and an explicit
+/// save flag (set by [`UsageRight::Save`]). It is a pure, deterministic
+/// function of a rights set and performs no I/O or cryptography.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FillSavePolicy {
+    operations: DocumentRights,
+    form_fill: bool,
+    save: bool,
+}
+
+impl FillSavePolicy {
+    /// Derives a fill-and-save policy from a rights set.
+    pub const fn from_rights(rights: DocumentRights) -> Self {
+        Self {
+            form_fill: rights.contains(UsageRight::FillIn),
+            save: rights.contains(UsageRight::Save),
+            operations: rights,
+        }
+    }
+
+    /// Returns the full set of allowed operations.
+    pub const fn allowed_operations(&self) -> DocumentRights {
+        self.operations
+    }
+
+    /// Returns the explicit form-fill flag.
+    pub const fn form_fill_flag(&self) -> bool {
+        self.form_fill
+    }
+
+    /// Returns the explicit save flag.
+    pub const fn save_flag(&self) -> bool {
+        self.save
+    }
+
+    /// Returns `true` when `right` is among the allowed operations.
+    pub const fn allows(&self, right: UsageRight) -> bool {
+        self.operations.contains(right)
+    }
+
+    /// Returns the form-fill decision.
+    pub const fn can_fill(&self) -> Permission {
+        if self.form_fill {
+            Permission::Allowed
+        } else {
+            Permission::Denied
+        }
+    }
+
+    /// Returns the save decision.
+    pub const fn can_save(&self) -> Permission {
+        if self.save {
+            Permission::Allowed
+        } else {
+            Permission::Denied
+        }
+    }
+
+    /// Renders a deterministic report of this policy.
+    pub fn report(&self) -> PolicyReport {
+        let operations: Vec<String> = self
+            .operations
+            .iter()
+            .map(|right| right.label().to_owned())
+            .collect();
+        PolicyReport {
+            can_fill: self.form_fill,
+            can_save: self.save,
+            operations,
+            filter: LOCAL_FILTER.to_owned(),
+            certified: false,
+        }
+    }
+}
+
+/// A deterministic report describing a [`FillSavePolicy`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyReport {
+    can_fill: bool,
+    can_save: bool,
+    operations: Vec<String>,
+    filter: String,
+    certified: bool,
+}
+
+impl PolicyReport {
+    /// Returns `true` when the form-fill decision is allowed.
+    pub const fn can_fill(&self) -> bool {
+        self.can_fill
+    }
+
+    /// Returns `true` when the save decision is allowed.
+    pub const fn can_save(&self) -> bool {
+        self.can_save
+    }
+
+    /// Returns the allowed operation labels in ascending bit order.
+    pub fn operations(&self) -> &[String] {
+        &self.operations
+    }
+
+    /// Returns the local filter name.
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Always `false`: no Adobe certification is implied.
+    pub const fn certified(&self) -> bool {
+        self.certified
+    }
+
+    /// Renders a stable, single-line summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "fill-save-policy: fill={} save={} operations=[{}] filter={} certified={}",
+            self.can_fill,
+            self.can_save,
+            self.operations.join(","),
+            self.filter,
+            self.certified
+        )
+    }
+}
+
+/// Validates and parses an existing `/Perms /UR` reader-enable dictionary.
+///
+/// The returned [`ReaderEnablePlan`] reproduces the rights and placeholder
+/// metadata found in `value`. Foreign filters, non-placeholder `/Contents`,
+/// malformed structure, and unknown `/Ff` bits are rejected with typed errors.
+/// Nothing is signed or verified cryptographically.
+///
+/// # Errors
+///
+/// Returns [`ReaderEnableError`] when the dictionary is malformed, carries a
+/// foreign filter or non-placeholder contents, has an invalid `/Ff` value, or
+/// grants rights this local model does not support.
+pub fn parse_rights_dictionary(value: &PdfValue) -> Result<ReaderEnablePlan, ReaderEnableError> {
+    let root = value
+        .as_dict()
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "catalog must be a dictionary",
+        })?;
+    let perms = root
+        .get("Perms")
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "missing /Perms",
+        })?
+        .as_dict()
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "/Perms must be a dictionary",
+        })?;
+    let ur = perms
+        .get("UR")
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "missing /UR",
+        })?
+        .as_dict()
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "/UR must be a dictionary",
+        })?;
+
+    let ff_value = ur.get("Ff").ok_or(ReaderEnableError::MalformedDictionary {
+        detail: "missing /Ff",
+    })?;
+    let ff_number = match ff_value {
+        PdfValue::Number(number) => *number,
+        _ => {
+            return Err(ReaderEnableError::InvalidFf {
+                value: "not a number".to_owned(),
+            });
+        }
+    };
+    if !ff_number.is_finite()
+        || ff_number < 0.0
+        || ff_number.fract() != 0.0
+        || ff_number > u32::MAX as f64
+    {
+        return Err(ReaderEnableError::InvalidFf {
+            value: ff_number.to_string(),
+        });
+    }
+    let rights = DocumentRights::from_bits(ff_number as u32)?;
+
+    let filter = ur
+        .get("F")
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "missing /F",
+        })?
+        .as_name()
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "/F must be a name",
+        })?
+        .to_owned();
+
+    let contents = ur
+        .get("Contents")
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "missing /Contents",
+        })?
+        .as_text()
+        .ok_or(ReaderEnableError::MalformedDictionary {
+            detail: "/Contents must be a string",
+        })?;
+    if contents.is_empty() || !contents.bytes().all(|byte| byte == b'0') {
+        return Err(ReaderEnableError::NonPlaceholderContent);
+    }
+    if contents.len() > READER_MAX_PLACEHOLDER_SIZE {
+        return Err(ReaderEnableError::InvalidPlaceholderSize {
+            size: contents.len(),
+            max: READER_MAX_PLACEHOLDER_SIZE,
+        });
+    }
+
+    let reason = match ur.get("Reason") {
+        Some(value) => Some(
+            value
+                .as_text()
+                .ok_or(ReaderEnableError::MalformedDictionary {
+                    detail: "/Reason must be a string",
+                })?
+                .to_owned(),
+        ),
+        None => None,
+    };
+
+    let signature = UsageRightsSignature {
+        filter,
+        placeholder_bytes: contents.len(),
+        reason,
+    };
+    let plan = ReaderEnablePlan { rights, signature };
+    plan.validate()?;
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -523,5 +859,168 @@ mod tests {
         }
         assert_eq!(rights.bits(), SUPPORTED_RIGHT_BITS);
         assert_eq!(DocumentRights::NONE.iter().count(), 0);
+    }
+
+    fn dictionary_with(flags: f64, filter: &str, contents: &str) -> PdfValue {
+        let mut ur = BTreeMap::new();
+        ur.insert("Ff".to_owned(), PdfValue::Number(flags));
+        ur.insert("F".to_owned(), PdfValue::Name(filter.to_owned()));
+        ur.insert("Contents".to_owned(), PdfValue::Text(contents.to_owned()));
+        let mut perms = BTreeMap::new();
+        perms.insert("UR".to_owned(), PdfValue::Dictionary(ur));
+        let mut root = BTreeMap::new();
+        root.insert("Perms".to_owned(), PdfValue::Dictionary(perms));
+        PdfValue::Dictionary(root)
+    }
+
+    #[test]
+    fn rights_round_trip_through_dictionary() {
+        let rights = DocumentRights::new()
+            .with(UsageRight::FillIn)
+            .with(UsageRight::Save)
+            .with(UsageRight::Accessibility);
+        let plan = ReaderEnablePlan::new(rights);
+        let dict = plan.to_dictionary().unwrap();
+        let parsed = parse_rights_dictionary(&dict).unwrap();
+        assert_eq!(parsed.rights(), rights);
+        assert_eq!(parsed.signature(), plan.signature());
+        assert_eq!(parsed, plan);
+    }
+
+    #[test]
+    fn can_fill_allowed_when_fill_in_granted() {
+        let plan = ReaderEnablePlan::new(DocumentRights::new().with(UsageRight::FillIn));
+        assert_eq!(plan.can_fill(), Ok(Permission::Allowed));
+        assert!(plan.can_fill().unwrap().is_allowed());
+    }
+
+    #[test]
+    fn can_fill_denied_when_fill_in_absent() {
+        let plan = ReaderEnablePlan::new(DocumentRights::new().with(UsageRight::Save));
+        assert_eq!(plan.can_fill(), Ok(Permission::Denied));
+    }
+
+    #[test]
+    fn can_save_allowed_when_save_granted() {
+        let plan = ReaderEnablePlan::new(DocumentRights::new().with(UsageRight::Save));
+        assert_eq!(plan.can_save(), Ok(Permission::Allowed));
+    }
+
+    #[test]
+    fn can_save_denied_when_save_absent() {
+        let plan = ReaderEnablePlan::new(DocumentRights::new().with(UsageRight::FillIn));
+        assert_eq!(plan.can_save(), Ok(Permission::Denied));
+    }
+
+    #[test]
+    fn unknown_right_bits_in_dictionary_are_a_typed_error() {
+        let unknown = 1 << 12;
+        let dict = dictionary_with(
+            f64::from(SUPPORTED_RIGHT_BITS | unknown),
+            LOCAL_FILTER,
+            "00",
+        );
+        assert_eq!(
+            parse_rights_dictionary(&dict),
+            Err(ReaderEnableError::UnsupportedRight {
+                bits: SUPPORTED_RIGHT_BITS | unknown,
+            })
+        );
+    }
+
+    #[test]
+    fn placeholder_contents_validated_on_parse() {
+        let dict = dictionary_with(0.0, LOCAL_FILTER, "SIgned");
+        assert_eq!(
+            parse_rights_dictionary(&dict),
+            Err(ReaderEnableError::NonPlaceholderContent)
+        );
+        let empty = dictionary_with(0.0, LOCAL_FILTER, "");
+        assert_eq!(
+            parse_rights_dictionary(&empty),
+            Err(ReaderEnableError::NonPlaceholderContent)
+        );
+    }
+
+    #[test]
+    fn policy_report_is_deterministic() {
+        let plan = ReaderEnablePlan::new(
+            DocumentRights::new()
+                .with(UsageRight::Accessibility)
+                .with(UsageRight::FillIn),
+        );
+        let first = plan.policy_report().unwrap();
+        let second = plan.policy_report().unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.operations(), ["fill-in", "accessibility"]);
+        assert!(first.can_fill());
+        assert!(!first.can_save());
+        assert!(!first.certified());
+    }
+
+    #[test]
+    fn malformed_rights_dictionary_is_a_typed_error() {
+        assert_eq!(
+            parse_rights_dictionary(&PdfValue::Null),
+            Err(ReaderEnableError::MalformedDictionary {
+                detail: "catalog must be a dictionary",
+            })
+        );
+        let empty = PdfValue::Dictionary(BTreeMap::new());
+        assert_eq!(
+            parse_rights_dictionary(&empty),
+            Err(ReaderEnableError::MalformedDictionary {
+                detail: "missing /Perms"
+            })
+        );
+        let mut root = BTreeMap::new();
+        root.insert("Perms".to_owned(), PdfValue::Dictionary(BTreeMap::new()));
+        let no_ur = PdfValue::Dictionary(root);
+        assert_eq!(
+            parse_rights_dictionary(&no_ur),
+            Err(ReaderEnableError::MalformedDictionary {
+                detail: "missing /UR"
+            })
+        );
+    }
+
+    #[test]
+    fn policy_report_wording_is_stable() {
+        let plan = ReaderEnablePlan::new(
+            DocumentRights::new()
+                .with(UsageRight::FillIn)
+                .with(UsageRight::Save),
+        );
+        assert_eq!(
+            plan.policy_report().unwrap().to_text(),
+            "fill-save-policy: fill=true save=true operations=[fill-in,save] filter=PDFXI.ReaderEnable.Local certified=false"
+        );
+    }
+
+    #[test]
+    fn foreign_filter_is_rejected_without_a_certification_claim() {
+        let plan = ReaderEnablePlan::new(DocumentRights::NONE)
+            .with_signature(UsageRightsSignature::with_filter("Adobe.ReaderEnable"));
+        assert_eq!(
+            plan.can_fill().unwrap_err(),
+            ReaderEnableError::NonLocalFilter {
+                filter: "Adobe.ReaderEnable".to_owned(),
+            }
+        );
+        assert!(!plan.is_certification());
+    }
+
+    #[test]
+    fn invalid_ff_flag_is_a_typed_error() {
+        let negative = dictionary_with(-1.0, LOCAL_FILTER, "0");
+        assert!(matches!(
+            parse_rights_dictionary(&negative),
+            Err(ReaderEnableError::InvalidFf { .. })
+        ));
+        let fractional = dictionary_with(1.5, LOCAL_FILTER, "0");
+        assert!(matches!(
+            parse_rights_dictionary(&fractional),
+            Err(ReaderEnableError::InvalidFf { .. })
+        ));
     }
 }

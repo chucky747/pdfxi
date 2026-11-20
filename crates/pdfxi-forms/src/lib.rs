@@ -56,8 +56,10 @@
 //!   typed conversion into AcroForm fields.
 //! - [`ReaderEnablePlan`] / [`DocumentRights`] / [`UsageRightsSignature`] — a
 //!   local reader-enable compatibility metadata plan with a placeholder usage
-//!   rights signature. This is explicitly not Adobe certification and performs
-//!   no cryptography.
+//!   rights signature. [`FillSavePolicy`] derives `can_fill`/`can_save`
+//!   decisions, [`parse_rights_dictionary`] validates existing `/Perms /UR`
+//!   metadata, and [`PolicyReport`] renders a deterministic summary. This is
+//!   explicitly not Adobe certification and performs no cryptography.
 //! - [`BlankBundle`] / [`ResponseFile`] / [`MergeReport`] — local distribute
 //!   and collect: a canonical blank-bundle export, in-memory FDF/XFDF response
 //!   import, deterministic merge with conflict reporting and a status summary.
@@ -150,9 +152,10 @@ pub use flatten::{
 };
 pub use form::{Form, FormError};
 pub use reader_enable::{
-    DocumentRights, LOCAL_FILTER, READER_DEFAULT_PLACEHOLDER_SIZE, READER_MAX_PLACEHOLDER_SIZE,
-    READER_MAX_TEXT_LEN, ReaderEnableError, ReaderEnablePlan, RightsReport, SUPPORTED_RIGHT_BITS,
-    UsageRight, UsageRightsSignature,
+    DocumentRights, FillSavePolicy, LOCAL_FILTER, Permission, PolicyReport,
+    READER_DEFAULT_PLACEHOLDER_SIZE, READER_MAX_PLACEHOLDER_SIZE, READER_MAX_TEXT_LEN,
+    ReaderEnableError, ReaderEnablePlan, RightsReport, SUPPORTED_RIGHT_BITS, UsageRight,
+    UsageRightsSignature, parse_rights_dictionary,
 };
 pub use recognition::{
     ConversionPlan, FormHint, HintKind, LABEL_PROXIMITY, MAX_HINTS, RECOGNITION_MAX_TEXT_LEN,
