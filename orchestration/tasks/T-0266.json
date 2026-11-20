@@ -1,0 +1,18 @@
+{
+  "id": "T-0266",
+  "lane": "app",
+  "title": "Convert to PDF tool UI",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0240"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/**",
+    "docs/evidence/ui/T-0266.md",
+    "orchestration/feature-updates/T-0266.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-28 creates PDFs from images, text, Markdown, HTML and Office files from the UI in all four theme/control combinations",
+  "notes": "Closes the acceptance gap found in the matrix audit: A-28 requires the Convert to PDF tool to create PDFs from images, text, Markdown, HTML and Office files, T-0240 delivered only the library, and no app task covered the tool, so the Tools entry would have been missing. Surfaces Convert to PDF in the Tools panel plus an open/drop path for non-PDF files, calls pdfxi-convert through the pdfxi-document session, shows progress and a typed failure, hides or explains Office conversion when Office is not installed instead of failing late, and captures all four theme/control combinations. Added to T-0260's depends_on so the end-to-end scenario covers it.",
+  "evidence": "docs/evidence/ui/T-0266.md"
+}
