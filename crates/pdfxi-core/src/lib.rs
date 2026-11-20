@@ -66,7 +66,8 @@ pub use page::{Page, Rectangle};
 pub use pages::{PageOperation, PagePlan, RotationTarget};
 pub use parser::{XrefReport, XrefSectionKind, XrefSectionReport, inspect_xref};
 pub use printer_marks::{
-    MarkCircle, MarkGeometry, MarkSegment, PrinterMarkOptions, PrinterMarks, generate_printer_marks,
+    MarkCircle, MarkGeometry, MarkSegment, PrinterMarkApplication, PrinterMarkOptions,
+    PrinterMarks, generate_printer_marks,
 };
 pub use repair::{RepairError, RepairReport, RepairWarning, RepairedDocument, repair_document};
 

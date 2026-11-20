@@ -2,8 +2,14 @@
 //!
 //! This module builds a ready-to-use PDF content stream that draws crop marks,
 //! registration marks, a CMYK colour bar and page information around a page's
-//! TrimBox. It performs no I/O and depends only on the typed page boxes in
-//! [`crate::boxes`].
+//! TrimBox. Stream generation performs no I/O and depends only on the typed
+//! page boxes in [`crate::boxes`].
+//!
+//! [Document::apply_printer_marks] is the application layer: it wraps the
+//! generated stream in a self-contained Form XObject, installs a resource on a
+//! real page, appends a content stream that invokes the form, and stages all of
+//! it through copy-on-write so the marks survive [`Document::save`] and
+//! [`Document::save_incremental`] and a subsequent reparse.
 //!
 //! # Units and origin
 //!
@@ -53,13 +59,15 @@
 //! as `0`, and options below that floor are rejected so precision is never
 //! silently lost.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+
 use std::fmt::Write as _;
 
 use crate::boxes::PageBoxes;
-use crate::object::{Dictionary, Object};
+use crate::object::{Dictionary, Object, ObjectId};
 use crate::page::Rectangle;
-use crate::{Error, Result};
+use crate::parser::{Structure, load_object};
+use crate::{Document, Error, Result};
 
 /// Gap between the TrimBox bottom edge and the colour bar, in points.
 const COLOR_BAR_GAP: f64 = 6.0;
@@ -358,6 +366,275 @@ pub fn generate_printer_marks(
         overlay_box,
         geometry,
     })
+}
+
+/// Base name used for the overlay Form XObject in a page's `/XObject` resources.
+const MARK_RESOURCE_BASE: &str = "PdfxiMarks";
+/// Upper bound on generated resource-name variants when the base name is taken.
+const MAX_RESOURCE_SUFFIX: u32 = 1024;
+
+/// A report describing an application of printer marks to a real page.
+///
+/// Returned by [`Document::apply_printer_marks`]. The identifiers are the staged
+/// copy-on-write objects; they become permanent after a save.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrinterMarkApplication {
+    /// Index of the page the marks were applied to.
+    pub page_index: usize,
+    /// Object number of the Form XObject holding the mark content stream.
+    ///
+    /// The form carries its own `/BBox` and `/Resources`, including the font
+    /// needed by the page-information mark.
+    pub form_id: ObjectId,
+    /// Object number of the appended content stream that invokes the form.
+    pub content_id: ObjectId,
+    /// Resource name under which the form is installed in the page's
+    /// `/Resources /XObject` dictionary.
+    pub resource_name: String,
+    /// Smallest rectangle enclosing all generated marks, in default user space.
+    pub overlay_box: Rectangle,
+}
+
+impl Document {
+    /// Apply generated printer marks to page `index` as a self-contained overlay.
+    ///
+    /// The marks are generated from the page's effective [`PageBoxes`] with
+    /// [`generate_printer_marks`], wrapped in a Form XObject that carries its own
+    /// `/BBox` and font resources, and installed on the page as follows:
+    ///
+    /// 1. a new Form XObject stream holds the mark content;
+    /// 2. a new content stream invokes it with `q /Name Do Q`;
+    /// 3. the form is added to the page's effective `/Resources /XObject` map
+    ///    (resources inherited from ancestors are materialised on the page so
+    ///    none are lost);
+    /// 4. the invocation stream is appended to the page's `/Contents` (a single
+    ///    reference becomes a two-element array; an existing array is extended;
+    ///    a missing entry becomes a one-element array).
+    ///
+    /// Every edit is staged through [`Document::set_object`] as a copy-on-write
+    /// change, so the original bytes are never mutated and the marks survive
+    /// both [`Document::save`] and [`Document::save_incremental`] followed by a
+    /// reparse. Existing dictionary keys and unrelated content streams are
+    /// preserved byte-for-byte.
+    ///
+    /// The returned report names the staged objects. Because [`Document::page_content`]
+    /// reads the original byte buffer, the new operators are observable only
+    /// after a save and reparse.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::PageNotFound`] when `index` is out of range, a box or
+    /// option error from [`generate_printer_marks`] when the layout is invalid or
+    /// cannot fit the sheet, and a structural or serialization error when the
+    /// page tree, resources or contents cannot be read or written.
+    pub fn apply_printer_marks(
+        &mut self,
+        index: usize,
+        options: &PrinterMarkOptions,
+    ) -> Result<PrinterMarkApplication> {
+        let boxes = self.page_boxes(index)?;
+        let marks = generate_printer_marks(&boxes, options)?;
+
+        // Snapshot the page object before staging anything so all borrows of
+        // `self` end before the mutations below.
+        let (page_id, stream_data, mut page_dict) = {
+            let structure = self.structure.as_ref().map_err(Clone::clone)?;
+            let page = structure
+                .pages
+                .get(index)
+                .ok_or(Error::PageNotFound(index))?;
+            let object = current_object(self, structure, page.id)?;
+            let stream_data = match &object {
+                Object::Stream { data, .. } => Some(data.clone()),
+                _ => None,
+            };
+            let dictionary = object
+                .as_dictionary()
+                .ok_or_else(|| {
+                    Error::MalformedPageTree("page object is not a dictionary".to_owned())
+                })?
+                .clone();
+            (page.id, stream_data, dictionary)
+        };
+
+        let ids = allocate_object_numbers(self, 2)?;
+        let form_id = *ids
+            .first()
+            .ok_or_else(|| Error::CannotSerialize("object allocation failed".to_owned()))?;
+        let content_id = *ids
+            .get(1)
+            .ok_or_else(|| Error::CannotSerialize("object allocation failed".to_owned()))?;
+
+        let mut xobjects = resolved_xobjects(self, page_id)?;
+        let resource_name = choose_resource_name(&xobjects)?;
+        xobjects.insert(resource_name.clone(), Object::Reference(form_id));
+        let mut resources = effective_resources(self, page_id)?;
+        resources.insert("XObject".to_owned(), Object::Dictionary(xobjects));
+        page_dict.insert("Resources".to_owned(), Object::Dictionary(resources));
+
+        let invocation = format!("q /{resource_name} Do Q\n").into_bytes();
+        let content_object = Object::Stream {
+            dictionary: Dictionary::new(),
+            data: invocation,
+        };
+        let contents = append_content_reference(page_dict.get("Contents"), content_id)?;
+        page_dict.insert("Contents".to_owned(), contents);
+
+        let page_object = match stream_data {
+            Some(data) => Object::Stream {
+                dictionary: page_dict,
+                data,
+            },
+            None => Object::Dictionary(page_dict),
+        };
+
+        self.set_object(form_id, marks.to_form_xobject())?;
+        self.set_object(content_id, content_object)?;
+        self.set_object(page_id, page_object)?;
+
+        Ok(PrinterMarkApplication {
+            page_index: index,
+            form_id,
+            content_id,
+            resource_name,
+            overlay_box: marks.overlay_box(),
+        })
+    }
+}
+
+/// Read an object from a staged change first, then from the cross-reference table.
+fn current_object(document: &Document, structure: &Structure, id: ObjectId) -> Result<Object> {
+    match document.changes.get(&id) {
+        Some(object) => Ok(object.clone()),
+        None => load_object(document.bytes(), &structure.xref, id),
+    }
+}
+
+/// Return a set of every object number already used by the source or by changes.
+fn used_object_numbers(document: &Document) -> Result<HashSet<u32>> {
+    let structure = document.structure.as_ref().map_err(Clone::clone)?;
+    let mut used: HashSet<u32> = structure.xref.all_object_numbers().into_iter().collect();
+    used.extend(document.changes.keys().map(|id| id.number));
+    Ok(used)
+}
+
+/// Allocate `count` unused object numbers starting at or after the declared size.
+///
+/// The loop is bounded by the `u32` object-number space; exhaustion returns a
+/// typed error rather than panicking.
+fn allocate_object_numbers(document: &Document, count: usize) -> Result<Vec<ObjectId>> {
+    let used = used_object_numbers(document)?;
+    let structure = document.structure.as_ref().map_err(Clone::clone)?;
+    let declared = structure.trailer_size.unwrap_or(0);
+    let max_used = used.iter().copied().max().unwrap_or(0);
+    let mut candidate = declared.max(max_used).max(1);
+    let mut ids = Vec::with_capacity(count);
+    let exhausted =
+        || Error::CannotSerialize("the 32-bit object number space is exhausted".to_owned());
+    while ids.len() < count {
+        if candidate == 0 {
+            return Err(exhausted());
+        }
+        if !used.contains(&candidate) {
+            ids.push(ObjectId::new(candidate, 0));
+        }
+        candidate = candidate.checked_add(1).ok_or_else(exhausted)?;
+    }
+    Ok(ids)
+}
+
+/// Resolve the effective `/Resources` dictionary of `page_id` through `/Parent`.
+///
+/// PDF resource inheritance selects the nearest dictionary wholesale rather
+/// than merging sub-entries, so cloning the nearest one is correct. An indirect
+/// resources object is resolved through the same change-aware reader.
+fn effective_resources(document: &Document, page_id: ObjectId) -> Result<Dictionary> {
+    let structure = document.structure.as_ref().map_err(Clone::clone)?;
+    let mut current = page_id;
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current.number) {
+            return Err(Error::MalformedPageTree(
+                "cycle in page /Parent chain while reading resources".to_owned(),
+            ));
+        }
+        let object = current_object(document, structure, current)?;
+        let dictionary = object.as_dictionary().ok_or_else(|| {
+            Error::MalformedPageTree("page tree node is not a dictionary".to_owned())
+        })?;
+        let resolved = match dictionary.get("Resources") {
+            Some(Object::Reference(id)) => Some(current_object(document, structure, *id)?),
+            other => other.cloned(),
+        };
+        if let Some(resources) = resolved {
+            return resources.as_dictionary().cloned().ok_or_else(|| {
+                Error::MalformedPageTree("page /Resources is not a dictionary".to_owned())
+            });
+        }
+        match dictionary.get("Parent").and_then(Object::as_reference) {
+            Some(parent) => current = parent,
+            None => return Ok(Dictionary::new()),
+        }
+    }
+}
+
+/// Resolve the effective `/XObject` resource dictionary of a page.
+fn resolved_xobjects(document: &Document, page_id: ObjectId) -> Result<Dictionary> {
+    let resources = effective_resources(document, page_id)?;
+    match resources.get("XObject") {
+        Some(Object::Dictionary(dict)) => Ok(dict.clone()),
+        Some(Object::Reference(id)) => {
+            let structure = document.structure.as_ref().map_err(Clone::clone)?;
+            current_object(document, structure, *id)?
+                .as_dictionary()
+                .cloned()
+                .ok_or_else(|| {
+                    Error::MalformedPageTree(
+                        "page /XObject resource is not a dictionary".to_owned(),
+                    )
+                })
+        }
+        Some(_) => Err(Error::MalformedPageTree(
+            "page /XObject resource is not a dictionary".to_owned(),
+        )),
+        None => Ok(Dictionary::new()),
+    }
+}
+
+/// Choose a resource name that does not collide with an existing XObject.
+fn choose_resource_name(xobjects: &Dictionary) -> Result<String> {
+    for suffix in 0..MAX_RESOURCE_SUFFIX {
+        let name = if suffix == 0 {
+            MARK_RESOURCE_BASE.to_owned()
+        } else {
+            format!("{MARK_RESOURCE_BASE}{suffix}")
+        };
+        if !xobjects.contains_key(&name) {
+            return Ok(name);
+        }
+    }
+    Err(Error::CannotSerialize(
+        "could not allocate a unique printer-mark resource name".to_owned(),
+    ))
+}
+
+/// Build the new `/Contents` value with `new_ref` appended.
+fn append_content_reference(contents: Option<&Object>, new_ref: ObjectId) -> Result<Object> {
+    match contents {
+        None | Some(Object::Null) => Ok(Object::Array(vec![Object::Reference(new_ref)])),
+        Some(reference @ Object::Reference(_)) => Ok(Object::Array(vec![
+            reference.clone(),
+            Object::Reference(new_ref),
+        ])),
+        Some(Object::Array(items)) => {
+            let mut items = items.clone();
+            items.push(Object::Reference(new_ref));
+            Ok(Object::Array(items))
+        }
+        Some(_) => Err(Error::MalformedPageTree(
+            "page /Contents is neither a stream reference nor an array".to_owned(),
+        )),
+    }
 }
 
 /// Reject a layout whose crop marks, colour bar or page information would fall
@@ -931,6 +1208,465 @@ mod tests {
         assert!(
             !marks.overlay_box().width().is_nan(),
             "overlay box is bounded"
+        );
+    }
+}
+
+/// T-0128 coverage: applying printer marks to real document bytes so they
+/// survive save and reparse. Each fixture is a small, bounded classic-table PDF.
+#[cfg(test)]
+mod t0128_tests {
+    use super::*;
+
+    /// Boxes with enough inset for the default marks on every side.
+    const ROOMY_BOXES: &str = "/MediaBox [0 0 612 792] /CropBox [10 10 602 782] \
+                               /BleedBox [20 20 592 772] /TrimBox [30 30 582 762]";
+    const CATALOG: &str = "<< /Type /Catalog /Pages 2 0 R >>";
+    const PAGES: &str = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+
+    /// Assemble a classic-table PDF from numbered object bodies.
+    fn assemble(objects: &[String]) -> Vec<u8> {
+        let mut out = String::from("%PDF-1.7\n%PDFXI\n");
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
+        }
+        let xref = out.len();
+        out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+        out.push_str("0000000000 65535 f \n");
+        for offset in &offsets {
+            out.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        ));
+        out.into_bytes()
+    }
+
+    /// Build a content-stream object body with an exact `/Length`.
+    fn stream(data: &str) -> String {
+        format!("<< /Length {} >>\nstream\n{}\nendstream", data.len(), data)
+    }
+
+    /// One page whose `/Contents` is a single stream reference.
+    fn single_content_pdf() -> Vec<u8> {
+        assemble(&[
+            CATALOG.to_owned(),
+            PAGES.to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R {ROOMY_BOXES} /Contents 4 0 R >>"),
+            stream("BT (Hi) Tj ET"),
+        ])
+    }
+
+    /// One page whose `/Contents` is an array of two streams.
+    fn array_content_pdf() -> Vec<u8> {
+        assemble(&[
+            CATALOG.to_owned(),
+            PAGES.to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R {ROOMY_BOXES} /Contents [4 0 R 5 0 R] >>"),
+            stream("BT (First) Tj ET"),
+            stream("BT (Second) Tj ET"),
+        ])
+    }
+
+    /// One page with no `/Contents` entry at all.
+    fn no_content_pdf() -> Vec<u8> {
+        assemble(&[
+            CATALOG.to_owned(),
+            PAGES.to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R {ROOMY_BOXES} >>"),
+        ])
+    }
+
+    /// One page carrying the supplied inline `/Resources` dictionary.
+    fn resource_pdf(resources: &str) -> Vec<u8> {
+        assemble(&[
+            CATALOG.to_owned(),
+            PAGES.to_owned(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R {ROOMY_BOXES} /Resources {resources} /Contents 4 0 R >>"
+            ),
+            stream("BT (Hi) Tj ET"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        ])
+    }
+
+    /// Resources live on the `/Pages` node and must be materialised on the page.
+    fn inherited_resource_pdf() -> Vec<u8> {
+        assemble(&[
+            CATALOG.to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 \
+             /Resources << /Font << /F1 5 0 R >> >> >>"
+                .to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R {ROOMY_BOXES} /Contents 4 0 R >>"),
+            stream("BT (Hi) Tj ET"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        ])
+    }
+
+    /// The default resource name is already taken by an existing XObject.
+    fn collision_pdf() -> Vec<u8> {
+        assemble(&[
+            CATALOG.to_owned(),
+            PAGES.to_owned(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R {ROOMY_BOXES} \
+                 /Resources << /XObject << /PdfxiMarks 4 0 R >> >> >>"
+            ),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 0 >>\nstream\n\nendstream"
+                .to_owned(),
+        ])
+    }
+
+    /// A page whose TrimBox is too close to the MediaBox for default marks.
+    fn tight_pdf() -> Vec<u8> {
+        let boxes = "/MediaBox [0 0 612 792] /CropBox [10 10 602 782] \
+                     /BleedBox [10 10 602 782] /TrimBox [10 10 602 782]";
+        assemble(&[
+            CATALOG.to_owned(),
+            PAGES.to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R {boxes} >>"),
+        ])
+    }
+
+    #[test]
+    fn apply_writes_form_and_invocation_that_survive_save() {
+        let mut document = Document::from_bytes(single_content_pdf()).expect("fixture");
+        let expected = generate_printer_marks(
+            &document.page_boxes(0).expect("boxes"),
+            &PrinterMarkOptions::default(),
+        )
+        .expect("mark generation");
+
+        let application = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+        assert_eq!(application.page_index, 0);
+        assert_eq!(application.overlay_box, expected.overlay_box());
+
+        let reparsed = Document::from_bytes(document.save().expect("save")).expect("reparse");
+        assert_eq!(reparsed.page_count().expect("count"), 1);
+
+        let form = reparsed.object(application.form_id).expect("form XObject");
+        let (dictionary, data) = match form {
+            Object::Stream { dictionary, data } => (dictionary, data),
+            other => panic!("test: form must be a stream, got {other:?}"),
+        };
+        assert_eq!(data.as_slice(), expected.content_stream());
+        assert_eq!(
+            dictionary.get("Subtype").and_then(Object::as_name),
+            Some("Form")
+        );
+        assert!(
+            dictionary.contains_key("Resources"),
+            "font resources are self-contained"
+        );
+
+        let invocation = reparsed
+            .object(application.content_id)
+            .expect("invocation stream");
+        match invocation {
+            Object::Stream { data, .. } => assert_eq!(
+                String::from_utf8(data).expect("ASCII stream"),
+                format!("q /{} Do Q\n", application.resource_name)
+            ),
+            other => panic!("test: invocation must be a stream, got {other:?}"),
+        }
+
+        let content =
+            String::from_utf8(reparsed.page_content(0).expect("content")).expect("ASCII content");
+        assert!(
+            content.contains("BT (Hi) Tj ET"),
+            "original content preserved"
+        );
+        assert!(
+            content.contains(&format!("/{} Do", application.resource_name)),
+            "mark invocation appended"
+        );
+    }
+
+    #[test]
+    fn applied_marks_survive_incremental_save() {
+        let source = single_content_pdf();
+        let mut document = Document::from_bytes(source.clone()).expect("fixture");
+        let application = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+
+        let bytes = document.save_incremental().expect("incremental save");
+        assert!(
+            bytes.starts_with(&source),
+            "incremental save keeps source bytes"
+        );
+        let reparsed = Document::from_bytes(bytes).expect("reparse");
+        assert!(
+            matches!(
+                reparsed.object(application.form_id).expect("form"),
+                Object::Stream { .. }
+            ),
+            "form survives a /Prev chain"
+        );
+        let content =
+            String::from_utf8(reparsed.page_content(0).expect("content")).expect("ASCII content");
+        assert!(content.contains(&format!("/{} Do", application.resource_name)));
+    }
+
+    #[test]
+    fn apply_appends_to_array_contents() {
+        let mut document = Document::from_bytes(array_content_pdf()).expect("fixture");
+        let application = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+        let reparsed = Document::from_bytes(document.save().expect("save")).expect("reparse");
+
+        let page = reparsed.object(ObjectId::new(3, 0)).expect("page");
+        let contents = page
+            .as_dictionary()
+            .expect("page dictionary")
+            .get("Contents")
+            .and_then(Object::as_array)
+            .expect("contents array");
+        assert_eq!(
+            contents.len(),
+            3,
+            "two original streams plus the invocation"
+        );
+        assert_eq!(contents[0].as_reference(), Some(ObjectId::new(4, 0)));
+        assert_eq!(contents[1].as_reference(), Some(ObjectId::new(5, 0)));
+        assert_eq!(contents[2].as_reference(), Some(application.content_id));
+
+        let text =
+            String::from_utf8(reparsed.page_content(0).expect("content")).expect("ASCII content");
+        assert!(text.contains("First") && text.contains("Second"));
+        assert!(text.contains("Do Q"));
+    }
+
+    #[test]
+    fn apply_creates_contents_when_page_has_none() {
+        let mut document = Document::from_bytes(no_content_pdf()).expect("fixture");
+        let application = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+        let reparsed = Document::from_bytes(document.save().expect("save")).expect("reparse");
+
+        let page = reparsed.object(ObjectId::new(3, 0)).expect("page");
+        let contents = page
+            .as_dictionary()
+            .expect("page dictionary")
+            .get("Contents")
+            .and_then(Object::as_array)
+            .expect("contents array");
+        assert_eq!(contents.len(), 1, "a one-element array is installed");
+        assert_eq!(contents[0].as_reference(), Some(application.content_id));
+        assert_eq!(
+            String::from_utf8(reparsed.page_content(0).expect("content")).expect("ASCII content"),
+            format!("q /{} Do Q\n", application.resource_name)
+        );
+    }
+
+    #[test]
+    fn apply_preserves_existing_page_resources() {
+        let resources = "<< /Font << /F1 5 0 R >> /ProcSet [/PDF /Text] >>";
+        let mut document = Document::from_bytes(resource_pdf(resources)).expect("fixture");
+        let application = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+        let reparsed = Document::from_bytes(document.save().expect("save")).expect("reparse");
+
+        let page = reparsed.object(ObjectId::new(3, 0)).expect("page");
+        let dict = page.as_dictionary().expect("page dictionary");
+        let installed = dict
+            .get("Resources")
+            .and_then(Object::as_dictionary)
+            .expect("resources");
+        assert!(
+            installed.get("Font").is_some(),
+            "existing font resource kept"
+        );
+        assert!(installed.get("ProcSet").is_some(), "existing ProcSet kept");
+        let xobjects = installed
+            .get("XObject")
+            .and_then(Object::as_dictionary)
+            .expect("new XObject map");
+        assert_eq!(
+            xobjects
+                .get(&application.resource_name)
+                .and_then(Object::as_reference),
+            Some(application.form_id)
+        );
+    }
+
+    #[test]
+    fn apply_materialises_inherited_resources() {
+        let mut document = Document::from_bytes(inherited_resource_pdf()).expect("fixture");
+        let application = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+        let reparsed = Document::from_bytes(document.save().expect("save")).expect("reparse");
+
+        let page = reparsed.object(ObjectId::new(3, 0)).expect("page");
+        let resources = page
+            .as_dictionary()
+            .expect("page dictionary")
+            .get("Resources")
+            .and_then(Object::as_dictionary)
+            .expect("page now carries its own resources");
+        assert!(
+            resources.get("Font").is_some(),
+            "inherited font materialised"
+        );
+        let xobjects = resources
+            .get("XObject")
+            .and_then(Object::as_dictionary)
+            .expect("XObject map");
+        assert_eq!(
+            xobjects
+                .get(&application.resource_name)
+                .and_then(Object::as_reference),
+            Some(application.form_id)
+        );
+    }
+
+    #[test]
+    fn apply_avoids_existing_resource_name_collision() {
+        let mut document = Document::from_bytes(collision_pdf()).expect("fixture");
+        let application = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+        assert_eq!(application.resource_name, "PdfxiMarks1");
+        let reparsed = Document::from_bytes(document.save().expect("save")).expect("reparse");
+
+        let page = reparsed.object(ObjectId::new(3, 0)).expect("page");
+        let xobjects = page
+            .as_dictionary()
+            .expect("page dictionary")
+            .get("Resources")
+            .and_then(Object::as_dictionary)
+            .expect("resources")
+            .get("XObject")
+            .and_then(Object::as_dictionary)
+            .expect("XObject map");
+        assert_eq!(
+            xobjects.get("PdfxiMarks").and_then(Object::as_reference),
+            Some(ObjectId::new(4, 0)),
+            "pre-existing mark XObject is not overwritten"
+        );
+        assert_eq!(
+            xobjects.get("PdfxiMarks1").and_then(Object::as_reference),
+            Some(application.form_id)
+        );
+        let content =
+            String::from_utf8(reparsed.page_content(0).expect("content")).expect("ASCII content");
+        assert!(content.contains("/PdfxiMarks1 Do"));
+    }
+
+    #[test]
+    fn apply_is_deterministic() {
+        let source = single_content_pdf();
+        let mut first = Document::from_bytes(source.clone()).expect("first document");
+        let mut second = Document::from_bytes(source).expect("second document");
+        let a = first
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("first apply");
+        let b = second
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("second apply");
+        assert_eq!(a, b);
+        assert_eq!(
+            first.save().expect("first save"),
+            second.save().expect("second save")
+        );
+    }
+
+    #[test]
+    fn apply_rejects_out_of_range_index_without_staging() {
+        let mut document = Document::from_bytes(single_content_pdf()).expect("fixture");
+        let before = document.save().expect("baseline");
+        let error = document
+            .apply_printer_marks(1, &PrinterMarkOptions::default())
+            .expect_err("page 1 does not exist");
+        assert!(matches!(error, Error::PageNotFound(1)));
+        assert_eq!(
+            document.save().expect("after failure"),
+            before,
+            "nothing staged"
+        );
+    }
+
+    #[test]
+    fn apply_rejects_invalid_options_without_staging() {
+        let mut document = Document::from_bytes(single_content_pdf()).expect("fixture");
+        let before = document.save().expect("baseline");
+        let options = PrinterMarkOptions {
+            mark_length: -1.0,
+            ..Default::default()
+        };
+        let error = document
+            .apply_printer_marks(0, &options)
+            .expect_err("negative mark length");
+        assert!(matches!(
+            error,
+            Error::InvalidPrinterMarkOptions("mark_length")
+        ));
+        assert_eq!(
+            document.save().expect("after failure"),
+            before,
+            "nothing staged"
+        );
+    }
+
+    #[test]
+    fn apply_rejects_marks_that_do_not_fit_the_sheet() {
+        let mut document = Document::from_bytes(tight_pdf()).expect("fixture");
+        let before = document.save().expect("baseline");
+        let error = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect_err("trim margin is too small");
+        assert!(matches!(error, Error::PrinterMarksOutOfSheet { .. }));
+        assert_eq!(
+            document.save().expect("after failure"),
+            before,
+            "nothing staged"
+        );
+    }
+
+    #[test]
+    fn original_bytes_are_unchanged_until_save() {
+        let source = single_content_pdf();
+        let mut document = Document::from_bytes(source.clone()).expect("fixture");
+        let _ = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("apply marks");
+        assert_eq!(document.bytes(), source.as_slice(), "source is immutable");
+        assert_ne!(
+            document.save().expect("save"),
+            source,
+            "save reflects the overlay"
+        );
+    }
+
+    #[test]
+    fn apply_twice_allocates_distinct_objects() {
+        let mut document = Document::from_bytes(single_content_pdf()).expect("fixture");
+        let first = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("first apply");
+        let second = document
+            .apply_printer_marks(0, &PrinterMarkOptions::default())
+            .expect("second apply");
+        assert_ne!(first.form_id, second.form_id);
+        assert_ne!(first.content_id, second.content_id);
+        assert_ne!(first.resource_name, second.resource_name);
+
+        let reparsed = Document::from_bytes(document.save().expect("save")).expect("reparse");
+        let content =
+            String::from_utf8(reparsed.page_content(0).expect("content")).expect("ASCII content");
+        assert_eq!(
+            content.matches(" Do Q").count(),
+            2,
+            "both overlays are invoked"
         );
     }
 }

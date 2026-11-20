@@ -1,0 +1,15 @@
+{
+  "id": "T-0130",
+  "lane": "app",
+  "title": "Bookmarks attachments and links viewer",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0126"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0130.md",
+    "orchestration/feature-updates/T-0130.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}
