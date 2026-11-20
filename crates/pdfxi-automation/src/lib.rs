@@ -52,11 +52,22 @@
 //!   grants, deterministic id-ordered registration, and an allow/deny
 //!   [`plan_invocation`] report with budgets and sorted deny reasons. No WASM
 //!   runtime is loaded or executed.
+//! - [`ActionSequence`] / [`WizardStep`] / [`WizardStepKind`] / [`RunnerPlan`] /
+//!   [`SequenceRunner`] — an Action Wizard-style binding for the sandboxed JS
+//!   subset. A sequence carries named, ordered script / metadata / command
+//!   steps with a [`ScriptBudget`]; [`plan_sequence`] reports per-step allow or
+//!   deny with typed [`PlanDenyReason`]s, and [`SequenceRunner`] executes an
+//!   allowed plan through the caller-supplied [`ScriptStepExecutor`] and
+//!   [`CommandHandler`] boundaries. [`SandboxedScriptExecutor`] wires scripts
+//!   directly into the existing parser/interpreter with the same budgets and
+//!   cancellation token. All execution is deterministic and I/O-free; no real
+//!   PDF document is mutated.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 mod action;
+mod action_wizard;
 mod api;
 mod batch;
 mod document;
@@ -69,6 +80,13 @@ mod toolset;
 mod watched;
 
 pub use action::{Action, ActionStep, StepKind};
+pub use action_wizard::{
+    ActionSequence, CommandExecError, CommandHandler, DEFAULT_SCRIPT_FUEL, MAX_SCRIPT_BYTES,
+    MAX_SEQUENCE_STEPS, PlanDecision, PlanDenyReason, RecordingCommandHandler, RunnerPlan,
+    SandboxedScriptExecutor, ScriptBudget, ScriptExecError, ScriptStepExecutor, SequencePolicy,
+    SequenceReport, SequenceRunner, StepPlan, StepRunOutcome, WizardBudgetField, WizardRunError,
+    WizardStep, WizardStepKind, WizardValidationError, plan_sequence, run_sequence,
+};
 pub use api::{
     API_VERSION, ApiEngine, ApiError, ApiHost, MAX_LINE_BYTES, MemoryHost, Request, Response,
     SUPPORTED_COMMANDS,
