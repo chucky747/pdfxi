@@ -390,7 +390,7 @@ pub fn fixture_candidates(name: &str) -> Vec<PathBuf> {
 
 /// Find the first existing fixture below the supplied roots.
 ///
-/// Pure helper used by tests and by [`demo_fixture_path`].
+/// Pure helper used by tests and by `demo_fixture_path`.
 #[must_use]
 pub fn find_fixture_in(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
     roots

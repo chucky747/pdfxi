@@ -632,7 +632,12 @@ pub fn run() {
     if let Err(error) = eframe::run_native(
         app_name(),
         options,
-        Box::new(|_creation_context| Ok(Box::new(PdfxiApp::new()))),
+        Box::new(|_creation_context| {
+            let mut app = PdfxiApp::new();
+            let arguments: Vec<String> = std::env::args().skip(1).collect();
+            app.open_startup_argument(arguments);
+            Ok(Box::new(app))
+        }),
     ) {
         eprintln!("PDFXI viewer exited with an error: {error}");
     }
@@ -1019,6 +1024,21 @@ impl PdfxiApp {
         }
         self.open_document(path);
         true
+    }
+
+    /// Open the first path passed on the command line, if any.
+    ///
+    /// The desktop shortcut and "Open with" both launch the viewer with a path
+    /// as the first argument. Flags are skipped, and a bad path reports a status
+    /// instead of failing startup. Returns `true` when a tab was opened.
+    pub fn open_startup_argument(&mut self, args: impl IntoIterator<Item = String>) -> bool {
+        for argument in args {
+            if argument.starts_with('-') {
+                continue;
+            }
+            return self.open_path_text(&argument);
+        }
+        false
     }
 
     /// Whether a path carries a `.pdf` extension (case-insensitive).
@@ -3150,6 +3170,26 @@ mod tests {
         assert_eq!(empty.open_dropped(&[]), 0);
         assert_eq!(empty.open_dropped(&[base.join("missing.pdf")]), 0);
         assert!(empty.status().starts_with("File not found"));
+
+        std::fs::remove_dir_all(&base).expect("clean temp dir");
+    }
+
+    #[test]
+    fn startup_argument_opens_a_pdf_and_skips_flags() {
+        let base = std::env::temp_dir().join("pdfxi-startup-arg-test");
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let pdf = base.join("launch.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").expect("write pdf");
+
+        let mut app = PdfxiApp::new();
+        assert!(
+            app.open_startup_argument(vec!["--ignored".to_owned(), pdf.display().to_string(),])
+        );
+        assert_eq!(app.state().tab_count(), 1);
+
+        let mut empty = PdfxiApp::new();
+        assert!(!empty.open_startup_argument(Vec::<String>::new()));
+        assert_eq!(empty.state().tab_count(), 0);
 
         std::fs::remove_dir_all(&base).expect("clean temp dir");
     }
