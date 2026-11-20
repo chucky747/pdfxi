@@ -384,14 +384,53 @@ tests = [
 title = "Links and named destinations"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-app/src/presentation.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0141.md",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-app: 281 passed, 0 failed, including 14 new presentation::tests::* covering document-order slides, empty-document and invalid-duration typed errors, strict page-order validation, transition/command labels, next/prev/first/last/exit command walking and boundary clamping, keyboard/gesture mapping, auto-advance accumulation with remainder carry and identical-tick determinism, multi-slide crossing to Finished, manual zero-duration stop, invalid tick rejection, restart-from-finished, and fit/actual layout math (centred, non-finite/negative geometry rejected). cargo test -p pdfxi-app --features ui: 344 passed, 0 failed. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0141.md."
 id = "VIEW-012"
-notes = ""
+notes = """
+Window-free full-screen presentation model. PresentationModel holds a sequence
+of Slides (document page index, duration, Transition None/Fade/Push); `new`
+builds every page in ascending document order and `from_slides` accepts a
+subsequence only when pages are strictly increasing, so document page order is
+always honoured. Slide::new rejects non-finite/negative durations with
+PresentationError::InvalidDuration; an empty document yields EmptyDocument.
+Auto-advance is a caller-timed state machine (Stopped/Playing/Finished/Exited):
+`tick(elapsed)` accumulates supplied seconds, carries the remainder across
+slides on a large tick, treats duration 0.0 as a manual slide that halts
+auto-advance, ignores invalid/negative inputs, and reports outcomes
+(Nothing/PageChanged/AutoAdvanceStarted/AutoAdvanceStopped/Finished/Exited).
+Navigation commands next/prev/first/last/exit and auto-advance toggle have both
+keyboard (`map_presentation_key`) and swipe (`map_presentation_gesture`) paths.
+`layout`/`layout_rect` compute deterministic centred fit (uniform scale,
+letterboxed) and actual (1:1) placements for a given viewport and page size.
+
+Honest scope: pure model only. No OS full-screen window transition, no native
+key/gesture event capture, no rendering or animation is performed — the host
+must translate outcomes into those effects. Hence `in-progress` per ADR 0008.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "presentation::tests::new_builds_document_order_and_rejects_empty_document",
+    "presentation::tests::from_slides_honours_document_order_and_rejects_reordering",
+    "presentation::tests::invalid_durations_are_rejected",
+    "presentation::tests::transition_and_command_labels_are_stable",
+    "presentation::tests::navigation_commands_walk_slides_and_clamp_at_boundaries",
+    "presentation::tests::exit_is_terminal_for_other_commands",
+    "presentation::tests::keyboard_and_gesture_mapping_resolve_all_commands",
+    "presentation::tests::auto_advance_accumulates_and_carries_remainder_deterministically",
+    "presentation::tests::a_large_tick_can_cross_multiple_slides_and_finishes",
+    "presentation::tests::manual_zero_duration_slide_stops_auto_advance",
+    "presentation::tests::invalid_or_negative_ticks_are_ignored",
+    "presentation::tests::toggle_from_finished_restarts_at_first_slide",
+    "presentation::tests::layout_fit_and_actual_math_is_deterministic_and_centered",
+    "presentation::tests::layout_rejects_invalid_geometry",
+]
 title = "Full screen and presentation mode"
 
 [[feature]]
@@ -3913,12 +3952,43 @@ tests = [
 title = "Find text in a document and select copy text"
 
 [[feature]]
-docs = "docs/features/view.md"
+docs = [
+    "crates/pdfxi-app/src/loupe.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "docs/evidence/app/T-0141.md",
+]
 domain = "View & Navigate"
-evidence = ""
+evidence = "cargo test -p pdfxi-app: 281 passed, 0 failed, including 10 new loupe::tests::* covering geometry validation/centring, zoom clamping and sanitization, page<->screen round-trip, source-rect-to-dest-rect mapping, shape-aware screen/page hit-testing, bounded drag/scroll panning clamped to the page, bounded gesture accumulation, pinch zoom clamping and invalid-delta rejection, determinism over identical gesture sequences, and lens centre clamped to the viewport. cargo test -p pdfxi-app --features ui: 344 passed, 0 failed. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0141.md."
 id = "VIEW-018"
-notes = "Split from VIEW-003 (2026-11-19) so zoom/pan/fit could be verified without claiming the magnifier. See docs/decisions/0007-viewer-row-split.md."
+notes = """
+Window-free loupe magnifier model. LoupeModel supports circular and rectangular
+lenses (LensShape), a zoom clamped to 1.0..=16.0 (MIN/MAX_LOUPE_ZOOM) with
+NaN/infinity sanitization and try_set_zoom typed error, page/screen coordinate
+mapping via exact inverses (page_to_screen / screen_to_page), source_rect (page
+space, size lens/zoom) and dest_rect (screen space) whose corners map round-trip,
+and deterministic half-open rectangle / radius-based circle hit-testing in both
+spaces. Gesture navigation consumes caller-supplied Drag/Scroll/Pinch deltas
+(no OS gesture recognizer): each step is bounded to MAX_GESTURE_STEP, drag is
+accumulated up to MAX_GESTURE_ACCUM, panning divides by zoom and clamps the page
+centre to page bounds, and pinch scales zoom within bounds. LoupeError reports
+invalid geometry/zoom. No new deps, unsafe, or non-test panics.
+
+Honest scope: pure model only. No native pointer/scroll/pinch event capture, no
+OS window, and no rendering of the magnified raster — the host must feed deltas
+into `apply` and draw dest_rect. Hence `in-progress` per ADR 0008.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "loupe::tests::new_validates_geometry_and_centres_the_lens",
+    "loupe::tests::zoom_is_bounded_and_sanitized",
+    "loupe::tests::page_to_screen_and_screen_to_page_round_trip",
+    "loupe::tests::source_rect_maps_round_trip_to_dest_rect",
+    "loupe::tests::lens_hit_testing_is_shape_aware_and_deterministic",
+    "loupe::tests::drag_and_scroll_pan_and_clamp_to_page",
+    "loupe::tests::gesture_accumulation_is_bounded",
+    "loupe::tests::pinch_clamps_zoom_and_invalid_deltas_are_ignored",
+    "loupe::tests::identical_gesture_sequences_are_deterministic",
+    "loupe::tests::center_clamping_keeps_the_lens_inside_the_viewport",
+]
 title = "Loupe magnifier and gesture navigation"

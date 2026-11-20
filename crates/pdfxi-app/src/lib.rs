@@ -33,6 +33,13 @@
 //! module indexes link annotations per page, resolves internal/URI/named
 //! destinations, and provides a pure page-space hit-test helper. All three keep
 //! mutable state in per-tab registries so documents stay isolated.
+//! The [`presentation`] module adds a window-free full-screen presentation state
+//! machine: document-ordered slides, transitions, caller-timed auto-advance,
+//! keyboard/gesture commands, and deterministic fit/actual layout. The [`loupe`]
+//! module adds a window-free magnifier model: circular/rectangular lenses,
+//! bounded zoom, page/screen source-destination mapping, deterministic
+//! hit-testing, and clamped drag/scroll/pinch gesture accumulation. Neither
+//! module touches a GUI or OS gesture recognizer.
 //! The [`home`] module holds the home-screen model: bounded, deduplicated
 //! recent/favorite/collection state over opaque document keys with deterministic
 //! ordering and a bounded, I/O-free text serialization format.
@@ -73,9 +80,11 @@ pub mod find;
 pub mod home;
 pub mod layers;
 pub mod links;
+pub mod loupe;
 pub mod nav;
 pub mod open;
 pub mod page_text;
+pub mod presentation;
 pub mod print;
 pub mod raster;
 pub mod read_aloud;
@@ -133,6 +142,10 @@ pub use links::{
     Link, LinkError, LinkId, LinkInfo, LinkModel, LinkPoint, LinkRect, LinkRegistry, LinkSummary,
     LinkTarget, MAX_LINK_TEXT_LEN, MAX_LINKS, MAX_NAMES, ResolvedLink,
 };
+pub use loupe::{
+    GestureDelta, GestureEffect, LensShape, LoupeError, LoupeModel, LoupePoint, LoupeRect,
+    LoupeSize, MAX_GESTURE_ACCUM, MAX_GESTURE_STEP, MAX_LOUPE_ZOOM, MIN_LOUPE_ZOOM,
+};
 pub use nav::{
     FocusOrder, FocusTarget, Focusable, HIGH_CONTRAST_TARGET, MAX_REFLOW_SCALE, MIN_CONTRAST_RATIO,
     MIN_REFLOW_SCALE, NavCommand, NavKey, NavModifiers, ReflowMetrics, ReflowRequest, Rgb, Theme,
@@ -144,6 +157,11 @@ pub use open::{
     TabOpenState,
 };
 pub use page_text::PageText;
+pub use presentation::{
+    AdvanceState, FitMode, FullscreenLayout, PresentationCommand, PresentationError,
+    PresentationGesture, PresentationKey, PresentationModel, PresentationModifiers,
+    PresentationOutcome, Slide, Transition, map_presentation_gesture, map_presentation_key,
+};
 pub use print::{
     DEFAULT_PRINT_DPI, PaperSize, PrintContext, PrintDialogState, PrintModel, PrintModelError,
     PrintPageRange, PrintPlan,
