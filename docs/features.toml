@@ -1617,17 +1617,31 @@ title = "Fill existing AcroForm fields"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-forms/src/serialize.rs",
     "crates/pdfxi-forms/src/build.rs",
-    "crates/pdfxi-forms/src/appearance.rs",
     "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0080.md",
+    "docs/evidence/forms/T-0140.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms: 147 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 255 passed, 0 failed; 12 new serialize::tests cover full emit->PDF-bytes->parse round trip, page /Annots, AcroForm /Fields, missing/invalid page reference, duplicate names, malformed dictionaries, empty fields, widget count mismatch, explicit widget override, byte determinism and bad-header rejection. fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0140.md."
 id = "FORMS-002"
-notes = "Typed field creation for all six widget types with name, tooltip, values, flags, options, max length, alignment, border/colour, rectangle and page. Well-formed dictionary models are emitted into the PdfValue model; /P is a placeholder page-object reference and the host writer must substitute the real page reference. Deterministic /AP generation already existed via build_appearance. Serialising the emitted dictionaries into a concrete PDF and a property-editing UI remain deferred."
+notes = """
+The previously deferred step -- serializing emitted field/widget dictionaries
+into a concrete, loadable PDF -- is now implemented and end-to-end tested.
+serialize_form_pdf promotes each /Kids widget into an indirect object, rewrites
+field /Kids to reference it, overwrites widget /P with the supplied page object
+reference, wires page /Annots, builds the AcroForm /Fields array, a catalogue,
+page tree, xref table and trailer. parse_pdf parses the bytes back; the
+round-trip test asserts /T names, /FT types, /Rect placement, corrected /P and
+page /Annots. Field names are unique-checked before emission and the caller's
+page number is reserved/bounded so no hostile reference can allocate a huge
+xref. Honest boundary: this creates a standalone document with one page; it
+does not merge into an existing host document, does not attach per-option radio
+appearance streams, and does not provide a UI. The original typed field-creation
+tests from T-0080 remain valid and are retained below.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
     "build::tests::create_text_field_with_typed_properties",
     "build::tests::create_checkbox_field",
@@ -1641,22 +1655,49 @@ tests = [
     "appearance::tests::choice_combo_renders_single_line",
     "appearance::tests::choice_list_renders_highlight_and_rows",
     "build::tests::maximum_page_index_is_a_typed_error",
+    "serialize::tests::serialize_round_trip_verifies_names_types_and_placement",
+    "serialize::tests::page_annots_reference_all_widgets",
+    "serialize::tests::acroform_fields_reference_field_objects",
+    "serialize::tests::missing_page_reference_is_a_typed_error",
+    "serialize::tests::invalid_page_reference_is_rejected",
+    "serialize::tests::duplicate_field_names_are_rejected",
+    "serialize::tests::malformed_field_dictionary_is_rejected",
+    "serialize::tests::empty_field_list_is_rejected",
+    "serialize::tests::widget_count_mismatch_is_rejected",
+    "serialize::tests::explicit_widgets_override_embedded_kids",
+    "serialize::tests::serialization_is_deterministic",
+    "serialize::tests::parser_rejects_non_pdf_input",
 ]
 title = "Create text checkbox radio choice and button fields"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/build.rs",
-    "crates/pdfxi-forms/src/rules.rs",
+    "crates/pdfxi-forms/src/properties.rs",
     "crates/pdfxi-forms/src/validation.rs",
-    "crates/pdfxi-forms/src/calculation.rs",
+    "crates/pdfxi-forms/src/rules.rs",
     "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0080.md",
+    "docs/evidence/forms/T-0140.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms: 147 passed / 0 failed; fmt/clippy/doc EXIT=0. See docs/evidence/forms/T-0080.md."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 255 passed, 0 failed; 9 new properties::tests cover name-sorted listing, validation success/failure matrices, typed format/length failures, duplicate rejection, read-only+required conflict, name/tooltip limits, from_spec derivation and choice membership. fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0140.md."
 id = "FORMS-003"
-notes = "Added configurable validation (required, max length, numeric/currency/date formats, dependency-free pattern, choice membership, custom hook trait) with typed per-field errors and a name-sorted deterministic summary. Calculations now include Min/Max, bounded simplified arithmetic, and an order-independent dependency plan with cycle detection and deterministic results. No arbitrary scripts are run. Property-editing UI and Acrobat calculation-order semantics for cyclic dependencies remain deferred."
+notes = """
+Adds a deterministic field property model: FieldProperties (name, tooltip,
+required, read-only, max length, Format, choices) with builders and getters,
+and PropertySet backed by a BTreeMap so list() is name-sorted regardless of
+insertion order. Validation is side-effect free and folds typed per-field errors
+into the existing ValidationSummary: required/empty text, max length,
+numeric/currency/date/pattern formats, choice membership, the incompatible
+required+read-only flag pair, and name/tooltip length and control-character
+limits, plus UnknownField for properties with no matching form field.
+Three new ValidationError variants (InvalidName, InvalidTooltip,
+ConflictingFlags) carry field names and reasons; rules::Format::check became
+pub(crate) so existing format logic is reused rather than duplicated. Builders
+also derive properties from a FieldSpec. No scripts, UI, filesystem or network
+are involved. Honest remaining scope: an editable property-editing UI and
+arbitrary script hooks are still deferred, so the row stays in-progress. All
+pre-existing calculation/rule tests from T-0080 remain valid and are retained.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
@@ -1674,6 +1715,15 @@ tests = [
     "build::tests::create_text_field_with_typed_properties",
     "build::tests::overflowing_rect_edges_are_rejected",
     "rules::tests::escaped_trailing_dollar_is_a_literal",
+    "properties::tests::property_set_lists_by_name_deterministically",
+    "properties::tests::property_validation_success_matrix",
+    "properties::tests::property_validation_failure_matrix",
+    "properties::tests::format_and_length_failures_are_typed",
+    "properties::tests::duplicate_property_name_is_rejected",
+    "properties::tests::readonly_required_conflict_is_typed_error",
+    "properties::tests::name_and_tooltip_constraints_are_enforced",
+    "properties::tests::properties_from_spec_round_trip_flags",
+    "properties::tests::choice_and_radio_membership_is_checked",
 ]
 title = "Field properties calculations and validation"
 

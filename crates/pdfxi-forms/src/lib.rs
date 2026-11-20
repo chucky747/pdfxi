@@ -50,6 +50,14 @@
 //!   `/AA` (K/F/V/C) and `/A` actions into a typed safe whitelist, with
 //!   dangerous actions (JavaScript, URI, Launch, Import/Export) rejected and
 //!   reported; no script is ever executed.
+//! - [`serialize_form_pdf`] / [`parse_pdf`] — serialize emitted field/widget
+//!   dictionaries and a page reference into a complete, loadable PDF byte
+//!   stream with `/AcroForm /Fields`, page `/Annots` and corrected `/P`
+//!   references, plus a bounded reader for round-trip verification.
+//! - [`FieldProperties`] / [`PropertySet`] — a deterministic, name-sorted
+//!   property model that validates required, max-length, numeric/currency/date,
+//!   choice-membership, flag-consistency and name/tooltip constraints into the
+//!   existing [`ValidationSummary`] without a UI.
 //! - [`FormHint`] / [`RecognitionPlan`] / [`ConversionPlan`] — heuristic
 //!   recognition of static form areas from caller-supplied label/control
 //!   rectangles (no OCR), with confidence, deterministic reading order and a
@@ -104,9 +112,11 @@ mod field;
 mod fill;
 mod flatten;
 mod form;
+mod properties;
 mod reader_enable;
 mod recognition;
 mod rules;
+mod serialize;
 mod signature;
 mod taborder;
 mod validation;
@@ -151,6 +161,7 @@ pub use flatten::{
     PageAnnotation, StoredAppearance, flatten_document, flatten_page,
 };
 pub use form::{Form, FormError};
+pub use properties::{FieldProperties, MAX_NAME_LEN, MAX_TOOLTIP_LEN, PropertyError, PropertySet};
 pub use reader_enable::{
     DocumentRights, FillSavePolicy, LOCAL_FILTER, Permission, PolicyReport,
     READER_DEFAULT_PLACEHOLDER_SIZE, READER_MAX_PLACEHOLDER_SIZE, READER_MAX_TEXT_LEN,
@@ -164,6 +175,10 @@ pub use recognition::{
 pub use rules::{
     CurrencyFormat, DateLayout, Format, MAX_PATTERN_LEN, MAX_PATTERN_TEXT_LEN, Pattern,
     PatternError, Rule, ValidationHook, Validator,
+};
+pub use serialize::{
+    MAX_OBJECT_NUMBER, MAX_OBJECTS, ParseError, PdfDocument, SerializeError, parse_pdf,
+    serialize_form_pdf,
 };
 pub use signature::{
     ByteRangePlan, CertPermission, Certification, DEFAULT_FILTER, DEFAULT_PLACEHOLDER_SIZE,

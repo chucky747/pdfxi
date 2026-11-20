@@ -79,6 +79,27 @@ pub enum ValidationError {
         /// Fully qualified name that was not found.
         field: String,
     },
+    /// A field property name violated a structural constraint.
+    InvalidName {
+        /// Fully qualified name of the offending property.
+        field: String,
+        /// Human-readable description of the violated constraint.
+        reason: String,
+    },
+    /// A field tooltip violated a structural constraint.
+    InvalidTooltip {
+        /// Fully qualified name of the offending property.
+        field: String,
+        /// Human-readable description of the violated constraint.
+        reason: String,
+    },
+    /// A field carried mutually incompatible flag properties.
+    ConflictingFlags {
+        /// Fully qualified name of the offending property.
+        field: String,
+        /// Human-readable description of the conflict.
+        reason: String,
+    },
 }
 
 impl ValidationError {
@@ -92,7 +113,10 @@ impl ValidationError {
             | Self::MaxLengthExceeded { field, .. }
             | Self::InvalidFormat { field, .. }
             | Self::CustomRejected { field, .. }
-            | Self::UnknownField { field } => field,
+            | Self::UnknownField { field }
+            | Self::InvalidName { field, .. }
+            | Self::InvalidTooltip { field, .. }
+            | Self::ConflictingFlags { field, .. } => field,
         }
     }
 
@@ -108,6 +132,9 @@ impl ValidationError {
             Self::InvalidFormat { .. } => 5,
             Self::InvalidText { .. } => 6,
             Self::CustomRejected { .. } => 7,
+            Self::InvalidName { .. } => 8,
+            Self::InvalidTooltip { .. } => 9,
+            Self::ConflictingFlags { .. } => 10,
         }
     }
 }
@@ -147,6 +174,15 @@ impl fmt::Display for ValidationError {
             }
             Self::UnknownField { field } => {
                 write!(f, "rule targets unknown field '{field}'")
+            }
+            Self::InvalidName { field, reason } => {
+                write!(f, "field '{field}' has an invalid name: {reason}")
+            }
+            Self::InvalidTooltip { field, reason } => {
+                write!(f, "field '{field}' has an invalid tooltip: {reason}")
+            }
+            Self::ConflictingFlags { field, reason } => {
+                write!(f, "field '{field}' has conflicting flags: {reason}")
             }
         }
     }

@@ -449,7 +449,7 @@ impl Format {
         }
     }
 
-    fn check(&self, text: &str) -> Result<(), String> {
+    pub(crate) fn check(&self, text: &str) -> Result<(), String> {
         match self {
             Self::Numeric => check_numeric(text),
             Self::Currency(format) => check_currency(text, *format),
