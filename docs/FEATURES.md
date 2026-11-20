@@ -4,7 +4,7 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 25 verified, 18 library, 96 model, 3 replaced, 1 in-progress (143 rows; see ADR 0009).
+Current status: 26 verified, 18 library, 96 model, 3 replaced, 0 in-progress (143 rows; see ADR 0009).
 
 ## Detailed feature pages
 

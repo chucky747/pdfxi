@@ -4354,9 +4354,10 @@ title = "Shippable viewer package: GUI subsystem, icon, version resource, DPI ma
 docs = [
     "installer/pdfxi.iss",
     "docs/evidence/release/T-0202.md",
+    "scripts/test-installer.ps1",
 ]
 domain = "Platform"
-evidence = "docs/evidence/release/T-0202-final-install.md"
+evidence = "cargo xtask installer-test (working tree at 1a5c346): 22 assertions passed, 0 failed, INSTALLER TEST PASS; transcript in docs/evidence/hardening/T-0210.md"
 id = "PKG-003"
 notes = """
 installer/pdfxi.iss installs per user (PrivilegesRequired=lowest) into the per-user
@@ -4364,12 +4365,19 @@ programs directory, creates Start Menu and optional desktop shortcuts, writes an
 uninstall entry, offers an unchecked task that only adds PDFXI to the .pdf "Open with"
 list (never the default handler), and leaves the PDFXI settings directory in place on
 uninstall. package.ps1 builds it when ISCC.exe is found and prints a clear skip message
-otherwise. R4 built the setup executable, installed it silently per user into a temporary
-directory, launched the viewer with pdfium.dll from its own directory, and uninstalled it
-cleanly with the HKCU key and shortcuts removed. Status is in-progress because no
-automated test drives the installer yet; the evidence is a manual smoke transcript.
+otherwise. The installer is now covered by an automated test: scripts/test-installer.ps1
+(cargo xtask installer-test) builds the Smoke-identity setup (separate AppId and
+AppName, so a real installation is never touched), installs it silently into a folder
+under target/tmp with TEMP/TMP redirected, asserts the payload, the GUI subsystem of
+pdfxi-ui.exe, the HKCU uninstall entry, the desktop shortcut, a live viewer with
+pdfium.dll loaded from the install directory, then uninstalls and asserts the
+directory, key and shortcuts are gone and that the real installation and desktop
+shortcut are byte-for-byte and timestamp-for-timestamp untouched. It skips with exit 0
+and a loud SKIPPED line when Inno Setup is absent, and exits 1 on any failed assertion.
 """
 priority = "P1"
-status = "in-progress"
-tests = []
+status = "verified"
+tests = [
+    "packaging::installer_test_script_contract",
+]
 title = "Per-user Inno Setup installer (build, silent install, uninstall)"

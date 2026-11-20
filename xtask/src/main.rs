@@ -108,6 +108,8 @@ enum Command {
         #[command(subcommand)]
         command: CorpusCommand,
     },
+    /// Build, install, exercise and uninstall the smoke-identity installer.
+    InstallerTest,
 }
 
 #[derive(Debug, Subcommand)]
@@ -204,6 +206,7 @@ fn main() -> Result<()> {
         Command::Corpus { command } => match command {
             CorpusCommand::Smoke => corpus_smoke(),
         },
+        Command::InstallerTest => installer_test(),
     }
 }
 
@@ -1104,6 +1107,24 @@ fn corpus_smoke() -> Result<()> {
     )?;
     println!("CORPUS SMOKE OK");
     Ok(())
+}
+
+/// Build, install, exercise and uninstall the smoke-identity installer.
+///
+/// Delegates to `scripts/test-installer.ps1`, which prints a loud `SKIPPED:`
+/// line and exits 0 when Inno Setup is not installed, so a host without Inno
+/// Setup does not fail this command. It exits non-zero on a failed assertion.
+fn installer_test() -> Result<()> {
+    run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/test-installer.ps1",
+        ],
+    )
 }
 
 #[cfg(test)]
