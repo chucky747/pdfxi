@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Home recents favorites and cross-file search",
   "priority": "P2",
-  "status": "queued",
+  "status": "superseded",
   "depends_on": ["T-0011"],
   "owns": [
     "crates/pdfxi-app/**",

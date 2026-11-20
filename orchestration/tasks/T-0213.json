@@ -1,0 +1,16 @@
+{
+  "id": "T-0213",
+  "lane": "core",
+  "title": "Full rewrite save, optimize and page plans for xref-stream and hybrid sources",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "crates/pdfxi-core/src/**",
+    "crates/pdfxi-core/tests/**",
+    "docs/evidence/hardening/T-0213.md",
+    "orchestration/feature-updates/T-0213.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core",
+  "evidence": "docs/evidence/hardening/T-0213.md"
+}

@@ -3,7 +3,7 @@
   "lane": "forms",
   "title": "Recognize static form fields",
   "priority": "P2",
-  "status": "queued",
+  "status": "superseded",
   "depends_on": ["T-0080"],
   "owns": [
     "crates/pdfxi-forms/**",

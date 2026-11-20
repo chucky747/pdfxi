@@ -1,0 +1,17 @@
+{
+  "id": "T-0214",
+  "lane": "core",
+  "title": "pdfxi-document session crate: load, decrypt, mutate, undo/redo, atomic save",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0213"
+  ],
+  "owns": [
+    "crates/pdfxi-document/**",
+    "docs/evidence/hardening/T-0214.md",
+    "orchestration/feature-updates/T-0214.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-document",
+  "evidence": "docs/evidence/hardening/T-0214.md"
+}

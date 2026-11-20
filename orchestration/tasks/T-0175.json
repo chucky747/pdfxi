@@ -3,7 +3,7 @@
   "lane": "convert",
   "title": "Export rows closure for images text and archives",
   "priority": "P2",
-  "status": "queued",
+  "status": "superseded",
   "depends_on": ["T-0174"],
   "owns": [
     "crates/pdfxi-convert/**",

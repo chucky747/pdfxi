@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Split and tile document windows",
   "priority": "P2",
-  "status": "queued",
+  "status": "superseded",
   "depends_on": ["T-0083"],
   "owns": [
     "crates/pdfxi-app/**",

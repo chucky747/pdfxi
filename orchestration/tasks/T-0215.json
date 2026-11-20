@@ -1,0 +1,17 @@
+{
+  "id": "T-0215",
+  "lane": "qa",
+  "title": "Real-world corpus and smoke",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "fixtures/realworld/**",
+    "crates/pdfxi-testkit/**",
+    "docs/CORPUS.md",
+    "docs/evidence/hardening/T-0215.md",
+    "orchestration/feature-updates/T-0215.toml"
+  ],
+  "acceptance": "cargo xtask corpus smoke",
+  "evidence": "docs/evidence/hardening/T-0215.md"
+}

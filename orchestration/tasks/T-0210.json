@@ -1,0 +1,20 @@
+{
+  "id": "T-0210",
+  "lane": "integrator",
+  "title": "Gate hygiene: cargo-deny bans, optional rfd, automated installer test, ADRs",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "Cargo.toml",
+    "deny.toml",
+    "crates/*/Cargo.toml",
+    "scripts/**",
+    "installer/**",
+    "xtask/**",
+    "docs/decisions/**",
+    "docs/evidence/hardening/T-0210.md"
+  ],
+  "acceptance": "cargo deny check && cargo xtask verify",
+  "evidence": "docs/evidence/hardening/T-0210.md"
+}

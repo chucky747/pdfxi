@@ -3,7 +3,7 @@
   "lane": "automation",
   "title": "Local JSON automation API",
   "priority": "P2",
-  "status": "queued",
+  "status": "superseded",
   "depends_on": ["T-0094"],
   "owns": [
     "crates/pdfxi-automation/**",
