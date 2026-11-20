@@ -63,6 +63,19 @@
 //! header so the output is a well-formed PDF 1.4 file. Every emitted stream,
 //! including image XObjects, carries an exact `/Length` for its embedded bytes
 //! as required by ISO 32000-1.
+//!
+//! # CLI exposure and supported subset
+//!
+//! The `pdfxi-cli` binary exposes this module as `create image <INPUT> <OUTPUT>`
+//! and `create text <INPUT> <OUTPUT>` (with `--page-size letter|a4`, `--margin`,
+//! `--font-size`, `--line-height`, and `--markdown` options). The image command
+//! accepts **non-interlaced 8-bit grayscale or RGB PNG** (no alpha or palette)
+//! and **8-bit JPEG with one or three components**; interlaced/alpha/palette
+//! PNG, CMYK JPEG, and other raster formats return a typed error. The text
+//! command accepts UTF-8 plain text and the Markdown subset described above
+//! (ATX headings, paragraphs, bullet lists, fenced code blocks); inline
+//! emphasis, links, tables, ordered lists, blockquotes, and full CommonMark are
+//! not interpreted and are emitted literally.
 
 use std::path::Path;
 

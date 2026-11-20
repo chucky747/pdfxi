@@ -19,6 +19,11 @@
 //! file and runs them through the `pdfxi-automation` `DocumentExecutor`. The
 //! companion `droplet` command is the same run with Explorer-friendly defaults;
 //! see the `action` module for the staging-only executor and drop-handler notes.
+//!
+//! The `create` command group builds new PDFs from PNG/JPEG images and from
+//! plain text or a small Markdown subset. The `export tagged` command writes a
+//! structured text representation of a PDF's accessible content (roles, reading
+//! order and text); it is not a tagged-PDF producer or a PDF/UA certification.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -30,6 +35,11 @@ mod image;
 
 // Action-file commands (`action` and `droplet`) built on pdfxi-automation.
 mod action;
+
+// PDF creation (`create`) and accessible-text export (`export`) built on
+// pdfxi-convert and the accessibility tree builder.
+mod create;
+mod export;
 
 use std::path::{Path, PathBuf};
 
@@ -122,6 +132,21 @@ enum Command {
         #[arg(long, value_enum, default_value = "png")]
         format: OutputFormat,
     },
+    /// Create a new PDF from an image or text/Markdown source.
+    Create {
+        /// The creation operation to perform.
+        #[command(subcommand)]
+        command: CreateCommand,
+    },
+    /// Export a PDF's accessible text as a structured representation.
+    ///
+    /// This writes a structured text representation (roles, reading order and
+    /// text); it does not produce a tagged-PDF file or certify PDF/UA.
+    Export {
+        /// The export operation to perform.
+        #[command(subcommand)]
+        command: ExportCommand,
+    },
     /// Manage named actions stored in a tab-delimited action file.
     ///
     /// An action file holds one or more action blocks separated by blank lines.
@@ -193,6 +218,107 @@ enum ActionCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Operations on the `pdfxi create` command group.
+#[derive(Debug, Subcommand)]
+enum CreateCommand {
+    /// Create a one-page PDF from a PNG or JPEG image.
+    Image {
+        /// Path to the source PNG or JPEG image.
+        input: PathBuf,
+        /// Destination path for the generated PDF.
+        output: PathBuf,
+        /// Page geometry: `letter` (default) or `a4`.
+        #[arg(long, value_enum, default_value = "letter")]
+        page_size: CreatePageSize,
+        /// Uniform margin on every side, in PDF points.
+        #[arg(long, value_name = "PT", default_value_t = 72.0)]
+        margin: f64,
+        /// Body font size in points (accepted for uniformity; images ignore it).
+        #[arg(long, value_name = "PT", default_value_t = 11.0)]
+        font_size: f64,
+        /// Line-height multiplier (accepted for uniformity; images ignore it).
+        #[arg(long, value_name = "FACTOR", default_value_t = 1.2)]
+        line_height: f64,
+    },
+    /// Create a paginated PDF from plain text or the documented Markdown subset.
+    Text {
+        /// Path to the source UTF-8 text or Markdown file.
+        input: PathBuf,
+        /// Destination path for the generated PDF.
+        output: PathBuf,
+        /// Page geometry: `letter` (default) or `a4`.
+        #[arg(long, value_enum, default_value = "letter")]
+        page_size: CreatePageSize,
+        /// Uniform margin on every side, in PDF points.
+        #[arg(long, value_name = "PT", default_value_t = 72.0)]
+        margin: f64,
+        /// Body font size in points.
+        #[arg(long, value_name = "PT", default_value_t = 11.0)]
+        font_size: f64,
+        /// Line-height multiplier.
+        #[arg(long, value_name = "FACTOR", default_value_t = 1.2)]
+        line_height: f64,
+        /// Parse as Markdown even without an .md/.markdown extension.
+        #[arg(long)]
+        markdown: bool,
+    },
+}
+
+/// Operations on the `pdfxi export` command group.
+#[derive(Debug, Subcommand)]
+enum ExportCommand {
+    /// Export accessible text as a structured representation.
+    Tagged {
+        /// Path to the source PDF.
+        input: PathBuf,
+        /// Destination path for the exported text.
+        output: PathBuf,
+        /// Representation to write: `structured` (default) or `plain`.
+        #[arg(long, value_enum, default_value = "structured")]
+        format: TaggedOutputFormat,
+    },
+}
+
+/// Page geometry accepted by `create image` and `create text`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum CreatePageSize {
+    /// US Letter, 612 by 792 points.
+    #[default]
+    Letter,
+    /// ISO A4.
+    A4,
+}
+
+impl CreatePageSize {
+    /// Map to the CLI module's page-size choice.
+    const fn choice(self) -> create::PageSizeChoice {
+        match self {
+            Self::Letter => create::PageSizeChoice::Letter,
+            Self::A4 => create::PageSizeChoice::A4,
+        }
+    }
+}
+
+/// Tagged-text representation accepted by `export tagged`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum TaggedOutputFormat {
+    /// Nested, indented outline with `@role` markers.
+    #[default]
+    Structured,
+    /// Flat text with `[role]` markers and optional alt text.
+    Plain,
+}
+
+impl TaggedOutputFormat {
+    /// Map to the CLI module's tagged-format choice.
+    const fn format(self) -> export::TaggedFormat {
+        match self {
+            Self::Structured => export::TaggedFormat::Structured,
+            Self::Plain => export::TaggedFormat::Plain,
+        }
+    }
 }
 
 /// Image encoding selected by `pdfxi render --format`.
@@ -270,6 +396,51 @@ fn main() -> anyhow::Result<()> {
             out,
             format,
         } => render(&file, page, scale, &out, format),
+        Command::Create { command } => match command {
+            CreateCommand::Image {
+                input,
+                output,
+                page_size,
+                margin,
+                font_size,
+                line_height,
+            } => create::create_image(
+                &input,
+                &output,
+                create::CreateSettings {
+                    page_size: page_size.choice(),
+                    margin_pt: margin,
+                    font_size_pt: font_size,
+                    line_height,
+                },
+            ),
+            CreateCommand::Text {
+                input,
+                output,
+                page_size,
+                margin,
+                font_size,
+                line_height,
+                markdown,
+            } => create::create_text(
+                &input,
+                &output,
+                create::CreateSettings {
+                    page_size: page_size.choice(),
+                    margin_pt: margin,
+                    font_size_pt: font_size,
+                    line_height,
+                },
+                markdown,
+            ),
+        },
+        Command::Export { command } => match command {
+            ExportCommand::Tagged {
+                input,
+                output,
+                format,
+            } => export::export_tagged(&input, &output, format.format()),
+        },
         Command::Action { command } => match command {
             ActionCommand::List { file } => action::list_actions(&file),
             ActionCommand::Show { file, name } => action::show_action(&file, &name),

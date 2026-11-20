@@ -20,6 +20,12 @@ pdfxi-core = { path = "../pdfxi-core" }
 # A workspace crate, so no external dependency is introduced.
 pdfxi-automation = { path = "../pdfxi-automation" }
 pdfxi-text = { path = "../pdfxi-text" }
+# PDF creation (images, text, Markdown) and tagged/accessible text export used
+# by the `create` and `export` command groups. Both are workspace crates, so no
+# external dependency is introduced. `default-features = false` keeps the
+# optional renderer path out of these headless commands.
+pdfxi-convert = { path = "../pdfxi-convert", default-features = false }
+pdfxi-accessibility = { path = "../pdfxi-accessibility" }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.
 pdfxi-render = { path = "../pdfxi-render", optional = true }

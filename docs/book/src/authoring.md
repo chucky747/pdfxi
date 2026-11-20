@@ -8,13 +8,13 @@ command.
 
 ## Create a PDF
 
-| Source | Row | Status | Library |
-|---|---|---|---|
-| Plain text and a documented Markdown subset | `CREATE-004` | in-progress | `pdfxi-convert::create` |
-| PNG and JPEG images | `CREATE-003` | in-progress | `pdfxi-convert::create` |
-| Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` |
-| Local HTML and a CSS subset | `CREATE-005` | verified | `pdfxi-convert::create::html` |
-| Office, scan, portfolios | `CREATE-006`–`CREATE-010` | planned | — |
+| Source | Row | Status | Library | CLI |
+|---|---|---|---|---|
+| Plain text and a documented Markdown subset | `CREATE-004` | verified | `pdfxi-convert::create` | `create text` |
+| PNG and JPEG images | `CREATE-003` | verified | `pdfxi-convert::create` | `create image` |
+| Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
+| Local HTML and a CSS subset | `CREATE-005` | verified | `pdfxi-convert::create::html` | — |
+| Office, scan, portfolios | `CREATE-006`–`CREATE-010` | planned | — | — |
 
 Text creation renders ATX headings, paragraphs, bullet lists, and fenced code
 blocks with Helvetica/Courier metrics and paginates across pages. Inline
@@ -22,6 +22,43 @@ emphasis, links, tables, and full CommonMark are emitted literally today. Image
 creation supports non-interlaced 8-bit grayscale/RGB PNG (no alpha or palette)
 and 8-bit JPEG with one or three components; DPI and page-fit rules are
 documented in `crates/pdfxi-convert/src/create.rs`.
+
+### Create from the CLI
+
+`CREATE-003` and `CREATE-004` are now exposed headlessly:
+
+```text
+pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
+pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
+```
+
+Both accept `--page-size letter|a4`, `--margin <PT>`, `--font-size <PT>` and
+`--line-height <FACTOR>`; `create text` also accepts `--markdown` to force the
+Markdown parser regardless of extension. Output is deterministic — the same
+input and options always produce byte-identical PDFs — and malformed or
+unsupported input returns a typed, actionable error. The **image subset** is
+non-interlaced 8-bit grayscale/RGB PNG (no alpha or palette) and 8-bit JPEG with
+one or three components; interlaced/alpha/palette PNG, CMYK JPEG, and other
+raster formats are rejected. The **Markdown subset** is ATX headings,
+paragraphs, bullet lists, and fenced code blocks; inline emphasis, links,
+tables, ordered lists, blockquotes, and full CommonMark are emitted literally.
+
+### Export accessible text
+
+`EXPORT-007` (verified) exposes tagged/accessible text export through
+`pdfxi-convert::export_tagged_text` and the CLI:
+
+```text
+pdfxi export tagged <INPUT.pdf> <OUTPUT.txt> [--format structured|plain]
+```
+
+A deterministic accessibility tree is derived from extracted page text and
+serialized as either a nested, indented `@role` outline (`structured`, the
+default) or a flat `[role]` text variant (`plain`). Roles and reading order are
+preserved, so the output carries document/page/paragraph structure and the
+original text content. This is a **structured text representation**, not a
+tagged-PDF file and not a PDF/UA certification; producing tagged-PDF structure
+belongs to the accessibility lane.
 
 `Document::apply_page_plan` with `PagePlan::merge(...)` copies every source into
 a fresh catalog and page tree with deterministic object numbers and remapped

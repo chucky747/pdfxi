@@ -1218,3 +1218,335 @@ fn action_run_rejects_escaping_export_targets() {
         "the echo executor must not write files"
     );
 }
+
+// ---------------------------------------------------------------------------
+// create (CREATE-003 images, CREATE-004 text/Markdown)
+// ---------------------------------------------------------------------------
+
+/// A unique temporary path used as either a command input or output.
+struct TempPath {
+    path: PathBuf,
+    display: String,
+}
+
+impl TempPath {
+    /// Choose a unique, not-yet-created path with the given extension.
+    fn new(extension: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let name = format!(
+            "pdfxi-cli-path-{}-{nanos}-{id}.{extension}",
+            std::process::id()
+        );
+        let path = std::env::temp_dir().join(name);
+        let display = path.to_string_lossy().into_owned();
+        Self { path, display }
+    }
+
+    /// Write bytes to this path (for use as a command input).
+    fn write(&self, bytes: &[u8]) {
+        fs::write(&self.path, bytes).expect("write temporary input");
+    }
+
+    /// Return the path as a command-line argument.
+    fn arg(&self) -> &str {
+        &self.display
+    }
+}
+
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// A compact JPEG-shaped byte buffer with a 300 dpi JFIF density marker.
+fn sample_jpeg() -> Vec<u8> {
+    let mut out = vec![0xFF, 0xD8];
+    let mut app0 = Vec::from(&b"JFIF\0"[..]);
+    app0.extend_from_slice(&[1, 1]);
+    app0.extend_from_slice(&300u16.to_be_bytes());
+    app0.extend_from_slice(&300u16.to_be_bytes());
+    app0.extend_from_slice(&[0, 0]);
+    out.push(0xFF);
+    out.push(0xE0);
+    out.extend_from_slice(&((app0.len() + 2) as u16).to_be_bytes());
+    out.extend_from_slice(&app0);
+    let mut sof = vec![8];
+    sof.extend_from_slice(&100u16.to_be_bytes());
+    sof.extend_from_slice(&200u16.to_be_bytes());
+    sof.extend_from_slice(&[3, 1, 0x11, 0, 2, 0x11, 1, 0x11, 1]);
+    out.push(0xFF);
+    out.push(0xC0);
+    out.extend_from_slice(&((sof.len() + 2) as u16).to_be_bytes());
+    out.extend_from_slice(&sof);
+    out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+    out
+}
+
+/// Append one PNG chunk. The embedder does not validate CRCs, so a zero CRC is
+/// sufficient for this structural fixture.
+fn push_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&[0u8; 4]);
+}
+
+/// A minimal non-interlaced 8-bit RGB PNG fixture.
+fn sample_png() -> Vec<u8> {
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&2u32.to_be_bytes());
+    ihdr.extend_from_slice(&2u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    push_png_chunk(&mut out, b"IHDR", &ihdr);
+    push_png_chunk(
+        &mut out,
+        b"IDAT",
+        &[0x78, 0x9C, 0x00, 0x00, 0x00, 0xFF, 0xFF],
+    );
+    push_png_chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+/// Run `create text` over `text` and return the generated PDF path.
+fn create_text_pdf(text: &str) -> TempPath {
+    let input = TempPath::new("txt");
+    input.write(text.as_bytes());
+    let pdf = TempPath::new("pdf");
+    let output = run(&["create", "text", input.arg(), pdf.arg()]);
+    assert!(
+        output.status.success(),
+        "create text failed: {}",
+        stderr(&output)
+    );
+    pdf
+}
+
+#[test]
+fn create_text_writes_a_parseable_pdf() {
+    let pdf = create_text_pdf("Hello PDFXI.\nSecond line.\nThird line.");
+    let bytes = fs::read(&pdf.path).expect("read generated PDF");
+    assert!(bytes.starts_with(b"%PDF-"), "not a PDF: {:?}", &bytes[..8]);
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("core parses generated PDF");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    let text = document.page_text(0).expect("page text");
+    assert!(text.contains("Hello PDFXI."), "text: {text:?}");
+    assert!(text.contains("Third line."), "text: {text:?}");
+}
+
+#[test]
+fn create_text_output_is_deterministic() {
+    let input = TempPath::new("txt");
+    input.write(b"Deterministic document.\nLine two.");
+    let a = TempPath::new("pdf");
+    let b = TempPath::new("pdf");
+    for out in [&a, &b] {
+        let output = run(&["create", "text", input.arg(), out.arg()]);
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+    }
+    assert_eq!(
+        fs::read(&a.path).expect("first PDF"),
+        fs::read(&b.path).expect("second PDF"),
+        "identical inputs must produce byte-identical PDFs"
+    );
+}
+
+#[test]
+fn create_markdown_by_extension_and_by_flag() {
+    let md = TempPath::new("md");
+    md.write(b"# Title\n\nBody text.\n");
+    let md_pdf = TempPath::new("pdf");
+    let output = run(&["create", "text", md.arg(), md_pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let document =
+        pdfxi_core::Document::from_bytes(fs::read(&md_pdf.path).expect("read markdown PDF"))
+            .expect("parse markdown PDF");
+    let text = document.page_text(0).expect("page text");
+    assert!(text.contains("Title"), "heading missing: {text:?}");
+    assert!(text.contains("Body text."), "paragraph missing: {text:?}");
+
+    // The --markdown flag forces Markdown parsing regardless of extension.
+    let txt = TempPath::new("txt");
+    txt.write(b"# Title\n\nBody text.\n");
+    let flag_pdf = TempPath::new("pdf");
+    let output = run(&["create", "text", txt.arg(), flag_pdf.arg(), "--markdown"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let flagged =
+        pdfxi_core::Document::from_bytes(fs::read(&flag_pdf.path).expect("read flagged PDF"))
+            .expect("parse flagged PDF");
+    let flagged_text = flagged.page_text(0).expect("page text");
+    assert!(flagged_text.contains("Title"), "text: {flagged_text:?}");
+    assert!(
+        !flagged_text.contains("# Title"),
+        "Markdown heading marker must be consumed, not emitted literally: {flagged_text:?}"
+    );
+}
+
+#[test]
+fn create_text_empty_input_is_a_typed_error() {
+    let input = TempPath::new("txt");
+    input.write(b"   \n");
+    let out = TempPath::new("pdf");
+    let output = run(&["create", "text", input.arg(), out.arg()]);
+    assert!(!output.status.success(), "blank input must fail");
+    assert!(
+        stderr(&output).contains("cannot create a PDF from empty input"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(!out.path.exists(), "no PDF should be written on failure");
+}
+
+#[test]
+fn create_image_jpeg_writes_a_parseable_pdf() {
+    let input = TempPath::new("jpg");
+    input.write(&sample_jpeg());
+    let out = TempPath::new("pdf");
+    let output = run(&["create", "image", input.arg(), out.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let document = pdfxi_core::Document::from_bytes(fs::read(&out.path).expect("read image PDF"))
+        .expect("core parses image PDF");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    assert_eq!(document.version(), "1.4");
+}
+
+#[test]
+fn create_image_png_writes_a_parseable_pdf() {
+    let input = TempPath::new("png");
+    input.write(&sample_png());
+    let out = TempPath::new("pdf");
+    let output = run(&["create", "image", input.arg(), out.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let document = pdfxi_core::Document::from_bytes(fs::read(&out.path).expect("read PNG PDF"))
+        .expect("core parses PNG PDF");
+    assert_eq!(document.page_count().expect("page count"), 1);
+}
+
+#[test]
+fn create_image_output_is_deterministic() {
+    let input = TempPath::new("jpg");
+    input.write(&sample_jpeg());
+    let a = TempPath::new("pdf");
+    let b = TempPath::new("pdf");
+    for out in [&a, &b] {
+        let output = run(&["create", "image", input.arg(), out.arg()]);
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+    }
+    assert_eq!(
+        fs::read(&a.path).expect("first PDF"),
+        fs::read(&b.path).expect("second PDF"),
+        "identical image input must produce byte-identical PDFs"
+    );
+}
+
+#[test]
+fn create_image_rejects_unsupported_extension_and_malformed_bytes() {
+    let gif = TempPath::new("gif");
+    gif.write(b"GIF89a");
+    let out = TempPath::new("pdf");
+    let output = run(&["create", "image", gif.arg(), out.arg()]);
+    assert!(!output.status.success(), "unsupported extension must fail");
+    assert!(
+        stderr(&output).contains("unsupported image extension"),
+        "stderr: {}",
+        stderr(&output)
+    );
+
+    let bad = TempPath::new("jpg");
+    bad.write(b"not a jpeg");
+    let output = run(&["create", "image", bad.arg(), out.arg()]);
+    assert!(!output.status.success(), "malformed JPEG must fail");
+    assert!(
+        stderr(&output).contains("malformed JPEG"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(!out.path.exists(), "no PDF should be written on failure");
+}
+
+// ---------------------------------------------------------------------------
+// export tagged (EXPORT-007)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn export_tagged_writes_structured_roles_in_reading_order() {
+    let pdf = create_text_pdf("Hello PDFXI.\nSecond line.\nThird line.");
+    let out = TempPath::new("txt");
+    let output = run(&["export", "tagged", pdf.arg(), out.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = fs::read_to_string(&out.path).expect("read tagged output");
+    assert!(text.contains("@document"), "output: {text:?}");
+    assert!(text.contains("@page"), "output: {text:?}");
+    assert!(text.contains("@p "), "output: {text:?}");
+    let document_at = text.find("@document").expect("document role");
+    let page_at = text.find("@page").expect("page role");
+    let paragraph_at = text.find("@p ").expect("paragraph role");
+    assert!(
+        document_at < page_at && page_at < paragraph_at,
+        "structure roles must appear in document/page/paragraph order: {text:?}"
+    );
+    // Text content round-trips through the derived accessibility tree.
+    assert!(text.contains("Hello PDFXI."), "output: {text:?}");
+    assert!(text.contains("Second line."), "output: {text:?}");
+    assert!(text.contains("Third line."), "output: {text:?}");
+}
+
+#[test]
+fn export_tagged_plain_has_role_markers_and_text() {
+    let pdf = create_text_pdf("Alpha content.\nBeta content.");
+    let out = TempPath::new("txt");
+    let output = run(&[
+        "export",
+        "tagged",
+        pdf.arg(),
+        out.arg(),
+        "--format",
+        "plain",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = fs::read_to_string(&out.path).expect("read plain tagged output");
+    for role in ["[document]", "[page]", "[paragraph]"] {
+        assert!(text.contains(role), "missing {role}: {text:?}");
+    }
+    assert!(text.contains("Alpha content."), "output: {text:?}");
+    assert!(text.contains("Beta content."), "output: {text:?}");
+}
+
+#[test]
+fn export_tagged_output_is_deterministic() {
+    let pdf = create_text_pdf("Deterministic tagged export.");
+    let a = TempPath::new("txt");
+    let b = TempPath::new("txt");
+    for out in [&a, &b] {
+        let output = run(&["export", "tagged", pdf.arg(), out.arg()]);
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+    }
+    assert_eq!(
+        fs::read(&a.path).expect("first export"),
+        fs::read(&b.path).expect("second export"),
+        "identical PDFs must produce byte-identical tagged text"
+    );
+}
+
+#[test]
+fn export_tagged_rejects_a_non_pdf_input() {
+    let input = TempPath::new("pdf");
+    input.write(b"this is not a PDF");
+    let out = TempPath::new("txt");
+    let output = run(&["export", "tagged", input.arg(), out.arg()]);
+    assert!(!output.status.success(), "non-PDF input must fail");
+    assert!(
+        stderr(&output).contains("not a parseable PDF"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(!out.path.exists(), "no output should be written on failure");
+}

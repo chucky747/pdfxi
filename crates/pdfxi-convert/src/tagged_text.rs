@@ -13,6 +13,18 @@
 //!
 //! No PDF parsing, rendering, external tool, or unsafe code is involved. The
 //! accessibility crate is a std-only workspace dependency.
+//!
+//! # Scope of the export
+//!
+//! This writer emits a **structured text representation** of an accessibility
+//! tree — nested `@role` markers in [`export_structured_text`] and flat
+//! `[role]` markers in [`export_plain_text`]. It is intended for accessible
+//! text inspection and round-trip tooling. It does **not** produce a tagged-PDF
+//! structure tree and makes **no PDF/UA certification claim**; producing
+//! tagged-PDF structure belongs to the accessibility lane. The `pdfxi-cli`
+//! `export tagged <INPUT> <OUTPUT>` command derives a deterministic accessibility
+//! tree from extracted page text and writes either representation with
+//! `--format structured|plain`.
 
 use crate::export_options::{
     ExportOptionError, ExportPageSelection, LineEnding, validate_heading_levels,
