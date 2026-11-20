@@ -1,0 +1,18 @@
+{
+  "id": "T-0256",
+  "lane": "security",
+  "title": "Use a CSPRNG file key for AES-256 encryption and preserve /Info on protect",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0238"
+  ],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/hardening/T-0256.md",
+    "orchestration/feature-updates/T-0256.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security; two protects of the same source with the same passwords produce different file keys, and an independent reader opens the result while /Info survives",
+  "notes": "Follow-up from the orchestrator's review of T-0238 (docs/evidence/hardening/T-0238.md, Known limitations). Three defects, recorded as cryptographic-quality issues to fix before release, not as an exploitable-today claim. 1) The existing writer derives the AES-256 file key deterministically from the document /ID plus the user and owner passwords (derive_file_key in encryption_writer.rs) instead of drawing a random 32-byte file key and wrapping it through /UE and /OE per ISO 32000-2 revision 6. A shared/deterministic key is a real weakness: replace it with a CSPRNG (vetted getrandom/rand, licence-checked), generate the R6 salts and validation values per spec, and add a test that two protects of identical bytes and passwords yield different /UE, /OE, /U, /O and /Perms-derived values. 2) protect and remove-protection emit a minimal trailer (Size, Root, ID, Encrypt) and lose the /Info reference; preserve /Info (and any other trailer keys that do not conflict) in protected and decrypted output. 3) Independent-reader verification is missing: the T-0238 tests reopen with the same crate that wrote the file. Add a PDFium reopen (with the password; failure without it) and, where available, a second reader (qpdf or Adobe) so the file is not validated only by its author. Rows stay library until the shell task; do not promote anything here.",
+  "evidence": "docs/evidence/hardening/T-0256.md"
+}
