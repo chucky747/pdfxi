@@ -1,10 +1,9 @@
 # T-0212 - UI interaction harness and no-dead-controls gate
 #
-# Adds an integration-test harness that dispatches every AppCommand through
-# `PdfxiApp::dispatch` and requires observable state (or a viewport command) to
-# change, plus a static scanner that fails when a shell control has no
-# dispatch in its enclosing function. No production code changed; no feature
-# row status changes.
+# Follow-up hardening of the harness after the T-0220/T-0221/T-0222 shell work.
+# The source of truth for AppCommand coverage is now the enum itself: the guard
+# parses `AppCommand` from src/shell/commands.rs, so a new variant cannot be
+# silently forgotten. No production code changed; no feature row status changes.
 
 task = "T-0212"
 lane = "qa"
@@ -15,32 +14,40 @@ docs = [
     "docs/evidence/hardening/T-0212.md",
 ]
 notes = """
-Integration-test gate in crates/pdfxi-app/tests/ui_controls.rs (15 tests). A
-Snapshot of every public accessor is taken before/after dispatch; a command
-passes only if it changes tabs, page, zoom, rotation, view mode, tool, find
-state, status, theme, window controls, banner, errors, close policy, selection
-or thumbnails. Viewport-only commands (Caption, StartWindowDrag,
-ToggleFullscreen) are proven through `egui::Context::run`'s viewport command
-queue. All 60 AppCommand labels are pinned, unique and non-empty. 55 commands
-are proven; 5 are allowlisted with reasons (open-dialog opens the native rfd
-picker next frame; copy-selection needs a canvas selection; toggle-tools,
-toggle-grid and show-rail flip private flags without public getters so T-0220
-needs to add accessors). A static scanner over src/shell/**.rs and src/ui.rs
-flags `.button(`, `.clicked()`, menus, checkboxes, selectable widgets and the
-shell icon-button factories when the enclosing function contains neither
-`dispatch(` nor `AppCommand`, with narrow allowlists for text fields, drag
-values, control factories and deferred TabAction returns; positive/negative
-synthetic snippets prove the scanner fails on a dead button. `egui_kittest`
-was not needed and no dependency was added. No production source edited.
-Gates: `cargo fmt -p pdfxi-app -- --check` clean, clippy -D warnings clean,
-cargo test -p pdfxi-app --features ui,pdfium = 447 lib + 15 integration passed.
+Integration-test gate in crates/pdfxi-app/tests/ui_controls.rs (20 tests). The
+source-derived variant guard parses the AppCommand enum out of
+src/shell/commands.rs and finds 92 variants; `all_commands()` covers 74 of them
+and enumerates 18 as pending with a written reason. The guard fails when a
+variant is missing from both lists (source_guard_reports_a_missing_variant
+proves the failure path) and when a listed variant no longer exists. The
+allowlist is exactly two entries (open-dialog, copy-selection), each with its
+reason, and the guard asserts len() == 2. A Snapshot of every public accessor is
+taken before/after dispatch; a command passes only if it changes tabs, page,
+zoom, rotation, view mode, tool, find state, status, theme, window controls,
+banner, errors, close policy, selection or thumbnails. Viewport-only commands
+are proven through egui::Context::run. New since the first round:
+dispatched_annotation_commands_act proves the comments commands,
+save_note_draft_commits_and_cancels_the_public_draft proves the note draft is
+public and reversible, and undo_redo_and_help_commands_act proves undo/redo and
+the help window. The static scanner over src/shell/**.rs and src/ui.rs still
+fails on a dead control, with positive/negative synthetic snippets. egui_kittest
+was not needed and no dependency was added. Gates: `cargo fmt -p pdfxi-app --
+--check` clean; `cargo test -p pdfxi-app --features ui,pdfium` = 473 lib + 20
+integration passed. Clippy is clean for pdfxi-app; the full-workspace run is
+temporarily red on an unrelated in-flight security lint, recorded in the
+evidence.
 """
 tests = [
     "command_labels_are_stable_unique_and_non_empty",
     "every_app_command_is_proven_or_allowlisted",
+    "source_variants_are_all_covered",
+    "source_guard_reports_a_missing_variant",
     "dispatched_navigation_and_view_commands_act",
     "dispatched_tab_commands_act",
     "dispatched_find_commands_act",
+    "dispatched_annotation_commands_act",
+    "save_note_draft_commits_and_cancels_the_public_draft",
+    "undo_redo_and_help_commands_act",
     "dispatched_shell_and_settings_commands_act",
     "dispatched_capability_commands_report_unavailable",
     "viewport_commands_reach_the_egui_context",

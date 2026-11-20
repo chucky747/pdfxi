@@ -1,15 +1,20 @@
 //! UI interaction harness and no-dead-controls gate (T-0212).
 //!
-//! Two independent checks live here:
+//! Three independent checks live here:
 //!
-//! 1. **Interaction harness** — every [`AppCommand`] the shell can emit is
-//!    dispatched through the single public entry point,
-//!    [`PdfxiApp::dispatch`], and must change observable application state. A
-//!    command whose only effect is a viewport message is proven through the
-//!    commands an `egui::Context` records for the frame. The few commands whose
-//!    effect is intentionally invisible to a window-free process are listed in
+//! 1. **Interaction harness** — every covered [`AppCommand`] is dispatched
+//!    through the single public entry point, [`PdfxiApp::dispatch`], and must
+//!    change observable application state. A command whose only effect is a
+//!    viewport message is proven through the commands an `egui::Context`
+//!    records for the frame. The commands whose effect is intentionally
+//!    invisible to a window-free process are listed in
 //!    [`UNOBSERVABLE_ALLOWLIST`] with one reason each.
-//! 2. **Static no-dead-controls scanner** — a line-based scan of the shell
+//! 2. **Source-derived coverage guard** — `src/shell/commands.rs` is parsed at
+//!    test time and its variant set is compared with [`all_commands`] plus
+//!    [`PENDING_COVERAGE`]. A new variant cannot be silently missed: it fails
+//!    [`source_variants_are_all_covered`] until it has a proof or an explicit,
+//!    reasoned triage entry.
+//! 3. **Static no-dead-controls scanner** — a line-based scan of the shell
 //!    sources fails the build when a clickable control is created without a
 //!    following `dispatch` (or `AppCommand`) in its enclosing function. The
 //!    scanner is exercised by synthetic positive and negative snippets so the
@@ -19,7 +24,8 @@
 //! and the page/find commands can only be proven when the native renderer
 //! supplies real page counts and text. Registering a new `AppCommand` without
 //! adding it to [`PROVEN_LABELS`] or [`UNOBSERVABLE_ALLOWLIST`] fails
-//! [`every_app_command_is_proven_or_allowlisted`].
+//! [`every_app_command_is_proven_or_allowlisted`]; adding it to the enum
+//! without any entry fails [`source_variants_are_all_covered`].
 
 #![cfg(all(feature = "ui", feature = "pdfium"))]
 
@@ -123,6 +129,17 @@ struct Snapshot {
     tools_open: bool,
     grid_view: bool,
     active_rail: RailItem,
+    annotation_count: usize,
+    annotation_digest: Vec<(String, String, Option<String>, Option<String>)>,
+    selected_annotation: Option<(usize, String)>,
+    note_tool_active: bool,
+    note_draft_open: bool,
+    note_draft_text: Option<String>,
+    help_open: bool,
+    can_undo: bool,
+    can_redo: bool,
+    comments_hint: Option<String>,
+    comments_error: Option<String>,
 }
 
 fn snapshot(app: &PdfxiApp) -> Snapshot {
@@ -156,6 +173,30 @@ fn snapshot(app: &PdfxiApp) -> Snapshot {
         tools_open: app.tools_open(),
         grid_view: app.grid_view(),
         active_rail: app.active_rail(),
+        annotation_count: app.annotation_count(),
+        annotation_digest: app
+            .annotations()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.view.id.clone(),
+                    entry.view.contents.clone(),
+                    entry.view.state.clone(),
+                    entry.view.parent_id.clone(),
+                )
+            })
+            .collect(),
+        selected_annotation: app
+            .selected_annotation()
+            .map(|(page, view)| (page, view.id.clone())),
+        note_tool_active: app.note_tool_active(),
+        note_draft_open: app.note_draft_open(),
+        note_draft_text: app.note_draft_text().map(str::to_owned),
+        help_open: app.help_open(),
+        can_undo: app.can_undo(),
+        can_redo: app.can_redo(),
+        comments_hint: app.comments_hint().map(str::to_owned),
+        comments_error: app.comments_error().map(str::to_owned),
     }
 }
 
@@ -191,79 +232,163 @@ fn viewport_commands(app: &mut PdfxiApp, command: AppCommand) -> Vec<egui::Viewp
         .unwrap_or_default()
 }
 
-/// Every `AppCommand` variant, once, with dummy arguments.
+/// Every `AppCommand` variant the harness covers, once, with dummy arguments.
 ///
-/// `close-tab` and friends share a family label, but every variant has its own
-/// label; the uniqueness assertion below is therefore per variant.
-fn all_commands() -> Vec<AppCommand> {
+/// The first tuple element is the exact enum variant name from
+/// `src/shell/commands.rs`. `source_variants_are_all_covered` parses that file
+/// and compares the result against these names plus `PENDING_COVERAGE`, so a
+/// new variant cannot be added without either a proof or an explicit,
+/// reasoned triage entry.
+fn all_commands() -> Vec<(&'static str, AppCommand)> {
     vec![
-        AppCommand::OpenDialog,
-        AppCommand::OpenPath("fixtures/minimal.pdf".to_owned()),
-        AppCommand::OpenDropped(vec![PathBuf::from("fixtures/minimal.pdf")]),
-        AppCommand::CloseActiveTab,
-        AppCommand::CloseTab(TabId::from_u64(1)),
-        AppCommand::CloseOtherTabs,
-        AppCommand::ActivateTab(TabId::from_u64(1)),
-        AppCommand::ActivateNextTab,
-        AppCommand::ActivatePreviousTab,
-        AppCommand::ReorderTab {
-            id: TabId::from_u64(1),
-            new_index: 0,
-        },
-        AppCommand::NextPage,
-        AppCommand::PreviousPage,
-        AppCommand::GoToPage(1),
-        AppCommand::ZoomIn,
-        AppCommand::ZoomOut,
-        AppCommand::FitPage,
-        AppCommand::FitWidth,
-        AppCommand::ActualSize,
-        AppCommand::RotateClockwise,
-        AppCommand::RotateCounterclockwise,
-        AppCommand::ResetRotation,
-        AppCommand::SetViewMode(ViewMode::SinglePage),
-        AppCommand::SelectTool(Toolset::Hand),
-        AppCommand::ToggleFind,
-        AppCommand::OpenFind,
-        AppCommand::CloseFind,
-        AppCommand::FindNext,
-        AppCommand::FindPrevious,
-        AppCommand::SetFindQuery("Page".to_owned()),
-        AppCommand::SetFindOptions {
-            case_sensitive: true,
-            whole_word: true,
-        },
-        AppCommand::CopySelection,
-        AppCommand::ClearSelection,
-        AppCommand::SetThemePreference(ThemePreference::Dark),
-        AppCommand::SetWindowControls(WindowControlStyle::MacOs),
-        AppCommand::ToggleTheme,
-        AppCommand::Caption(CaptionAction::Close),
-        AppCommand::StartWindowDrag,
-        AppCommand::DismissOpenError,
-        AppCommand::ClearOpenErrors,
-        AppCommand::SelectThumbnailPage(1),
-        AppCommand::SetClosePolicy(UiClosePolicy::DiscardDirty),
+        ("OpenDialog", AppCommand::OpenDialog),
+        (
+            "OpenPath",
+            AppCommand::OpenPath("fixtures/minimal.pdf".to_owned()),
+        ),
+        (
+            "OpenDropped",
+            AppCommand::OpenDropped(vec![PathBuf::from("fixtures/minimal.pdf")]),
+        ),
+        ("CloseActiveTab", AppCommand::CloseActiveTab),
+        ("CloseTab", AppCommand::CloseTab(TabId::from_u64(1))),
+        ("CloseOtherTabs", AppCommand::CloseOtherTabs),
+        ("ActivateTab", AppCommand::ActivateTab(TabId::from_u64(1))),
+        ("ActivateNextTab", AppCommand::ActivateNextTab),
+        ("ActivatePreviousTab", AppCommand::ActivatePreviousTab),
+        (
+            "ReorderTab",
+            AppCommand::ReorderTab {
+                id: TabId::from_u64(1),
+                new_index: 0,
+            },
+        ),
+        ("NextPage", AppCommand::NextPage),
+        ("PreviousPage", AppCommand::PreviousPage),
+        ("GoToPage", AppCommand::GoToPage(1)),
+        ("ZoomIn", AppCommand::ZoomIn),
+        ("ZoomOut", AppCommand::ZoomOut),
+        ("FitPage", AppCommand::FitPage),
+        ("FitWidth", AppCommand::FitWidth),
+        ("ActualSize", AppCommand::ActualSize),
+        ("RotateClockwise", AppCommand::RotateClockwise),
+        ("RotateCounterclockwise", AppCommand::RotateCounterclockwise),
+        ("ResetRotation", AppCommand::ResetRotation),
+        ("SetViewMode", AppCommand::SetViewMode(ViewMode::SinglePage)),
+        ("SelectTool", AppCommand::SelectTool(Toolset::Hand)),
+        ("ToggleFind", AppCommand::ToggleFind),
+        ("OpenFind", AppCommand::OpenFind),
+        ("CloseFind", AppCommand::CloseFind),
+        ("FindNext", AppCommand::FindNext),
+        ("FindPrevious", AppCommand::FindPrevious),
+        ("SetFindQuery", AppCommand::SetFindQuery("Page".to_owned())),
+        (
+            "SetFindOptions",
+            AppCommand::SetFindOptions {
+                case_sensitive: true,
+                whole_word: true,
+            },
+        ),
+        ("CopySelection", AppCommand::CopySelection),
+        ("ClearSelection", AppCommand::ClearSelection),
+        (
+            "SetThemePreference",
+            AppCommand::SetThemePreference(ThemePreference::Dark),
+        ),
+        (
+            "SetWindowControls",
+            AppCommand::SetWindowControls(WindowControlStyle::MacOs),
+        ),
+        ("ToggleTheme", AppCommand::ToggleTheme),
+        ("Caption", AppCommand::Caption(CaptionAction::Close)),
+        ("StartWindowDrag", AppCommand::StartWindowDrag),
+        ("DismissOpenError", AppCommand::DismissOpenError),
+        ("ClearOpenErrors", AppCommand::ClearOpenErrors),
+        ("SelectThumbnailPage", AppCommand::SelectThumbnailPage(1)),
+        (
+            "SetClosePolicy",
+            AppCommand::SetClosePolicy(UiClosePolicy::DiscardDirty),
+        ),
         // T-0220 acceptance-shell commands.
-        AppCommand::EditDocument,
-        AppCommand::Comment,
-        AppCommand::Highlight,
-        AppCommand::FillAndSign,
-        AppCommand::Sign,
-        AppCommand::Organize,
-        AppCommand::Export,
-        AppCommand::ConvertToPdf,
-        AppCommand::CombineFiles,
-        AppCommand::Protect,
-        AppCommand::AiAssistant,
-        AppCommand::ToggleTools,
-        AppCommand::ToggleGrid,
-        AppCommand::ToggleFullscreen,
-        AppCommand::SetZoomPercent(150),
-        AppCommand::SubmitPageNumber("2".to_owned()),
-        AppCommand::ShowRail(RailItem::Pages),
-        AppCommand::AddPage,
-        AppCommand::PageMenu,
+        ("EditDocument", AppCommand::EditDocument),
+        ("Comment", AppCommand::Comment),
+        ("Highlight", AppCommand::Highlight),
+        ("FillAndSign", AppCommand::FillAndSign),
+        ("Sign", AppCommand::Sign),
+        ("Organize", AppCommand::Organize),
+        ("Export", AppCommand::Export),
+        ("ConvertToPdf", AppCommand::ConvertToPdf),
+        ("CombineFiles", AppCommand::CombineFiles),
+        ("Protect", AppCommand::Protect),
+        ("AiAssistant", AppCommand::AiAssistant),
+        ("ToggleTools", AppCommand::ToggleTools),
+        ("ToggleGrid", AppCommand::ToggleGrid),
+        ("ToggleFullscreen", AppCommand::ToggleFullscreen),
+        ("SetZoomPercent", AppCommand::SetZoomPercent(150)),
+        (
+            "SubmitPageNumber",
+            AppCommand::SubmitPageNumber("2".to_owned()),
+        ),
+        ("ShowRail", AppCommand::ShowRail(RailItem::Pages)),
+        ("AddPage", AppCommand::AddPage),
+        ("PageMenu", AppCommand::PageMenu),
+        // T-0221/T-0222 surfaces proven through public accessors.
+        ("OpenHelp", AppCommand::OpenHelp),
+        ("CloseHelp", AppCommand::CloseHelp),
+        ("Undo", AppCommand::Undo),
+        ("Redo", AppCommand::Redo),
+        // T-0242 comments and markup commands.
+        (
+            "AddNote",
+            AppCommand::AddNote {
+                page: 0,
+                x: 72.0,
+                y: 720.0,
+                contents: "QA note".to_owned(),
+            },
+        ),
+        ("CancelNoteDraft", AppCommand::CancelNoteDraft),
+        ("SaveNoteDraft", AppCommand::SaveNoteDraft),
+        ("AddHighlight", AppCommand::AddHighlight),
+        (
+            "OpenAnnotation",
+            AppCommand::OpenAnnotation {
+                page: 0,
+                id: "pdfxi-note-1".to_owned(),
+            },
+        ),
+        ("CloseAnnotationPopup", AppCommand::CloseAnnotationPopup),
+        (
+            "ReplyToAnnotation",
+            AppCommand::ReplyToAnnotation {
+                page: 0,
+                id: "pdfxi-note-1".to_owned(),
+                contents: "QA reply".to_owned(),
+            },
+        ),
+        (
+            "SetAnnotationResolved",
+            AppCommand::SetAnnotationResolved {
+                page: 0,
+                id: "pdfxi-note-1".to_owned(),
+                resolved: true,
+            },
+        ),
+        (
+            "UpdateAnnotation",
+            AppCommand::UpdateAnnotation {
+                page: 0,
+                id: "pdfxi-note-1".to_owned(),
+                contents: "QA note updated".to_owned(),
+            },
+        ),
+        (
+            "DeleteAnnotation",
+            AppCommand::DeleteAnnotation {
+                page: 0,
+                id: "pdfxi-note-1".to_owned(),
+            },
+        ),
     ]
 }
 
@@ -327,6 +452,102 @@ const PROVEN_LABELS: &[&str] = &[
     "toggle-tools",
     "toggle-grid",
     "show-rail",
+    "add-note",
+    "cancel-note-draft",
+    "save-note-draft",
+    "add-highlight",
+    "open-annotation",
+    "close-annotation-popup",
+    "reply-to-annotation",
+    "set-annotation-resolved",
+    "update-annotation",
+    "delete-annotation",
+    "open-help",
+    "close-help",
+    "undo",
+    "redo",
+];
+
+/// Enum variants that exist but are deliberately not covered by this harness
+/// yet.
+///
+/// This is triage, not an exemption: `source_variants_are_all_covered` fails
+/// for any variant that is neither in `all_commands()` nor here, so a new
+/// variant still breaks the build until someone records why it has no proof.
+/// Each entry names the owning task and the concrete missing piece.
+const PENDING_COVERAGE: &[(&str, &str)] = &[
+    (
+        "SetDisplayName",
+        "T-0221 local identity; needs an identity accessor in Snapshot",
+    ),
+    (
+        "ToggleStar",
+        "T-0221 library state; mutates persisted library state, needs an isolated library root",
+    ),
+    (
+        "RemoveRecent",
+        "T-0221 recent list; mutates persisted library state, needs an isolated library root",
+    ),
+    (
+        "OpenStorageFolder",
+        "T-0221 host side effect: opens the OS file manager; must not run in a fast headless test",
+    ),
+    (
+        "RevealInExplorer",
+        "T-0221 host side effect: opens the OS file manager; must not run in a fast headless test",
+    ),
+    (
+        "OpenDocsFolder",
+        "T-0221 host side effect: opens the OS file manager; must not run in a fast headless test",
+    ),
+    (
+        "RefreshLibrary",
+        "T-0221 storage refresh; filesystem-dependent and needs an isolated library root",
+    ),
+    (
+        "Save",
+        "T-0222 session write; would overwrite a repository fixture, needs a temporary copy",
+    ),
+    (
+        "SaveAs",
+        "T-0222 native save dialog; blocking/modal, cannot run headlessly",
+    ),
+    (
+        "SetDocumentTitle",
+        "T-0222 session metadata; needs a document-title accessor in Snapshot",
+    ),
+    (
+        "SubmitPassword",
+        "T-0222 password modal; requires an encrypted fixture and an open modal",
+    ),
+    (
+        "CancelPasswordPrompt",
+        "T-0222 password modal; requires the modal to be open first",
+    ),
+    (
+        "ResolveClose",
+        "T-0222 unsaved-close prompt; requires a dirty tab and modal state",
+    ),
+    (
+        "OverwriteDocument",
+        "T-0222 save-conflict dialog; requires a real on-disk conflict fixture",
+    ),
+    (
+        "DismissSaveConflict",
+        "T-0222 save-conflict dialog; requires the dialog to be open first",
+    ),
+    (
+        "Print",
+        "T-0222 pre-print panel; needs a print-panel accessor in Snapshot",
+    ),
+    (
+        "ConfirmPrint",
+        "T-0222 starts the native print dialog; blocking/modal, cannot run headlessly",
+    ),
+    (
+        "CancelPrint",
+        "T-0222 cancellation; requires a running print job",
+    ),
 ];
 
 /// Commands that cannot change observable state in a window-free process.
@@ -416,6 +637,20 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("show-rail", "show-rail"),
         ("add-page", "add-page"),
         ("page-menu", "page-menu"),
+        ("open-help", "open-help"),
+        ("close-help", "close-help"),
+        ("undo", "undo"),
+        ("redo", "redo"),
+        ("add-note", "add-note"),
+        ("cancel-note-draft", "cancel-note-draft"),
+        ("save-note-draft", "save-note-draft"),
+        ("add-highlight", "add-highlight"),
+        ("open-annotation", "open-annotation"),
+        ("close-annotation-popup", "close-annotation-popup"),
+        ("reply-to-annotation", "reply-to-annotation"),
+        ("set-annotation-resolved", "set-annotation-resolved"),
+        ("update-annotation", "update-annotation"),
+        ("delete-annotation", "delete-annotation"),
     ];
 
     let commands = all_commands();
@@ -425,9 +660,13 @@ fn command_labels_are_stable_unique_and_non_empty() {
         "all_commands() and the label snapshot must list the same variants"
     );
     let mut seen = BTreeSet::new();
-    for (command, (label, _)) in commands.iter().zip(expected) {
-        assert_eq!(command.label(), *label, "label changed for {command:?}");
-        assert!(!label.is_empty(), "empty label for {command:?}");
+    for ((variant, command), (label, _)) in commands.iter().zip(expected) {
+        assert_eq!(
+            command.label(),
+            *label,
+            "label changed for variant `{variant}` ({command:?})"
+        );
+        assert!(!label.is_empty(), "empty label for `{variant}`");
         assert!(
             seen.insert(*label),
             "duplicate label `{label}`; labels are the stable test surface"
@@ -441,14 +680,162 @@ fn every_app_command_is_proven_or_allowlisted() {
     covered.extend(UNOBSERVABLE_ALLOWLIST.iter().map(|(label, _)| *label));
     covered.sort_unstable();
 
-    let mut labels: Vec<&str> = all_commands().iter().map(AppCommand::label).collect();
+    let mut labels: Vec<&str> = all_commands()
+        .iter()
+        .map(|(_, command)| command.label())
+        .collect();
     labels.sort_unstable();
 
     assert_eq!(
         labels, covered,
-        "every AppCommand must be proven by a dispatch test or listed in \
-         UNOBSERVABLE_ALLOWLIST; the two lists differ"
+        "every covered AppCommand must be proven by a dispatch test or listed \
+         in UNOBSERVABLE_ALLOWLIST; the two lists differ"
     );
+}
+
+#[test]
+fn source_variants_are_all_covered() {
+    let source = commands_source();
+    let discovered: BTreeSet<String> = source_variants(&source).into_iter().collect();
+    assert!(
+        discovered.len() > 60,
+        "the enum parser found only {} variants; parsing broke",
+        discovered.len()
+    );
+
+    let mut covered: BTreeSet<String> = all_commands()
+        .iter()
+        .map(|(variant, _)| (*variant).to_owned())
+        .collect();
+    covered.extend(
+        PENDING_COVERAGE
+            .iter()
+            .map(|(variant, _)| (*variant).to_owned()),
+    );
+
+    for (variant, reason) in PENDING_COVERAGE {
+        assert!(
+            all_commands()
+                .iter()
+                .all(|(covered_variant, _)| covered_variant != variant),
+            "`{variant}` is both covered and pending; remove one entry"
+        );
+        assert!(
+            !reason.trim().is_empty(),
+            "pending variant `{variant}` needs a concrete reason"
+        );
+    }
+
+    if let Err(message) = coverage_report(&discovered, &covered) {
+        panic!("{message}");
+    }
+}
+
+#[test]
+fn source_guard_reports_a_missing_variant() {
+    let discovered: BTreeSet<String> = ["AddNote", "DeleteAnnotation"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let covered: BTreeSet<String> = ["DeleteAnnotation"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let message = coverage_report(&discovered, &covered).expect_err("a missing variant must fail");
+    assert!(
+        message.contains("AddNote"),
+        "failure must name the missing variant: {message}"
+    );
+    assert!(
+        message.contains("missing from"),
+        "failure must explain the direction: {message}"
+    );
+}
+
+/// Read the shell command enum at test time, like the dead-control scanner
+/// reads the shell sources. No build-time copy can go stale.
+fn commands_source() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/shell/commands.rs");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+}
+
+/// Variant names in `pub enum AppCommand { … }`, in declaration order.
+///
+/// Line-based: a variant is an identifier at exactly four spaces of
+/// indentation whose next non-space character is `,`, `(`, or `{`. Doc
+/// comments, attributes, and struct-variant fields (eight spaces) are ignored.
+fn source_variants(source: &str) -> Vec<String> {
+    let mut variants = Vec::new();
+    let mut in_enum = false;
+    let mut depth = 0i32;
+    for line in source.lines() {
+        if !in_enum {
+            if line.trim_end() == "pub enum AppCommand {" {
+                in_enum = true;
+                depth = brace_delta(line);
+            }
+            continue;
+        }
+        if depth > 0
+            && let Some(name) = variant_name(line)
+        {
+            variants.push(name);
+        }
+        depth += brace_delta(line);
+        if depth <= 0 {
+            break;
+        }
+    }
+    variants
+}
+
+/// The variant name on one enum-body line, if the line declares one.
+fn variant_name(line: &str) -> Option<String> {
+    let body = line.strip_prefix("    ")?;
+    if body.starts_with(' ') {
+        return None;
+    }
+    let name_len = body
+        .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .unwrap_or(body.len());
+    if name_len == 0 {
+        return None;
+    }
+    let name = &body[..name_len];
+    if !name
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_uppercase())
+    {
+        return None;
+    }
+    let tail = body[name_len..].trim_start();
+    if matches!(tail.chars().next(), Some(',' | '(' | '{')) {
+        Some(name.to_owned())
+    } else {
+        None
+    }
+}
+
+/// Compare the parsed enum against the harness's variant set.
+fn coverage_report(
+    discovered: &BTreeSet<String>,
+    covered: &BTreeSet<String>,
+) -> Result<(), String> {
+    let missing: Vec<&str> = discovered.difference(covered).map(String::as_str).collect();
+    let extra: Vec<&str> = covered.difference(discovered).map(String::as_str).collect();
+    if missing.is_empty() && extra.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "AppCommand coverage drift (T-0212 source guard): source variants missing from \
+         all_commands()/PENDING_COVERAGE: [{}]; harness names with no source variant: [{}]. \
+         Add each missing variant to all_commands() with a real proof, or record it in \
+         PENDING_COVERAGE with a reason.",
+        missing.join(", "),
+        extra.join(", ")
+    ))
 }
 
 #[test]
@@ -657,6 +1044,223 @@ fn dispatched_find_commands_act() {
         app.find_state().options(),
         FindOptions::new(true).with_whole_word(true)
     );
+}
+
+/// Open the real-world Excel fixture used for annotation proofs.
+///
+/// It has no pre-existing `/Annots`, so annotation counts start at zero and a
+/// new note is unambiguous.
+fn with_excel_document() -> PdfxiApp {
+    let path = fixture("fixtures/realworld/microsoft-excel-2019-sample.pdf");
+    let mut app = PdfxiApp::new();
+    assert!(
+        app.open_path_text(path.to_string_lossy().as_ref()),
+        "annotation fixture {} did not open",
+        path.display()
+    );
+    assert!(
+        app.state()
+            .active_tab()
+            .is_some_and(|tab| tab.page_count() > 0),
+        "annotation fixture must have at least one page"
+    );
+    assert_eq!(
+        app.annotation_count(),
+        0,
+        "the annotation fixture must start without annotations"
+    );
+    app
+}
+
+#[test]
+fn dispatched_annotation_commands_act() {
+    let mut app = with_excel_document();
+
+    assert_dispatch_acts(
+        "add-note",
+        &mut app,
+        AppCommand::AddNote {
+            page: 0,
+            x: 72.0,
+            y: 720.0,
+            contents: "QA note".to_owned(),
+        },
+    );
+    assert_eq!(app.annotation_count(), 1);
+    let note = app
+        .annotations()
+        .first()
+        .expect("the note must be listed")
+        .view
+        .id
+        .clone();
+
+    // `Comment` arms the note tool; `CancelNoteDraft` disarms it. The draft
+    // commit path is proven in `save_note_draft_commits_and_cancels_the_public_draft`.
+    app.dispatch(AppCommand::Comment, None);
+    assert!(app.note_tool_active());
+    assert_dispatch_acts("cancel-note-draft", &mut app, AppCommand::CancelNoteDraft);
+    assert!(!app.note_tool_active());
+
+    // No public selection setter: prove the documented no-selection guard.
+    assert_dispatch_acts("add-highlight", &mut app, AppCommand::AddHighlight);
+    assert!(app.comments_hint().is_some());
+
+    assert_dispatch_acts(
+        "open-annotation",
+        &mut app,
+        AppCommand::OpenAnnotation {
+            page: 0,
+            id: note.clone(),
+        },
+    );
+    assert_eq!(
+        app.selected_annotation()
+            .map(|(page, view)| (page, view.id.clone())),
+        Some((0, note.clone()))
+    );
+
+    assert_dispatch_acts(
+        "close-annotation-popup",
+        &mut app,
+        AppCommand::CloseAnnotationPopup,
+    );
+    assert!(app.selected_annotation().is_none());
+
+    assert_dispatch_acts(
+        "reply-to-annotation",
+        &mut app,
+        AppCommand::ReplyToAnnotation {
+            page: 0,
+            id: note.clone(),
+            contents: "QA reply".to_owned(),
+        },
+    );
+    assert_eq!(app.annotation_count(), 2);
+    let reply = app
+        .annotations()
+        .iter()
+        .find(|entry| entry.view.parent_id.as_deref() == Some(note.as_str()))
+        .map(|entry| entry.view.id.clone())
+        .expect("the reply must be listed");
+
+    assert_dispatch_acts(
+        "set-annotation-resolved",
+        &mut app,
+        AppCommand::SetAnnotationResolved {
+            page: 0,
+            id: note.clone(),
+            resolved: true,
+        },
+    );
+    assert_eq!(
+        app.annotations()
+            .iter()
+            .find(|entry| entry.view.id == note)
+            .and_then(|entry| entry.view.state.as_deref()),
+        Some("Accepted")
+    );
+
+    assert_dispatch_acts(
+        "update-annotation",
+        &mut app,
+        AppCommand::UpdateAnnotation {
+            page: 0,
+            id: note.clone(),
+            contents: "QA note updated".to_owned(),
+        },
+    );
+    assert_eq!(
+        app.annotations()
+            .iter()
+            .find(|entry| entry.view.id == note)
+            .map(|entry| entry.view.contents.as_str()),
+        Some("QA note updated")
+    );
+
+    assert_dispatch_acts(
+        "delete-annotation",
+        &mut app,
+        AppCommand::DeleteAnnotation {
+            page: 0,
+            id: note.clone(),
+        },
+    );
+    assert_eq!(
+        app.annotation_count(),
+        0,
+        "deleting the note must remove its reply too"
+    );
+    assert!(app.annotations().iter().all(|entry| entry.view.id != reply));
+}
+
+#[test]
+fn save_note_draft_commits_and_cancels_the_public_draft() {
+    let mut app = with_excel_document();
+
+    // 1. A public draft entry point opens a draft without arming the tool.
+    app.begin_note_draft_at(0, 72.0, 720.0);
+    assert!(app.note_draft_open());
+    assert!(!app.note_tool_active());
+    assert_eq!(app.note_draft_text(), Some(""));
+
+    // 2. Saving empty text keeps the draft open, reports an error, and
+    //    creates no annotation.
+    assert_dispatch_acts("save-note-draft", &mut app, AppCommand::SaveNoteDraft);
+    assert!(app.note_draft_open());
+    assert!(app.comments_error().is_some());
+    assert_eq!(app.annotation_count(), 0);
+
+    // 3. Fill the draft through the public setter, then commit it.
+    app.set_note_draft_text("Draft written by the harness".to_owned());
+    assert_eq!(app.note_draft_text(), Some("Draft written by the harness"));
+    assert_dispatch_acts("save-note-draft", &mut app, AppCommand::SaveNoteDraft);
+    assert!(!app.note_draft_open());
+    assert!(app.comments_error().is_none());
+    assert_eq!(app.annotation_count(), 1);
+    assert_eq!(
+        app.annotations()[0].view.contents,
+        "Draft written by the harness"
+    );
+
+    // 4. Cancel discards a fresh draft without creating an annotation.
+    let before = app.annotation_count();
+    app.begin_note_draft_at(0, 72.0, 720.0);
+    assert!(app.note_draft_open());
+    assert_dispatch_acts("cancel-note-draft", &mut app, AppCommand::CancelNoteDraft);
+    assert!(!app.note_draft_open());
+    assert_eq!(app.annotation_count(), before);
+}
+
+#[test]
+fn undo_redo_and_help_commands_act() {
+    let mut app = with_excel_document();
+
+    // One undoable session edit gives Undo/Redo real observable state.
+    app.dispatch(
+        AppCommand::AddNote {
+            page: 0,
+            x: 72.0,
+            y: 720.0,
+            contents: "QA undo note".to_owned(),
+        },
+        None,
+    );
+    assert_eq!(app.annotation_count(), 1);
+    assert!(app.can_undo());
+
+    assert_dispatch_acts("undo", &mut app, AppCommand::Undo);
+    assert_eq!(app.annotation_count(), 0);
+    assert!(app.can_redo());
+
+    assert_dispatch_acts("redo", &mut app, AppCommand::Redo);
+    assert_eq!(app.annotation_count(), 1);
+
+    assert!(!app.help_open());
+    assert_dispatch_acts("open-help", &mut app, AppCommand::OpenHelp);
+    assert!(app.help_open());
+    assert_dispatch_acts("close-help", &mut app, AppCommand::CloseHelp);
+    assert!(!app.help_open());
 }
 
 #[test]
@@ -949,6 +1553,9 @@ fn is_fn_start(line: &str) -> bool {
 /// mis-count degrades to a missed function boundary (a false negative), never
 /// to a false alarm about live code.
 fn brace_delta(line: &str) -> i32 {
+    if line.trim_start().starts_with("//") {
+        return 0;
+    }
     let bytes = line.as_bytes();
     let mut delta = 0i32;
     let mut index = 0usize;
