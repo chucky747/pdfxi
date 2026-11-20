@@ -532,17 +532,33 @@ tests = [
 title = "Create PDF from plain text and Markdown"
 
 [[feature]]
-docs = "crates/pdfxi-convert/src/create/html.rs, docs/evidence/convert/T-0084.md"
+docs = [
+    "crates/pdfxi-convert/src/create/html.rs",
+    "crates/pdfxi-convert/src/convert_to_pdf.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0084.md",
+    "docs/evidence/hardening/T-0240.md",
+]
 domain = "Create"
-evidence = "docs/evidence/convert/T-0084.md"
+evidence = "docs/evidence/convert/T-0084.md for the HTML importer; docs/evidence/hardening/T-0240.md for the A-28 document-level entry point: cargo test -p pdfxi-convert = 417 lib + 62 integration tests passed, 0 failed, including html_file_with_table_renders_cells (HTML file with a table converts, reopens through pdfxi_core with 1 page, and extracts Regional Summary/Region/North/1200/South/900). fmt/clippy -D warnings/RUSTDOCFLAGS=-D warnings doc all clean for pdfxi-convert."
 id = "CREATE-005"
-notes = "Local, bounded HTML/CSS subset; no network fetch, no script execution."
+notes = """
+Local, bounded HTML/CSS subset; no network fetch, no script execution.
+T-0240 adds the document-level "Convert to PDF" entry point: an HTML file (or
+caller-supplied markup) can be one of several sources in a single
+`ConvertInput`, is rendered by this importer, and is merged in source order into
+one PDF through `pdfxi_core::PagePlan`. Local images still resolve only inside
+the source file's directory; active content, remote URLs, and traversal stay
+typed errors, surfaced as `ConvertError::Source { source: CreateError::... }`.
+Status remains `library` until the Convert-tool shell task lands.
+"""
 priority = "P1"
 status = "library"
 tests = [
     "create::html::tests::headings_paragraphs_and_entities_render",
     "create::html::tests::table_rows_and_cells_render_with_borders",
     "create::html::tests::scripts_event_handlers_and_javascript_urls_are_rejected",
+    "html_file_with_table_renders_cells",
 ]
 title = "Create PDF from HTML"
 
@@ -2321,6 +2337,41 @@ tests = [
     "policy::tests::policy_set_applies_protection_plan",
 ]
 title = "Policy-based protection replacement"
+
+[[feature]]
+docs = [
+    "crates/pdfxi-security/src/protect.rs",
+    "crates/pdfxi-security/tests/protect_document.rs",
+    "docs/evidence/hardening/T-0238.md",
+]
+domain = "Security"
+evidence = "docs/evidence/hardening/T-0238.md"
+id = "SEC-012"
+notes = """
+Library-level Protect PDF: `protect_document` writes AES-256 R6 (or AES-128,
+RC4-128, RC4-40 by explicit choice) with eight named permission grants,
+owner/user passwords and an owner-password default; `remove_protection`
+authenticates either role and returns a full unencrypted rewrite. Real-world
+normalization goes through `pdfxi-core` full save so hybrid xref-stream and
+object-stream fixtures work. Proven on the Excel 2019 sample with password
+required, wrong-password rejection, permission flags reported by the reader,
+unchanged page text, and a protection-removal round trip. Advisory permissions,
+no PFX encryption (T-0249), and no shell wiring yet; the app shell task lands
+`verified` per ADR 0012.
+"""
+priority = "P1"
+status = "library"
+tests = [
+    "protect_document::real_world_aes256_protect_opens_with_password_and_round_trips",
+    "protect_document::owner_password_only_opens_without_a_prompt_and_keeps_read_only_rights",
+    "protect_document::protection_errors_are_typed_and_never_silent",
+    "protect_document::explicit_aes128_and_rc4_revisions_are_covered",
+    "protect::tests::permission_fields_map_to_the_documented_bits",
+    "protect::tests::contradictory_grants_are_rejected_before_writing",
+    "protect::tests::debug_redacts_both_passwords_and_the_seed",
+    "protect::tests::encrypt_entry_detection_ignores_metadata_and_boundaries",
+]
+title = "Protect PDF: apply and remove password protection"
 
 [[feature]]
 docs = [

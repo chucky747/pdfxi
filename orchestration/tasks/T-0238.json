@@ -3,7 +3,7 @@
   "lane": "security",
   "title": "Protect PDF: AES-256 encryption, permissions, remove protection on real documents",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0214"
   ],

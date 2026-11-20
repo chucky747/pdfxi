@@ -31,6 +31,10 @@
 //!   handler to write `/Encrypt` dictionaries and encrypted strings/streams,
 //!   plus a password-aware reopen path ([`encrypt_document`], [`open_encrypted`],
 //!   [`EncryptionReport`]).
+//! - [`protect`] — document-facing protect and unprotect entry points
+//!   ([`protect_document`], [`remove_protection`], [`ProtectOptions`],
+//!   [`ProtectPermissions`]) over the same writer, with the eight `/P`
+//!   permission bits and AES-256 revision 6 as the default.
 //! - [`RedactionPlan`] / [`RedactionReport`] — page-scoped rectangle and text
 //!   redaction with deterministic ordering and strict residual verification
 //!   against caller-supplied post-redaction text.
@@ -117,6 +121,7 @@ pub mod password_policy;
 pub mod pdf_signature;
 mod permissions;
 pub mod policy;
+pub mod protect;
 mod protector;
 mod redaction;
 mod sanitization;
@@ -170,6 +175,9 @@ pub use policy::{
     ProtectionAction, ProtectionApplyReport, ProtectionPlan, ProtectionPolicy,
     apply_protection_policy, build_policy_plan, build_protection_plan, check_permission,
     enforce_policy, validate_policy, validate_policy_spec,
+};
+pub use protect::{
+    MAX_PASSWORD_BYTES, ProtectOptions, ProtectPermissions, protect_document, remove_protection,
 };
 pub use protector::{MockProtector, Protector};
 pub use redaction::{

@@ -340,6 +340,18 @@ pub enum SecurityError {
     TsaTokenInvalid(&'static str),
     /// A detached signature's supplied certificate did not match its signer.
     DetachedSignerMismatch,
+    /// Protection was requested for bytes that already carry a `/Encrypt` entry.
+    ///
+    /// The caller must decrypt the document with [`crate::open_encrypted`] first;
+    /// encrypting ciphertext again would corrupt the object graph.
+    DocumentAlreadyEncrypted,
+    /// Protection removal was requested for bytes that carry no `/Encrypt` entry.
+    DocumentNotEncrypted,
+    /// A full rewrite that protection or protection removal requires failed.
+    ///
+    /// The message names the failing stage and never contains document content
+    /// or password material.
+    DocumentRewriteFailed(String),
 }
 
 impl fmt::Display for SecurityError {
@@ -688,6 +700,13 @@ impl fmt::Display for SecurityError {
                     f,
                     "detached signature signer does not match the supplied certificate"
                 )
+            }
+            Self::DocumentAlreadyEncrypted => {
+                write!(f, "the document is already encrypted")
+            }
+            Self::DocumentNotEncrypted => write!(f, "the document is not encrypted"),
+            Self::DocumentRewriteFailed(reason) => {
+                write!(f, "document rewrite failed: {reason}")
             }
         }
     }
