@@ -3,11 +3,27 @@
 use crate::design::Palette;
 use crate::ui::PdfxiApp;
 
-use super::capabilities::tool_rows_for;
+use super::capabilities::{ToolRow, tool_rows_for};
 use super::widgets::shell_tool_button;
 
 impl PdfxiApp {
-    /// Draw the tools panel. Rows appear only when their capability is enabled.
+    /// The tools-panel rows for the open document.
+    ///
+    /// A capability alone is not enough: Fill & Sign is listed only when the
+    /// active document actually carries an AcroForm, so the panel never offers
+    /// a tool that could only report "no form fields". Every other row is
+    /// filtered by capability and by the search query.
+    #[must_use]
+    pub fn tools_panel_rows(&self) -> Vec<ToolRow> {
+        let forms_available = self.forms_available();
+        tool_rows_for(self.capabilities, &self.tools_search)
+            .into_iter()
+            .filter(|row| forms_available || row.command.label() != "fill-and-sign")
+            .collect()
+    }
+
+    /// Draw the tools panel. Rows appear only when their capability is enabled
+    /// and, for document-dependent tools, when the document supports them.
     pub(crate) fn tools_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         ui.horizontal(|ui| {
             ui.label(
@@ -25,7 +41,7 @@ impl PdfxiApp {
         });
         ui.add_space(8.0);
 
-        let rows = tool_rows_for(self.capabilities, &self.tools_search);
+        let rows = self.tools_panel_rows();
         let empty = rows.is_empty();
         for row in rows {
             if shell_tool_button(ui, palette, row.icon, row.label, false).clicked() {

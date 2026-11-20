@@ -89,7 +89,7 @@ mod shell;
 #[path = "library.rs"]
 pub mod library;
 
-pub use shell::capabilities::{Capabilities, Capability, RailItem};
+pub use shell::capabilities::{Capabilities, Capability, RailItem, ToolRow};
 pub use shell::commands::AppCommand;
 pub use shell::comments::AnnotationEntry;
 use shell::preferences::{self as shell_preferences, ShellPreferences};
@@ -489,6 +489,7 @@ pub fn run() -> Result<(), String> {
             app.open_startup_argument(arguments);
             app.apply_launch_title(launch.title.as_deref());
             app.apply_launch_panel(launch.panel);
+            app.apply_launch_tool(launch.tool);
             if print_requested {
                 app.dispatch(AppCommand::Print, None);
             }
@@ -587,6 +588,8 @@ pub struct PdfxiApp {
     pub(super) save_conflict: Option<shell::session::SaveConflict>,
     /// Comments list, rail badge, note draft and thread popup.
     comments: shell::comments::CommentsUiState,
+    /// Fill & Sign state: cached AcroForm model, panel, draft and notices.
+    forms: shell::forms::FormsUiState,
     /// Pre-print panel, progress and worker state.
     print_ui: shell::print_dialog::PrintUiState,
     /// Revision of the active session bound to the renderer.
@@ -731,6 +734,31 @@ impl PdfxiApp {
             LaunchPanel::Comments => RailItem::Comments,
             LaunchPanel::AiAssistant => RailItem::AiAssistant,
         };
+    }
+
+    /// Apply a `--tool=` deep link after startup documents open.
+    ///
+    /// The tool name maps to the same [`AppCommand`] its panel control emits, so
+    /// a deep link can never do more than the real control. When the capability
+    /// is off the command does what a click would: it reports the tool is not
+    /// available and changes nothing else.
+    fn apply_launch_tool(&mut self, tool: Option<settings::LaunchTool>) {
+        let Some(tool) = tool else {
+            return;
+        };
+        let command = match tool {
+            settings::LaunchTool::Edit => AppCommand::EditDocument,
+            settings::LaunchTool::Comment => AppCommand::Comment,
+            settings::LaunchTool::Highlight => AppCommand::Highlight,
+            settings::LaunchTool::Fill => AppCommand::FillAndSign,
+            settings::LaunchTool::Sign => AppCommand::Sign,
+            settings::LaunchTool::Organize => AppCommand::Organize,
+            settings::LaunchTool::Export => AppCommand::Export,
+            settings::LaunchTool::Convert => AppCommand::ConvertToPdf,
+            settings::LaunchTool::Protect => AppCommand::Protect,
+            settings::LaunchTool::AiAssistant => AppCommand::AiAssistant,
+        };
+        self.dispatch(command, None);
     }
 
     /// The theme preference currently in effect.
@@ -953,6 +981,7 @@ impl PdfxiApp {
             self.save_conflict = None;
         }
         self.refresh_annotations();
+        self.refresh_forms();
     }
 
     /// Make the tab with the given id active, if it exists.
@@ -1229,6 +1258,7 @@ impl PdfxiApp {
         self.pending_page_scroll = None;
         self.refresh_renderer_for_active_tab();
         self.refresh_annotations();
+        self.refresh_forms();
     }
 
     /// Bind the PDFium renderer to the active tab's document.
@@ -1752,6 +1782,7 @@ impl eframe::App for PdfxiApp {
         self.shell_ui(ctx);
         self.print_ui_ui(ctx);
         self.note_draft_ui(ctx);
+        self.forms_panel_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);

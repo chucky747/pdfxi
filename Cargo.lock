@@ -2864,6 +2864,7 @@ dependencies = [
  "pdfxi-core",
  "pdfxi-document",
  "pdfxi-edit",
+ "pdfxi-forms",
  "pdfxi-render",
  "pdfxi-security",
  "pdfxi-text",
@@ -2945,7 +2946,9 @@ version = "0.1.0"
 dependencies = [
  "image",
  "pdfxi-core",
+ "pdfxi-document",
  "pdfxi-render",
+ "pdfxi-text",
  "thiserror 2.0.21",
 ]
 
@@ -2978,6 +2981,7 @@ dependencies = [
  "der",
  "des",
  "getrandom 0.2.17",
+ "pdfium-render",
  "pdfxi-core",
  "rand 0.8.8",
  "rsa",

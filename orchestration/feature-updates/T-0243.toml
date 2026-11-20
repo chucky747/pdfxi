@@ -1,0 +1,110 @@
+# T-0243 Round A - Forms UI: field widgets and Fill & Sign
+#
+# Round A scope: enable Capability::Forms, list the tool only for a document
+# with an AcroForm, read the real /AcroForm into a cached model, draw text and
+# checkbox widgets at their real page rectangles, fill through AppCommand,
+# undo/redo, save and reopen with appearances, and prove the appearance with an
+# independent PDFium render.
+#
+# Round B (choice/radio interaction, tab order, apply/reset, flatten, FDF/XFDF)
+# is NOT part of this round, so FORMS-001, FORMS-006 and FORMS-007 stay
+# `library` until it lands: this fragment deliberately promotes no row.
+# The matrix rows are listed in `feature_rows` only so the integrator can see
+# which rows this task will eventually carry.
+
+task = "T-0243"
+lane = "app"
+status = "in_progress"
+evidence = "docs/evidence/ui/T-0243.md"
+docs = [
+    "crates/pdfxi-app/Cargo.toml",
+    "crates/pdfxi-app/src/settings.rs",
+    "crates/pdfxi-app/src/shell/forms.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/tools_panel.rs",
+    "crates/pdfxi-app/src/shell/session.rs",
+    "crates/pdfxi-app/src/shell/document_view.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/ui/T-0243.md",
+    "docs/evidence/ui/t0243-forms-light-windows.png",
+    "docs/evidence/ui/t0243-forms-dark-windows.png",
+    "docs/evidence/ui/t0243-forms-light-macos.png",
+    "docs/evidence/ui/t0243-forms-dark-macos.png",
+]
+feature_rows = ["FORMS-001", "FORMS-006", "FORMS-007"]
+promoted_rows = []
+
+notes = """
+Round A of the forms shell pair (ADR 0012). Capability::Forms is enabled and the
+Tools panel lists Fill & Sign only when the active document actually carries a
+non-empty AcroForm, so an empty shell or a form-less PDF shows no control that
+could only report "not available". AppCommand::FillAndSign now opens a real
+Fill & Sign panel (field list with kind and value, hint line, read-error and
+XFA/JavaScript banner) instead of not_available().
+
+The shell reads pdfxi_forms::read_acroform(session.document()) on open, tab
+switch, undo/redo and after each edit, caching the AcroFormModel by tab and
+DocumentSession::revision_count(). Text and checkbox commits run
+pdfxi_forms::set_text / set_checkbox on a clone of the session document and
+commit it as one DocumentSession::edit, which is the T-0242 annotation shape:
+/V, widget /AS and regenerated /AP /N come from the library, the shell writes no
+field dictionary, and undo, redo, dirty marking, save and reopen all work.
+after_session_edit (the single post-edit hook shared with open/undo/redo) now
+also refreshes the form model, so undo and redo cannot leave stale values in the
+panel or widgets.
+
+Widgets are drawn at their real /Rect through CanvasLayout::page_rect_to_canvas,
+the same mapping as the find, selection and annotation overlays. Text fields
+take focus and a draft, committing on Enter or blur; checkboxes toggle on click
+and draw a vector check mark rather than a filled block so the view matches the
+PDF appearance. Choice, radio, pushbutton and signature widgets are drawn
+read-only at their rectangles; they are not interactive until Round B, which
+keeps the "no dead control" rule.
+
+Read-only tabs and /Perms masks that deny FILL_IN_FORM are refused by a pure,
+unit-tested gate with a one-sentence hint and no session revision; field-level
+/Ff read-only is refused by the library and pre-checked from the cached model.
+/XFA and JavaScript are detected and reported as not rendered or executed; no
+script ever runs.
+
+New AppCommand variants: SetFormText { name, value } ("set-form-text") and
+ToggleFormCheckbox { name } ("toggle-form-checkbox"). New public accessors for
+the harness: forms_model, has_acroform, forms_available, form_field_count,
+form_field_values, form_widget_count, forms_panel_open, forms_banner,
+forms_hint, active_form_field, form_draft, forms_editable, form_edit_blocker,
+refresh_forms and tools_panel_rows.
+
+settings::LaunchOptions gained `tool: Option<LaunchTool>` for `--tool=<name>`
+(edit, comment, highlight, fill|fill-sign|fill-and-sign|forms, sign, organize,
+export, convert, protect, ai|assistant; case-insensitive, last wins, unknown
+ignored). Fill dispatches the same AppCommand::FillAndSign the Tools row emits,
+so a deep link cannot exceed the control; the captures use
+`--tool=fill --light|--dark --controls=windows|macos` on the saved filled file.
+
+Captures found and fixed three defects: the panel opened centred over the page
+widgets (now defaults lower-left), dark-mode widget text drew with the theme
+text colour on the always-white page (now a fixed dark page ink, including the
+focused TextEdit), and the checked checkbox painted a red block over the real
+appearance (now a check mark).
+
+Gate: cargo fmt -p pdfxi-app -- --check = 0; cargo clippy -p pdfxi-app
+--all-targets --features ui,pdfium -- -D warnings = 0 (full dependency graph);
+cargo test -p pdfxi-app --features ui,pdfium = 481 lib + 23 harness passed;
+release build of pdfxi-ui with ui,pdfium = 0.
+
+Round B still owns choice/radio interaction, tab order, apply and reset,
+flatten, FDF/XFDF behind the same panel, and promoting FORMS-001/006/007.
+"""
+
+tests = [
+    "ui::shell::forms::tests::form_edit_gate_refuses_read_only_and_missing_permission",
+    "ui::shell::forms::tests::field_values_display_as_text",
+    "ui::shell::forms::tests::widget_rect_flips_the_page_axis",
+    "ui::shell::forms::tests::notice_names_xfa_and_javascript_without_claiming_execution",
+    "ui::shell::forms::integration_tests::fills_text_and_checkbox_then_undo_and_redo_restore_values",
+    "ui::shell::forms::integration_tests::read_only_render_cannot_be_edited_even_from_the_command",
+    "ui::shell::forms::integration_tests::saved_values_persist_and_the_page_renders_the_filled_text",
+    "settings::tests::tool_flag_parses_stable_names_and_ignores_unknown_values",
+]

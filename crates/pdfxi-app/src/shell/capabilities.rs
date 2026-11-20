@@ -64,9 +64,9 @@ impl Capabilities {
     /// Capabilities that are enabled today.
     ///
     /// The document workspace, recent files, bookmarks navigation, the local
-    /// Files library and starring exist. Shared is added by the shell when a
-    /// shared folder is configured; authoring, export, print, protect and AI
-    /// remain off until their task lands.
+    /// Files library, starring, comments and AcroForm filling exist. Shared is
+    /// added by the shell when a shared folder is configured; edit, export,
+    /// print, protect and AI remain off until their task lands.
     #[must_use]
     pub fn available() -> Self {
         Self::none()
@@ -76,6 +76,7 @@ impl Capabilities {
             .with(Capability::Files)
             .with(Capability::Starred)
             .with(Capability::Comments)
+            .with(Capability::Forms)
     }
 
     /// No capabilities at all, for tests and for a deliberately bare shell.

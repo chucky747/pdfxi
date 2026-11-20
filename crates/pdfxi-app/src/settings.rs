@@ -317,6 +317,76 @@ impl LaunchPanel {
     }
 }
 
+/// A feature tool selected by `--tool=` for captures and deep links.
+///
+/// The value names the tool a person would click, not a command variant: the
+/// shell maps it to the same [`crate::AppCommand`] the tools panel emits, so a
+/// deep link can never do more than the real control. Names are stable because
+/// the packaging and capture tasks use them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchTool {
+    /// Edit PDF.
+    Edit,
+    /// Comment (note placement).
+    Comment,
+    /// Highlight.
+    Highlight,
+    /// Fill & Sign.
+    Fill,
+    /// Sign.
+    Sign,
+    /// Organize Pages.
+    Organize,
+    /// Export PDF.
+    Export,
+    /// Convert to PDF.
+    Convert,
+    /// Protect PDF.
+    Protect,
+    /// AI Assistant.
+    AiAssistant,
+}
+
+impl LaunchTool {
+    /// Parse a tool name, ignoring ASCII case.
+    ///
+    /// `fill`, `fill-sign` and `forms` all name Fill & Sign; `ai` and
+    /// `assistant` name the AI Assistant. Anything else returns `None`.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "edit" => Some(Self::Edit),
+            "comment" | "comments" => Some(Self::Comment),
+            "highlight" => Some(Self::Highlight),
+            "fill" | "fill-sign" | "fill-and-sign" | "forms" => Some(Self::Fill),
+            "sign" => Some(Self::Sign),
+            "organize" | "organise" => Some(Self::Organize),
+            "export" => Some(Self::Export),
+            "convert" | "convert-to-pdf" => Some(Self::Convert),
+            "protect" => Some(Self::Protect),
+            "ai" | "assistant" | "ai-assistant" => Some(Self::AiAssistant),
+            _ => None,
+        }
+    }
+
+    /// The stable identifier used by `--tool=`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Edit => "edit",
+            Self::Comment => "comment",
+            Self::Highlight => "highlight",
+            Self::Fill => "fill",
+            Self::Sign => "sign",
+            Self::Organize => "organize",
+            Self::Export => "export",
+            Self::Convert => "convert",
+            Self::Protect => "protect",
+            Self::AiAssistant => "ai-assistant",
+        }
+    }
+}
+
 /// Settings overrides parsed from the command line.
 ///
 /// Every field is optional: `None` means "use the saved setting".
@@ -328,6 +398,8 @@ pub struct LaunchOptions {
     pub window_controls: Option<WindowControlStyle>,
     /// Rail requested with `--rail=...` or `--panel=...`.
     pub panel: Option<LaunchPanel>,
+    /// Tool requested with `--tool=...`.
+    pub tool: Option<LaunchTool>,
     /// Info title requested with `--set-title=...`.
     ///
     /// Used to prove the session edit path headlessly and to capture the dirty
@@ -342,17 +414,19 @@ impl LaunchOptions {
         self.theme.is_none()
             && self.window_controls.is_none()
             && self.panel.is_none()
+            && self.tool.is_none()
             && self.title.is_none()
     }
 }
 
 /// Parse viewer launch flags, ignoring everything else.
 ///
-/// Recognised forms are `--dark`, `--light`, and `--controls=windows` or
-/// `--controls=macos`. Unknown flags, bare `--controls`, and invalid values
-/// are ignored without panicking. When a flag repeats, the last one wins.
-/// Arguments that look like file paths are skipped so callers can pass the same
-/// list to the document opener.
+/// Recognised forms are `--dark`, `--light`, `--controls=windows` or
+/// `--controls=macos`, `--rail=`/`--panel=`, `--tool=`, and `--set-title=`.
+/// Unknown flags, bare `--controls`, and invalid values are ignored without
+/// panicking. When a flag repeats, the last one wins. Arguments that look like
+/// file paths are skipped so callers can pass the same list to the document
+/// opener.
 #[must_use]
 pub fn parse_launch_arguments(arguments: &[String]) -> LaunchOptions {
     let mut options = LaunchOptions::default();
@@ -372,6 +446,11 @@ pub fn parse_launch_arguments(arguments: &[String]) -> LaunchOptions {
                     && let Some(panel) = LaunchPanel::parse(value)
                 {
                     options.panel = Some(panel);
+                }
+                if let Some(value) = other.strip_prefix("--tool=")
+                    && let Some(tool) = LaunchTool::parse(value)
+                {
+                    options.tool = Some(tool);
                 }
                 if let Some(value) = other.strip_prefix("--set-title=") {
                     options.title = Some(value.to_owned());
@@ -635,5 +714,51 @@ mod tests {
         assert_eq!(none, LaunchOptions::default());
         assert!(none.is_empty());
         assert_eq!(saved.with_overrides(&none), saved);
+    }
+
+    #[test]
+    fn tool_flag_parses_stable_names_and_ignores_unknown_values() {
+        for (flag, expected) in [
+            ("--tool=edit", LaunchTool::Edit),
+            ("--tool=comment", LaunchTool::Comment),
+            ("--tool=highlight", LaunchTool::Highlight),
+            ("--tool=sign", LaunchTool::Sign),
+            ("--tool=organize", LaunchTool::Organize),
+            ("--tool=export", LaunchTool::Export),
+            ("--tool=convert", LaunchTool::Convert),
+            ("--tool=protect", LaunchTool::Protect),
+            ("--tool=ai", LaunchTool::AiAssistant),
+            // Fill & Sign answers to its UI label and its feature name.
+            ("--tool=fill", LaunchTool::Fill),
+            ("--tool=fill-sign", LaunchTool::Fill),
+            ("--tool=fill-and-sign", LaunchTool::Fill),
+            ("--tool=forms", LaunchTool::Fill),
+            // Names are case-insensitive so a script never has to guess.
+            ("--tool=FILL", LaunchTool::Fill),
+        ] {
+            let parsed = parse_launch_arguments(&[flag.to_owned()]);
+            assert_eq!(parsed.tool, Some(expected), "{flag}");
+            assert!(!parsed.is_empty(), "{flag} must be a real override");
+        }
+
+        let bad = parse_launch_arguments(&[
+            "--tool=".to_owned(),
+            "--tool=typeset".to_owned(),
+            "--tool".to_owned(),
+        ]);
+        assert_eq!(bad.tool, None, "an unknown tool is ignored, never guessed");
+        assert!(bad.is_empty());
+
+        // Paths and tool flags coexist in the same argument list.
+        let mixed = parse_launch_arguments(&[
+            "--tool=fill".to_owned(),
+            "plan.pdf".to_owned(),
+            "--light".to_owned(),
+        ]);
+        assert_eq!(mixed.tool, Some(LaunchTool::Fill));
+        assert_eq!(mixed.theme, Some(ThemePreference::Light));
+
+        assert_eq!(LaunchTool::Fill.as_str(), "fill");
+        assert_eq!(LaunchTool::AiAssistant.as_str(), "ai-assistant");
     }
 }

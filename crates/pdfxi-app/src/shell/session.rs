@@ -137,6 +137,7 @@ impl PdfxiApp {
                 self.finish_new_tab(id);
                 self.sync_tab_dirty(id);
                 self.refresh_annotations();
+                self.refresh_forms();
                 self.refresh_renderer_for_active_tab();
                 let title = self.state.tab_title(id).unwrap_or_default();
                 self.library.record_open(path, &title, 0);
@@ -494,6 +495,7 @@ impl PdfxiApp {
         self.sync_tab_dirty(id);
         self.force_canvas_reload();
         self.refresh_annotations();
+        self.refresh_forms();
     }
 
     /// Sync a tab's dirty marker with its session.

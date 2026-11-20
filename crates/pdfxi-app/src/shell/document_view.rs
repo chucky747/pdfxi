@@ -314,6 +314,12 @@ impl PdfxiApp {
                     }
                 }
 
+                // Form field widgets from the real AcroForm, drawn at their
+                // page rectangles with the same mapping as the find and
+                // annotation overlays. Text fields take focus and typing;
+                // checkboxes toggle on click.
+                self.form_widgets_ui(ui, &layout, origin, pad_x);
+
                 // Thread popup anchored beside the selected annotation.
                 self.annotation_popup_ui(ui, &layout, origin, pad_x);
 

@@ -256,6 +256,18 @@ pub enum AppCommand {
         /// Annotation `/NM` identifier.
         id: String,
     },
+    /// Commit a form text field value through the session.
+    SetFormText {
+        /// Fully qualified AcroForm field name.
+        name: String,
+        /// New value.
+        value: String,
+    },
+    /// Toggle a form checkbox through the session.
+    ToggleFormCheckbox {
+        /// Fully qualified AcroForm field name.
+        name: String,
+    },
 }
 
 impl AppCommand {
@@ -359,6 +371,8 @@ impl AppCommand {
             Self::SetAnnotationResolved { .. } => "set-annotation-resolved",
             Self::UpdateAnnotation { .. } => "update-annotation",
             Self::DeleteAnnotation { .. } => "delete-annotation",
+            Self::SetFormText { .. } => "set-form-text",
+            Self::ToggleFormCheckbox { .. } => "toggle-form-checkbox",
         }
     }
 }
@@ -467,7 +481,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::EditDocument => self.not_available("Edit PDF"),
             AppCommand::Comment => self.start_note_tool(),
             AppCommand::Highlight => self.highlight_selection(),
-            AppCommand::FillAndSign => self.not_available("Fill & Sign"),
+            AppCommand::FillAndSign => self.open_fill_and_sign(),
             AppCommand::Sign => self.not_available("Sign"),
             AppCommand::Organize => self.not_available("Organize Pages"),
             AppCommand::Export => self.not_available("Export"),
@@ -579,6 +593,8 @@ impl crate::ui::PdfxiApp {
                 self.update_annotation_contents(page, &id, &contents)
             }
             AppCommand::DeleteAnnotation { page, id } => self.delete_annotation(page, &id),
+            AppCommand::SetFormText { name, value } => self.set_form_text(&name, &value),
+            AppCommand::ToggleFormCheckbox { name } => self.toggle_form_checkbox(&name),
         }
     }
 }

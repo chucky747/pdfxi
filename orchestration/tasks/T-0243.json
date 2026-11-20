@@ -1,18 +1,18 @@
 {
-  "id": "T-0243",
-  "lane": "app",
-  "title": "Forms UI: field widgets and Fill & Sign",
-  "priority": "P0",
-  "status": "queued",
-  "depends_on": [
-    "T-0234"
-  ],
-  "owns": [
-    "crates/pdfxi-app/src/**",
-    "docs/evidence/ui/T-0243.md",
-    "orchestration/feature-updates/T-0243.toml"
-  ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-25 and O-05 work on a real form fixture in all four theme/control combinations",
-  "notes": "Shell half of the forms pair per ADR 0012; opens only after the T-0234 library is verified and its claim is released. Serves acceptance items A-25 (Fill & Sign: fill form fields) and O-05 (fill, tab order, save with appearances, FDF/XFDF, flatten) from docs/design/FEATURE_ACCEPTANCE.md. Draws field widgets over the page at the library-provided field rectangles, wires tab order, apply and reset, reads and writes XFDF through the T-0234 API, and shows the Fill & Sign tool row only when the capability is on. Calls the library and does not change its semantics. The FORMS feature-matrix rows become `verified` only when this task lands; until then they stay `library` after T-0234. The app lane runs one task at a time, so earlier app tasks are implicit ordering constraints, not formal dependencies.",
-  "evidence": "docs/evidence/ui/T-0243.md"
+    "id":  "T-0243",
+    "lane":  "app",
+    "title":  "Forms UI: field widgets and Fill \u0026 Sign",
+    "priority":  "P0",
+    "status":  "in_progress",
+    "depends_on":  [
+                       "T-0234"
+                   ],
+    "owns":  [
+                 "crates/pdfxi-app/src/**",
+                 "docs/evidence/ui/T-0243.md",
+                 "orchestration/feature-updates/T-0243.toml"
+             ],
+    "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; A-25 and O-05 work on a real form fixture in all four theme/control combinations",
+    "notes":  "Shell half of the forms pair per ADR 0012; opens only after the T-0234 library is verified and its claim is released. Serves acceptance items A-25 (Fill \u0026 Sign: fill form fields) and O-05 (fill, tab order, save with appearances, FDF/XFDF, flatten) from docs/design/FEATURE_ACCEPTANCE.md. Draws field widgets over the page at the library-provided field rectangles, wires tab order, apply and reset, reads and writes XFDF through the T-0234 API, and shows the Fill \u0026 Sign tool row only when the capability is on. Calls the library and does not change its semantics. The FORMS feature-matrix rows become `verified` only when this task lands; until then they stay `library` after T-0234. The app lane runs one task at a time, so earlier app tasks are implicit ordering constraints, not formal dependencies. Round A delivered: text/checkbox fill, appearances, save/reopen, undo/redo refresh, --tool=fill, four captures; Round B pending: choice/radio, tab order, apply/reset, flatten, FDF/XFDF",
+    "evidence":  "docs/evidence/ui/T-0243.md"
 }
