@@ -172,3 +172,23 @@ Finish T-0243 rounds A/B, then T-0252/T-0253 assistant work, then the remaining
 app tasks. Check each lane's output yourself (tests plus a real-fixture or
 installed-build check) before checkpointing; do not trust a summary alone.
 
+### Checkpoint update (2026-11-20, later)
+
+- **T-0249** verified as the narrowed PFX/PKCS#12 slice, commit `c8448d6`:
+  `from_pfx` imports Windows PBES1/3DES and PBES2/AES-256 fixtures, signs and
+  verifies, typed errors. Trust anchors, Windows certificate store, RFC 3161
+  timestamps and CRL/OCSP are T-0267.
+- **T-0212** harness form coverage committed `0e426f9`: 94 discovered / 79
+  covered / 15 pending / allowlist exactly 2, 23 tests, app gate 481 lib + 23
+  harness, exact clippy green for the harness state.
+- **Packaging** bundles the user guide, commit `1331a82`: `package.ps1 -Check`
+  PASS, installer test 28 assertions PASS (installed `docs\README.md`,
+  `security.md`, `privacy.md` hash-equal), staging manifest 46 hashes. Installed
+  A-03 (Help opens `exe\docs`) is part of the T-0262 final check.
+- **In flight:** T-0243 forms UI (Round A evidence/captures done, Round B
+  pending), T-0265 edit transforms (Round A docs done, Round B
+  resize/replace), T-0257 sanitize/verification.
+- **Counts:** 29 feature rows verified; `cargo xtask goal-verify --all` baseline
+  113 unfinished rows outside the campaign acceptance surface.
+- **Next:** finish T-0243 Round B, then T-0252/T-0253 assistant work, then the
+  remaining app tasks. T-0263 needs T-0257; T-0264 needs T-0265.
