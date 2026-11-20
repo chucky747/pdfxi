@@ -1,0 +1,20 @@
+{
+  "id": "T-0263",
+  "lane": "app",
+  "title": "Protect PDF and Redact UI",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0238",
+    "T-0237",
+    "T-0257"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/**",
+    "docs/evidence/ui/T-0263.md",
+    "orchestration/feature-updates/T-0263.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; O-04 (save half), O-06 and A-30 work on real documents in all four theme/control combinations",
+  "notes": "App half of the protect and redaction pairs per ADR 0012, serialised after the three libraries. Serves acceptance items O-04 (set/change/remove password and permissions and save with encryption; the open half landed in T-0222), O-06 (redaction removes content, verified by re-extraction and a byte scan) and A-30 (Protect PDF: password and permissions, redact, sanitize) from docs/design/FEATURE_ACCEPTANCE.md. Adds the password and permissions dialog, remove protection, redaction marks for area, selection and search matches, and an apply flow that refuses to proceed unless the library's verification helper reports clean. Calls the library APIs and does not change their semantics. Feature-matrix rows stay as the libraries left them (`library`) until this task verifies them.",
+  "evidence": "docs/evidence/ui/T-0263.md"
+}

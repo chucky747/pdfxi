@@ -1,0 +1,19 @@
+{
+  "id": "T-0253",
+  "lane": "app",
+  "title": "Assistant panel: ask, summarize, key insights, citations",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0252",
+    "T-0254"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/**",
+    "docs/evidence/ui/T-0253.md",
+    "orchestration/feature-updates/T-0253.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-06 and A-16 work on a real document, with citations that navigate and a stop control",
+  "notes": "App half of the assistant panel per ADR 0011, serialised after T-0252 and the citation task T-0254. Serves acceptance items A-06 (command bar AI Assistant activates its working tool) and A-16 (ask, summarize, key insights on the open document through OpenCode) from docs/design/FEATURE_ACCEPTANCE.md. Implements the three placements in the acceptance image (command-bar pill, panel card, rail entry), streamed answers, page citations that navigate to the cited page, a stop control, a per-document conversation, and a 'Connect to OpenCode' state when no service is connected. Document text is untrusted tool output; nothing is sent before the user asks. Depends on T-0254 (citation extraction); until that task record exists and verifies, this task cannot be claimed.",
+  "evidence": "docs/evidence/ui/T-0253.md"
+}
