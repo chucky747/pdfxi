@@ -43,7 +43,7 @@ $ cargo test --workspace
 $ cargo doc --workspace --no-deps
 FEATURES OK: 140 rows, 137 verified
 VERIFY OK
-GOAL VERIFIED: 3e9f10ca63dc7178270f5e79b636b2185ad6fd3b unix=1795151653
+GOAL VERIFIED: 23623c9a0ce05b760ef4fdedf4bb8be83a70ece0 unix=1795151774
 ```
 
 The full transcript (486 KB) of this clean-worktree run is committed at
