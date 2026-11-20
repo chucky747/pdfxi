@@ -8,7 +8,7 @@ Last updated: 2026-11-19 (M3 gate satisfied; 104 verified feature rows of 140; 1
 
 | ID | Criterion | Status | Evidence | Blocker |
 |---|---|---|---|---|
-| AC-01 | Reproducible bootstrap | partial | `scripts/bootstrap.ps1`, `scripts/env.ps1`, `docs/decisions/0001-toolchain.md`; user-local Rust/GCC/MinGit bootstrap works, winget elevation path not exercised | Needs a clean-machine dry run record |
+| AC-01 | Reproducible bootstrap | partial | `scripts/bootstrap.ps1`, `scripts/env.ps1`, `docs/decisions/0001-toolchain.md`; `bootstrap.ps1 -Check` result=PASS, missing=0, verified_tools=5 with pinned `stable-x86_64-pc-windows-gnu` (`docs/evidence/bootstrap-check.md`) | Needs a clean-machine dry run record; winget elevation path not exercised |
 | AC-02 | Build quality | partial | per-crate clippy `-D warnings` green for all first-party crates; `cargo build --workspace --release` succeeded in 26.21 s (2026-11-19, target/integration) | Workspace-wide fmt/clippy gate re-run at a quiescent checkpoint |
 | AC-03 | Tests | partial | unit/integration tests across all lanes; doctests host-limited (ADR-0005/`docs/ASSUMPTIONS.md`); five fuzz targets with seed corpus and a smoke example (T-0081); `cargo xtask corpus smoke` passed 8/8 with manifest hashes (2026-11-19) | Full-profile fuzz run and coverage targets pending |
 | AC-04 | Feature parity | partial | `docs/features.toml` 140 rows, 104 verified, 33 in-progress, 2 replaced, 1 planned; `cargo xtask features verify` green (2026-11-19) | 36 rows open |
