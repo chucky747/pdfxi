@@ -1,0 +1,18 @@
+{
+  "id": "T-0265",
+  "lane": "author",
+  "title": "Edit PDF object transforms: move, resize, replace, delete existing objects",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0233"
+  ],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/hardening/T-0265.md",
+    "orchestration/feature-updates/T-0265.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit; move, resize, replace and delete each work on a real page, render correctly before/after in PDFium, and undo through the session snapshot",
+  "notes": "Completes A-23 (Edit PDF: add/move/resize/replace/delete), which T-0233 deliberately left at EDIT-004 `model` after shipping add-text and add-image. Library ops: enumerate selectable objects (text runs/blocks and image XObjects) with page rectangles; move (translate the placement matrix / Tm); resize (scale about the object box); replace (new text contents for a run/block, new image data for an XObject); delete (remove the operator or the XObject usage and its orphaned resource entry). Every operation goes through the caller's pdfxi-document session snapshot so undo/redo works, and is proven by rendering before and after through PDFium in tests, not only by re-extraction. Update EDIT-004 to `library` only when all four operations are real; a shell task follows for the selection overlay and handles.",
+  "evidence": "docs/evidence/hardening/T-0265.md"
+}

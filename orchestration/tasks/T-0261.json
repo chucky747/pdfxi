@@ -1,0 +1,19 @@
+{
+  "id": "T-0261",
+  "lane": "docs",
+  "title": "User guide per tool, security notes, notices and matrix evidence",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0260"
+  ],
+  "owns": [
+    "docs/book/**",
+    "docs/book/src/security/**",
+    "orchestration/feature-updates/T-0261.toml",
+    "orchestration/blockers/**"
+  ],
+  "acceptance": "cargo xtask docs passes; every shipped tool has a guide page, the security page states what the assistant sends and what signatures and redaction do and do not guarantee, and the notices cover the new crates and the bundled font",
+  "notes": "Documentation close-out for the acceptance campaign. One mdBook page per tool that actually shipped, written against the installed build's behaviour rather than the plan. Security notes: exactly what the assistant sends and when, signature trust (digest validity versus chain/identity, which is not verified without a trust anchor), and redaction guarantees and limits (what is removed, what an independent reader can still recover). Third-party notices for the new crates (ureq/rustls and the MCP path) and the bundled Courier Prime font (SIL OFL 1.1). Final feature-matrix evidence links. The mdBook tree is docs/book/** (confirmed: docs/book exists with src/); docs/security/** does not exist, so security pages go under docs/book/src/security/**. `cargo xtask docs` must be green. This task owns docs/book/**, its fragment and blockers; it must not edit integrator-owned files.",
+  "evidence": "docs/evidence/acceptance/T-0261.md"
+}

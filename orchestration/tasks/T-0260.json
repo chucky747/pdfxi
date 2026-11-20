@@ -1,0 +1,29 @@
+{
+  "id": "T-0260",
+  "lane": "qa",
+  "title": "Acceptance scenario, fuzz and performance on real data",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0242",
+    "T-0243",
+    "T-0244",
+    "T-0245",
+    "T-0246",
+    "T-0231",
+    "T-0255",
+    "T-0263",
+    "T-0264",
+    "T-0252",
+    "T-0253"
+  ],
+  "owns": [
+    "fuzz/**",
+    "docs/evidence/acceptance/**",
+    "orchestration/feature-updates/T-0260.toml",
+    "orchestration/blockers/**"
+  ],
+  "acceptance": "the campaign section 6 end-to-end scenario passes on a Word-produced document, the new parsers have fuzz targets with a clean short run, and open/edit/save budgets are recorded with numbers",
+  "notes": "Final QA task for the acceptance campaign. Runs the campaign section 6 end-to-end scenario on a Word-produced multi-page document: open, edit text, highlight, add a comment thread, fill a form, sign, export to Word, and ask the assistant for a summary. The assistant step is gated on a connected OpenCode service and the test model `opencode-go/hy4-flash-free`; if the service is unavailable the step is skipped with the reason recorded, never faked. Adds fuzz targets for the new redaction, edit and form parsers under the existing fuzz/ harness and records a short clean run. Records open/edit/save performance budgets and measured numbers on the real corpus (fixtures/realworld/**), and skips heavy parts only with a recorded reason. Evidence goes under docs/evidence/acceptance/; this task owns that new directory, the existing fuzz/ tree, its fragment and blockers. It must not claim or edit integrator-owned files (Cargo.toml, docs/features.toml, orchestration/BOARD.md, xtask/**, .opencode/**).",
+  "evidence": "docs/evidence/acceptance/T-0260.md"
+}

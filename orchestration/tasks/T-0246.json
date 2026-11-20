@@ -1,18 +1,18 @@
 {
-  "id": "T-0246",
-  "lane": "app",
-  "title": "Shared folder browsing and notifications",
-  "priority": "P0",
-  "status": "queued",
-  "depends_on": [
-    "T-0221"
-  ],
-  "owns": [
-    "crates/pdfxi-app/src/**",
-    "docs/evidence/ui/T-0246.md",
-    "orchestration/feature-updates/T-0246.toml"
-  ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-02, A-11",
-  "notes": "Split out of T-0221 round A, which delivered A-03, A-04, A-07..A-10 and A-12 but not notifications or the shared folder; those two acceptance items stay open until this task lands. A-02: the bell lists real local events only (document saved, export finished, signature request returned later), a capped list, a popover and an honest empty state; no fabricated or demo events. A-11: the shared folder is configured in settings, lists PDFs and XFDF review files from it, and opens them; file-system semantics only, with no network assumptions and no sync protocol. Both are app-lane work and serialise behind T-0221.",
-  "evidence": "docs/evidence/ui/T-0246.md"
+    "id":  "T-0246",
+    "lane":  "app",
+    "title":  "Shared folder, review sync and notifications",
+    "priority":  "P0",
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0221"
+                   ],
+    "owns":  [
+                 "crates/pdfxi-app/src/**",
+                 "docs/evidence/ui/T-0246.md",
+                 "orchestration/feature-updates/T-0246.toml"
+             ],
+    "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; A-02 real local notifications, A-11 shared-folder browsing and A-32 shared-folder review with XFDF import/export",
+    "notes":  "Split out of T-0221 round A. Serves A-02 (bell lists real local events only: document saved, export finished, signature request returned later; capped list, popover, honest empty state), A-11 (shared folder configured in settings, lists PDFs and XFDF review files, opens them, no network assumptions) and A-32 (Comment \u0026 Review collaborate: XFDF import/export and shared-folder review sync) from docs/design/FEATURE_ACCEPTANCE.md. pdfxi-edit already exports export_xfdf/import_xfdf for annotations and has review::ReviewRegistry for a network-free local shared-review file with deterministic merge. The app must surface XFDF import/export in the Comment \u0026 Review flow, sync the review registry through the shared folder, show new-comment notifications, and report conflicts rather than silently overwriting. App-lane work serialised behind T-0221.",
+    "evidence":  "docs/evidence/ui/T-0246.md"
 }

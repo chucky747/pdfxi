@@ -1,18 +1,19 @@
 {
-  "id": "T-0264",
-  "lane": "app",
-  "title": "Edit PDF tool UI",
-  "priority": "P0",
-  "status": "queued",
-  "depends_on": [
-    "T-0233"
-  ],
-  "owns": [
-    "crates/pdfxi-app/src/**",
-    "docs/evidence/ui/T-0264.md",
-    "orchestration/feature-updates/T-0264.toml"
-  ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-17 and A-23 work on a real document in all four theme/control combinations",
-  "notes": "App half of the Edit PDF pair per ADR 0012, serialised after T-0233. Serves acceptance items A-17 (click a paragraph, edit it, reflow; the saved file shows and extracts the new text) and A-23 (Edit PDF tool) from docs/design/FEATURE_ACCEPTANCE.md. Adds the text-block selection overlay, the edit box with handles, add text and add image, and applies every change through the pdfxi-document session and the T-0233 library API; the shell must not re-implement text geometry. Object move/resize/replace/delete of existing objects stays out: it remains EDIT-004 at `model` per the T-0233 acceptance. Feature-matrix rows stay as the library left them until this task verifies them.",
-  "evidence": "docs/evidence/ui/T-0264.md"
+    "id":  "T-0264",
+    "lane":  "app",
+    "title":  "Edit PDF tool UI",
+    "priority":  "P0",
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0233",
+                       "T-0265"
+                   ],
+    "owns":  [
+                 "crates/pdfxi-app/src/**",
+                 "docs/evidence/ui/T-0264.md",
+                 "orchestration/feature-updates/T-0264.toml"
+             ],
+    "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; A-17 and A-23 work on a real document in all four theme/control combinations",
+    "notes":  "App half of the Edit PDF pair per ADR 0012, serialised after T-0233. Serves acceptance items A-17 (click a paragraph, edit it, reflow; the saved file shows and extracts the new text) and A-23 (Edit PDF tool) from docs/design/FEATURE_ACCEPTANCE.md. Adds the text-block selection overlay, the edit box with handles, add text and add image, and applies every change through the pdfxi-document session and the T-0233 library API; the shell must not re-implement text geometry. Object move/resize/replace/delete of existing objects stays out: it remains EDIT-004 at `model` per the T-0233 acceptance. Feature-matrix rows stay as the library left them until this task verifies them. A-23 is not ticked by A-17 alone: it also needs the T-0265 object transform ops, so this task adds a selection overlay, drag/resize handles, Delete and Replace on top of the text-block editing.",
+    "evidence":  "docs/evidence/ui/T-0264.md"
 }
