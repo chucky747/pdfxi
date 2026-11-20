@@ -1,0 +1,15 @@
+{
+  "id": "T-0146",
+  "lane": "author",
+  "title": "Redaction marks permanent removal closure",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0138"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/author/T-0146.md",
+    "orchestration/feature-updates/T-0146.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "evidence": ""
+}

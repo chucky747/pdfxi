@@ -81,6 +81,15 @@
 //!   that draws text, rectangles, and lines with standard fonts and shows every
 //!   page. Unrepresentable glyphs and image content are skipped and recorded in
 //!   an explicit [`PsExportReport`] rather than silently faked.
+//! - [`postscript_ingest`] is the bounded read counterpart: it parses DSC headers
+//!   (`%%BoundingBox`, `%%Pages`, `%%Page`), detects EPS versus PS, and extracts
+//!   a documented text/line/rectangle subset into the same [`PsContent`] model.
+//!   A full interpreter is deliberately out of scope; every other construct is
+//!   surfaced in a deterministic [`PsIngestReport`] or a typed strict-mode error.
+//! - [`office_import`] accepts caller-supplied Office-derived HTML/XML bundles
+//!   (no ZIP, COM, or network) and maps a documented markup subset onto the
+//!   [`OfficeDocument`] model, with bounded input, a deterministic report, and
+//!   typed errors for active content and remote references.
 //!
 //! The text/JSON modules are always compiled and add no dependencies, so a
 //! `--no-default-features` build stays dependency-free.
@@ -124,10 +133,12 @@ pub mod image;
 mod json;
 mod mime;
 pub mod office_export;
+pub mod office_import;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
 pub mod postscript;
+pub mod postscript_ingest;
 pub mod preflight;
 mod rtf;
 mod source;
@@ -169,6 +180,12 @@ pub use office_export::{
     DocxExporter, OfficeDocument, OfficeExport, OfficeExportError, OfficeExportReport,
     OfficeExporter, OfficeFormat, PptxExporter, ReportedUnsupported, SheetMode, XlsxExporter,
 };
+pub use office_import::{
+    OFFICE_BUNDLE_MAX_BYTES, OFFICE_BUNDLE_PAGE_HEIGHT, OFFICE_BUNDLE_PAGE_WIDTH, OfficeBundle,
+    OfficeBundleKind, OfficeImport, OfficeImportError, OfficeImportFinding, OfficeImportReport,
+    PAGE_BREAK_MARKER, import_office_bundle, import_office_bundle_strict,
+    import_office_bundle_with_report,
+};
 pub use options::ConversionOptions;
 #[cfg(feature = "renderer")]
 pub use page_export::{
@@ -180,6 +197,12 @@ pub use postscript::{
     MAX_PAGES as POSTSCRIPT_MAX_PAGES, PsContent, PsDocument, PsExportError, PsExportReport,
     PsFont, PsImageRef, PsLine, PsPage, PsRect, PsText, PsUnsupportedItem, export_postscript,
     export_postscript_with_report,
+};
+pub use postscript_ingest::{
+    PS_INGEST_MAX_BYTES, PS_INGEST_MAX_LINES, PS_INGEST_MAX_PAGES, PS_INGEST_MAX_TOKENS_PER_PAGE,
+    PostScriptKind, PsBoundingBox, PsIngestError, PsIngestOptions, PsIngestReport,
+    PsUnsupportedFinding, ingest_postscript, ingest_postscript_str, ingest_postscript_strict,
+    ingest_postscript_with_options,
 };
 pub use preflight::{
     BytePreflightError, BytePreflightReport, PreflightOptions, PreflightReport,

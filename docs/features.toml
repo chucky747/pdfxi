@@ -576,14 +576,46 @@ tests = [
 title = "Create PDF from HTML"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/office_import.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0142.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert: 8 new office_import tests pass, including office_bundle_validation_accepts_word_html_and_builds_blocks, office_bundle_rejects_active_content_with_typed_error, office_bundle_page_breaks_produce_ordered_pages, office_bundle_output_is_deterministic and imported_office_document_exports_through_existing_adapters (imported model exports back through DocxExporter); 249 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0142.md."
 id = "CREATE-006"
-notes = ""
+notes = """
+Adds `pdfxi_convert::office_import`: the read counterpart of the existing
+`office_export` adapters. The supported input envelope is a caller-supplied
+`OfficeBundle` (kind Word/Excel/PowerPoint, title, plain UTF-8 HTML/XML markup)
+with no ZIP archive, no COM, and no network. A documented markup subset is
+accepted: p/div/w:p, h1..h6, ul/ol/li, table/w:tbl/tr/w:tr/td/th/w:tc, br/w:br,
+and inline span/w:t/b/strong/i/em/u/small/sub/sup/font; page breaks are
+`<!--pdfxi:page-->` or the common Word `<w:br w:type="page"/>` forms. Entities
+(&amp; &lt; &gt; &quot; &apos; and numeric) are decoded. The result is an
+`OfficeDocument` that the existing Docx/Xlsx/Pptx exporters consume unchanged.
+Active tags (script/iframe/object/embed/form/input/...), event-handler
+attributes and remote http(s) references are typed errors; media and unknown
+tags are deterministic report findings. Input size, page count, blocks/page and
+text length are bounded, and both report and output are deterministic.
+
+Honest remaining scope: no ZIP/OOXML archive reading, no real Office/LibreOffice
+extraction process, no COM automation, no inline-style/fidelity preservation,
+no image/media embedding, and no CLI/UI entry point. The row therefore stays
+in-progress, not replaced.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "office_import::tests::office_bundle_validation_accepts_word_html_and_builds_blocks",
+    "office_import::tests::office_bundle_rejects_active_content_with_typed_error",
+    "office_import::tests::office_bundle_records_unsupported_media_finding",
+    "office_import::tests::office_bundle_page_breaks_produce_ordered_pages",
+    "office_import::tests::office_bundle_output_is_deterministic",
+    "office_import::tests::office_bundle_oversized_input_is_rejected",
+    "office_import::tests::imported_office_document_exports_through_existing_adapters",
+    "office_import::tests::bundle_kind_mapping_and_entity_decoding_are_stable",
+]
 title = "Create PDF from Microsoft Office via adapter"
 
 [[feature]]
@@ -745,14 +777,53 @@ tests = [
 title = "Email-to-PDF capture"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/postscript_ingest.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0142.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert: 13 new postscript_ingest tests pass, including parses_dsc_headers_boundingbox_pages_and_page_labels, detects_eps_from_header_token_and_boundingbox, strict_mode_returns_typed_unsupported_error, oversized_input_is_rejected_before_parsing, too_many_tokens_is_a_typed_error, pages_are_sorted_by_ordinal_deterministically and ingestion_is_byte_for_byte_deterministic; 249 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0142.md."
 id = "CREATE-013"
-notes = ""
+notes = """
+Adds `pdfxi_convert::postscript_ingest`: a bounded, dependency-free DSC reader.
+It parses %%BoundingBox, %%Pages, %%Page, %%Trailer and %%EndComments; detects
+EPS from an EPSF header token or a bounding box with no %%Page markers; orders
+pages by ascending %%Page ordinal; and extracts a documented minimal operator
+subset (moveto/rmoveto, lineto/rlineto, newpath, closepath, rectfill/
+rectstroke, fill/stroke limited to straight two-point lines and axis-aligned
+rectangles, show with escaped literal strings, and findfont/scalefont/setfont)
+into the crate's existing PsContent vector/text model. Input is bounded before
+parsing (8 MiB bytes, 200k lines, 10k pages, 200k tokens/page, 256 stack slots,
+512 findings, 8192 chars/text). Everything else is reported, not guessed: a
+deterministic PsIngestReport carries stable kind/reason findings per page, and
+strict mode promotes them to a typed PsIngestError::Unsupported. Binary
+%%BeginData/%%BeginBinary sections are a typed error.
+
+Honest remaining scope: no full Turing-complete PostScript interpreter; no
+general graphics-state, CTM/transform, clipping, or color modeling; no Bezier
+path approximation; no raster image decoding or image/font embedding; no CID or
+keyed font handling; no DSC (atend) resolution across %%Trailer; no %%Include*
+resource following; no external Distiller/Ghostscript process; and no CLI/UI
+entry point. The row therefore stays in-progress, not replaced.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "postscript_ingest::tests::parses_dsc_headers_boundingbox_pages_and_page_labels",
+    "postscript_ingest::tests::detects_eps_from_header_token_and_boundingbox",
+    "postscript_ingest::tests::detects_ps_when_no_epsf_marker_and_page_markers_exist",
+    "postscript_ingest::tests::extracts_text_line_and_rect_operators",
+    "postscript_ingest::tests::unsupported_operator_is_recorded_with_deterministic_reason",
+    "postscript_ingest::tests::strict_mode_returns_typed_unsupported_error",
+    "postscript_ingest::tests::oversized_input_is_rejected_before_parsing",
+    "postscript_ingest::tests::too_many_tokens_is_a_typed_error",
+    "postscript_ingest::tests::pages_are_sorted_by_ordinal_deterministically",
+    "postscript_ingest::tests::ingestion_is_byte_for_byte_deterministic",
+    "postscript_ingest::tests::missing_header_and_bad_dsc_are_typed_errors",
+    "postscript_ingest::tests::binary_data_section_is_a_typed_unsupported_error",
+    "postscript_ingest::tests::escaped_literal_strings_are_decoded",
+]
 title = "PostScript and Distiller-compatible ingestion"
 
 [[feature]]
