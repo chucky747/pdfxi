@@ -120,11 +120,13 @@ mod fillworkflow;
 mod flatten;
 mod form;
 mod properties;
+mod propertyedit;
 mod reader_enable;
 mod recognition;
 mod rules;
 mod serialize;
 mod signature;
+mod signatureplan;
 mod taborder;
 mod validation;
 mod xfdf;
@@ -173,6 +175,11 @@ pub use flatten::{
 };
 pub use form::{Form, FormError};
 pub use properties::{FieldProperties, MAX_NAME_LEN, MAX_TOOLTIP_LEN, PropertyError, PropertySet};
+pub use propertyedit::{
+    EditError, EditOperation, EditPlan, EditReport, EditSnapshot, FieldDictionarySet,
+    PropertyDescriptor, PropertyEdit, PropertyEditor, PropertyKey, PropertyValue,
+    applicable_properties,
+};
 pub use reader_enable::{
     DocumentRights, FillSavePolicy, LOCAL_FILTER, Permission, PolicyReport,
     READER_DEFAULT_PLACEHOLDER_SIZE, READER_MAX_PLACEHOLDER_SIZE, READER_MAX_TEXT_LEN,
@@ -193,10 +200,14 @@ pub use serialize::{
 };
 pub use signature::{
     ByteRangePlan, CertPermission, Certification, DEFAULT_FILTER, DEFAULT_PLACEHOLDER_SIZE,
-    DEFAULT_SUBFILTER, LockAction, MAX_PLACEHOLDER_SIZE, Participant, ParticipantRole, SigFilter,
-    SignatureDictionary, SignatureError, SignatureField, SignatureLock, SignatureSlot,
-    SignatureStatus, SignatureWorkflow, SubFilter, Transition, TransitionKind, WorkflowError,
-    WorkflowReport,
+    DEFAULT_SUBFILTER, LockAction, LockScope, MAX_PLACEHOLDER_SIZE, Participant, ParticipantRole,
+    SigFilter, SignatureDictionary, SignatureError, SignatureField, SignatureGuard,
+    SignatureGuardError, SignatureLock, SignatureSlot, SignatureStatus, SignatureWorkflow,
+    SubFilter, Transition, TransitionKind, WorkflowError, WorkflowReport,
+};
+pub use signatureplan::{
+    ContractError, PlaceholderContract, SignatureFieldPlanEntry, SignaturePlan, SignaturePlanError,
+    SignaturePlanReport, workflow_report_lines,
 };
 pub use taborder::{
     NavPolicy, TabNavigator, TabOrder, TabPolicy, TabWidget, parse_tabs, tabs_from_acroform,

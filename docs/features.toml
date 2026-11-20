@@ -1825,59 +1825,16 @@ tests = [
 title = "Create text checkbox radio choice and button fields"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-forms/src/properties.rs",
-    "crates/pdfxi-forms/src/validation.rs",
-    "crates/pdfxi-forms/src/rules.rs",
-    "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0140.md",
-]
+docs = "crates/pdfxi-forms/src/propertyedit.rs, docs/evidence/forms/T-0149.md"
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 255 passed, 0 failed; 9 new properties::tests cover name-sorted listing, validation success/failure matrices, typed format/length failures, duplicate rejection, read-only+required conflict, name/tooltip limits, from_spec derivation and choice membership. fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0140.md."
+evidence = "docs/evidence/forms/T-0149.md"
 id = "FORMS-003"
-notes = """
-Adds a deterministic field property model: FieldProperties (name, tooltip,
-required, read-only, max length, Format, choices) with builders and getters,
-and PropertySet backed by a BTreeMap so list() is name-sorted regardless of
-insertion order. Validation is side-effect free and folds typed per-field errors
-into the existing ValidationSummary: required/empty text, max length,
-numeric/currency/date/pattern formats, choice membership, the incompatible
-required+read-only flag pair, and name/tooltip length and control-character
-limits, plus UnknownField for properties with no matching form field.
-Three new ValidationError variants (InvalidName, InvalidTooltip,
-ConflictingFlags) carry field names and reasons; rules::Format::check became
-pub(crate) so existing format logic is reused rather than duplicated. Builders
-also derive properties from a FieldSpec. No scripts, UI, filesystem or network
-are involved. Honest remaining scope: an editable property-editing UI and
-arbitrary script hooks are still deferred, so the row stays in-progress. All
-pre-existing calculation/rule tests from T-0080 remain valid and are retained.
-"""
+notes = "Property descriptors per field type, deterministic atomic edit plans, dictionary/form application, re-validation and undo snapshots. Editing UI remains host work."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "rules::tests::validator_checks_required_max_length_and_choice_membership",
-    "rules::tests::required_rule_reports_empty_and_empty_choice_lists",
-    "rules::tests::format_rule_fails_on_numeric_and_date_inputs",
-    "rules::tests::numeric_currency_and_date_formats_are_checked",
-    "rules::tests::pattern_matches_literals_classes_and_quantifiers",
-    "rules::tests::custom_hook_can_reject_a_field",
-    "rules::tests::summary_is_deterministic_and_reports_unknown_fields",
-    "calculation::tests::min_and_max_are_deterministic",
-    "calculation::tests::arithmetic_expression_evaluates_and_rounds",
-    "calculation::tests::plan_is_order_independent_and_respects_dependencies",
-    "calculation::tests::plan_detects_dependency_cycles_before_applying",
-    "build::tests::create_text_field_with_typed_properties",
-    "build::tests::overflowing_rect_edges_are_rejected",
-    "rules::tests::escaped_trailing_dollar_is_a_literal",
-    "properties::tests::property_set_lists_by_name_deterministically",
-    "properties::tests::property_validation_success_matrix",
-    "properties::tests::property_validation_failure_matrix",
-    "properties::tests::format_and_length_failures_are_typed",
-    "properties::tests::duplicate_property_name_is_rejected",
-    "properties::tests::readonly_required_conflict_is_typed_error",
-    "properties::tests::name_and_tooltip_constraints_are_enforced",
-    "properties::tests::properties_from_spec_round_trip_flags",
-    "properties::tests::choice_and_radio_membership_is_checked",
+    "propertyedit::tests::descriptors_vary_by_field_type",
+    "propertyedit::tests::apply_updates_field_dictionary_and_properties",
 ]
 title = "Field properties calculations and validation"
 
@@ -2018,38 +1975,16 @@ tests = [
 title = "Distribute and collect forms locally"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-forms/src/fillworkflow.rs",
-    "crates/pdfxi-forms/src/fillworkflow/tests.rs",
-    "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0147.md",
-]
+docs = "crates/pdfxi-forms/src/signatureplan.rs, docs/evidence/forms/T-0149.md"
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms: 268 passed, 0 failed, TEST_EXIT=0; signature tests include signature_field_blocked_without_signature (direct set/clear refused, Unsigned and Pending attach refused) and signature_workflow_transition_recorded (Signed transition kind/from/to/timestamp/participant recorded, /V stays null, no /Contents or /ByteRange in bytes). fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0147.md."
+evidence = "docs/evidence/forms/T-0149.md"
 id = "FORMS-010"
-notes = """
-T-0147 binds the existing `SignatureWorkflow` state machine to the fill flow at
-library level. Signature fields are fillable **only** via
-`FillWorkflow::attach_signature`: direct `set`/`clear` is rejected with
-`SignatureMustUseWorkflow`, and a workflow still `Unsigned` or `Pending` is
-rejected with `SignatureNotReady`. Only `Signed`/`Valid` states are accepted;
-the in-memory field value becomes the participant name (a model-level fill) and
-a `SignaturePlanRecord` capturing the latest transition (kind, from, to,
-timestamp), participant and transition count is stored in the plan, sorted by
-field name. Reset/per-field reset drops attached workflows and records.
-
-No cryptography is implemented and no signature is forged: the workflow never
-writes `/Contents`, `/ByteRange` or appearance bytes for a signature field, and
-verification intentionally skips signature fields (their state is in the plan).
-Cryptographic signing/validation and the signing UI remain with the security and
-app lanes, so the row stays in-progress rather than verified.
-"""
+notes = "Placeholder contract, lock/certification guard and deterministic reports are complete at library level; cryptographic signing and validation stay with the security lane and the workflow UI with the app lane."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "fillworkflow::tests::signature_field_blocked_without_signature",
-    "fillworkflow::tests::signature_workflow_transition_recorded",
-    "fillworkflow::tests::valid_signature_and_reset_field_record",
+    "signatureplan::tests::placeholder_contract_accepts_generated_dictionaries",
+    "signatureplan::tests::certification_form_fill_allows_unlocked_fields",
 ]
 title = "Electronic signature fields and workflows"
 

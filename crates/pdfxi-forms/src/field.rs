@@ -532,6 +532,28 @@ impl Field {
         self.value = value;
     }
 
+    /// Replaces the field flags.
+    ///
+    /// Used by the property editor when applying an edit plan. Validation of the
+    /// resulting flag combination is the caller's responsibility.
+    pub fn set_flags(&mut self, flags: FieldFlags) {
+        self.flags = flags;
+    }
+
+    /// Replaces the allowed export values for choice and radio fields.
+    pub fn set_choices<I, S>(&mut self, choices: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.choices = choices.into_iter().map(Into::into).collect();
+    }
+
+    /// Replaces the text validation constraints.
+    pub fn set_constraint(&mut self, constraint: TextConstraint) {
+        self.constraint = constraint;
+    }
+
     /// Restores the current value to the default value.
     pub fn reset(&mut self) {
         self.value = self.default_value.clone();

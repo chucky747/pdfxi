@@ -35,7 +35,7 @@ use crate::appearance::{
     AppearanceDictionary, AppearanceError, WidgetAppearance, WidgetRect, build_appearance,
 };
 use crate::field::{Field, FieldFlags, FieldType, FieldValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Default `/Filter` for a newly created signature dictionary.
@@ -352,6 +352,200 @@ impl SignatureLock {
             dict.insert("SubFilter".to_owned(), PdfValue::Name(subfilter.clone()));
         }
         PdfValue::Dictionary(dict)
+    }
+}
+
+/// The scope of a signature lock enforced on subsequent form fills.
+///
+/// ISO 32000-1 defines the `/Lock` dictionary's `/Action` as `Include` or
+/// `Exclude` over a set of fields. At the *workflow* level the effective scope
+/// additionally distinguishes locking every field from locking the document as
+/// a whole; this enum makes those three cases explicit so a fill workflow can
+/// enforce them without guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LockScope {
+    /// Only the explicitly named fields are locked.
+    Fields,
+    /// Every field is locked; `/Exclude` names stay fillable.
+    All,
+    /// The whole document is locked; no field may be filled.
+    Document,
+}
+
+impl LockScope {
+    /// Returns a stable lowercase label for this scope.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fields => "fields",
+            Self::All => "all",
+            Self::Document => "document",
+        }
+    }
+
+    /// Returns the scope with the stronger restriction.
+    ///
+    /// `Document` is stronger than `All`, which is stronger than `Fields`.
+    pub const fn stricter(self, other: Self) -> Self {
+        if (self as u8) >= (other as u8) {
+            self
+        } else {
+            other
+        }
+    }
+}
+
+impl fmt::Display for LockScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A typed reason why a fill was refused by a signature lock or certification.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SignatureGuardError {
+    /// The named field is locked by a signature.
+    #[error("field '{0}' is locked by a signature and cannot be filled")]
+    FieldLocked(String),
+    /// The document is locked by a signature.
+    #[error("the document is locked by a signature and cannot be filled")]
+    DocumentLocked,
+    /// A certification level forbids all document changes.
+    #[error("the document certification forbids all changes to form fields")]
+    CertificationLocked,
+}
+
+/// A deterministic lock and certification guard for a fill workflow.
+///
+/// A guard is derived from the signature fields of a document (their `/Lock`
+/// dictionaries and DocMDP `/Reference` entries) and is installed into a
+/// [`crate::FillWorkflow`]. Every subsequent `set`/`clear` is checked against
+/// it. The guard performs no cryptography: it only decides whether a field may
+/// be filled, based on caller-supplied lock and certification metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureGuard {
+    scope: LockScope,
+    locked: BTreeSet<String>,
+    excluded: BTreeSet<String>,
+    certification: Option<CertPermission>,
+}
+
+impl SignatureGuard {
+    /// Creates a guard with `scope` and an optional certification level and no
+    /// named fields.
+    pub fn new(scope: LockScope, certification: Option<CertPermission>) -> Self {
+        Self {
+            scope,
+            locked: BTreeSet::new(),
+            excluded: BTreeSet::new(),
+            certification,
+        }
+    }
+
+    /// Adds fields that are locked under [`LockScope::Fields`].
+    #[must_use]
+    pub fn with_locked_fields<I, S>(mut self, fields: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.locked.extend(fields.into_iter().map(Into::into));
+        self
+    }
+
+    /// Adds fields that remain fillable under [`LockScope::All`] (`/Exclude`).
+    #[must_use]
+    pub fn with_excluded_fields<I, S>(mut self, fields: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.excluded.extend(fields.into_iter().map(Into::into));
+        self
+    }
+
+    /// Derives a guard from a PDF [`SignatureLock`] and certification level.
+    ///
+    /// `Include` maps to [`LockScope::Fields`] with the named fields locked;
+    /// `Exclude` maps to [`LockScope::All`] with the named fields exempt.
+    pub fn from_lock(lock: &SignatureLock, certification: Option<CertPermission>) -> Self {
+        match lock.action() {
+            LockAction::Include => Self::new(LockScope::Fields, certification)
+                .with_locked_fields(lock.fields().iter().cloned()),
+            LockAction::Exclude => Self::new(LockScope::All, certification)
+                .with_excluded_fields(lock.fields().iter().cloned()),
+        }
+    }
+
+    /// Returns the effective lock scope.
+    pub const fn scope(&self) -> LockScope {
+        self.scope
+    }
+
+    /// Returns the certification level, if any.
+    pub const fn certification(&self) -> Option<CertPermission> {
+        self.certification
+    }
+
+    /// Returns the fields locked under [`LockScope::Fields`], in name order.
+    pub fn locked_fields(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.locked.iter().map(String::as_str)
+    }
+
+    /// Returns the fields exempt under [`LockScope::All`], in name order.
+    pub fn excluded_fields(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.excluded.iter().map(String::as_str)
+    }
+
+    /// Returns `Ok(())` when `field` may be filled under this guard.
+    ///
+    /// A `NoChanges` certification blocks every fill. Otherwise `Document`
+    /// blocks every field, `All` blocks every field except exempt ones, and
+    /// `Fields` blocks only explicitly named fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignatureGuardError`] describing why the fill is refused.
+    pub fn check_fill(&self, field: &str) -> Result<(), SignatureGuardError> {
+        if self.certification == Some(CertPermission::NoChanges) {
+            return Err(SignatureGuardError::CertificationLocked);
+        }
+        match self.scope {
+            LockScope::Document => Err(SignatureGuardError::DocumentLocked),
+            LockScope::All => {
+                if self.excluded.contains(field) {
+                    Ok(())
+                } else {
+                    Err(SignatureGuardError::FieldLocked(field.to_owned()))
+                }
+            }
+            LockScope::Fields => {
+                if self.locked.contains(field) {
+                    Err(SignatureGuardError::FieldLocked(field.to_owned()))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Returns stable report lines describing this guard.
+    pub fn report_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("lock.scope={}", self.scope),
+            format!(
+                "lock.certification={}",
+                self.certification
+                    .map(|permission| permission.bits().to_string())
+                    .unwrap_or_else(|| "none".to_owned())
+            ),
+        ];
+        for field in &self.locked {
+            lines.push(format!("lock.field={field}"));
+        }
+        for field in &self.excluded {
+            lines.push(format!("lock.excluded={field}"));
+        }
+        lines
     }
 }
 
@@ -742,6 +936,16 @@ impl SignatureField {
     /// Returns the contact information, if set.
     pub fn contact(&self) -> Option<&str> {
         self.dictionary.contact()
+    }
+
+    /// Returns the signature lock dictionary, if configured.
+    pub fn lock(&self) -> Option<&SignatureLock> {
+        self.dictionary.lock.as_ref()
+    }
+
+    /// Returns the DocMDP certification, if configured.
+    pub const fn certification(&self) -> Option<Certification> {
+        self.dictionary.certification
     }
 
     /// Validates the field's name, geometry and page index.

@@ -193,6 +193,36 @@ impl FieldProperties {
         &self.choices
     }
 
+    /// Replaces the tooltip. Used by the property editor when applying a plan.
+    pub(crate) fn set_tooltip(&mut self, tooltip: Option<String>) {
+        self.tooltip = tooltip;
+    }
+
+    /// Replaces the required flag. Used by the property editor when applying a plan.
+    pub(crate) fn set_required(&mut self, required: bool) {
+        self.required = required;
+    }
+
+    /// Replaces the read-only flag. Used by the property editor when applying a plan.
+    pub(crate) fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
+    }
+
+    /// Replaces the maximum text length. Used by the property editor when applying a plan.
+    pub(crate) fn set_max_len(&mut self, max_len: Option<usize>) {
+        self.max_len = max_len;
+    }
+
+    /// Replaces the value format. Used by the property editor when applying a plan.
+    pub(crate) fn set_format(&mut self, format: Option<Format>) {
+        self.format = format;
+    }
+
+    /// Replaces the choice options. Used by the property editor when applying a plan.
+    pub(crate) fn set_choices(&mut self, choices: Vec<String>) {
+        self.choices = choices;
+    }
+
     /// Validates the definition and returns the first [`PropertyError`].
     ///
     /// # Errors
@@ -406,6 +436,14 @@ impl PropertySet {
     /// Returns the properties with the given fully qualified name.
     pub fn get(&self, name: &str) -> Option<&FieldProperties> {
         self.properties.get(name)
+    }
+
+    /// Returns a mutable reference to the properties with the given name.
+    ///
+    /// Used by the property editor to apply a validated edit plan; callers must
+    /// re-run validation after mutating a definition.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut FieldProperties> {
+        self.properties.get_mut(name)
     }
 
     /// Returns the number of properties.

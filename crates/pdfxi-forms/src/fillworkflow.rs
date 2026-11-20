@@ -45,7 +45,9 @@ use crate::build::{CreationError, FieldSpec, acroform_dictionary};
 use crate::field::{FieldType, FieldValue, ValueKind};
 use crate::form::{Form, FormError};
 use crate::serialize::{self, MAX_OBJECT_NUMBER, ParseError, SerializeError};
-use crate::signature::{SignatureStatus, SignatureWorkflow, TransitionKind};
+use crate::signature::{
+    SignatureGuard, SignatureGuardError, SignatureStatus, SignatureWorkflow, TransitionKind,
+};
 use crate::validation::Validation;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -94,6 +96,9 @@ pub enum FillWorkflowError {
         /// The workflow's current state.
         state: SignatureStatus,
     },
+    /// A signature lock or certification refused a field write.
+    #[error(transparent)]
+    Guard(#[from] SignatureGuardError),
     /// No signature field with the requested name exists.
     #[error("no signature field named '{0}'")]
     UnknownSignatureField(String),
@@ -481,6 +486,7 @@ pub struct FillWorkflow {
     document: FillDocument,
     signature_workflows: BTreeMap<String, SignatureWorkflow>,
     signature_records: Vec<SignaturePlanRecord>,
+    guard: Option<SignatureGuard>,
 }
 
 impl FillWorkflow {
@@ -490,12 +496,35 @@ impl FillWorkflow {
             document,
             signature_workflows: BTreeMap::new(),
             signature_records: Vec::new(),
+            guard: None,
         }
     }
 
     /// Returns the underlying document model.
     pub const fn document(&self) -> &FillDocument {
         &self.document
+    }
+
+    /// Installs a signature lock/certification guard on this session.
+    ///
+    /// Every subsequent [`Self::set`], [`Self::clear`] and
+    /// [`Self::reset_field`] is checked against the guard. A guard is typically
+    /// derived from a [`crate::SignaturePlan`] built from the document's
+    /// signature fields. Installing a new guard replaces the previous one.
+    pub fn install_signature_guard(&mut self, guard: SignatureGuard) {
+        self.guard = Some(guard);
+    }
+
+    /// Returns the installed signature guard, if any.
+    pub const fn signature_guard(&self) -> Option<&SignatureGuard> {
+        self.guard.as_ref()
+    }
+
+    fn check_guard(&self, name: &str) -> Result<(), FillWorkflowError> {
+        if let Some(guard) = &self.guard {
+            guard.check_fill(name)?;
+        }
+        Ok(())
     }
 
     /// Returns the current value of a named field.
@@ -531,6 +560,7 @@ impl FillWorkflow {
         if field.field_type() == FieldType::Signature {
             return Err(FillWorkflowError::SignatureMustUseWorkflow(name.to_owned()));
         }
+        self.check_guard(name)?;
         self.document
             .form
             .set_value(name, value)
@@ -550,11 +580,15 @@ impl FillWorkflow {
     }
 
     /// Restores every writable field to its default and drops all attached
-    /// signature workflows and records.
+    /// signature workflows, records and signature guard.
+    ///
+    /// Resetting is an explicit "start over" operation, so it also removes the
+    /// lock/certification guard installed by [`Self::install_signature_guard`].
     pub fn reset(&mut self) {
         self.document.form.reset();
         self.signature_workflows.clear();
         self.signature_records.clear();
+        self.guard = None;
     }
 
     /// Restores one field to its default.
@@ -567,6 +601,7 @@ impl FillWorkflow {
     /// Returns [`FillWorkflowError::FieldNotFound`] or
     /// [`FillWorkflowError::ReadOnlyField`].
     pub fn reset_field(&mut self, name: &str) -> Result<(), FillWorkflowError> {
+        self.check_guard(name)?;
         let is_signature = self
             .document
             .form
