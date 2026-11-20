@@ -1,0 +1,17 @@
+{
+  "id": "T-0120",
+  "lane": "qa",
+  "title": "Performance budgets and tracked benchmarks",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0081"],
+  "owns": [
+    "crates/pdfxi-testkit/**",
+    "xtask/**",
+    "docs/TESTING.md",
+    "docs/evidence/qa/T-0120.md",
+    "orchestration/feature-updates/T-0120.toml"
+  ],
+  "acceptance": "cargo xtask bench",
+  "evidence": ""
+}

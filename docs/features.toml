@@ -1191,21 +1191,17 @@ tests = []
 title = "Export to PostScript"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-forms/src/appearance.rs",
-    "crates/pdfxi-forms/src/lib.rs",
-]
+docs = "crates/pdfxi-forms/src/acrofill.rs, docs/evidence/forms/T-0097.md"
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 85 passed / 0 failed."
+evidence = "docs/evidence/forms/T-0097.md"
 id = "FORMS-001"
-notes = "A filled field's current value can be rendered through build_appearance(field, widget, value). Writing the regenerated /AP back into a concrete /AcroForm remains pending."
+notes = "Headless fill with appearance regeneration, flag handling, and deterministic reporting; CLI/UI binding and FDF import remain open."
 priority = "P1"
 status = "in-progress"
 tests = [
-    "appearance::tests::text_fits_without_clipping",
-    "appearance::tests::text_overflow_clips_with_ellipsis",
-    "appearance::tests::alignment_left_center_right_offsets",
-    "appearance::tests::build_appearance_is_deterministic",
+    "acrofill::tests::text_field_fill_sets_value",
+    "acrofill::tests::appearance_stream_is_emitted",
+    "acrofill::tests::report_is_deterministic",
 ]
 title = "Fill existing AcroForm fields"
 

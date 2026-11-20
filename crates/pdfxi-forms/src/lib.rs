@@ -30,6 +30,9 @@
 //!   that maps names and values onto the target [`Form`]'s field types.
 //! - [`load_acroform`] — loads a real PDF catalog `/AcroForm` dictionary into a
 //!   [`Form`] through the dependency-free [`FormSource`] adapter trait.
+//! - [`fill_acroform`] — applies [`FieldAssignment`]s to a concrete `/AcroForm`
+//!   dictionary model, writing `/V`, `/DV`, widget `/AS` and regenerated
+//!   `/AP /N` streams with a deterministic [`AcroFillReport`].
 //! - [`build_appearance`] — deterministically generates a widget's appearance
 //!   content stream and `/AP` dictionary model from a [`Field`], a
 //!   [`WidgetAppearance`] and the current [`FieldValue`].
@@ -75,6 +78,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod acrofill;
 mod acroform;
 mod actions;
 mod appearance;
@@ -91,6 +95,10 @@ mod taborder;
 mod validation;
 mod xfdf;
 
+pub use acrofill::{
+    AcroFillError, AcroFillReport, FieldAssignment, FilledField, RejectedField, SkipReason,
+    SkippedField, fill_acroform,
+};
 pub use acroform::{
     AcroFormLoad, FormSource, LoadError, LoadedFieldInfo, LoadedForm, ObjectRef, PdfValue,
     load_acroform,

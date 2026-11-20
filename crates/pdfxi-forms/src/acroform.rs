@@ -113,6 +113,18 @@ pub enum PdfValue {
     Array(Vec<PdfValue>),
     /// A dictionary mapping names (without the leading slash) to objects.
     Dictionary(BTreeMap<String, PdfValue>),
+    /// A stream: a dictionary of attributes followed by raw decoded bytes.
+    ///
+    /// This is the model used by generated appearance streams. `dict` holds
+    /// entries such as `/Type`, `/Subtype`, `/BBox` and `/Length`; `data` holds
+    /// the content-stream bytes verbatim. The bytes are already decoded, so no
+    /// filter handling belongs here.
+    Stream {
+        /// The stream dictionary entries.
+        dict: BTreeMap<String, PdfValue>,
+        /// The raw, decoded stream bytes.
+        data: Vec<u8>,
+    },
     /// An indirect reference to another object.
     Reference(ObjectRef),
 }
@@ -122,6 +134,15 @@ impl PdfValue {
     pub fn as_dict(&self) -> Option<&BTreeMap<String, PdfValue>> {
         match self {
             Self::Dictionary(entries) => Some(entries),
+            _ => None,
+        }
+    }
+
+    /// Returns the dictionary and decoded bytes when this is a
+    /// [`PdfValue::Stream`].
+    pub fn as_stream(&self) -> Option<(&BTreeMap<String, PdfValue>, &[u8])> {
+        match self {
+            Self::Stream { dict, data } => Some((dict, data.as_slice())),
             _ => None,
         }
     }
@@ -700,7 +721,7 @@ where
 
 /// Classifies a terminal field using the inherited `/FT` name and button
 /// flags. Missing or unrecognised types become [`FieldType::Unknown`].
-fn classify_field_type(field_type: Option<&str>, flags: u32) -> FieldType {
+pub(crate) fn classify_field_type(field_type: Option<&str>, flags: u32) -> FieldType {
     match field_type {
         Some("Tx") => FieldType::Text,
         Some("Ch") => FieldType::Choice,
@@ -719,7 +740,7 @@ fn classify_field_type(field_type: Option<&str>, flags: u32) -> FieldType {
 }
 
 /// Decodes the `#xx` hexadecimal escapes used by PDF names.
-fn decode_pdf_name(raw: &str) -> String {
+pub(crate) fn decode_pdf_name(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -748,7 +769,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
-fn textish(value: &PdfValue) -> Option<String> {
+pub(crate) fn textish(value: &PdfValue) -> Option<String> {
     match value {
         PdfValue::Text(text) => Some(text.clone()),
         PdfValue::Name(name) => Some(decode_pdf_name(name)),
@@ -756,7 +777,7 @@ fn textish(value: &PdfValue) -> Option<String> {
     }
 }
 
-fn choices_from_opt(value: &PdfValue) -> Option<Vec<String>> {
+pub(crate) fn choices_from_opt(value: &PdfValue) -> Option<Vec<String>> {
     let items = value.as_array()?;
     let mut choices = Vec::with_capacity(items.len());
     for item in items {
@@ -820,7 +841,7 @@ fn build_field(inherited: &Inherited, radio_states: &[String], unnamed: &mut usi
 /// Returns `None` when the PDF type has no meaningful representation for the
 /// field; `build_field` turns that into the documented [`FieldValue::Empty`]
 /// fallback.
-fn coerce_value(value: &PdfValue, field_type: FieldType) -> Option<FieldValue> {
+pub(crate) fn coerce_value(value: &PdfValue, field_type: FieldType) -> Option<FieldValue> {
     match field_type {
         FieldType::Button => Some(FieldValue::Empty),
         FieldType::CheckBox => match value {
