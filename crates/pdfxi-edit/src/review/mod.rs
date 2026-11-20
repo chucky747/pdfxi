@@ -15,18 +15,26 @@
 //! - The `serialize` module round-trips a whole registry through a dictionary
 //!   using the private `XI_Thread...` key namespace while preserving unknown
 //!   keys.
+//! - The `report` module adds documented import/export and print views plus a
+//!   sorted participant/status summary derived from the registry.
 //!
 //! All edits here are copy-on-write by contract: the model owns its data and
 //! never mutates source document bytes.
 
 mod error;
 mod registry;
+mod report;
 mod serialize;
 mod thread;
 mod workflow;
 
 pub use error::ReviewError;
 pub use registry::{ReviewFilter, ReviewRegistry, ReviewSummary};
+pub use report::{
+    ParticipantStatusSummary, ParticipantSummary, export_registry, import_registry,
+    participant_status_summary, participants, print_registry, registry_to_print_lines,
+    registry_to_text, root_annotation_ids,
+};
 pub use serialize::{dict_to_registry, registry_to_dict};
 pub use thread::{CommentThread, Reply, ReplyId, ThreadId};
 pub use workflow::{HistoryEntry, ReviewState, ReviewStatus};

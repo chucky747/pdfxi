@@ -4,7 +4,7 @@
   "title": "Manage home search and compare",
   "priority": "P2",
   "status": "queued",
-  "depends_on": ["T-0101"],
+  "depends_on": ["T-0011"],
   "owns": [
     "crates/pdfxi-app/**",
     "crates/pdfxi-text/**",

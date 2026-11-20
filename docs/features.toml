@@ -2205,75 +2205,124 @@ tests = [
 title = "Sticky note highlight underline strikeout and squiggly"
 
 [[feature]]
-docs = "crates/pdfxi-accessibility/src/lib.rs"
+docs = [
+    "crates/pdfxi-edit/src/markup.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "docs/evidence/author/T-0104.md",
+]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit -p pdfxi-accessibility (CARGO_TARGET_DIR=target/lanes/author): pdfxi-accessibility 6 passed, 0 failed; clippy -D warnings clean"
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 7 new markup tests covering free-text validation/round-trip, callout leader geometry, line/arrow determinism, rectangle/oval/polygon shapes, cloud scallops, border preservation and malformed dictionaries; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
 id = "REVIEW-002"
-notes = "Added a small accessibility model: TagRole semantic roles and a validated ReadingOrder tree with duplicate-id, unknown-child, multiple-parent, and cycle detection (Kahn) plus deterministic depth-first traversal. Standard-library only with hand-written error types. Wiring into tag-tree parsing and assistive output is deferred to the accessibility milestone."
+notes = """
+Adds typed, validated option models for the free-text/callout/line/arrow/shape/cloud
+tools that the older pdf mapping keeps as opaque subtypes: FreeTextOptions
+(text, font size, alignment, border), CalloutOptions (text, leader point, border),
+LineOptions, ArrowOptions (head style and length), ShapeOptions (rectangle, oval,
+polygon with vertices), and CloudOptions (bump count and amplitude). Each derives a
+pure MarkupAppearance of PathCommand geometry: reused solid/dashed border paths,
+a leader line from the box centre, arrowhead wings, a deterministic 16-segment
+oval, closed polygons, and a clockwise scalloped cloud. DrawingOptions provides
+to_dict/from_dict in a private XI_Draw... namespace so every shape round-trips
+losslessly and byte-deterministically. Honest scope: this is a renderer-agnostic
+geometry/serialization model, not a painted appearance stream or a UI tool; the
+row therefore stays in-progress. No unsafe/new deps/panics.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
-    "pdfxi-accessibility::reading_order::tests::valid_reading_order_traverses_in_presentation_order",
-    "pdfxi-accessibility::reading_order::tests::cyclic_reading_order_is_rejected",
-    "pdfxi-accessibility::reading_order::tests::duplicate_ids_and_unknown_children_are_rejected",
-    "pdfxi-accessibility::reading_order::tests::multiple_parents_are_rejected",
-    "pdfxi-accessibility::reading_order::tests::empty_reading_order_is_valid",
-    "pdfxi-accessibility::tests::tag_role_has_stable_names",
+    "markup::tests::free_text_options_validate_and_round_trip",
+    "markup::tests::callout_appearance_has_a_leader_line_from_the_centre",
+    "markup::tests::line_and_arrow_appearance_is_deterministic",
+    "markup::tests::shape_options_cover_rectangle_oval_and_polygon",
+    "markup::tests::cloud_outline_is_deterministic_and_scales_with_bumps",
+    "markup::tests::dictionary_round_trip_preserves_border_style_and_is_stable",
+    "markup::tests::malformed_dictionaries_return_typed_errors",
 ]
 title = "Free text callout line arrow shape and cloud"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-edit/src/markup.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "docs/evidence/author/T-0104.md",
+]
 domain = "Review"
-evidence = ""
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 2 new markup tests for ink path validation/round-trip and stamp caption plus file-attachment reference round-trip; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
 id = "REVIEW-003"
-notes = ""
+notes = """
+Adds InkOptions (one or more non-empty, finite pencil strokes -> deterministic
+MoveTo/LineTo commands), StampOptions with a typed StampName caption rendered as a
+text line, and FileAttachmentOptions carrying an attachment_name reference plus a
+typed AttachmentIcon; the attachment model deliberately stores a reference only,
+never caller-held bytes. All three round-trip through DrawingOptions::to_dict /
+from_dict and are covered by validation tests (empty ink paths, empty attachment
+name, unknown dictionary names yield typed MarkupError). Honest scope: the icon
+outline is a deterministic marker, not a final rasterised stamp/attachment icon,
+and there is no UI/CLI exposure, so the row stays in-progress. No unsafe/new
+deps/panics.
+"""
 priority = "P1"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "markup::tests::ink_options_reject_empty_paths_and_round_trip",
+    "markup::tests::stamp_caption_and_attachment_reference_round_trip",
+]
 title = "Pencil stamp and file attachment annotations"
 
 [[feature]]
 docs = [
     "crates/pdfxi-edit/src/review/thread.rs",
     "crates/pdfxi-edit/src/review/workflow.rs",
-    "crates/pdfxi-edit/src/review/mod.rs",
+    "crates/pdfxi-edit/src/review/report.rs",
+    "docs/evidence/author/T-0104.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit review:: (CARGO_TARGET_DIR=target/lanes/author): 27 review tests pass as part of 86/86 total. cargo clippy -D warnings clean; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps clean."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including all 20 existing review thread/workflow/registry tests plus new review::report tests that exercise transitions, history and assignee state; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
 id = "REVIEW-004"
-notes = "CommentThread with a root annotation, deterministically ordered replies (author, timestamp, body, status), and a five-status workflow with validated transitions, assignee, timestamps, and an append-only history log. Reply insertion/removal, duplicate ids, empty threads, and invalid transitions are covered by tests."
+notes = """
+Reused the existing CommentThread/ReviewState/ReviewStatus workflow (replies ordered
+by (timestamp, id), five-status transition table, append-only history) and added
+coverage through the new review::report helpers, which read thread status,
+assignee, replies and transition history to build deterministic printable and
+participant views. The existing thread/workflow validation tests remain green; no
+behavioural change to the transition table was needed. Honest scope: local model
+and views only; shared/email collaboration and a host UI remain future work, so the
+row stays in-progress. No unsafe/new deps/panics.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
-    "pdfxi-edit::review::thread::tests::thread_assembly_orders_replies_by_timestamp_then_id",
-    "pdfxi-edit::review::thread::tests::duplicate_reply_ids_are_rejected",
-    "pdfxi-edit::review::thread::tests::reply_removal_returns_the_removed_reply_and_reports_missing_ids",
-    "pdfxi-edit::review::thread::tests::empty_thread_is_rejected_by_validate",
-    "pdfxi-edit::review::workflow::tests::status_names_round_trip_and_are_stable",
-    "pdfxi-edit::review::workflow::tests::state_transition_validates_records_history_and_updates_timestamp",
-    "pdfxi-edit::review::workflow::tests::invalid_transition_is_rejected_without_mutating_state",
+    "review::report::tests::registry_summary_helper_still_agrees_with_the_existing_summary",
+    "review::thread::tests::thread_assembly_orders_replies_by_timestamp_then_id",
+    "review::workflow::tests::allowed_transitions_match_the_documented_table",
 ]
 title = "Comment threads replies and status"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-edit/src/review/report.rs",
     "crates/pdfxi-edit/src/review/serialize.rs",
-    "crates/pdfxi-edit/src/review/error.rs",
+    "docs/evidence/author/T-0104.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit review::serialize::tests (CARGO_TARGET_DIR=target/lanes/author): 7 round-trip tests pass as part of 86/86 total. cargo fmt --check clean; cargo clippy -D warnings clean."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 2 new review::report tests for lossless export/import round-trip and stable print output plus the 7 existing review::serialize round-trip tests; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
 id = "REVIEW-005"
-notes = "Deterministic dictionary round-trip for review registries using a documented private XI_Thread... namespace. Unknown keys are preserved at registry, thread, reply, and history levels and never overwrite owned keys. Real PDF comment import/export and printing remain outside this crate."
+notes = """
+Added documented export_registry/import_registry wrappers over the existing
+registry_to_dict/dict_to_registry round-trip, plus registry_to_print_lines,
+registry_to_text and print_registry, which render a stable, self-describing listing
+of threads, replies and transition history in deterministic root/timestamp order.
+Tests prove export->import reproduces the registry exactly and that the printed
+text is byte-stable across calls. Honest scope: this is a dictionary intermediate
+and plain-text view; real PDF /Annots comment import/export and an OS print driver
+remain outside this crate, so the row stays in-progress. No unsafe/new deps/panics.
+"""
 priority = "P1"
 status = "in-progress"
 tests = [
-    "pdfxi-edit::review::serialize::tests::registry_round_trip_preserves_threads_replies_and_history",
-    "pdfxi-edit::review::serialize::tests::serialization_is_deterministic_and_uses_private_namespace",
-    "pdfxi-edit::review::serialize::tests::unknown_keys_are_preserved_at_every_level",
-    "pdfxi-edit::review::serialize::tests::unknown_keys_do_not_overwrite_owned_keys",
-    "pdfxi-edit::review::serialize::tests::duplicate_ids_and_unknown_statuses_are_rejected_on_parse",
-    "pdfxi-edit::review::serialize::tests::negative_and_missing_keys_are_reported",
+    "review::report::tests::export_import_round_trip_preserves_every_thread",
+    "review::report::tests::print_lines_are_stable_and_cover_threads_replies_and_history",
+    "review::serialize::tests::registry_round_trip_preserves_threads_replies_and_history",
 ]
 title = "Import export and print comments"
 
@@ -2290,21 +2339,31 @@ title = "Email and shared review workflows locally"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-edit/src/review/report.rs",
     "crates/pdfxi-edit/src/review/registry.rs",
-    "crates/pdfxi-edit/src/review/mod.rs",
+    "docs/evidence/author/T-0104.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit review::registry::tests (CARGO_TARGET_DIR=target/lanes/author): 7 registry tests pass as part of 86/86 total. cargo clippy -D warnings clean; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps clean."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 4 new review::report participant/status tests and all 7 existing review::registry tests; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
 id = "REVIEW-007"
-notes = "ReviewRegistry groups annotations into threads, tracks per-page and per-thread state, filters deterministically by status/author/page, and derives a stable per-status summary with all five statuses present. Shared/email collaboration and participant synchronization remain future work."
+notes = """
+Added ParticipantSummary and participants(), which derive a lexicographically
+sorted roster with reply count, distinct-thread count, assigned-thread count,
+transition count and a per-status breakdown (all five statuses always present).
+ParticipantStatusSummary/participant_status_summary aggregate those per-status
+counts deterministically. Tests cover sorting, reply/thread/transition accounting,
+assignee attribution, zero-entry stability and empty registries. Honest scope: a
+local aggregate derived from the registry only; shared/email participant
+synchronisation and a tracker UI are future work, so the row stays in-progress. No
+unsafe/new deps/panics.
+"""
 priority = "P3"
 status = "in-progress"
 tests = [
-    "pdfxi-edit::review::registry::tests::from_annotations_groups_by_annotation_in_deterministic_order",
-    "pdfxi-edit::review::registry::tests::duplicate_and_empty_inputs_are_rejected",
-    "pdfxi-edit::review::registry::tests::filtering_by_status_author_and_page_is_deterministic",
-    "pdfxi-edit::review::registry::tests::summary_counts_are_stable_and_include_zero_entries",
-    "pdfxi-edit::review::registry::tests::state_transition_on_registry_updates_history",
+    "review::report::tests::participants_are_sorted_and_count_replies_threads_and_transitions",
+    "review::report::tests::assigned_and_unassigned_threads_are_reflected_in_participant_summary",
+    "review::report::tests::participant_status_summary_is_stable_and_includes_zero_entries",
+    "review::registry::tests::summary_counts_are_stable_and_include_zero_entries",
 ]
 title = "Review tracker and participant status"
 

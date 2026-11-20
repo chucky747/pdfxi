@@ -8,8 +8,12 @@
 //! with validation and deterministic appearance geometry, and [`navigation`]
 //! models bookmarks, links, and attachments with the same dictionary
 //! round-trip approach; `navigation::edit` adds bookmark tree editing by path,
-//! link-annotation storage, and attachment add/remove. [`review`] models comment threads, workflow states, and
-//! a filterable review registry with a dictionary round-trip. [`header_footer`]
+//! link-annotation storage, and attachment add/remove. [`markup`] provides typed
+//! options and deterministic appearance geometry for the drawing tools
+//! (free text, callout, line, arrow, shape, cloud, ink, stamp, and file
+//! attachment), each round-tripping through a private dictionary namespace.
+//! [`review`] models comment threads, workflow states, and a filterable review
+//! registry with a dictionary round-trip and printable/participant views. [`header_footer`]
 //! models six-slot headers, footers, and page numbering and renders them as
 //! additive content-stream overlays, including whole-page-set application with
 //! filename tokens and alternate page selection. [`watermark`] models text,
@@ -34,6 +38,7 @@ pub mod annotation;
 pub mod flatten;
 pub mod geometry;
 pub mod header_footer;
+pub mod markup;
 pub mod navigation;
 pub mod pdf;
 pub mod redaction;
@@ -54,6 +59,11 @@ pub use header_footer::{
     StandardFont, TextColor, TextStyle, Token, compose_content, compose_page_set,
     display_dimensions, escape_literal, render_overlay, render_page_set, transform_for_page,
 };
+pub use markup::{
+    ArrowHead, ArrowOptions, AttachmentIcon, CalloutOptions, CloudOptions, DrawingKind,
+    DrawingOptions, FileAttachmentOptions, FreeTextOptions, InkOptions, LineOptions,
+    MarkupAppearance, MarkupError, ShapeKind, ShapeOptions, StampName, StampOptions, TextAlignment,
+};
 pub use navigation::{
     Attachment, Bookmark, BookmarkPath, Destination, FitType, Link, LinkBorder, LinkHighlight,
     LinkStore, LinkTarget, MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link,
@@ -65,8 +75,11 @@ pub use redaction::{
     RemovalKind, Residual, ResidualSource, TextPattern, apply, redact, scan_text,
 };
 pub use review::{
-    CommentThread, HistoryEntry, Reply, ReplyId, ReviewError, ReviewFilter, ReviewRegistry,
-    ReviewState, ReviewStatus, ReviewSummary, ThreadId, dict_to_registry, registry_to_dict,
+    CommentThread, HistoryEntry, ParticipantStatusSummary, ParticipantSummary, Reply, ReplyId,
+    ReviewError, ReviewFilter, ReviewRegistry, ReviewState, ReviewStatus, ReviewSummary, ThreadId,
+    dict_to_registry, export_registry, import_registry, participant_status_summary, participants,
+    print_registry, registry_to_dict, registry_to_print_lines, registry_to_text,
+    root_annotation_ids,
 };
 pub use watermark::{
     ImageMark, MarkContent, PageRange, Placement, ResourceExtGState, ResourceFont, ResourcePatch,

@@ -3,7 +3,7 @@
   "lane": "author",
   "title": "Review markup shapes and comment workflows",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0076"],
   "owns": [
     "crates/pdfxi-edit/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0104.toml"
   ],
   "acceptance": "cargo test -p pdfxi-edit",
-  "evidence": ""
+  "evidence": "docs/evidence/author/T-0104.md"
 }
