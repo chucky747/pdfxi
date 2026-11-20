@@ -18,6 +18,7 @@ pub mod find_bar;
 pub mod help;
 pub mod preferences;
 pub mod rail;
+pub mod session;
 pub mod side_panel;
 pub mod title_bar;
 pub mod tools_panel;

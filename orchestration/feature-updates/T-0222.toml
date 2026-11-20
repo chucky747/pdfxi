@@ -1,0 +1,50 @@
+# T-0222 Round A - session-backed save, undo/redo, passwords, permissions
+#
+# DocumentSession is now the only write path: the app opens through it, renders
+# its current bytes, edits through `edit`, and saves atomically. Password
+# prompts, read-only permissions, the dirty marker, undo/redo and the
+# external-modification dialog are real. The bookmarks panel is Round B.
+
+task = "T-0222"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0222.md"
+docs = [
+    "crates/pdfxi-app/Cargo.toml",
+    "crates/pdfxi-app/src/state.rs",
+    "crates/pdfxi-app/src/tabs.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/settings.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/session.rs",
+    "crates/pdfxi-app/src/shell/dialogs.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/command_bar.rs",
+    "docs/evidence/ui/T-0222.md",
+    "docs/evidence/ui/t0222-dirty-light-windows.png",
+    "docs/evidence/ui/t0222-password-dark-windows.png",
+    "docs/evidence/ui/t0222-undo-light-macos.png",
+]
+notes = """
+Adds pdfxi-document and pdfxi-security to the app. Each tab owns a
+DocumentSession; open honours the 2 GiB cap and asks for a password on
+PasswordRequired, retrying on WrongPassword and opening no tab on cancel.
+Permissions decide read-only from the decryption report. The canvas renderer is
+bound to the session bytes and keyed by (path, revision), so edit, undo and redo
+re-rasterize. Save / Save As / Undo / Redo / CloseTab-with-prompt are wired to
+Ctrl+S, Ctrl+Shift+S, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z; the tab title gains `*`
+when dirty. ExternallyModified opens the Save As / overwrite dialog and a failed
+save keeps the tab open. The Info title is edited through session.edit, which is
+the proof used by the tests and by a capture-only --set-title= launch flag.
+New commands: Save, SaveAs, Undo, Redo, SetDocumentTitle, SubmitPassword,
+CancelPasswordPrompt, ResolveClose, OverwriteDocument, DismissSaveConflict.
+Round B covers the bookmarks panel and the permission explanation UI.
+"""
+tests = [
+    "ui::shell::session::tests::close_plans_prompt_only_for_dirty_tabs",
+    "ui::shell::session::tests::only_external_changes_offer_save_as",
+    "ui::shell::session::tests::encrypted_document_asks_for_a_password_and_cancel_opens_no_tab",
+    "ui::shell::session::tests::edit_title_undo_redo_and_save_round_trip",
+    "ui::shell::session::tests::dirty_close_prompt_cancel_then_save",
+    "ui::shell::session::tests::external_modification_is_reported_and_offers_save_as",
+]

@@ -325,7 +325,7 @@ impl LaunchPanel {
 /// Settings overrides parsed from the command line.
 ///
 /// Every field is optional: `None` means "use the saved setting".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LaunchOptions {
     /// Theme requested with `--light` or `--dark`.
     pub theme: Option<ThemePreference>,
@@ -333,13 +333,21 @@ pub struct LaunchOptions {
     pub window_controls: Option<WindowControlStyle>,
     /// Rail requested with `--rail=...` or `--panel=...`.
     pub panel: Option<LaunchPanel>,
+    /// Info title requested with `--set-title=...`.
+    ///
+    /// Used to prove the session edit path headlessly and to capture the dirty
+    /// tab state; it performs the same `session.edit` call the UI would.
+    pub title: Option<String>,
 }
 
 impl LaunchOptions {
     /// Whether no override was requested.
     #[must_use]
-    pub fn is_empty(self) -> bool {
-        self.theme.is_none() && self.window_controls.is_none() && self.panel.is_none()
+    pub fn is_empty(&self) -> bool {
+        self.theme.is_none()
+            && self.window_controls.is_none()
+            && self.panel.is_none()
+            && self.title.is_none()
     }
 }
 
@@ -369,6 +377,9 @@ pub fn parse_launch_arguments(arguments: &[String]) -> LaunchOptions {
                     && let Some(panel) = LaunchPanel::parse(value)
                 {
                     options.panel = Some(panel);
+                }
+                if let Some(value) = other.strip_prefix("--set-title=") {
+                    options.title = Some(value.to_owned());
                 }
             }
         }

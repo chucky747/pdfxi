@@ -2,7 +2,7 @@
 
 use super::widgets::shell_panel_frame;
 use crate::design::Palette;
-use crate::ui::{AppCommand, PdfxiApp};
+use crate::ui::{AppCommand, CloseChoice, PdfxiApp};
 
 impl PdfxiApp {
     /// Draw the in-app "Open PDF" path dialog.
@@ -57,6 +57,120 @@ impl PdfxiApp {
         }
         if ui.button("Clear").clicked() {
             self.dispatch(AppCommand::ClearOpenErrors, Some(ui.ctx()));
+        }
+    }
+
+    /// Modal prompt for an encrypted document's open password.
+    ///
+    /// The field is masked, a wrong password keeps the modal open with the
+    /// typed reason, and Cancel opens no tab.
+    pub(crate) fn password_dialog_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut prompt) = self.password_prompt.take() else {
+            return;
+        };
+        let mut submit = None;
+        let mut cancel = false;
+        egui::Window::new(format!("Password required - {}", prompt.title))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label("This document is encrypted. Enter its open password.");
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut prompt.input)
+                        .password(true)
+                        .desired_width(240.0),
+                );
+                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    submit = Some(prompt.input.clone());
+                }
+                if let Some(error) = &prompt.error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Open").clicked() {
+                        submit = Some(prompt.input.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+                response.request_focus();
+            });
+        if let Some(password) = submit {
+            self.dispatch(AppCommand::SubmitPassword(password), Some(ctx));
+            return;
+        }
+        if cancel {
+            // Put the prompt back so the cancel path can report which document
+            // was skipped, then dispatch the command that clears it.
+            self.password_prompt = Some(prompt);
+            self.dispatch(AppCommand::CancelPasswordPrompt, Some(ctx));
+            return;
+        }
+        self.password_prompt = Some(prompt);
+    }
+
+    /// Modal save / discard / cancel prompt for a dirty tab.
+    pub(crate) fn close_prompt_ui(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.pending_close.take() else {
+            return;
+        };
+        let mut choice = None;
+        egui::Window::new("Unsaved changes")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(format!("\"{}\" has unsaved changes.", pending.title));
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        choice = Some(CloseChoice::Save);
+                    }
+                    if ui.button("Discard").clicked() {
+                        choice = Some(CloseChoice::Discard);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(CloseChoice::Cancel);
+                    }
+                });
+            });
+        match choice {
+            Some(choice) => self.dispatch(AppCommand::ResolveClose(choice), Some(ctx)),
+            None => self.pending_close = Some(pending),
+        }
+    }
+
+    /// Dialog offered when a save finds the file changed on disk.
+    pub(crate) fn save_conflict_ui(&mut self, ctx: &egui::Context) {
+        let Some(conflict) = self.save_conflict.take() else {
+            return;
+        };
+        let mut choice = None;
+        egui::Window::new("File changed on disk")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "{} changed after it was opened. Saving would overwrite those changes.",
+                    conflict.path.display()
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("Save As...").clicked() {
+                        choice = Some(AppCommand::SaveAs);
+                    }
+                    if ui.button("Overwrite").clicked() {
+                        choice = Some(AppCommand::OverwriteDocument);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(AppCommand::DismissSaveConflict);
+                    }
+                });
+            });
+        match choice {
+            Some(command) => self.dispatch(command, Some(ctx)),
+            None => self.save_conflict = Some(conflict),
         }
     }
 }

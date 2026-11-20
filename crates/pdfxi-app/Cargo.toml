@@ -25,6 +25,8 @@ pdfium = ["pdfxi-render/pdfium"]
 # is pulled in only through the `pdfium` feature above.
 pdfxi-render = { workspace = true }
 pdfxi-text = { workspace = true }
+pdfxi-document = { workspace = true }
+pdfxi-security = { workspace = true }
 thiserror.workspace = true
 # Native file picker for Open (MIT). Only the `ui` shell calls it, so it is
 # optional: a build without `ui` links no picker and emits no unused-dependency

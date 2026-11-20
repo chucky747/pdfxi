@@ -7,7 +7,7 @@
 //! All operations are deterministic and report failures as typed [`AppError`]
 //! values, so they can be driven and asserted without a window.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::canvas::CanvasPoint;
 use crate::tabs::{DocumentTab, TabId, normalize_path_key};
@@ -73,7 +73,7 @@ pub enum CloseOutcome {
 }
 
 /// The typed result of opening a document into the workspace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenOutcome {
     /// A new tab was created and made active.
     Opened {
@@ -84,6 +84,16 @@ pub enum OpenOutcome {
     Focused {
         /// The id of the pre-existing tab that was activated.
         id: TabId,
+    },
+    /// The document is encrypted and needs an open password before a tab opens.
+    PasswordRequired {
+        /// Path that is waiting for a password.
+        path: PathBuf,
+    },
+    /// The document could not be opened; no tab was created.
+    Failed {
+        /// Human-readable reason, already suitable for the error banner.
+        message: String,
     },
 }
 

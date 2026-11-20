@@ -14,6 +14,21 @@ impl PdfxiApp {
             if shell_tool_button(ui, palette, Icon::File, "Open", false).clicked() {
                 self.dispatch(AppCommand::OpenDialog, Some(ui.ctx()));
             }
+            // Undo and redo exist only when the active session can use them.
+            if self.can_undo()
+                && shell_tool_button(ui, palette, Icon::ArrowLeft, "Undo", false)
+                    .on_hover_text("Undo (Ctrl+Z)")
+                    .clicked()
+            {
+                self.dispatch(AppCommand::Undo, Some(ui.ctx()));
+            }
+            if self.can_redo()
+                && shell_tool_button(ui, palette, Icon::ArrowRight, "Redo", false)
+                    .on_hover_text("Redo (Ctrl+Y)")
+                    .clicked()
+            {
+                self.dispatch(AppCommand::Redo, Some(ui.ctx()));
+            }
             ui.add_space(8.0);
             ui.add_enabled_ui(has_document, |ui| {
                 if shell_icon_button(ui, palette, Icon::ArrowLeft, 30.0)

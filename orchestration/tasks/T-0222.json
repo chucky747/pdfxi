@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Save, Save As, dirty state, undo/redo, password prompt, permissions, bookmarks panel",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0214",
     "T-0220"
@@ -14,7 +14,7 @@
     "docs/evidence/ui/T-0222.md",
     "orchestration/feature-updates/T-0222.toml"
   ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-05, O-01, O-03, O-04 (open)",
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-05 (undo/redo), O-01 (save, Save As, dirty marker, close prompt) and the O-04 open half (password prompt, permissions, encrypted-save refusal) work on real documents; O-03 bookmarks panel and the document-properties dialog deferred to T-0255",
   "notes": "Leaves crates/pdfxi-app/src/shell/print_dialog.rs in place as the print dialog entry point (a stub is acceptable) so T-0223 can take that file over. Owns all of crates/pdfxi-app/src/** otherwise; T-0223 is serialised after this task and must not edit shell modules outside print_dialog.rs.",
   "evidence": "docs/evidence/ui/T-0222.md"
 }

@@ -123,6 +123,15 @@ impl DocumentTab {
         self.path.as_deref()
     }
 
+    /// Rebind this tab to a new path after Save As.
+    ///
+    /// The display name follows the new file name so the tab strip and the
+    /// window title report the file the document will be saved to next.
+    pub fn replace_path(&mut self, path: &Path) {
+        self.display_name = display_name_from_path(path);
+        self.path = Some(path.to_path_buf());
+    }
+
     /// The normalized duplicate-detection key for this tab's path.
     ///
     /// Returns `None` for tabs without a path or with an empty/root-only path;

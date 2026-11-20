@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use egui::Context;
 
 use crate::settings::{ThemePreference, WindowControlStyle};
-use crate::ui::{CaptionAction, UiClosePolicy};
+use crate::ui::{CaptionAction, CloseChoice, UiClosePolicy};
 use crate::{TabId, Toolset, ViewMode};
 
 use super::capabilities::RailItem;
@@ -170,6 +170,26 @@ pub enum AppCommand {
     OpenDocsFolder,
     /// Re-read the library folder and storage total.
     RefreshLibrary,
+    /// Save the active document through its session.
+    Save,
+    /// Save the active document to a new path.
+    SaveAs,
+    /// Undo the newest session revision.
+    Undo,
+    /// Redo the most recently undone revision.
+    Redo,
+    /// Set the active document's Info title through a session edit.
+    SetDocumentTitle(String),
+    /// Submit the password currently typed in the password modal.
+    SubmitPassword(String),
+    /// Dismiss the password modal without opening a tab.
+    CancelPasswordPrompt,
+    /// Answer the unsaved-changes prompt.
+    ResolveClose(CloseChoice),
+    /// Overwrite a file that changed on disk.
+    OverwriteDocument,
+    /// Dismiss the external-modification dialog.
+    DismissSaveConflict,
 }
 
 impl AppCommand {
@@ -250,6 +270,16 @@ impl AppCommand {
             Self::RevealInExplorer(_) => "reveal-in-explorer",
             Self::OpenDocsFolder => "open-docs-folder",
             Self::RefreshLibrary => "refresh-library",
+            Self::Save => "save",
+            Self::SaveAs => "save-as",
+            Self::Undo => "undo",
+            Self::Redo => "redo",
+            Self::SetDocumentTitle(_) => "set-document-title",
+            Self::SubmitPassword(_) => "submit-password",
+            Self::CancelPasswordPrompt => "cancel-password-prompt",
+            Self::ResolveClose(_) => "resolve-close",
+            Self::OverwriteDocument => "overwrite-document",
+            Self::DismissSaveConflict => "dismiss-save-conflict",
         }
     }
 }
@@ -273,7 +303,7 @@ impl crate::ui::PdfxiApp {
             }
             AppCommand::CloseActiveTab => self.close_active_tab(),
             AppCommand::CloseTab(id) => {
-                self.close_tab_by_id(id);
+                self.request_close_tab(id);
             }
             AppCommand::CloseOtherTabs => {
                 self.close_other_tabs();
@@ -405,6 +435,40 @@ impl crate::ui::PdfxiApp {
             AppCommand::RevealInExplorer(path) => self.reveal_path(&path),
             AppCommand::OpenDocsFolder => self.open_docs_folder(),
             AppCommand::RefreshLibrary => self.refresh_library(),
+            AppCommand::Save => {
+                if let Err(error) = self.save_active_document() {
+                    // Conflict errors already opened the dialog; other errors
+                    // already set the banner.
+                    if !crate::ui::save_conflict_offers_save_as(&error) {
+                        self.status = error.to_string();
+                    }
+                }
+            }
+            AppCommand::SaveAs => self.save_as_dialog(),
+            AppCommand::Undo => {
+                if let Err(error) = self.undo_document() {
+                    self.status = error.to_string();
+                }
+            }
+            AppCommand::Redo => {
+                if let Err(error) = self.redo_document() {
+                    self.status = error.to_string();
+                }
+            }
+            AppCommand::SetDocumentTitle(title) => {
+                if let Err(error) = self.set_active_document_title(&title) {
+                    self.status = error.to_string();
+                }
+            }
+            AppCommand::SubmitPassword(password) => self.submit_password(password),
+            AppCommand::CancelPasswordPrompt => self.cancel_password_prompt(),
+            AppCommand::ResolveClose(choice) => self.resolve_close(choice),
+            AppCommand::OverwriteDocument => {
+                if let Err(error) = self.save_forced_active() {
+                    self.status = error.to_string();
+                }
+            }
+            AppCommand::DismissSaveConflict => self.cancel_save_conflict(),
         }
     }
 }

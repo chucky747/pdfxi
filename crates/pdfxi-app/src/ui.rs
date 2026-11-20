@@ -60,7 +60,7 @@
 //! performs blocking I/O.
 //!
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use crate::OpenError;
@@ -77,6 +77,7 @@ use crate::{
 
 #[cfg(feature = "pdfium")]
 use crate::raster::RasterCache;
+use pdfxi_document::DocumentSession;
 #[cfg(feature = "pdfium")]
 use pdfxi_render::{CancellationToken, PageIndex, PdfiumRenderer, Renderer};
 #[cfg(feature = "pdfium")]
@@ -91,6 +92,7 @@ pub mod library;
 pub use shell::capabilities::{Capabilities, Capability, RailItem};
 pub use shell::commands::AppCommand;
 use shell::preferences::{self as shell_preferences, ShellPreferences};
+pub use shell::session::{CloseChoice, ClosePlan, plan_close, save_conflict_offers_save_as};
 use shell::widgets::shell_panel_frame;
 pub use shell::widgets::{
     CAPTION_BUTTON_WIDTH, CaptionAction, CaptionSide, caption_command, caption_layout,
@@ -469,6 +471,7 @@ pub fn run() -> Result<(), String> {
             let mut app = PdfxiApp::new_for_window();
             app.apply_launch_options(&launch);
             app.open_startup_argument(arguments);
+            app.apply_launch_title(launch.title.as_deref());
             app.apply_launch_panel(launch.panel);
             Ok(Box::new(app))
         }),
@@ -542,6 +545,21 @@ pub struct PdfxiApp {
     identity_name: String,
     /// Whether the identity popover is open.
     identity_open: bool,
+    /// One editing session per open tab, keyed by tab id.
+    pub(super) sessions: BTreeMap<TabId, DocumentSession>,
+    /// Tabs whose document permissions deny modification.
+    pub(super) read_only_tabs: BTreeSet<TabId>,
+    /// Open password prompt, if any.
+    pub(super) password_prompt: Option<shell::session::PasswordPrompt>,
+    /// Open unsaved-changes prompt, if any.
+    pub(super) pending_close: Option<shell::session::PendingClose>,
+    /// Open external-modification dialog, if any.
+    pub(super) save_conflict: Option<shell::session::SaveConflict>,
+    /// Revision of the active session bound to the renderer.
+    ///
+    /// Alongside `renderer_path` this key notices edits, undo and redo so the
+    /// canvas is re-rasterized from the session's current bytes.
+    renderer_revision: usize,
     /// Path currently bound to the PDFium renderer.
     #[cfg(feature = "pdfium")]
     renderer_path: Option<PathBuf>,
@@ -646,6 +664,19 @@ impl PdfxiApp {
         let effective = self.settings.with_overrides(options);
         self.theme_preference = effective.theme;
         self.window_controls = effective.window_controls;
+    }
+
+    /// Apply a `--set-title=` title edit through the active session.
+    ///
+    /// The same `session.edit` path a document-properties dialog would use;
+    /// it exists so captures and headless verification can show a dirty tab.
+    fn apply_launch_title(&mut self, title: Option<&str>) {
+        let Some(title) = title else {
+            return;
+        };
+        if let Err(error) = self.set_active_document_title(title) {
+            self.status = error.to_string();
+        }
     }
 
     /// Apply a `--rail=`/`--panel=` deep link after startup documents open.
@@ -801,12 +832,12 @@ impl PdfxiApp {
 
     /// Close the active tab, if any, using the configured [`UiClosePolicy`].
     ///
-    /// A vetoed close leaves the workspace untouched and reports why through
-    /// [`Self::status`]. With no active tab the status is `"No tab to close"`,
-    /// preserving the original shell behavior.
+    /// A clean tab closes immediately. A dirty tab raises the save / discard /
+    /// cancel prompt. A vetoed close leaves the workspace untouched and reports
+    /// why through [`Self::status`].
     pub fn close_active_tab(&mut self) {
-        if let Some(id) = self.state.active_tab_id() {
-            let _ = self.close_tab_by_id(id);
+        if self.state.active_tab_id().is_some() {
+            self.request_close_active_tab();
         } else {
             self.status = "No tab to close".to_string();
         }
@@ -832,14 +863,57 @@ impl PdfxiApp {
         };
         match outcome {
             crate::CloseOutcome::Closed { .. } => {
+                self.forget_tab_state(id);
                 self.status = format!("Closed tab {id}");
                 self.restore_scroll_from_active();
+                self.refresh_renderer_for_active_tab();
                 true
             }
             crate::CloseOutcome::Cancelled { .. } => {
                 self.status = format!("Unsaved changes in {title}; save or discard before closing");
                 false
             }
+        }
+    }
+
+    /// Close a tab immediately, ignoring unsaved changes.
+    ///
+    /// Used only after the user chose Discard, or after a successful save in
+    /// the prompt. Model policy is not consulted, so a discarded dirty tab
+    /// actually closes.
+    pub(crate) fn force_close_tab(&mut self, id: TabId) -> bool {
+        match self.state.close_tab(id) {
+            Ok(_) => {
+                self.forget_tab_state(id);
+                self.status = format!("Closed tab {id}");
+                self.restore_scroll_from_active();
+                self.refresh_renderer_for_active_tab();
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Drop session, permission and dialog state owned by a closed tab.
+    pub(super) fn forget_tab_state(&mut self, id: TabId) {
+        self.sessions.remove(&id);
+        self.read_only_tabs.remove(&id);
+        if self
+            .pending_close
+            .as_ref()
+            .is_some_and(|close| close.id == id)
+        {
+            self.pending_close = None;
+        }
+        if self
+            .save_conflict
+            .as_ref()
+            .is_some_and(|conflict| conflict.id == id)
+        {
+            self.save_conflict = None;
         }
     }
 
@@ -906,6 +980,19 @@ impl PdfxiApp {
     /// a reused one simply restores its saved view and becomes active.
     pub fn open_document(&mut self, path: &Path) -> OpenOutcome {
         self.save_scroll_to_active();
+        // Untitled tabs and design previews have no readable file behind them;
+        // they keep the model-only path so tests and the welcome canvas work.
+        if !path.is_file() {
+            return self.open_document_without_session(path);
+        }
+        self.open_document_session(path, None)
+    }
+
+    /// Open a path without a document session (the pre-session behaviour).
+    ///
+    /// Only used for paths that are not readable files, where a session cannot
+    /// exist; real documents always go through [`Self::open_document_session`].
+    fn open_document_without_session(&mut self, path: &Path) -> OpenOutcome {
         let outcome = self.state.open_document(path);
         match outcome {
             OpenOutcome::Opened { id } => {
@@ -921,6 +1008,7 @@ impl PdfxiApp {
                 self.library.record_open(path, &title, 0);
                 self.status = format!("Focused existing tab {id}");
             }
+            OpenOutcome::PasswordRequired { .. } | OpenOutcome::Failed { .. } => {}
         }
         outcome
     }
@@ -1111,24 +1199,37 @@ impl PdfxiApp {
     /// path: they use the built-in design preview and release the renderer.
     #[cfg(feature = "pdfium")]
     fn refresh_renderer_for_active_tab(&mut self) {
+        let id = self.state.active_tab_id();
         let path = self
             .state
             .active_tab()
             .and_then(|tab| tab.path())
             .map(Path::to_path_buf);
-        if path == self.renderer_path {
+        // Edits, undo and redo change the session bytes without changing the
+        // path, so the revision is part of the cache key.
+        let revision = id
+            .and_then(|id| self.sessions.get(&id))
+            .map_or(0, DocumentSession::revision_count);
+        if path == self.renderer_path && revision == self.renderer_revision {
             return;
         }
         self.renderer_path = path.clone();
+        self.renderer_revision = revision;
         self.raster_cancel.cancel();
         self.raster_cancel = CancellationToken::new();
         self.raster_cache.invalidate_all();
         self.textures.clear();
         self.pdfium_renderer = None;
-        let Some(path) = path else {
-            return;
+        let loaded = match id.and_then(|id| self.sessions.get(&id)) {
+            // Render the session's current bytes so a saved or undone edit is
+            // what the canvas shows.
+            Some(session) => PdfiumRenderer::from_bytes(session.bytes().to_vec()),
+            None => match path {
+                Some(path) => PdfiumRenderer::from_file(&path),
+                None => return,
+            },
         };
-        match PdfiumRenderer::from_file(&path) {
+        match loaded {
             Ok(renderer) => {
                 let count = Renderer::page_count(&renderer).unwrap_or(0);
                 self.page_sizes.clear();
@@ -1170,14 +1271,9 @@ impl PdfxiApp {
                 self.thumb_textures.clear();
             }
             Err(error) => {
-                // `pdfium-render` surfaces a password failure only as text, so
-                // this is a string heuristic rather than a typed error.
-                let message = if error.to_string().to_ascii_lowercase().contains("password") {
-                    "This PDF is password-protected. Password-protected PDFs are not supported yet."
-                        .to_owned()
-                } else {
-                    format!("Could not open this PDF: {error}")
-                };
+                // Passwords are resolved by `DocumentSession` before these
+                // bytes reach PDFium, so any failure here is a backend error.
+                let message = format!("Could not open this PDF: {error}");
                 self.open_error_banner = Some(message.clone());
                 self.status = message;
             }
@@ -1427,48 +1523,66 @@ impl PdfxiApp {
 
     /// Apply keyboard shortcuts for the main find, copy, and view commands.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let (open, next_tab, prev_tab, close, view_command, escape, open_find, next, prev, copy) =
-            ctx.input(|input| {
-                let ctrl = input.modifiers.ctrl;
-                let shift = input.modifiers.shift;
-                // Rotation, fit modes, and zoom are resolved through the shared
-                // shortcut map, so the toolbar and keyboard paths cannot drift.
-                let view_command = [
-                    Key::R,
-                    Key::Num0,
-                    Key::Num1,
-                    Key::Num2,
-                    Key::Equals,
-                    Key::Minus,
-                ]
-                .into_iter()
-                .find(|key| input.key_pressed(*key))
-                .and_then(native_shortcut_key)
-                .and_then(|key| {
-                    map_shortcut(
-                        key,
-                        ShortcutModifiers {
-                            ctrl,
-                            shift,
-                            alt: input.modifiers.alt,
-                        },
-                    )
-                });
-                // Pane commands use Ctrl+Shift and are resolved through the
-                // shared map so the toolbar and keyboard paths cannot drift.
-                (
-                    ctrl && input.key_pressed(Key::N),
-                    ctrl && !shift && input.key_pressed(Key::Tab),
-                    ctrl && shift && input.key_pressed(Key::Tab),
-                    ctrl && !shift && input.key_pressed(Key::W),
-                    view_command,
-                    input.key_pressed(Key::Escape),
-                    ctrl && input.key_pressed(Key::F),
-                    !shift && input.key_pressed(Key::F3),
-                    shift && input.key_pressed(Key::F3),
-                    ctrl && input.key_pressed(Key::C),
+        let (
+            open,
+            next_tab,
+            prev_tab,
+            close,
+            view_command,
+            escape,
+            open_find,
+            next,
+            prev,
+            copy,
+            save,
+            save_as,
+            undo,
+            redo,
+        ) = ctx.input(|input| {
+            let ctrl = input.modifiers.ctrl;
+            let shift = input.modifiers.shift;
+            // Rotation, fit modes, and zoom are resolved through the shared
+            // shortcut map, so the toolbar and keyboard paths cannot drift.
+            let view_command = [
+                Key::R,
+                Key::Num0,
+                Key::Num1,
+                Key::Num2,
+                Key::Equals,
+                Key::Minus,
+            ]
+            .into_iter()
+            .find(|key| input.key_pressed(*key))
+            .and_then(native_shortcut_key)
+            .and_then(|key| {
+                map_shortcut(
+                    key,
+                    ShortcutModifiers {
+                        ctrl,
+                        shift,
+                        alt: input.modifiers.alt,
+                    },
                 )
             });
+            // Pane commands use Ctrl+Shift and are resolved through the
+            // shared map so the toolbar and keyboard paths cannot drift.
+            (
+                ctrl && input.key_pressed(Key::N),
+                ctrl && !shift && input.key_pressed(Key::Tab),
+                ctrl && shift && input.key_pressed(Key::Tab),
+                ctrl && !shift && input.key_pressed(Key::W),
+                view_command,
+                input.key_pressed(Key::Escape),
+                ctrl && input.key_pressed(Key::F),
+                !shift && input.key_pressed(Key::F3),
+                shift && input.key_pressed(Key::F3),
+                ctrl && input.key_pressed(Key::C),
+                ctrl && !shift && input.key_pressed(Key::S),
+                ctrl && shift && input.key_pressed(Key::S),
+                ctrl && !shift && input.key_pressed(Key::Z),
+                ctrl && (input.key_pressed(Key::Y) || (shift && input.key_pressed(Key::Z))),
+            )
+        });
 
         if open {
             self.dispatch(AppCommand::OpenDialog, Some(ctx));
@@ -1481,6 +1595,18 @@ impl PdfxiApp {
         }
         if close {
             self.dispatch(AppCommand::CloseActiveTab, Some(ctx));
+        }
+        if save {
+            self.dispatch(AppCommand::Save, Some(ctx));
+        }
+        if save_as {
+            self.dispatch(AppCommand::SaveAs, Some(ctx));
+        }
+        if undo {
+            self.dispatch(AppCommand::Undo, Some(ctx));
+        }
+        if redo {
+            self.dispatch(AppCommand::Redo, Some(ctx));
         }
         if let Some(command) = view_command {
             let command = match command {
@@ -1565,6 +1691,9 @@ impl eframe::App for PdfxiApp {
         }
         self.open_dialog_ui(ctx);
         self.shell_ui(ctx);
+        self.password_dialog_ui(ctx);
+        self.close_prompt_ui(ctx);
+        self.save_conflict_ui(ctx);
         self.identity_window_ui(ctx);
         self.help_window_ui(ctx);
         if !self.open_errors.is_empty() {
