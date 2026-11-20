@@ -922,9 +922,9 @@ pub mod metrics {
     /// Pages panel width.
     pub const PAGES: f32 = 206.0;
     /// Tools panel width.
-    pub const TOOLS: f32 = 248.0;
-    /// Reserved bottom inset; the page controls float over the canvas.
-    pub const STATUS_BAR: f32 = 0.0;
+    pub const TOOLS: f32 = 206.0;
+    /// Bottom document bar height.
+    pub const STATUS_BAR: f32 = 44.0;
     /// Minimum canvas width before panels collapse.
     pub const MIN_CANVAS: f32 = 320.0;
 }

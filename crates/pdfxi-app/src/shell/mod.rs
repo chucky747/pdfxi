@@ -7,12 +7,17 @@
 //! [`crate::ui::PdfxiApp::dispatch`]; no click handler mutates application state
 //! directly.
 
+pub mod bottom_bar;
+pub mod capabilities;
 pub mod command_bar;
 pub mod commands;
 pub mod dialogs;
 pub mod document_view;
 pub mod empty_state;
 pub mod find_bar;
+pub mod preferences;
+pub mod rail;
 pub mod side_panel;
 pub mod title_bar;
+pub mod tools_panel;
 pub mod widgets;

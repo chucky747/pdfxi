@@ -13,6 +13,8 @@ use crate::settings::{ThemePreference, WindowControlStyle};
 use crate::ui::{CaptionAction, UiClosePolicy};
 use crate::{TabId, Toolset, ViewMode};
 
+use super::capabilities::RailItem;
+
 /// One user action performed by the viewer shell.
 ///
 /// Parameterless variants are the complete set of actions that need no
@@ -112,6 +114,44 @@ pub enum AppCommand {
     SelectThumbnailPage(usize),
     /// Replace the unsaved-close policy.
     SetClosePolicy(UiClosePolicy),
+    /// Open the Edit PDF tool (capability-gated).
+    EditDocument,
+    /// Open the comment tool (capability-gated).
+    Comment,
+    /// Start a highlight (capability-gated).
+    Highlight,
+    /// Open Fill & Sign (capability-gated).
+    FillAndSign,
+    /// Open the signing flow (capability-gated).
+    Sign,
+    /// Open Organize Pages (capability-gated).
+    Organize,
+    /// Open Export (capability-gated).
+    Export,
+    /// Convert a file to PDF (capability-gated).
+    ConvertToPdf,
+    /// Combine files (capability-gated).
+    CombineFiles,
+    /// Open Protect PDF (capability-gated).
+    Protect,
+    /// Open the AI assistant (capability-gated).
+    AiAssistant,
+    /// Show or hide the right tools panel.
+    ToggleTools,
+    /// Toggle the page-thumbnail grid/list layout.
+    ToggleGrid,
+    /// Toggle a native full-screen viewport.
+    ToggleFullscreen,
+    /// Set a custom zoom percentage.
+    SetZoomPercent(u32),
+    /// Validate and submit the page-number box.
+    SubmitPageNumber(String),
+    /// Switch the left rail and side-panel content.
+    ShowRail(RailItem),
+    /// Add a page (capability-gated).
+    AddPage,
+    /// Open the page menu (capability-gated).
+    PageMenu,
 }
 
 impl AppCommand {
@@ -164,6 +204,25 @@ impl AppCommand {
             Self::ClearOpenErrors => "clear-open-errors",
             Self::SelectThumbnailPage(_) => "select-thumbnail-page",
             Self::SetClosePolicy(_) => "set-close-policy",
+            Self::EditDocument => "edit-document",
+            Self::Comment => "comment",
+            Self::Highlight => "highlight",
+            Self::FillAndSign => "fill-and-sign",
+            Self::Sign => "sign",
+            Self::Organize => "organize",
+            Self::Export => "export",
+            Self::ConvertToPdf => "convert-to-pdf",
+            Self::CombineFiles => "combine-files",
+            Self::Protect => "protect",
+            Self::AiAssistant => "ai-assistant",
+            Self::ToggleTools => "toggle-tools",
+            Self::ToggleGrid => "toggle-grid",
+            Self::ToggleFullscreen => "toggle-fullscreen",
+            Self::SetZoomPercent(_) => "set-zoom-percent",
+            Self::SubmitPageNumber(_) => "submit-page-number",
+            Self::ShowRail(_) => "show-rail",
+            Self::AddPage => "add-page",
+            Self::PageMenu => "page-menu",
         }
     }
 }
@@ -269,6 +328,37 @@ impl crate::ui::PdfxiApp {
                 self.select_thumbnail_page(page);
             }
             AppCommand::SetClosePolicy(policy) => self.set_close_policy(policy),
+            AppCommand::EditDocument => self.not_available("Edit PDF"),
+            AppCommand::Comment => self.not_available("Comment"),
+            AppCommand::Highlight => self.not_available("Highlight"),
+            AppCommand::FillAndSign => self.not_available("Fill & Sign"),
+            AppCommand::Sign => self.not_available("Sign"),
+            AppCommand::Organize => self.not_available("Organize Pages"),
+            AppCommand::Export => self.not_available("Export"),
+            AppCommand::ConvertToPdf => self.not_available("Convert to PDF"),
+            AppCommand::CombineFiles => self.not_available("Combine Files"),
+            AppCommand::Protect => self.not_available("Protect PDF"),
+            AppCommand::AiAssistant => self.not_available("AI Assistant"),
+            AppCommand::ToggleTools => self.toggle_tools(),
+            AppCommand::ToggleGrid => self.grid_view = !self.grid_view,
+            AppCommand::ToggleFullscreen => {
+                if let Some(ctx) = ctx {
+                    let fullscreen =
+                        ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+                }
+            }
+            AppCommand::SetZoomPercent(percent) => self.set_zoom_percent(percent),
+            AppCommand::SubmitPageNumber(text) => {
+                self.submit_page_number(&text);
+            }
+            AppCommand::ShowRail(item) => {
+                if self.capabilities.contains(item.capability()) {
+                    self.active_rail = item;
+                }
+            }
+            AppCommand::AddPage => self.not_available("Add page"),
+            AppCommand::PageMenu => self.not_available("Page menu"),
         }
     }
 }

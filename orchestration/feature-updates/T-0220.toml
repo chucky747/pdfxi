@@ -1,0 +1,53 @@
+# T-0220 - acceptance shell layout: rail, command bar, tools panel, bottom bar
+#
+# Adds the acceptance frame around the existing viewer: left icon rail, sparse
+# capability-gated command bar, right tools panel with search, Pages side panel
+# with a real grid/list toggle, and a bottom document bar that replaces the old
+# floating page pill. A capability registry hides every control whose feature
+# has not landed; there are no disabled ghosts. No feature row status changes in
+# this round.
+
+task = "T-0220"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0220.md"
+docs = [
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/design.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/preferences.rs",
+    "crates/pdfxi-app/src/shell/rail.rs",
+    "crates/pdfxi-app/src/shell/tools_panel.rs",
+    "crates/pdfxi-app/src/shell/bottom_bar.rs",
+    "crates/pdfxi-app/src/shell/command_bar.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/shell/document_view.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "docs/evidence/ui/T-0220.md",
+    "docs/evidence/ui/t0220-home-light-windows.png",
+    "docs/evidence/ui/t0220-doc-light-windows.png",
+    "docs/evidence/ui/t0220-doc-dark-windows.png",
+    "docs/evidence/ui/t0220-doc-dark-macos.png",
+]
+notes = """
+The shell now has the acceptance frame: 78 pt rail, 56 pt command bar, 206 pt
+Pages side panel, 206 pt tools panel, 44 pt bottom bar. `Capabilities::available`
+enables only Documents, Recent and Bookmarks today, so the rail shows Home,
+Recent and Pages, the command bar keeps Open/rotate/fit/actual/find plus a
+persisted Tools toggle, the tools panel shows only its search and an empty-state
+line, and Pages hides add-page/page-menu. The bottom bar implements prev/next, a
+validated page-number box, the zoom dropdown (50-200/Fit page/Fit width/Actual
+size), -/+, and a real ViewportCommand::Fullscreen toggle. Five behaviour tests
+cover capability gating, tools search, page-box validation, zoom dispatch and
+panel-state persistence; the library suite is 447 green. The tools panel state
+persists in a sibling shell.toml next to settings.toml because settings.rs is
+outside this task's claim. The full --all-targets gate and the 447 library + 15 harness tests are green. Round B made the tools empty state one line, removed the duplicate Home open action, widened the page box with a spaced "of n", unified the rail Pages icon with the panel grid mark, and muted the tools title; the final round added tools_open(), grid_view() and active_rail() accessors and muted the Pages heading too.
+"""
+tests = [
+    "ui::tests::capability_registry_gates_command_bar_commands",
+    "ui::tests::tools_search_filters_enabled_rows_by_substring",
+    "ui::tests::page_number_box_validates_without_changing_the_page",
+    "ui::tests::bottom_bar_zoom_choices_apply_through_dispatch",
+    "ui::tests::tools_panel_state_round_trips_through_shell_settings",
+]

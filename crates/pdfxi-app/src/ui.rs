@@ -85,7 +85,9 @@ use pdfxi_text::TextExtractor;
 #[path = "shell/mod.rs"]
 mod shell;
 
+pub use shell::capabilities::{Capabilities, Capability, RailItem};
 pub use shell::commands::AppCommand;
+use shell::preferences::{self as shell_preferences, ShellPreferences};
 use shell::widgets::shell_panel_frame;
 pub use shell::widgets::{
     CAPTION_BUTTON_WIDTH, CaptionAction, CaptionSide, caption_command, caption_layout,
@@ -488,6 +490,24 @@ pub struct PdfxiApp {
     settings: settings::Settings,
     /// Where settings are saved; `None` for viewers that never touch disk.
     settings_path: Option<PathBuf>,
+    /// Feature families enabled in this build.
+    capabilities: Capabilities,
+    /// Active left rail and side-panel content.
+    active_rail: RailItem,
+    /// Whether the right tools panel is open.
+    tools_open: bool,
+    /// Tools-panel search query.
+    tools_search: String,
+    /// Page thumbnails as a grid rather than a list.
+    grid_view: bool,
+    /// Editable page-number box text.
+    page_box: String,
+    /// Set while the page-number box owns keyboard focus.
+    page_box_focused: bool,
+    /// Persisted shell preferences (tools panel visibility).
+    shell_prefs: ShellPreferences,
+    /// Where shell preferences are saved; `None` for headless viewers.
+    shell_prefs_path: Option<PathBuf>,
     /// Path currently bound to the PDFium renderer.
     #[cfg(feature = "pdfium")]
     renderer_path: Option<PathBuf>,
@@ -537,7 +557,10 @@ pub struct PdfxiApp {
 impl PdfxiApp {
     /// Create a viewer with no open documents.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            page_box: "1".to_owned(),
+            ..Self::default()
+        }
     }
 
     /// Create an empty viewer window with persisted preferences applied.
@@ -563,6 +586,11 @@ impl PdfxiApp {
         self.theme_preference = self.settings.theme;
         self.window_controls = self.settings.window_controls;
         self.settings_path = Some(path);
+        self.shell_prefs_path = shell_preferences::default_path();
+        if let Some(prefs_path) = &self.shell_prefs_path {
+            self.shell_prefs = shell_preferences::load(prefs_path);
+            self.tools_open = self.shell_prefs.tools_open;
+        }
     }
 
     /// Apply one run's launch flags on top of the saved settings.
@@ -621,6 +649,24 @@ impl PdfxiApp {
         &self.status
     }
 
+    /// Whether the right tools panel is currently open.
+    #[must_use]
+    pub fn tools_open(&self) -> bool {
+        self.tools_open
+    }
+
+    /// Whether the Pages panel draws thumbnails as a grid rather than a list.
+    #[must_use]
+    pub fn grid_view(&self) -> bool {
+        self.grid_view
+    }
+
+    /// The rail item whose side-panel content is currently shown.
+    #[must_use]
+    pub fn active_rail(&self) -> RailItem {
+        self.active_rail
+    }
+
     /// Initialize per-tab shell state for a newly opened document.
     ///
     /// The page count is filled in by the renderer once the document is open;
@@ -643,6 +689,8 @@ impl PdfxiApp {
         self.pending_page_scroll = None;
         self.thumbs.reset(0);
         self.thumb_follow_active = true;
+        self.active_rail = RailItem::Pages;
+        self.page_box = "1".to_owned();
         #[cfg(feature = "pdfium")]
         self.thumb_textures.clear();
     }
@@ -1223,6 +1271,7 @@ impl PdfxiApp {
         }
         self.pending_page_scroll = Some(page);
         self.thumb_follow_active = true;
+        self.page_box = (page + 1).to_string();
         self.status = format!("Page {} of {}", page + 1, self.thumbs.page_count());
         true
     }
@@ -1235,6 +1284,7 @@ impl PdfxiApp {
         let active = active_page_from_canvas_scroll(layout, self.scroll_y);
         if self.thumbs.set_active_page(active) {
             self.thumb_follow_active = true;
+            self.page_box = (active + 1).to_string();
             // Page position is per-tab view state, so scrolling a document and
             // then switching away and back returns to the same page.
             if let Some(tab) = self.state.active_tab_mut() {
@@ -1527,9 +1577,39 @@ impl PdfxiApp {
                 .show(ctx, |ui| self.find_ui(ui));
         }
 
-        if self.state.active_tab().is_some() {
-            egui::SidePanel::left("shell_pages")
-                .exact_width(metrics::PAGES)
+        egui::SidePanel::left("shell_rail")
+            .exact_width(metrics::RAIL)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.panel)
+                    .inner_margin(egui::Margin {
+                        left: 4,
+                        right: 4,
+                        top: 10,
+                        bottom: 8,
+                    }),
+            )
+            .show(ctx, |ui| self.rail_ui(ui, palette));
+
+        egui::SidePanel::left("shell_pages")
+            .exact_width(metrics::PAGES)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.panel)
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 12,
+                        top: 12,
+                        bottom: 10,
+                    }),
+            )
+            .show(ctx, |ui| self.side_panel_ui(ui, palette));
+
+        if self.tools_open {
+            egui::SidePanel::right("shell_tools")
+                .exact_width(metrics::TOOLS)
                 .resizable(false)
                 .frame(
                     egui::Frame::new()
@@ -1541,7 +1621,14 @@ impl PdfxiApp {
                             bottom: 10,
                         }),
                 )
-                .show(ctx, |ui| self.side_panel_ui(ui, palette));
+                .show(ctx, |ui| self.tools_panel_ui(ui, palette));
+        }
+
+        if self.state.active_tab().is_some() {
+            egui::TopBottomPanel::bottom("shell_bottom")
+                .exact_height(metrics::STATUS_BAR)
+                .frame(shell_panel_frame(palette, 12))
+                .show(ctx, |ui| self.bottom_bar_ui(ui, palette));
         }
 
         egui::CentralPanel::default()
@@ -1561,6 +1648,65 @@ impl PdfxiApp {
         let current = tab.current_page() as isize;
         let target = (current + delta).clamp(0, count as isize - 1) as usize;
         self.select_thumbnail_page(target);
+    }
+
+    /// Show or hide the right tools panel and persist the choice.
+    fn toggle_tools(&mut self) {
+        self.tools_open = !self.tools_open;
+        self.persist_shell_preferences();
+    }
+
+    /// Write the tools-panel state to the shell preferences file when present.
+    fn persist_shell_preferences(&mut self) {
+        self.shell_prefs.tools_open = self.tools_open;
+        let Some(path) = self.shell_prefs_path.clone() else {
+            return;
+        };
+        if let Err(error) = shell_preferences::save(&path, &self.shell_prefs) {
+            self.status = format!("Could not save shell preferences: {error}");
+        }
+    }
+
+    /// Report a capability-gated action that this build does not implement.
+    fn not_available(&mut self, feature: &str) {
+        self.status = format!("{feature} is not available in this build");
+    }
+
+    /// Apply a custom zoom percentage from the bottom bar.
+    fn set_zoom_percent(&mut self, percent: u32) {
+        let zoom = Zoom::custom(percent as f32 / 100.0);
+        match self.state.set_zoom(zoom) {
+            Ok(()) => self.status = format!("Zoom: {zoom}"),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Validate and apply the bottom-bar page number.
+    ///
+    /// Accepts a one-based page inside the active document; rejects `0`,
+    /// non-numbers, and pages past the end without changing the current page.
+    /// Returns `true` when the page changed.
+    pub fn submit_page_number(&mut self, text: &str) -> bool {
+        let Some(tab) = self.state.active_tab() else {
+            self.page_box = "1".to_owned();
+            return false;
+        };
+        let count = tab.page_count();
+        let current = tab.current_page();
+        match text.trim().parse::<usize>() {
+            Ok(page) if page >= 1 && page <= count => {
+                self.dispatch(AppCommand::GoToPage(page - 1), None);
+                self.page_box = page.to_string();
+                true
+            }
+            _ => {
+                self.page_box = (current + 1).to_string();
+                if count > 0 {
+                    self.status = format!("Enter a page between 1 and {count}");
+                }
+                false
+            }
+        }
     }
 }
 
@@ -1910,5 +2056,110 @@ mod tests {
             dispatched.state().active_tab().map(|tab| tab.rotation()),
             direct.state().active_tab().map(|tab| tab.rotation())
         );
+    }
+
+    #[test]
+    fn capability_registry_gates_command_bar_commands() {
+        let labels = |caps: Capabilities| -> Vec<&'static str> {
+            shell::capabilities::command_bar_features(caps)
+                .into_iter()
+                .map(|button| button.command.label())
+                .collect()
+        };
+        let hidden = labels(Capabilities::none());
+        for command in [
+            "edit-document",
+            "comment",
+            "highlight",
+            "sign",
+            "organize",
+            "export",
+            "ai-assistant",
+        ] {
+            assert!(!hidden.contains(&command), "{command} must be hidden");
+        }
+        let comments = labels(Capabilities::none().with(Capability::Comments));
+        assert!(comments.contains(&"edit-document"));
+        assert!(comments.contains(&"comment"));
+        assert!(comments.contains(&"highlight"));
+        let signing = labels(Capabilities::none().with(Capability::Signing));
+        assert!(signing.contains(&"sign"));
+        let export = labels(Capabilities::none().with(Capability::Export));
+        assert!(export.contains(&"organize"));
+        assert!(export.contains(&"export"));
+        let ai = labels(Capabilities::none().with(Capability::AiAssistant));
+        assert!(ai.contains(&"ai-assistant"));
+    }
+
+    #[test]
+    fn tools_search_filters_enabled_rows_by_substring() {
+        let all = Capabilities::none()
+            .with(Capability::Comments)
+            .with(Capability::Forms)
+            .with(Capability::Export)
+            .with(Capability::Protect);
+        let rows = shell::capabilities::tool_rows_for(all, "sign");
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter()
+                .all(|row| row.label.to_lowercase().contains("sign"))
+        );
+        assert!(rows.iter().any(|row| row.label == "Fill & Sign"));
+        assert!(shell::capabilities::tool_rows_for(all, "zzz").is_empty());
+        assert!(
+            shell::capabilities::tool_rows_for(Capabilities::available(), "").is_empty(),
+            "no tools are enabled today"
+        );
+    }
+
+    #[test]
+    fn page_number_box_validates_without_changing_the_page() {
+        let mut app = app_with_pages(12);
+        assert!(app.submit_page_number("3"));
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 2);
+        assert!(!app.submit_page_number("0"));
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 2);
+        assert!(!app.submit_page_number("abc"));
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 2);
+        assert!(!app.submit_page_number("13"));
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 2);
+    }
+
+    #[test]
+    fn bottom_bar_zoom_choices_apply_through_dispatch() {
+        let mut app = app_with_pages(3);
+        app.dispatch(AppCommand::FitWidth, None);
+        assert_eq!(
+            app.state().active_tab().map(|tab| tab.zoom()),
+            Some(Zoom::FitWidth)
+        );
+        app.dispatch(AppCommand::ActualSize, None);
+        assert_eq!(
+            app.state().active_tab().map(|tab| tab.zoom()),
+            Some(Zoom::custom(DEFAULT_ZOOM))
+        );
+    }
+
+    #[test]
+    fn tools_panel_state_round_trips_through_shell_settings() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("pdfxi-shell-prefs-{}-{unique}", std::process::id()));
+        let path = dir.join("shell.toml");
+        let mut app = PdfxiApp::new();
+        app.shell_prefs_path = Some(path.clone());
+        let before = app.tools_open;
+        app.dispatch(AppCommand::ToggleTools, None);
+        assert_eq!(app.tools_open, !before);
+        let saved = shell::preferences::load(&path);
+        assert_eq!(saved.tools_open, app.tools_open);
+        app.dispatch(AppCommand::ToggleTools, None);
+        assert_eq!(app.tools_open, before);
+        let saved = shell::preferences::load(&path);
+        assert_eq!(saved.tools_open, app.tools_open);
+        assert!(shell::preferences::ShellPreferences::default().tools_open);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

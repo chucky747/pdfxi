@@ -1,11 +1,13 @@
-//! The document command bar.
+//! Document command bar and the legacy tab strip.
 
-use super::widgets::{shell_icon_button, shell_tool_button};
 use crate::design::{Icon, Palette};
 use crate::ui::{AppCommand, PdfxiApp};
 
+use super::capabilities::command_bar_features;
+use super::widgets::{shell_icon_button, shell_tool_button};
+
 impl PdfxiApp {
-    /// The document command bar: only controls wired to real document state.
+    /// The document command bar: only controls backed by a real command.
     pub(crate) fn document_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         let has_document = self.state.active_tab().is_some();
         ui.horizontal_centered(|ui| {
@@ -39,25 +41,31 @@ impl PdfxiApp {
                     self.dispatch(AppCommand::ActualSize, Some(ui.ctx()));
                 }
             });
+
+            // Feature buttons exist only when their capability is enabled.
+            for feature in command_bar_features(self.capabilities) {
+                if shell_tool_button(ui, palette, feature.icon, feature.label, false).clicked() {
+                    self.dispatch(feature.command.clone(), Some(ui.ctx()));
+                }
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if shell_tool_button(ui, palette, Icon::Organize, "Tools", self.tools_open)
+                    .on_hover_text("Show or hide the tools panel")
+                    .clicked()
+                {
+                    self.dispatch(AppCommand::ToggleTools, Some(ui.ctx()));
+                }
                 if shell_tool_button(ui, palette, Icon::Search, "Find", self.find_open).clicked() {
                     self.dispatch(AppCommand::ToggleFind, Some(ui.ctx()));
                 }
             });
         });
     }
-}
 
-impl PdfxiApp {
-    /// Render the document tab strip.
-    ///
-    /// Labels, order, and the active highlight come from the window-free
-    /// [`Self::tab_strip_snapshot`]. Each tab also gets a small close button;
-    /// close requests are deferred until after the `egui` closure so the
-    /// workspace is never mutated while the UI borrows it. With no open tab the
-    /// strip shows a fixed placeholder.
+    /// Render the legacy document tab strip (kept for headless layout tests).
     #[allow(dead_code)]
-    fn tabs_ui(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn tabs_ui(&mut self, ui: &mut egui::Ui) {
         let snapshot = self.tab_strip_snapshot();
         if snapshot.is_empty() {
             ui.label("No documents open");

@@ -1,7 +1,6 @@
-//! Document canvas, floating page controls, and raster/texture helpers.
+﻿//! Document canvas, page pill, and raster/texture helpers.
 
-use super::widgets::{shell_divider, shell_icon_button};
-use crate::design::{Icon, Palette};
+use crate::design::Palette;
 #[cfg(feature = "pdfium")]
 use crate::raster::RasterKey;
 #[cfg(feature = "pdfium")]
@@ -129,7 +128,6 @@ impl PdfxiApp {
     /// Render the document canvas, or the empty Home state with no document.
     pub(crate) fn canvas_ui(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::for_mode(self.theme);
-        let canvas_rect = ui.max_rect();
         egui::Frame::new()
             .fill(palette.canvas)
             .inner_margin(egui::Margin::same(18))
@@ -299,122 +297,6 @@ impl PdfxiApp {
                 if let Some(tab) = self.state.active_tab_mut() {
                     tab.set_scroll_offset(CanvasPoint::new(self.scroll_x, self.scroll_y));
                 }
-            });
-        if self.state.active_tab().is_some() {
-            self.floating_page_bar_ui(ui, canvas_rect, palette);
-        }
-    }
-
-    /// Floating page and zoom controls over the bottom of the canvas.
-    ///
-    /// The reference keeps the page controls in a compact pill instead of a
-    /// full-width status bar, so the canvas keeps its full height.
-    pub(crate) fn floating_page_bar_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        canvas_rect: egui::Rect,
-        palette: Palette,
-    ) {
-        let width = 260.0_f32;
-        let pos = egui::pos2(
-            canvas_rect.center().x - width / 2.0,
-            canvas_rect.bottom() - 54.0,
-        );
-        egui::Area::new(egui::Id::new("shell-page-bar"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::new()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(1.0_f32, palette.border))
-                    .corner_radius(20.0)
-                    .inner_margin(egui::Margin {
-                        left: 8,
-                        right: 8,
-                        top: 4,
-                        bottom: 4,
-                    })
-                    .show(ui, |ui| {
-                        ui.horizontal_centered(|ui| {
-                            if shell_icon_button(ui, palette, Icon::ChevronLeft, 24.0)
-                                .on_hover_text("Previous page")
-                                .clicked()
-                            {
-                                self.dispatch(AppCommand::PreviousPage, Some(ui.ctx()));
-                            }
-                            let (current, count) = self
-                                .state
-                                .active_tab()
-                                .map(|tab| (tab.current_page(), tab.page_count()))
-                                .unwrap_or((0, 0));
-                            ui.label(
-                                egui::RichText::new(format!("{} of {}", current + 1, count.max(1)))
-                                    .size(10.5)
-                                    .color(palette.text),
-                            );
-                            if shell_icon_button(ui, palette, Icon::ChevronRight, 24.0)
-                                .on_hover_text("Next page")
-                                .clicked()
-                            {
-                                self.dispatch(AppCommand::NextPage, Some(ui.ctx()));
-                            }
-                            shell_divider(ui, palette);
-                            let zoom_label = self
-                                .state
-                                .active_tab()
-                                .map(|tab| match tab.zoom().scale() {
-                                    Some(scale) => format!("{:.0}%", scale * 100.0),
-                                    None => "Fit".to_owned(),
-                                })
-                                .unwrap_or_else(|| "Untitled".to_owned());
-                            ui.menu_button(
-                                egui::RichText::new(zoom_label)
-                                    .size(10.5)
-                                    .color(palette.text),
-                                |ui| {
-                                    if ui.button("Fit Page").clicked() {
-                                        self.dispatch(AppCommand::FitPage, Some(ui.ctx()));
-                                        ui.close();
-                                    }
-                                    if ui.button("Fit Width").clicked() {
-                                        self.dispatch(AppCommand::FitWidth, Some(ui.ctx()));
-                                        ui.close();
-                                    }
-                                    if ui.button("Actual Size").clicked() {
-                                        self.dispatch(AppCommand::ActualSize, Some(ui.ctx()));
-                                        ui.close();
-                                    }
-                                    ui.separator();
-                                    if ui.button("Zoom In").clicked() {
-                                        self.dispatch(AppCommand::ZoomIn, Some(ui.ctx()));
-                                        ui.close();
-                                    }
-                                    if ui.button("Zoom Out").clicked() {
-                                        self.dispatch(AppCommand::ZoomOut, Some(ui.ctx()));
-                                        ui.close();
-                                    }
-                                },
-                            );
-                            if shell_icon_button(ui, palette, Icon::ZoomOut, 24.0)
-                                .on_hover_text("Zoom out")
-                                .clicked()
-                            {
-                                self.dispatch(AppCommand::ZoomOut, Some(ui.ctx()));
-                            }
-                            if shell_icon_button(ui, palette, Icon::ZoomIn, 24.0)
-                                .on_hover_text("Zoom in")
-                                .clicked()
-                            {
-                                self.dispatch(AppCommand::ZoomIn, Some(ui.ctx()));
-                            }
-                            if shell_icon_button(ui, palette, Icon::FitPage, 24.0)
-                                .on_hover_text("Fit page")
-                                .clicked()
-                            {
-                                self.dispatch(AppCommand::FitPage, Some(ui.ctx()));
-                            }
-                        });
-                    });
             });
     }
 
