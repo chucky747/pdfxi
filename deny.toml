@@ -7,7 +7,23 @@ multiple-versions = "warn"
 wildcards = "deny"
 
 [advisories]
-ignore = []
+# Scoped ignore for RUSTSEC-2023-0071 (Marvin Attack, `rsa` 0.9.10).
+#
+# Scope: `pdfxi-security` uses `rsa` only for signing and signature
+# verification (`SigningKey<Sha256>`, `Pkcs1v15Sign`,
+# `RsaPrivateKey::from_pkcs8_pem` / `from_pkcs1_pem`, `RsaPublicKey::verify`).
+# No RSA decryption path exists.
+# Why it does not apply: the advisory is a PKCS#1 v1.5 *decryption*
+# padding-oracle timing issue. PDFXI never decrypts attacker-supplied RSA
+# ciphertext; document encryption uses the separate symmetric/AES paths.
+# Signing and verification are not affected.
+# Guard: `cargo test -p pdfxi-security --test rsa_usage_scope` fails if
+# `DecryptingKey`, `Pkcs1v15Encrypt`, `Oaep` or `rsa::RsaPrivateKey::decrypt`
+# appears in `crates/pdfxi-security/src`.
+# Decision record: `orchestration/blockers/T-0241-rsa-advisory.md` (status:
+# mitigated, scoped ignore). Revisit if PDFXI adds RSA decryption or a fixed
+# `rsa` release ships.
+ignore = ["RUSTSEC-2023-0071"]
 
 [sources]
 unknown-registry = "deny"
