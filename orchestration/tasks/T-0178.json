@@ -3,7 +3,7 @@
   "lane": "convert",
   "title": "Standards profiles closure with ICC validation",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0122"],
   "owns": [
     "crates/pdfxi-standards/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0178.toml"
   ],
   "acceptance": "cargo test -p pdfxi-standards",
-  "evidence": ""
+  "evidence": "docs/evidence/standards/T-0178.md"
 }

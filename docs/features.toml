@@ -4166,36 +4166,134 @@ tests = [
 title = "Tagged PDF and structure tree"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
+docs = [
+    "crates/pdfxi-standards/src/icc.rs",
+    "crates/pdfxi-standards/src/input.rs",
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "crates/pdfxi-standards/src/lib.rs",
+    "docs/evidence/standards/T-0178.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0166.md"
+evidence = "cargo test -p pdfxi-standards: 116 passed, 0 failed; icc::tests::minimal_profile_is_accepted_with_extracted_facts, truncation_is_a_typed_too_short_error, bad_signature_is_a_typed_error, declared_size_mismatch_is_typed, unsupported_colour_space_and_pcs_are_typed, tag_table_out_of_bounds_is_typed, tag_offset_out_of_range_is_typed, overlapping_tags_are_typed, oversized_buffer_is_rejected_before_parsing, and document_profile::t0178_tests::t0178_invalid_icc_is_an_error_in_every_pdf_a_and_pdf_x_profile all ok. TEST_EXIT=0; fmt/clippy/doc EXIT=0. Full output in docs/evidence/standards/T-0178.md."
 id = "STD-007"
-notes = "Deterministic PDF/A-style facts and plans with Incomplete verdicts for unknown facts; ICC byte validation and an independent validator remain."
+notes = """
+The recorded STD-007 gap (ICC byte validation) is closed at library level. A
+bounded validator parses the 128-byte header, acsp signature, declared size,
+colour space, PCS, tag count, tag-table bounds and per-tag ranges with typed
+IccError codes and no external dependency. PreflightInput gains an optional
+output_intent_icc byte field; PdfA1b, PdfA2b and PdfA3b emit a stable
+*.ICC_PROFILE_INVALID error for bad bytes while all pre-existing codes remain
+stable. Absent bytes are never reported as validated. Verified here for the
+library-level subset only: CERTIFICATION = false, colourimetric correctness and
+ICC tag payload semantics are not claimed, and veraPDF is a CI oracle rather
+than a runtime dependency.
+"""
 priority = "P2"
-status = "in-progress"
-tests = ["conformance::tests::version_and_encryption_facts_are_checked"]
+status = "verified"
+tests = [
+    "icc::tests::minimal_profile_is_accepted_with_extracted_facts",
+    "icc::tests::one_tag_profile_is_accepted",
+    "icc::tests::truncation_is_a_typed_too_short_error",
+    "icc::tests::empty_and_short_buffers_never_panic",
+    "icc::tests::bad_signature_is_a_typed_error",
+    "icc::tests::declared_size_smaller_than_minimum_is_typed",
+    "icc::tests::declared_size_mismatch_is_typed",
+    "icc::tests::unsupported_colour_space_and_pcs_are_typed",
+    "icc::tests::tag_count_limit_is_enforced",
+    "icc::tests::tag_table_out_of_bounds_is_typed",
+    "icc::tests::tag_offset_out_of_range_is_typed",
+    "icc::tests::tag_offset_into_header_is_typed",
+    "icc::tests::overlapping_tags_are_typed",
+    "icc::tests::oversized_buffer_is_rejected_before_parsing",
+    "icc::tests::error_codes_are_stable_and_unique",
+    "icc::tests::validation_is_deterministic",
+    "document_profile::t0178_tests::t0178_invalid_icc_is_an_error_in_every_pdf_a_and_pdf_x_profile",
+    "document_profile::t0178_tests::t0178_valid_icc_does_not_add_a_finding",
+    "document_profile::t0178_tests::t0178_absent_icc_bytes_are_not_claimed_as_validated",
+    "document_profile::t0178_tests::t0178_certification_is_false_and_never_claimed",
+]
 title = "PDF/A conformance"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
+docs = [
+    "crates/pdfxi-standards/src/icc.rs",
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "docs/evidence/standards/T-0178.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0166.md"
+evidence = "cargo test -p pdfxi-standards: 116 passed, 0 failed; icc::tests::one_tag_profile_is_accepted, icc::tests::error_codes_are_stable_and_unique and document_profile::t0178_tests::t0178_missing_icc_keeps_the_existing_stable_codes all ok, together with the shared ICC negative suite. TEST_EXIT=0; fmt/clippy/doc EXIT=0. Full output in docs/evidence/standards/T-0178.md."
 id = "STD-008"
-notes = "Output-intent and forbidden-entry checks with sorted stable codes; independent PDF/X validation and ICC inspection remain."
+notes = """
+The recorded STD-008 gap (ICC inspection for output intents) is closed at
+library level using the same shared bounded validator as STD-007. PdfX1a and
+PdfX4 emit the stable *.ICC_PROFILE_INVALID error for invalid GTS_PDFX
+DestOutputProfile bytes; NO_OUTPUT_INTENT and OUTPUT_INTENT_NO_PROFILE keep
+their existing codes and behaviour. The validator is structural only: it does
+not decode tag payloads or certify a print condition, and no independent
+validator is bundled or invoked at runtime. CERTIFICATION = false.
+"""
 priority = "P2"
-status = "in-progress"
-tests = ["conformance::tests::output_intent_and_forbidden_entries_are_checked"]
+status = "verified"
+tests = [
+    "icc::tests::one_tag_profile_is_accepted",
+    "icc::tests::every_supported_colour_space_round_trips",
+    "icc::tests::tag_count_limit_is_enforced",
+    "icc::tests::tag_table_out_of_bounds_is_typed",
+    "icc::tests::tag_offset_out_of_range_is_typed",
+    "icc::tests::overlapping_tags_are_typed",
+    "icc::tests::output_intent_helper_distinguishes_absent_and_invalid_bytes",
+    "icc::tests::error_codes_are_stable_and_unique",
+    "document_profile::t0178_tests::t0178_invalid_icc_is_an_error_in_every_pdf_a_and_pdf_x_profile",
+    "document_profile::t0178_tests::t0178_valid_icc_does_not_add_a_finding",
+    "document_profile::t0178_tests::t0178_missing_icc_keeps_the_existing_stable_codes",
+    "document_profile::t0178_tests::t0178_pdf_e_and_ua_do_not_validate_output_intent_icc",
+]
 title = "PDF/X conformance"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
+docs = [
+    "crates/pdfxi-standards/src/structure.rs",
+    "crates/pdfxi-standards/src/input.rs",
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "crates/pdfxi-standards/src/lib.rs",
+    "docs/evidence/standards/T-0178.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0166.md"
+evidence = "cargo test -p pdfxi-standards: 116 passed, 0 failed; all 13 structure::tests plus document_profile::t0178_tests::t0178_ua_structure_violations_produce_stable_codes, t0178_ua_clean_structure_adds_no_findings and t0178_structure_findings_ignore_input_collection_order are ok. TEST_EXIT=0; fmt/clippy/doc EXIT=0. Full output in docs/evidence/standards/T-0178.md."
 id = "STD-009"
-notes = "Tagging facts and structure validation drive a deterministic UA-style report; full reading-order and alt-text verification remain."
+notes = """
+The recorded STD-009 gap (full reading-order and alt-text verification) is
+closed for everything this crate can decide: standard-role and /RoleMap
+coverage, non-empty /Alt on Figure and Form (artifacts exempt), tagged text
+markers, /StructParents presence, unique MCIDs, StructParents-to-element link
+resolution, parent existence, self-parent rejection and reading-order
+parent-before-child consistency. Typed StructureViolation variants map to
+stable PDFUA1.* finding codes, are Error severity, and are sorted
+independently of input vector order. Verified for the library-level subset
+only: CERTIFICATION = false, semantic reading order and /ActualText quality
+still need human review or an external CI oracle such as veraPDF.
+"""
 priority = "P2"
-status = "in-progress"
-tests = ["conformance::tests::tagged_structure_row_reports_invalid_tree"]
+status = "verified"
+tests = [
+    "structure::tests::standard_roles_are_recognised_case_insensitively",
+    "structure::tests::clean_structure_has_no_violations",
+    "structure::tests::missing_role_map_is_typed_and_actionable",
+    "structure::tests::role_map_entry_suppresses_custom_role_finding",
+    "structure::tests::missing_alt_text_for_figures_and_forms_is_reported",
+    "structure::tests::artifact_and_present_alt_text_are_accepted",
+    "structure::tests::untagged_text_and_missing_struct_parents_are_reported",
+    "structure::tests::duplicate_mcid_is_reported_once_per_value",
+    "structure::tests::struct_parent_links_are_checked",
+    "structure::tests::parent_links_and_reading_order_are_checked",
+    "structure::tests::duplicate_struct_id_is_typed",
+    "structure::tests::violations_are_sorted_and_order_independent",
+    "structure::tests::violation_display_contains_code_and_message",
+    "document_profile::t0178_tests::t0178_ua_structure_violations_produce_stable_codes",
+    "document_profile::t0178_tests::t0178_ua_clean_structure_adds_no_findings",
+    "document_profile::t0178_tests::t0178_structure_findings_ignore_input_collection_order",
+    "document_profile::t0178_tests::t0178_certification_is_false_and_never_claimed",
+]
 title = "PDF/UA conformance"
 
 [[feature]]

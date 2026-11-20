@@ -342,6 +342,45 @@ impl AnnotationInfo {
     }
 }
 
+/// One simplified structure element from the tagged structure tree.
+///
+/// The caller reduces a real structure tree to these plain facts. Identifiers
+/// and reading-order positions are caller-assigned but must be stable for the
+/// document; the PDF/UA checks in [`crate::structure`] use them to verify parent
+/// links and reading order without parsing PDF objects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructElementInfo {
+    /// Stable, document-unique identifier used by parent and parent-tree links.
+    pub id: usize,
+    /// Structure type (role) name without a leading slash, for example `Figure`.
+    pub role: String,
+    /// The element's `/Alt` replacement text, when present.
+    pub alt_text: Option<String>,
+    /// Whether the element is an artifact and therefore exempt from alt text.
+    pub is_artifact: bool,
+    /// Identifier of the parent element; `None` for the structure-tree root.
+    pub parent: Option<usize>,
+    /// Reading-order position; a parent must precede each of its children.
+    pub reading_order: usize,
+}
+
+/// Per-page marked-content and structure-parent facts used by PDF/UA checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageStructureInfo {
+    /// One-based page number used in finding locations.
+    pub page_number: usize,
+    /// Whether the page dictionary carries a `/StructParents` entry.
+    pub has_struct_parents: bool,
+    /// Whether the page contains text drawing operators.
+    pub has_text: bool,
+    /// Whether all text on the page sits inside tagged marked content.
+    pub has_tagged_text: bool,
+    /// MCIDs of marked-content sequences, in content-stream order.
+    pub mcids: Vec<u32>,
+    /// `/StructParents` array: structure element id indexed by MCID.
+    pub struct_parents: Vec<usize>,
+}
+
 /// A dependency-free snapshot of the facts preflight profiles need.
 ///
 /// A caller adapts `pdfxi-core` (or any other PDF model) into this struct by
@@ -371,6 +410,17 @@ pub struct PreflightInput {
     pub transparency: TransparencyUsage,
     /// Annotations found in the document, in any order.
     pub annotations: Vec<AnnotationInfo>,
+    /// Raw bytes of the required output intent's `/DestOutputProfile` stream.
+    ///
+    /// `None` means the caller did not supply the bytes; profiles then keep the
+    /// existing output-intent findings and do not claim ICC validation.
+    pub output_intent_icc: Option<Vec<u8>>,
+    /// Simplified structure-tree elements used by PDF/UA checks.
+    pub struct_elements: Vec<StructElementInfo>,
+    /// Per-page marked-content facts used by PDF/UA checks.
+    pub page_structure: Vec<PageStructureInfo>,
+    /// Custom roles declared in the catalog `/RoleMap`.
+    pub role_map_roles: Vec<String>,
 }
 
 impl PreflightInput {

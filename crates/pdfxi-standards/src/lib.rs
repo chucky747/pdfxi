@@ -24,13 +24,22 @@
 //!   or contradictory requests with typed errors.
 //! - [`PreflightReport`], [`StaticProfile`], and [`HeaderProfile`] are the
 //!   report type, a test double, and a small real header check respectively.
+//! - [`icc`] validates bounded output-intent ICC bytes (header, `acsp`
+//!   signature, declared size, colour space, PCS, and tag-table bounds) with
+//!   typed [`IccError`]s and stable codes. [`validate_icc`] and
+//!   [`validated_output_intent_icc`] expose it; invalid bytes produce
+//!   `*.ICC_PROFILE_INVALID` findings in the PDF/A and PDF/X profiles.
+//! - [`structure`] runs deterministic PDF/UA structure checks (role-map
+//!   coverage, alt text, tagged text, `/StructParents`, unique MCIDs, and
+//!   parent links) and returns typed [`StructureViolation`]s.
 //!
-//! The crate is dependency-free and never executes external tools. Checks are
-//! limited to facts decidable from the snapshot; full byte-level conformance
-//! (including ICC profile validation) belongs in future adapters, with veraPDF
-//! used as a CI oracle rather than a runtime dependency. Fixups edit a cloned
-//! snapshot only: a producer applies the result to PDF bytes and must still
-//! supply real fonts, ICC profiles, and metadata where a placeholder is used.
+//! The crate is dependency-free and never executes external tools. [`CERTIFICATION`]
+//! is `false`: checks are limited to facts decidable from the snapshot. Full
+//! byte-level conformance, semantic reading order, and colourimetric validation
+//! need human review or an independent validator; veraPDF is a CI oracle, not a
+//! runtime dependency. Fixups edit a cloned snapshot only: a producer applies
+//! the result to PDF bytes and must still supply real fonts, ICC profiles, and
+//! metadata where a placeholder is used.
 //!
 //! # Examples
 //!
@@ -53,10 +62,12 @@
 mod document_profile;
 mod finding;
 mod fixup;
+pub mod icc;
 mod input;
 mod profile;
 mod profile_request;
 mod standard;
+pub mod structure;
 
 pub use document_profile::{
     PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfX1aProfile,
@@ -67,13 +78,27 @@ pub use fixup::{
     Fixup, FixupError, FixupOutcome, FixupPolicy, FixupRecord, FixupReport, apply_fixups,
     profile_uses_output_intents, prohibited_entries, required_output_subtype, suggested_fixups,
 };
+pub use icc::{
+    ICC_HEADER_LEN, ICC_MIN_PROFILE_LEN, ICC_TAG_COUNT_OFFSET, ICC_TAG_ENTRY_LEN,
+    ICC_TAG_TABLE_OFFSET, IccColourSpace, IccError, IccProfileInfo, MAX_ICC_BYTES, MAX_ICC_TAGS,
+    validate_icc, validate_icc_with_limit, validated_output_intent_icc,
+};
 pub use input::{
     AnnotationInfo, CatalogInfo, ColourSpace, FontInfo, FontType, ImageFilter, ImageInfo,
-    OutputIntent, PageBoxes, PageInfo, PdfVersion, PreflightInput, TransparencyUsage,
+    OutputIntent, PageBoxes, PageInfo, PageStructureInfo, PdfVersion, PreflightInput,
+    StructElementInfo, TransparencyUsage,
 };
 pub use profile::{HeaderProfile, PreflightProfile, PreflightReport, StaticProfile};
 pub use profile_request::{ConformanceProfile, ProfileRequest, ProfileRequestError};
 pub use standard::{Standard, StandardFamily};
+pub use structure::{STANDARD_ROLES, StructureViolation, check_structure, is_standard_role};
+
+/// Whether this crate performs conformance certification. Always `false`.
+///
+/// A green [`PreflightReport`] means no decidable subset rule fired. It is not
+/// a certification: an independent validator (for example veraPDF in CI) and
+/// human review remain necessary for any PDF/A, PDF/X, or PDF/UA claim.
+pub const CERTIFICATION: bool = false;
 
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {

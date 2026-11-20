@@ -14,15 +14,18 @@
 //! # Scope: subset preflight, not certification
 //!
 //! These profiles and their opt-in fixups are a **deterministic subset
-//! preflight**, not a conformance certification. They inspect a caller-built
-//! `PreflightInput` snapshot rather than raw PDF bytes, do not validate ICC
-//! profile payloads or embedded font programs, and cannot decide rules that
-//! need content-stream semantics or a rendering oracle. Fixups only edit a
-//! cloned snapshot and add *placeholders* (XMP skeleton, output intent without
-//! an ICC stream, version bump); a producer must supply real data and an
-//! independent validator (for example veraPDF in CI) before claiming PDF/A,
-//! PDF/X, PDF/E, or PDF/UA conformance. A passing report means "no decidable
-//! rule in this subset fired", not "certified conforming".
+//! preflight**, not a conformance certification: [`crate::CERTIFICATION`] is
+//! `false`. They inspect a caller-built `PreflightInput` snapshot rather than
+//! raw PDF bytes. The PDF/A and PDF/X profiles now validate the header and tag
+//! table of a caller-supplied output-intent ICC stream (see [`crate::icc`]), and
+//! the PDF/UA profile checks role-map, alt-text, and reading-order facts (see
+//! [`crate::structure`]). Embedded font programs, colourimetric correctness,
+//! full content-stream semantics, and a rendering oracle remain out of scope.
+//! Fixups only edit a cloned snapshot and add *placeholders* (XMP skeleton,
+//! output intent without an ICC stream, version bump); a producer must supply
+//! real data and an independent validator (for example veraPDF in CI) before
+//! claiming PDF/A, PDF/X, PDF/E, or PDF/UA conformance. A passing report means
+//! "no decidable rule in this subset fired", not "certified conforming".
 
 use crate::Severity;
 use crate::Standard;
@@ -59,6 +62,8 @@ struct Rules {
     forbidden_annotation_subtypes: &'static [&'static str],
     /// Catalog or document entries that the standard forbids.
     forbidden_catalog_entries: &'static [&'static str],
+    /// Whether the profile inspects the output intent's ICC bytes when supplied.
+    validate_output_intent_icc: bool,
 }
 
 const PDFA1B_RULES: Rules = Rules {
@@ -75,6 +80,7 @@ const PDFA1B_RULES: Rules = Rules {
     require_annotation_appearance: true,
     forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D"],
     forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
+    validate_output_intent_icc: true,
 };
 
 const PDFA2B_RULES: Rules = Rules {
@@ -91,6 +97,7 @@ const PDFA2B_RULES: Rules = Rules {
     require_annotation_appearance: true,
     forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D"],
     forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
+    validate_output_intent_icc: true,
 };
 
 const PDFA3B_RULES: Rules = Rules {
@@ -108,6 +115,7 @@ const PDFA3B_RULES: Rules = Rules {
     forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D"],
     // PDF/A-3, unlike PDF/A-1 and PDF/A-2, permits embedded files.
     forbidden_catalog_entries: &["/JavaScript", "/AA"],
+    validate_output_intent_icc: true,
 };
 
 const PDFX1A_RULES: Rules = Rules {
@@ -129,6 +137,7 @@ const PDFX1A_RULES: Rules = Rules {
     require_annotation_appearance: true,
     forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D", "/FileAttachment"],
     forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
+    validate_output_intent_icc: true,
 };
 
 const PDFX4_RULES: Rules = Rules {
@@ -145,6 +154,7 @@ const PDFX4_RULES: Rules = Rules {
     require_annotation_appearance: true,
     forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D", "/FileAttachment"],
     forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
+    validate_output_intent_icc: true,
 };
 
 const PDFE1_RULES: Rules = Rules {
@@ -163,6 +173,7 @@ const PDFE1_RULES: Rules = Rules {
     // PDF/E is an engineering exchange format; embedded files and scripting
     // are not prohibited by this subset of checks.
     forbidden_catalog_entries: &[],
+    validate_output_intent_icc: false,
 };
 
 const PDFUA1_RULES: Rules = Rules {
@@ -179,6 +190,7 @@ const PDFUA1_RULES: Rules = Rules {
     require_annotation_appearance: false,
     forbidden_annotation_subtypes: &[],
     forbidden_catalog_entries: &[],
+    validate_output_intent_icc: false,
 };
 
 /// Returns the catalog entries the profile for `standard` forbids.
@@ -363,6 +375,24 @@ fn run_checks(input: &PreflightInput, rules: &Rules) -> Vec<PreflightFinding> {
         }
     }
 
+    if rules.validate_output_intent_icc
+        && let Some(bytes) = input.output_intent_icc.as_deref()
+        && let Err(error) = crate::icc::validate_icc(bytes)
+    {
+        push(
+            &mut out,
+            rules,
+            "ICC_PROFILE_INVALID",
+            Severity::Error,
+            format!(
+                "output-intent /DestOutputProfile is not a valid ICC profile ({}): {}",
+                error.code(),
+                error
+            ),
+            Some("Catalog /OutputIntents /DestOutputProfile".to_owned()),
+        );
+    }
+
     if rules.xmp_required && !input.catalog.has_xmp_metadata {
         push(
             &mut out,
@@ -542,6 +572,16 @@ fn run_checks(input: &PreflightInput, rules: &Rules) -> Vec<PreflightFinding> {
                 Severity::Info,
                 "form fields must have accessible names; verify each field manually".to_owned(),
                 Some("Catalog /AcroForm".to_owned()),
+            );
+        }
+        for violation in crate::structure::check_structure(input) {
+            push(
+                &mut out,
+                rules,
+                violation.code(),
+                violation.severity(),
+                violation.message(),
+                Some(violation.location()),
             );
         }
     }
@@ -871,6 +911,7 @@ mod tests {
             }],
             transparency: TransparencyUsage::default(),
             annotations: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -1775,5 +1816,337 @@ mod t0127_tests {
             );
         }
         assert_eq!(first.findings(), profile.check_sorted(&input).as_slice());
+    }
+}
+
+/// T-0178 coverage: ICC byte validation wired into PDF/A and PDF/X, and the
+/// deterministic PDF/UA structure checks wired into the accessibility profile.
+#[cfg(test)]
+mod t0178_tests {
+    use super::*;
+    use crate::CERTIFICATION;
+    use crate::input::{
+        CatalogInfo, FontInfo, FontType, ImageInfo, OutputIntent, PageBoxes, PageInfo,
+        PageStructureInfo, StructElementInfo, TransparencyUsage,
+    };
+
+    fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    fn put_cc(bytes: &mut [u8], offset: usize, code: &[u8; 4]) {
+        bytes[offset..offset + 4].copy_from_slice(code);
+    }
+
+    /// A minimal, structurally valid ICC profile with no tags.
+    fn valid_icc() -> Vec<u8> {
+        let mut bytes = vec![0u8; 132];
+        put_u32(&mut bytes, 0, 132);
+        put_cc(&mut bytes, 12, b"mntr");
+        put_cc(&mut bytes, 16, b"CMYK");
+        put_cc(&mut bytes, 20, b"XYZ ");
+        put_cc(&mut bytes, 36, b"acsp");
+        put_u32(&mut bytes, 128, 0);
+        bytes
+    }
+
+    fn bad_icc() -> Vec<u8> {
+        let mut bytes = valid_icc();
+        bytes[36] = b'x';
+        bytes
+    }
+
+    fn conforming(standard: Standard) -> PreflightInput {
+        let (version, subtype) = match standard {
+            Standard::PdfA1b => (PdfVersion::new(1, 4), "GTS_PDFA1"),
+            Standard::PdfA2b | Standard::PdfA3b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
+            Standard::PdfX1a => (PdfVersion::new(1, 3), "GTS_PDFX"),
+            Standard::PdfX4 => (PdfVersion::new(1, 6), "GTS_PDFX"),
+            Standard::PdfE1 | Standard::PdfUa1 => (PdfVersion::new(1, 7), "GTS_PDFA1"),
+        };
+        let mut catalog = CatalogInfo {
+            has_xmp_metadata: true,
+            has_mark_info: true,
+            is_marked: true,
+            has_lang: true,
+            has_struct_tree_root: true,
+            ..Default::default()
+        };
+        if standard != Standard::PdfUa1 {
+            catalog
+                .output_intents
+                .push(OutputIntent::new(subtype, true));
+        }
+        PreflightInput {
+            version,
+            catalog,
+            page_count: 1,
+            pages: vec![PageInfo {
+                number: 1,
+                boxes: PageBoxes::all_present(),
+            }],
+            fonts: vec![FontInfo {
+                name: "/F1".to_owned(),
+                font_type: FontType::TrueType,
+                embedded: true,
+            }],
+            colour_spaces: vec![ColourSpace::DeviceCmyk],
+            images: vec![ImageInfo {
+                name: "/Im1".to_owned(),
+                filter: ImageFilter::FlateDecode,
+            }],
+            transparency: TransparencyUsage::default(),
+            annotations: Vec::new(),
+            output_intent_icc: Some(valid_icc()),
+            ..Default::default()
+        }
+    }
+
+    fn check(standard: Standard, input: &PreflightInput) -> Vec<PreflightFinding> {
+        match standard {
+            Standard::PdfA1b => PdfA1bProfile::new().check(input),
+            Standard::PdfA2b => PdfA2bProfile::new().check(input),
+            Standard::PdfA3b => PdfA3bProfile::new().check(input),
+            Standard::PdfX1a => PdfX1aProfile::new().check(input),
+            Standard::PdfX4 => PdfX4Profile::new().check(input),
+            Standard::PdfE1 => PdfE1Profile::new().check(input),
+            Standard::PdfUa1 => PdfUa1Profile::new().check(input),
+        }
+    }
+
+    #[test]
+    fn t0178_invalid_icc_is_an_error_in_every_pdf_a_and_pdf_x_profile() {
+        for standard in [
+            Standard::PdfA1b,
+            Standard::PdfA2b,
+            Standard::PdfA3b,
+            Standard::PdfX1a,
+            Standard::PdfX4,
+        ] {
+            let mut input = conforming(standard);
+            input.output_intent_icc = Some(bad_icc());
+            let findings = check(standard, &input);
+            let finding = findings
+                .iter()
+                .find(|item| item.code().ends_with(".ICC_PROFILE_INVALID"))
+                .unwrap_or_else(|| panic!("test: {standard} must report an invalid ICC profile"));
+            assert_eq!(finding.severity(), Severity::Error);
+            assert!(finding.message().contains("ICC.BAD_SIGNATURE"));
+            assert_eq!(
+                finding.location(),
+                Some("Catalog /OutputIntents /DestOutputProfile")
+            );
+        }
+    }
+
+    #[test]
+    fn t0178_valid_icc_does_not_add_a_finding() {
+        for standard in [
+            Standard::PdfA1b,
+            Standard::PdfA2b,
+            Standard::PdfA3b,
+            Standard::PdfX1a,
+            Standard::PdfX4,
+        ] {
+            let input = conforming(standard);
+            assert!(
+                check(standard, &input).is_empty(),
+                "{standard} rejected a valid ICC profile"
+            );
+        }
+    }
+
+    #[test]
+    fn t0178_missing_icc_keeps_the_existing_stable_codes() {
+        let mut input = conforming(Standard::PdfA2b);
+        input.catalog.output_intents.clear();
+        let findings = check(Standard::PdfA2b, &input);
+        let codes: Vec<&str> = findings.iter().map(PreflightFinding::code).collect();
+        assert!(codes.contains(&"PDFA2B.NO_OUTPUT_INTENT"));
+        assert!(
+            !codes
+                .iter()
+                .any(|code| code.contains("ICC_PROFILE_INVALID"))
+        );
+
+        let mut input = conforming(Standard::PdfX4);
+        input.catalog.output_intents[0].has_dest_output_profile = false;
+        let findings = check(Standard::PdfX4, &input);
+        let codes: Vec<&str> = findings.iter().map(PreflightFinding::code).collect();
+        assert!(codes.contains(&"PDFX4.OUTPUT_INTENT_NO_PROFILE"));
+        assert!(
+            !codes
+                .iter()
+                .any(|code| code.contains("ICC_PROFILE_INVALID"))
+        );
+    }
+
+    #[test]
+    fn t0178_absent_icc_bytes_are_not_claimed_as_validated() {
+        for standard in [Standard::PdfA1b, Standard::PdfX1a] {
+            let mut input = conforming(standard);
+            input.output_intent_icc = None;
+            assert!(
+                check(standard, &input).is_empty(),
+                "{standard} must stay green when bytes are not supplied"
+            );
+            assert_eq!(
+                crate::validated_output_intent_icc(&input),
+                Ok(None),
+                "no validation may be claimed when bytes are absent"
+            );
+        }
+    }
+
+    #[test]
+    fn t0178_pdf_e_and_ua_do_not_validate_output_intent_icc() {
+        for standard in [Standard::PdfE1, Standard::PdfUa1] {
+            let mut input = conforming(standard);
+            input.output_intent_icc = Some(bad_icc());
+            assert!(
+                check(standard, &input).is_empty(),
+                "{standard} has no ICC rule in this subset"
+            );
+        }
+    }
+
+    #[test]
+    fn t0178_ua_structure_violations_produce_stable_codes() {
+        let mut input = conforming(Standard::PdfUa1);
+        input.struct_elements = vec![
+            StructElementInfo {
+                id: 0,
+                role: "Document".to_owned(),
+                alt_text: None,
+                is_artifact: false,
+                parent: None,
+                reading_order: 0,
+            },
+            StructElementInfo {
+                id: 1,
+                role: "Figure".to_owned(),
+                alt_text: None,
+                is_artifact: false,
+                parent: Some(0),
+                reading_order: 1,
+            },
+            StructElementInfo {
+                id: 2,
+                role: "CustomWidget".to_owned(),
+                alt_text: None,
+                is_artifact: false,
+                parent: Some(0),
+                reading_order: 2,
+            },
+        ];
+        input.page_structure = vec![PageStructureInfo {
+            page_number: 1,
+            has_struct_parents: true,
+            has_text: true,
+            has_tagged_text: false,
+            mcids: vec![0, 0],
+            struct_parents: vec![1, 1],
+        }];
+
+        let findings = PdfUa1Profile::new().check(&input);
+        let codes: Vec<&str> = findings.iter().map(PreflightFinding::code).collect();
+        assert!(codes.contains(&"PDFUA1.ALT_TEXT_MISSING"));
+        assert!(codes.contains(&"PDFUA1.ROLE_MAP_MISSING"));
+        assert!(codes.contains(&"PDFUA1.UNTAGGED_TEXT"));
+        assert!(codes.contains(&"PDFUA1.DUPLICATE_MCID"));
+        assert!(
+            findings
+                .iter()
+                .all(|item| item.severity() == Severity::Error),
+            "structure violations must block conformance"
+        );
+        assert_eq!(findings, PdfUa1Profile::new().check(&input));
+        let sorted = PdfUa1Profile::new().check_sorted(&input);
+        assert_eq!(findings, sorted);
+    }
+
+    #[test]
+    fn t0178_ua_clean_structure_adds_no_findings() {
+        let mut input = conforming(Standard::PdfUa1);
+        input.struct_elements = vec![
+            StructElementInfo {
+                id: 0,
+                role: "Document".to_owned(),
+                alt_text: None,
+                is_artifact: false,
+                parent: None,
+                reading_order: 0,
+            },
+            StructElementInfo {
+                id: 1,
+                role: "P".to_owned(),
+                alt_text: None,
+                is_artifact: false,
+                parent: Some(0),
+                reading_order: 1,
+            },
+        ];
+        input.page_structure = vec![PageStructureInfo {
+            page_number: 1,
+            has_struct_parents: true,
+            has_text: true,
+            has_tagged_text: true,
+            mcids: vec![0],
+            struct_parents: vec![1],
+        }];
+        assert!(check(Standard::PdfUa1, &input).is_empty());
+    }
+
+    #[test]
+    fn t0178_structure_findings_ignore_input_collection_order() {
+        let mut input = conforming(Standard::PdfUa1);
+        input.struct_elements = vec![
+            StructElementInfo {
+                id: 0,
+                role: "Document".to_owned(),
+                alt_text: None,
+                is_artifact: false,
+                parent: None,
+                reading_order: 0,
+            },
+            StructElementInfo {
+                id: 1,
+                role: "Figure".to_owned(),
+                alt_text: Some(String::new()),
+                is_artifact: false,
+                parent: Some(0),
+                reading_order: 1,
+            },
+        ];
+        input.page_structure = vec![PageStructureInfo {
+            page_number: 1,
+            has_struct_parents: true,
+            has_text: true,
+            has_tagged_text: true,
+            mcids: vec![0],
+            struct_parents: vec![1],
+        }];
+        let mut reversed = input.clone();
+        reversed.struct_elements.reverse();
+        reversed.page_structure.reverse();
+        let a = PdfUa1Profile::new().report(&input);
+        let b = PdfUa1Profile::new().report(&reversed);
+        assert_eq!(a, b);
+        assert!(
+            a.findings()
+                .iter()
+                .any(|item| item.code() == "PDFUA1.ALT_TEXT_MISSING")
+        );
+    }
+
+    #[test]
+    fn t0178_certification_is_false_and_never_claimed() {
+        const { assert!(!CERTIFICATION) };
+        let input = conforming(Standard::PdfA1b);
+        let report = check(Standard::PdfA1b, &input);
+        assert!(report.is_empty());
+        let summary = PdfA1bProfile::new().report(&input).summary();
+        assert!(summary.contains("conforming"));
+        assert!(!summary.contains("certified"));
     }
 }
