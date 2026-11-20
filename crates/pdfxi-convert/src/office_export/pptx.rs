@@ -1,7 +1,7 @@
 //! PresentationML (`.pptx`) writer.
 
 use super::error::PptxExportError;
-use super::model::{OfficeBlock, OfficeDocument, TableBlock, TextBox};
+use super::model::{OfficeBlock, OfficeDocument, ParagraphStyle, TableBlock, TextBox};
 use super::xml;
 use super::{OfficeExport, OfficeExportError, OfficeExportReport, OfficeExporter};
 use super::{OfficeFormat, ReportedUnsupported, finish, validate};
@@ -353,19 +353,39 @@ fn render_page(
     let width = f64::from(page.width);
     let height = f64::from(page.height);
 
-    for block in &page.blocks {
+    // A leading `Title` or `Heading(1)` paragraph becomes the slide title at
+    // the top of the slide; the body flows below it. Without a title block the
+    // body starts near the top edge as before.
+    let (body_blocks, body_top) = match page.blocks.split_first() {
+        Some((
+            OfficeBlock::Paragraph {
+                text,
+                style: ParagraphStyle::Title | ParagraphStyle::Heading(1),
+            },
+            rest,
+        )) => {
+            let title = TextBox::new(text.clone(), 40.0, (height - 70.0) as f32).with_metrics(
+                (width - 80.0).max(1.0) as f32,
+                40.0,
+                28.0,
+            );
+            shapes.push(text_box_shape(shape_id, &title, height));
+            shape_id += 1;
+            (rest, 96.0_f64)
+        }
+        _ => (page.blocks.as_slice(), 36.0_f64),
+    };
+
+    for block in body_blocks {
         match block {
             OfficeBlock::TextBox(box_) => {
                 shapes.push(text_box_shape(shape_id, box_, height));
                 shape_id += 1;
             }
             OfficeBlock::Paragraph { text, .. } | OfficeBlock::ListItem { text, .. } => {
-                let top = (height - 60.0 - f64::from(flattened_index) * 30.0).max(0.0) as f32;
-                let box_ = TextBox::new(text.clone(), 40.0, top).with_metrics(
-                    (width - 80.0).max(1.0) as f32,
-                    24.0,
-                    18.0,
-                );
+                let top = (body_top + f64::from(flattened_index) * 24.0).min(height);
+                let box_ = TextBox::new(text.clone(), 40.0, (height - top - 22.0) as f32)
+                    .with_metrics((width - 80.0).max(1.0) as f32, 22.0, 16.0);
                 shapes.push(text_box_shape(shape_id, &box_, height));
                 shape_id += 1;
                 flattened_index += 1;
@@ -378,11 +398,8 @@ fn render_page(
             }
             OfficeBlock::Table(table) => {
                 let text = flatten_table(table);
-                let box_ = TextBox::new(text, 40.0, 60.0).with_metrics(
-                    (width - 80.0).max(1.0) as f32,
-                    60.0,
-                    12.0,
-                );
+                let box_ = TextBox::new(text, 40.0, (height - body_top - 60.0) as f32)
+                    .with_metrics((width - 80.0).max(1.0) as f32, 60.0, 12.0);
                 shapes.push(text_box_shape(shape_id, &box_, height));
                 shape_id += 1;
                 unsupported.push(ReportedUnsupported::new(
@@ -515,6 +532,24 @@ mod tests {
         assert!(slide1.contains("sz=\"1200\""));
         assert!(slide1.contains("<a:t>Hi</a:t>"));
         assert!(part(&export, "ppt/slides/slide2.xml").contains("<a:t>Bye</a:t>"));
+    }
+
+    #[test]
+    fn pptx_leading_title_paragraph_renders_a_title_shape() {
+        let doc = doc_with(vec![
+            OfficeBlock::styled("Page 1", ParagraphStyle::Title),
+            OfficeBlock::paragraph("body"),
+        ]);
+        let export = PptxExporter.write(&doc).expect("write");
+        let slide = part(&export, "ppt/slides/slide1.xml");
+        assert!(slide.contains("<a:t>Page 1</a:t>"));
+        assert!(slide.contains("sz=\"2800\""));
+        assert!(slide.contains("<a:t>body</a:t>"));
+        assert_eq!(
+            export.report.unsupported.len(),
+            1,
+            "only the body paragraph is reported as flattened"
+        );
     }
 
     #[test]

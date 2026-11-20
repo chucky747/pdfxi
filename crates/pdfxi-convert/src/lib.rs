@@ -27,7 +27,11 @@
 //!   [`export_docx`] are the end-to-end export path from a parsed
 //!   `pdfxi_core::Document`: page text is read through `Document::page_text`
 //!   (including `/ToUnicode`), and the same pages are mapped into a real
-//!   WordprocessingML `.docx` package. [`export_page_text`],
+//!   WordprocessingML `.docx` package. [`export_pdf`], [`ExportFormat`],
+//!   [`ExportOptions`], and [`ExportedFile`] are the single dispatch covering
+//!   A-27: text, Word, Excel, PowerPoint, PNG/JPEG (with the `pdfium` feature),
+//!   HTML, and RTF, with [`ExportFormat::implemented`] telling a UI which
+//!   formats the current build can actually write. [`export_page_text`],
 //!   [`TextExportPlan`], [`TextPageSelection`], and [`TextEncoding`] remain the
 //!   low-level writers for callers that already hold extracted `(page, text)`
 //!   pairs.
@@ -317,9 +321,12 @@ pub use page_export::{
 };
 #[cfg(feature = "pdfium")]
 pub use page_export::{export_pdf_bytes, export_pdf_file};
+#[cfg(feature = "renderer")]
+pub use pdf_export::export_pdf_with_cancellation;
 pub use pdf_export::{
-    DEFAULT_DOCX_TITLE, PdfDocxOptions, PdfExportError, PdfPageSeparator, PdfTextOptions,
-    build_office_document, export_docx, export_text,
+    DEFAULT_DOCX_TITLE, DEFAULT_EXPORT_DPI, DEFAULT_JPEG_QUALITY, ExportFormat, ExportOptions,
+    ExportedFile, ExportedPart, MAX_EXPORT_DPI, PdfDocxOptions, PdfExportError, PdfPageSeparator,
+    PdfTextOptions, build_office_document, export_docx, export_pdf, export_text,
 };
 pub use portfolio::{
     PORTFOLIO_MAX_DESCRIPTION_BYTES, PORTFOLIO_MAX_ENTRIES, PORTFOLIO_MAX_NAME_BYTES,

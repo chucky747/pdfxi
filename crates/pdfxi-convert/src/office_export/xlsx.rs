@@ -371,10 +371,15 @@ fn styles() -> String {
 
 fn sheet_xml(sheet: &Sheet) -> String {
     let mut out = format!(
-        "{decl}<worksheet xmlns=\"{s}\"><sheetData>",
+        "{decl}<worksheet xmlns=\"{s}\">",
         decl = xml::declaration(),
         s = S_NS,
     );
+    let cols = column_widths(&sheet.rows);
+    if !cols.is_empty() {
+        out.push_str(&cols);
+    }
+    out.push_str("<sheetData>");
     for (row_index, cells) in sheet.rows.iter().enumerate() {
         out.push_str(&format!("<row r=\"{}\">", row_index + 1));
         for (column_index, cell) in cells.iter().enumerate() {
@@ -398,6 +403,45 @@ fn sheet_xml(sheet: &Sheet) -> String {
         out.push_str("</row>");
     }
     out.push_str("</sheetData></worksheet>");
+    out
+}
+
+/// Build the `<cols>` element from the longest value in each column.
+///
+/// Excel column widths are measured in default-font characters. The width is
+/// the longest value plus two characters of padding, bounded to `8..=80` so a
+/// single huge extracted line cannot create an unusable sheet. Cells are never
+/// truncated; the bound only affects how much is visible without scrolling.
+/// Returns an empty string for a sheet with no cells.
+fn column_widths(rows: &[Vec<OfficeCell>]) -> String {
+    let mut widths: Vec<usize> = Vec::new();
+    for row in rows {
+        for (column, cell) in row.iter().enumerate() {
+            let length = match &cell.value {
+                CellValue::Text(text) => text.chars().count(),
+                CellValue::Number(_) => 12,
+                CellValue::Boolean(_) => 5,
+                CellValue::Empty => 0,
+            };
+            if column >= widths.len() {
+                widths.resize(column + 1, 0);
+            }
+            widths[column] = widths[column].max(length);
+        }
+    }
+    if widths.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<cols>");
+    for (column, length) in widths.iter().enumerate() {
+        let width = length.saturating_add(2).clamp(8, 80);
+        out.push_str(&format!(
+            "<col min=\"{min}\" max=\"{max}\" width=\"{width}\" customWidth=\"1\"/>",
+            min = column + 1,
+            max = column + 1,
+        ));
+    }
+    out.push_str("</cols>");
     out
 }
 
@@ -499,6 +543,26 @@ mod tests {
         assert!(xml.contains("r=\"D1\"/>"));
         assert!(xml.contains("r=\"A2\" t=\"inlineStr\""));
         assert!(!xml.contains("&lt;"));
+    }
+
+    #[test]
+    fn xlsx_declares_bounded_column_widths() {
+        let short = XlsxExporter::new()
+            .write(&doc_with(vec![OfficeBlock::paragraph("x")]))
+            .expect("short");
+        assert!(
+            part(&short, "xl/worksheets/sheet1.xml")
+                .contains("<col min=\"1\" max=\"1\" width=\"8\"")
+        );
+
+        let long = "y".repeat(200);
+        let wide = XlsxExporter::new()
+            .write(&doc_with(vec![OfficeBlock::paragraph(long)]))
+            .expect("wide");
+        assert!(
+            part(&wide, "xl/worksheets/sheet1.xml")
+                .contains("<col min=\"1\" max=\"1\" width=\"80\"")
+        );
     }
 
     #[test]
