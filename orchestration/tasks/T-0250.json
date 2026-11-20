@@ -1,0 +1,17 @@
+{
+  "id": "T-0250",
+  "lane": "automation",
+  "title": "OpenCode connection spike and ADR 0011 confirmation",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [],
+  "owns": [
+    "docs/decisions/0011-ai-assistant-through-opencode.md",
+    "docs/evidence/hardening/T-0250.md",
+    "orchestration/feature-updates/T-0250.toml",
+    "orchestration/blockers/**"
+  ],
+  "acceptance": "ADR 0011 updated with a verified request transcript and a pinned OpenCode version",
+  "notes": "Spike that confirms or rejects ADR 0011 (docs/decisions/0011-ai-assistant-through-opencode.md) before any assistant code is written. Discovery on this machine: search PATH and the usual install locations for the `opencode` executable, read the service registration file under the user profile, and probe listening localhost ports with GET /api/info. Authentication must follow the way the CLI authenticates; secrets are read from the local credential store only and never printed. Exercise and record exact request/response shapes (secrets redacted): server info, GET /api/provider and the model list (confirm `opencode-go/hy4-flash-free` is present), session create, one prompt, model switch, the event stream, client-MCP attach at /api/experimental/client-mcp, and a plugin RPC fallback. Many routes are experimental: pin the OpenCode version and every observed path in ADR 0011, and record which routes changed. Budget rule: do NOT enable or use the user's paid providers for bulk testing; at most one short prompt on `opencode-go/hy4-flash-free`. If no service can be reached, write orchestration/blockers/T-0250-opencode-service.md with the exact discovery attempts (paths searched, ports probed, errors) and do not invent a contract. Definition of done: ADR 0011 status moved from proposed to accepted or rejected, transcript in docs/evidence/hardening/T-0250.md, and a pinned version recorded.",
+  "evidence": "docs/evidence/hardening/T-0250.md"
+}

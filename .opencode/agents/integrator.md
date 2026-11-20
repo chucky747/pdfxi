@@ -58,6 +58,12 @@ permissions:
   - action: edit
     resource: "crates/pdfxi-document/**"
     effect: allow
+  - action: edit
+    resource: "deny.toml"
+    effect: allow
+  - action: edit
+    resource: "crates/*/tests/**"
+    effect: allow
   - action: shell
     resource: "*"
     effect: allow

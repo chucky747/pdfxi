@@ -2,7 +2,7 @@
 description: "Action batch and plugin lane"
 mode: subagent
 model: opencode-go/hy4-flash-free
-steps: 80
+steps: 140
 permissions:
   - action: edit
     resource: "*"
@@ -24,6 +24,12 @@ permissions:
     effect: allow
   - action: edit
     resource: "orchestration/blockers/**"
+    effect: allow
+  - action: edit
+    resource: "docs/decisions/**"
+    effect: allow
+  - action: edit
+    resource: "crates/pdfxi-assistant/**"
     effect: allow
   - action: shell
     resource: "*"
