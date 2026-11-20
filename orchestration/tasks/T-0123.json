@@ -3,7 +3,7 @@
   "lane": "qa",
   "title": "Reproducible Windows package and notices",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0120"],
   "owns": [
     "scripts/**",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0123.toml"
   ],
   "acceptance": "powershell -File scripts/package.ps1 -Check",
-  "evidence": ""
+  "evidence": "docs/evidence/qa/T-0123.md"
 }
