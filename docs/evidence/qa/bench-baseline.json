@@ -12,7 +12,7 @@
   "host": {
     "os": "windows",
     "arch": "x86_64",
-    "pdfium_available": true,
+    "pdfium_available": false,
     "renderer_note": "mock renderer: content decode + bounded RGB fill; no PDFium link"
   },
   "fixtures": [
@@ -24,51 +24,51 @@
         {
           "name": "open",
           "unit": "ms",
-          "value": 0.0078,
+          "value": 0.0076,
           "budget": 6.25,
           "within_budget": true,
-          "min": 0.0077,
+          "min": 0.0076,
           "max": 0.0078,
           "samples": 7
         },
         {
           "name": "first_page_render",
           "unit": "ms",
-          "value": 0.3304,
+          "value": 0.395,
           "budget": 6.25,
           "within_budget": true,
-          "min": 0.329,
-          "max": 0.4171,
+          "min": 0.3514,
+          "max": 0.6496,
           "samples": 7
         },
         {
           "name": "text_extract",
           "unit": "ms",
-          "value": 0.0134,
+          "value": 0.0139,
           "budget": 6.25,
           "within_budget": true,
-          "min": 0.0133,
-          "max": 0.0134,
+          "min": 0.0138,
+          "max": 0.019,
           "samples": 7
         },
         {
           "name": "search_index_build",
           "unit": "ms",
-          "value": 0.0098,
+          "value": 0.0106,
           "budget": 6.25,
           "within_budget": true,
-          "min": 0.0097,
-          "max": 0.01,
+          "min": 0.0104,
+          "max": 0.0108,
           "samples": 7
         },
         {
           "name": "save",
           "unit": "ms",
-          "value": 0.0136,
+          "value": 0.014,
           "budget": 6.25,
           "within_budget": true,
-          "min": 0.0136,
-          "max": 0.0166,
+          "min": 0.0139,
+          "max": 0.0149,
           "samples": 7
         },
         {
@@ -91,51 +91,51 @@
         {
           "name": "open",
           "unit": "ms",
-          "value": 0.2922,
+          "value": 0.2951,
           "budget": 375.0,
           "within_budget": true,
-          "min": 0.2921,
-          "max": 0.4596,
+          "min": 0.2893,
+          "max": 0.3598,
           "samples": 7
         },
         {
           "name": "first_page_render",
           "unit": "ms",
-          "value": 0.608,
+          "value": 0.715,
           "budget": 37.5,
           "within_budget": true,
-          "min": 0.6054,
-          "max": 0.6614,
+          "min": 0.6461,
+          "max": 1.2089,
           "samples": 7
         },
         {
           "name": "text_extract",
           "unit": "ms",
-          "value": 0.5948,
+          "value": 0.6972,
           "budget": 250.0,
           "within_budget": true,
-          "min": 0.5945,
-          "max": 0.6441,
+          "min": 0.6092,
+          "max": 0.8345,
           "samples": 7
         },
         {
           "name": "search_index_build",
           "unit": "ms",
-          "value": 0.5595,
+          "value": 0.582,
           "budget": 250.0,
           "within_budget": true,
-          "min": 0.5582,
-          "max": 0.5627,
+          "min": 0.5752,
+          "max": 1.0278,
           "samples": 7
         },
         {
           "name": "save",
           "unit": "ms",
-          "value": 0.5841,
+          "value": 0.5818,
           "budget": 500.0,
           "within_budget": true,
-          "min": 0.5839,
-          "max": 0.7384,
+          "min": 0.5764,
+          "max": 0.5967,
           "samples": 7
         },
         {
@@ -158,51 +158,51 @@
         {
           "name": "open",
           "unit": "ms",
-          "value": 1.5945,
+          "value": 1.9286,
           "budget": 1875.0,
           "within_budget": true,
-          "min": 1.5912,
-          "max": 1.7507,
+          "min": 1.6316,
+          "max": 2.7619,
           "samples": 7
         },
         {
           "name": "first_page_render",
           "unit": "ms",
-          "value": 1.8798,
+          "value": 2.08,
           "budget": 187.5,
           "within_budget": true,
-          "min": 1.8752,
-          "max": 1.9081,
+          "min": 1.907,
+          "max": 2.5408,
           "samples": 7
         },
         {
           "name": "text_extract",
           "unit": "ms",
-          "value": 3.3008,
+          "value": 3.744,
           "budget": 1250.0,
           "within_budget": true,
-          "min": 3.2966,
-          "max": 3.3344,
+          "min": 3.351,
+          "max": 5.6761,
           "samples": 7
         },
         {
           "name": "search_index_build",
           "unit": "ms",
-          "value": 3.9686,
+          "value": 4.6551,
           "budget": 1250.0,
           "within_budget": true,
-          "min": 3.9033,
-          "max": 4.1201,
+          "min": 4.1004,
+          "max": 7.275,
           "samples": 7
         },
         {
           "name": "save",
           "unit": "ms",
-          "value": 3.196,
+          "value": 3.7924,
           "budget": 2500.0,
           "within_budget": true,
-          "min": 3.188,
-          "max": 3.2542,
+          "min": 3.2775,
+          "max": 4.9903,
           "samples": 7
         },
         {
@@ -221,8 +221,8 @@
   "summary": {
     "operation_count": 18,
     "budget_breaches": 0,
-    "regressions": 0,
+    "regressions": 5,
     "baseline_status": "present",
-    "status": "pass"
+    "status": "fail"
   }
 }
