@@ -7,6 +7,8 @@
 //! - SHA-256 / SHA-384 / SHA-512 — FIPS 180-4.
 //! - RC4 — the public RC4 keystream generator (KSA/PRGA).
 //! - AES — FIPS 197, with CBC mode from NIST SP 800-38A and PKCS#7 padding.
+//! - AES-KW — RFC 3394 authenticated key wrap/unwrap, built on the AES block
+//!   cipher.
 //!
 //! No item here logs its inputs. Keys, passwords, and plaintexts are ordinary
 //! byte slices and are never written to diagnostics.
@@ -15,6 +17,7 @@
 //! `pdfxi-security` package stays dependency-free.
 
 pub mod aes;
+pub mod keywrap;
 pub mod md5;
 pub mod rc4;
 pub mod sha;

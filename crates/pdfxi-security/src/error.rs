@@ -203,6 +203,21 @@ pub enum SecurityError {
     CrlMalformed,
     /// The CRL's `thisUpdate` was later than its `nextUpdate`.
     CrlInvalidWindow,
+    /// A CRL carried no signature, but a signature was required for verification.
+    CrlSignatureMissing,
+    /// An RFC 3394 AES key-wrap KEK was not 16, 24, or 32 bytes long.
+    AesKwInvalidKekLength(usize),
+    /// An RFC 3394 AES key-wrap input had an invalid length.
+    AesKwInvalidKeyDataLength {
+        /// Which input was invalid (`"key data"` or `"wrapped key"`).
+        label: &'static str,
+        /// The invalid length in bytes.
+        len: usize,
+    },
+    /// The RFC 3394 integrity check register did not match `A6A6A6A6A6A6A6A6`.
+    ///
+    /// This indicates a wrong KEK or a modified wrapped key.
+    AesKwIntegrityCheckFailed,
     /// The core document layer could not be read or written while applying a
     /// sanitizer plan.
     ///
@@ -422,6 +437,25 @@ impl fmt::Display for SecurityError {
             }
             Self::CrlMalformed => write!(f, "certificate revocation list is malformed"),
             Self::CrlInvalidWindow => write!(f, "CRL thisUpdate is later than nextUpdate"),
+            Self::CrlSignatureMissing => write!(f, "CRL carries no signature to verify"),
+            Self::AesKwInvalidKekLength(len) => {
+                write!(
+                    f,
+                    "AES-KW key-encryption key length must be 16, 24, or 32 bytes (got {len})"
+                )
+            }
+            Self::AesKwInvalidKeyDataLength { label, len } => {
+                write!(
+                    f,
+                    "AES-KW {label} length {len} is invalid (must be a multiple of 8 and long enough)"
+                )
+            }
+            Self::AesKwIntegrityCheckFailed => {
+                write!(
+                    f,
+                    "AES-KW integrity check failed (wrong KEK or modified wrapped key)"
+                )
+            }
             Self::SanitizationCoreFailed(reason) => {
                 write!(f, "core document could not be sanitized: {reason}")
             }

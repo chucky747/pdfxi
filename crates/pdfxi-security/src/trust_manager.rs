@@ -12,13 +12,26 @@
 //! Only configuration / malformed-input problems produce a
 //! [`SecurityError`]; an untrusted or revoked chain is a *decision*, not an
 //! error, so callers get a complete, deterministic report in all cases.
+//!
+//! # CRL signatures
+//!
+//! A [`Crl`] may carry a signature over its canonical body. [`Crl::verify_signature`]
+//! checks that signature against a caller-supplied issuer certificate through
+//! the same [`CertificateVerifier`] boundary used for certificate-chain and
+//! timestamp verification. When [`RevocationPolicy::verify_crl_signatures`] is
+//! enabled, [`TrustManager::evaluate`] ignores CRLs whose signature does not
+//! verify or whose issuer does not match the chain issuer, and returns a typed
+//! [`TrustFailureReason::CrlSignatureInvalid`] when no authentic CRL remains.
+//! No network access and no host clock are involved.
 
-use crate::der::{DerReader, Tag, encode_integer, encode_sequence, encode_time};
+use crate::der::{
+    DerReader, Tag, encode_integer, encode_null, encode_oid, encode_sequence, encode_time,
+};
 use crate::error::{Result, SecurityError};
 use crate::x509::certificate::Certificate;
 use crate::x509::name::Name;
 use crate::x509::verify::{CertificateVerifier, TrustStore, ValidationPolicy, verify_chain};
-use crate::x509::{Clock, FixedClock};
+use crate::x509::{Clock, FixedClock, KeyUsageBit, SignatureAlgorithm};
 
 /// RFC 5280 CRL entry reason codes used by this model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,10 +115,12 @@ impl RevokedCertificate {
 
 /// A caller-supplied certificate revocation list.
 ///
-/// This is a clean-room *model*: a simplified, signed-field-free CRL carrying
-/// the issuing CA name, an update window, and revoked serials. Callers supply
-/// only CRLs they consider authentic; this crate does not fetch or verify CRL
-/// signatures. The DER form is deterministic and round-trippable.
+/// This is a clean-room model of an RFC 5280 CRL: it carries the issuing CA
+/// name, an update window, revoked serials, and an optional signature over the
+/// canonical body. [`Crl::verify_signature`] checks that signature against a
+/// caller-supplied issuer certificate through the shared
+/// [`CertificateVerifier`] boundary; this crate never fetches a CRL or holds a
+/// signing key. The DER form is deterministic and round-trippable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Crl {
     issuer: Name,
@@ -113,15 +128,56 @@ pub struct Crl {
     this_update: u64,
     next_update: u64,
     revoked: Vec<RevokedCertificate>,
+    tbs_der: Vec<u8>,
+    signature_algorithm: Option<SignatureAlgorithm>,
+    signature: Vec<u8>,
+}
+
+/// OID `0.0`, used as a placeholder for an unsigned CRL's AlgorithmIdentifier.
+const OID_UNSIGNED_CRL: [u32; 1] = [0];
+
+fn encode_oid_or_fallback(oid: &[u32]) -> Vec<u8> {
+    match encode_oid(oid) {
+        Ok(bytes) => bytes,
+        Err(_) => vec![0x06, 0x01, 0x00],
+    }
+}
+
+/// Encode the canonical, signed body (`tbsCertList`) of a CRL.
+fn encode_crl_tbs(
+    issuer_der: &[u8],
+    this_update: u64,
+    next_update: u64,
+    revoked: &[RevokedCertificate],
+) -> Vec<u8> {
+    let mut revoked_der = Vec::new();
+    for entry in revoked {
+        let mut item = encode_integer(entry.serial);
+        if let Ok(time) = encode_time(entry.revocation_date) {
+            item.extend_from_slice(&time);
+        }
+        item.extend_from_slice(&encode_integer(entry.reason.code()));
+        revoked_der.extend_from_slice(&encode_sequence(&item));
+    }
+    let mut content = issuer_der.to_vec();
+    if let Ok(time) = encode_time(this_update) {
+        content.extend_from_slice(&time);
+    }
+    if let Ok(time) = encode_time(next_update) {
+        content.extend_from_slice(&time);
+    }
+    content.extend_from_slice(&encode_sequence(&revoked_der));
+    encode_sequence(&content)
 }
 
 impl Crl {
-    /// Build a CRL from a DER-encoded issuer `Name`, an update window, and
-    /// revocation entries.
+    /// Build an unsigned CRL from a DER-encoded issuer `Name`, an update
+    /// window, and revocation entries.
     ///
     /// Returns [`SecurityError::CrlInvalidWindow`] when `next_update` precedes
     /// `this_update`, and a typed DER error if `issuer_der` is not one
-    /// well-formed `Name` value.
+    /// well-formed `Name` value. Use [`Self::with_signature`] to attach a
+    /// signature over the canonical body returned by [`Self::tbs_der`].
     pub fn new(
         issuer_der: &[u8],
         this_update: u64,
@@ -135,24 +191,107 @@ impl Crl {
         let tlv = reader.read_tlv()?;
         reader.expect_end()?;
         let issuer = Name::parse(&tlv)?;
+        let issuer_der = tlv.encoded().to_vec();
+        let tbs_der = encode_crl_tbs(&issuer_der, this_update, next_update, &revoked);
         Ok(Self {
             issuer,
-            issuer_der: tlv.encoded().to_vec(),
+            issuer_der,
             this_update,
             next_update,
             revoked,
+            tbs_der,
+            signature_algorithm: None,
+            signature: Vec::new(),
         })
+    }
+
+    /// Attach a signature to this CRL.
+    ///
+    /// `signature` must be the caller's signature over [`Self::tbs_der`] using
+    /// `algorithm`; the caller owns the signing key. This crate never signs.
+    pub fn with_signature(mut self, algorithm: SignatureAlgorithm, signature: Vec<u8>) -> Self {
+        self.signature_algorithm = Some(algorithm);
+        self.signature = signature;
+        self
+    }
+
+    /// Canonical DER bytes covered by the CRL signature (`tbsCertList`).
+    pub fn tbs_der(&self) -> &[u8] {
+        &self.tbs_der
+    }
+
+    /// Signature algorithm attached to this CRL, if any.
+    pub const fn signature_algorithm(&self) -> Option<&SignatureAlgorithm> {
+        self.signature_algorithm.as_ref()
+    }
+
+    /// Signature bytes attached to this CRL (empty when unsigned).
+    pub fn signature(&self) -> &[u8] {
+        &self.signature
+    }
+
+    /// Return `true` when this CRL carries a non-empty signature.
+    pub fn is_signed(&self) -> bool {
+        !self.signature.is_empty()
+    }
+
+    /// Verify this CRL's signature against the caller-supplied issuer
+    /// certificate using the shared [`CertificateVerifier`] boundary.
+    ///
+    /// The check enforces that the issuer subject matches the CRL issuer name,
+    /// that the issuer key usage permits `cRLSign`, that a signature is present
+    /// and its algorithm is recognized, and finally delegates the signature
+    /// check to `verifier`. A cryptographic mismatch returns `Ok(false)`;
+    /// structural problems return typed errors.
+    pub fn verify_signature(
+        &self,
+        issuer: &Certificate,
+        verifier: &dyn CertificateVerifier,
+    ) -> Result<bool> {
+        if issuer.subject() != &self.issuer {
+            return Ok(false);
+        }
+        if !issuer.allows_usage(KeyUsageBit::CrlSign) {
+            return Err(SecurityError::CertificateKeyUsageViolation("cRLSign"));
+        }
+        let algorithm = self
+            .signature_algorithm
+            .as_ref()
+            .ok_or(SecurityError::CrlSignatureMissing)?;
+        if self.signature.is_empty() {
+            return Err(SecurityError::CrlSignatureMissing);
+        }
+        if algorithm.digest_algorithm().is_none() {
+            return Err(SecurityError::UnsupportedSignatureAlgorithm(
+                algorithm.as_str(),
+            ));
+        }
+        verifier.verify_signature(
+            algorithm,
+            &self.tbs_der,
+            &self.signature,
+            issuer.subject_public_key_info(),
+        )
     }
 
     /// Parse a CRL from its canonical DER encoding (inverse of [`Self::to_der`]).
     ///
+    /// The encoding is `CertificateList { tbsCertList, signatureAlgorithm,
+    /// signatureValue }`. An empty signature value denotes an unsigned CRL.
     /// Truncated or structurally invalid input yields a typed
     /// [`SecurityError::CrlMalformed`].
     pub fn from_der(der: &[u8]) -> Result<Self> {
         let mut top = DerReader::new(der);
         let outer = top.read_tlv()?;
         top.expect_end()?;
-        let mut sequence = outer
+        let mut outer_sequence = outer
+            .as_sequence()
+            .map_err(|_| SecurityError::CrlMalformed)?;
+
+        let tbs_tlv = outer_sequence
+            .read_tlv()
+            .map_err(|_| SecurityError::CrlMalformed)?;
+        let mut sequence = tbs_tlv
             .as_sequence()
             .map_err(|_| SecurityError::CrlMalformed)?;
 
@@ -216,34 +355,56 @@ impl Crl {
             .expect_end()
             .map_err(|_| SecurityError::CrlMalformed)?;
 
+        let algorithm_tlv = outer_sequence
+            .read_tlv()
+            .map_err(|_| SecurityError::CrlMalformed)?;
+        let (oid, _parameters) = crate::x509::parse_algorithm_identifier(&algorithm_tlv)
+            .map_err(|_| SecurityError::CrlMalformed)?;
+        let signature_tlv = outer_sequence
+            .read_tlv()
+            .map_err(|_| SecurityError::CrlMalformed)?;
+        let signature = signature_tlv
+            .as_octets()
+            .map_err(|_| SecurityError::CrlMalformed)?
+            .to_vec();
+        outer_sequence
+            .expect_end()
+            .map_err(|_| SecurityError::CrlMalformed)?;
+
+        let (signature_algorithm, signature) = if signature.is_empty() || oid == OID_UNSIGNED_CRL {
+            (None, Vec::new())
+        } else {
+            (Some(SignatureAlgorithm::from_oid(&oid)), signature)
+        };
+
         Ok(Self {
             issuer,
             issuer_der: issuer_tlv.encoded().to_vec(),
             this_update,
             next_update,
             revoked,
+            tbs_der: tbs_tlv.encoded().to_vec(),
+            signature_algorithm,
+            signature,
         })
     }
 
     /// Encode this CRL in the canonical DER form.
+    ///
+    /// The body bytes emitted as `tbsCertList` are exactly those returned by
+    /// [`Self::tbs_der`], so a signature over that slice verifies after a
+    /// `to_der` / `from_der` round trip.
     pub fn to_der(&self) -> Vec<u8> {
-        let mut revoked_der = Vec::new();
-        for entry in &self.revoked {
-            let mut item = encode_integer(entry.serial);
-            if let Ok(time) = encode_time(entry.revocation_date) {
-                item.extend_from_slice(&time);
-            }
-            item.extend_from_slice(&encode_integer(entry.reason.code()));
-            revoked_der.extend_from_slice(&encode_sequence(&item));
-        }
-        let mut content = self.issuer_der.clone();
-        if let Ok(time) = encode_time(self.this_update) {
-            content.extend_from_slice(&time);
-        }
-        if let Ok(time) = encode_time(self.next_update) {
-            content.extend_from_slice(&time);
-        }
-        content.extend_from_slice(&encode_sequence(&revoked_der));
+        let algorithm = match &self.signature_algorithm {
+            Some(algorithm) => algorithm.oid(),
+            None => OID_UNSIGNED_CRL.to_vec(),
+        };
+        let mut algorithm_id = encode_oid_or_fallback(&algorithm);
+        algorithm_id.extend_from_slice(&encode_null());
+
+        let mut content = self.tbs_der.clone();
+        content.extend_from_slice(&encode_sequence(&algorithm_id));
+        content.extend_from_slice(&crate::der::encode_tlv(Tag::OCTET_STRING, &self.signature));
         encode_sequence(&content)
     }
 
@@ -320,14 +481,23 @@ pub struct RevocationPolicy {
     pub require_present: bool,
     /// Treat a supplied-but-stale CRL as a failure.
     pub require_fresh: bool,
+    /// Require each matching CRL's signature to verify against the chain
+    /// issuer before its revocation entries are trusted.
+    ///
+    /// When enabled, CRLs with an invalid signature, wrong issuer, or missing
+    /// signature are excluded from evidence. If no authentic CRL remains, the
+    /// decision carries [`TrustFailureReason::CrlSignatureInvalid`].
+    pub verify_crl_signatures: bool,
 }
 
 impl RevocationPolicy {
-    /// Conservative policy: presence and freshness are both required.
+    /// Conservative policy: presence, freshness, and CRL signatures are all
+    /// required.
     pub const fn strict() -> Self {
         Self {
             require_present: true,
             require_fresh: true,
+            verify_crl_signatures: true,
         }
     }
 }
@@ -370,6 +540,12 @@ pub enum TrustFailureReason {
     /// A required fresh CRL was stale for a serial.
     RevocationStale {
         /// Serial whose CRL was stale.
+        serial: u64,
+    },
+    /// Matching CRLs were present but none had a valid signature from the
+    /// chain issuer (wrong issuer, missing or invalid signature).
+    CrlSignatureInvalid {
+        /// Serial whose CRL signatures all failed verification.
         serial: u64,
     },
 }
@@ -418,6 +594,7 @@ pub struct RevocationEvidence {
     serial: u64,
     status: RevocationStatus,
     crl_issuer_display: Option<String>,
+    crl_signature_verified: bool,
 }
 
 impl RevocationEvidence {
@@ -434,6 +611,15 @@ impl RevocationEvidence {
     /// RFC 4514 display of the matching CRL issuer, when one was found.
     pub fn crl_issuer_display(&self) -> Option<&str> {
         self.crl_issuer_display.as_deref()
+    }
+
+    /// Whether at least one matching CRL had a signature that verified against
+    /// the chain issuer.
+    ///
+    /// This is always `false` when [`RevocationPolicy::verify_crl_signatures`]
+    /// is disabled, because no signature check was performed.
+    pub const fn crl_signature_verified(&self) -> bool {
+        self.crl_signature_verified
     }
 }
 
@@ -630,24 +816,52 @@ impl TrustManager {
         let mut revocation = Vec::new();
         let mut decision = TrustDecision::Trusted;
         // The trust anchor is the revocation authority terminus; only issued
-        // certificates are checked against CRLs.
-        for certificate in chain.iter().take(chain.len().saturating_sub(1)) {
-            let matching: Vec<&Crl> = crls
+        // certificates are checked against CRLs. In a validated chain the next
+        // certificate is the issuer of the current one.
+        let issued_count = chain.len().saturating_sub(1);
+        for (index, certificate) in chain.iter().take(issued_count).enumerate() {
+            let issuer_certificate = &chain[index + 1];
+            let name_matching: Vec<&Crl> = crls
                 .iter()
                 .filter(|crl| crl.issuer() == certificate.issuer())
                 .collect();
+            let mut signature_rejected = false;
+            let mut signature_verified = false;
+            let matching: Vec<&Crl> = if self.revocation_policy.verify_crl_signatures {
+                let mut verified = Vec::new();
+                for crl in name_matching {
+                    match crl.verify_signature(issuer_certificate, verifier) {
+                        Ok(true) => {
+                            signature_verified = true;
+                            verified.push(crl);
+                        }
+                        Ok(false) | Err(_) => signature_rejected = true,
+                    }
+                }
+                verified
+            } else {
+                name_matching
+            };
             let (status, display) =
                 combined_status(&matching, certificate.serial_number(), self.now);
             revocation.push(RevocationEvidence {
                 serial: certificate.serial_number(),
                 status,
                 crl_issuer_display: display,
+                crl_signature_verified: signature_verified,
             });
-            if decision.is_trusted()
-                && let Some(reason) =
+            if decision.is_trusted() {
+                if signature_rejected && matching.is_empty() {
+                    decision = TrustDecision::Untrusted {
+                        reason: TrustFailureReason::CrlSignatureInvalid {
+                            serial: certificate.serial_number(),
+                        },
+                    };
+                } else if let Some(reason) =
                     reason_from_status(status, certificate.serial_number(), self.revocation_policy)
-            {
-                decision = TrustDecision::Untrusted { reason };
+                {
+                    decision = TrustDecision::Untrusted { reason };
+                }
             }
         }
 
@@ -813,8 +1027,21 @@ mod tests {
         )
     }
 
+    /// Build a CRL signed with the `DigestVerifier` scheme (SHA-256/TBS[:16]).
+    fn signed_crl(
+        issuer_cn: &str,
+        this_update: u64,
+        next_update: u64,
+        revoked: Vec<RevokedCertificate>,
+    ) -> Crl {
+        let crl =
+            Crl::new(&name_der(issuer_cn), this_update, next_update, revoked).expect("base CRL");
+        let signature = crate::crypto::sha::sha256(crl.tbs_der())[..16].to_vec();
+        crl.with_signature(SignatureAlgorithm::Sha256WithRsa, signature)
+    }
+
     fn root_crl(revoked: Vec<RevokedCertificate>) -> Crl {
-        Crl::new(&name_der("Root"), 1_600_000_000, 1_700_000_000, revoked).expect("root CRL")
+        signed_crl("Root", 1_600_000_000, 1_700_000_000, revoked)
     }
 
     #[test]
@@ -953,8 +1180,7 @@ mod tests {
         );
 
         // A stale CRL present in strict mode is a distinct typed reason.
-        let stale =
-            Crl::new(&name_der("Root"), 1_000_000, 1_100_000, Vec::new()).expect("stale crl");
+        let stale = signed_crl("Root", 1_000_000, 1_100_000, Vec::new());
         let report = strict
             .evaluate(&leaf, &[], &[stale], &DigestVerifier)
             .expect("report");
@@ -1074,6 +1300,213 @@ mod tests {
             report.decision(),
             TrustDecision::Untrusted {
                 reason: TrustFailureReason::SignatureInvalid
+            }
+        );
+    }
+
+    #[test]
+    fn crl_signature_verifies_against_issuer() {
+        let root = cert("Root", 100, "Root", true, 1);
+        let crl = signed_crl("Root", 1_600_000_000, 1_700_000_000, Vec::new());
+        assert!(crl.is_signed());
+        assert_eq!(
+            crl.signature_algorithm(),
+            Some(&SignatureAlgorithm::Sha256WithRsa)
+        );
+        assert_eq!(crl.signature().len(), 16);
+        assert!(
+            crl.verify_signature(&root, &DigestVerifier)
+                .expect("verify")
+        );
+    }
+
+    #[test]
+    fn crl_signature_rejects_invalid_signature() {
+        let root = cert("Root", 100, "Root", true, 1);
+        let crl = signed_crl("Root", 1_600_000_000, 1_700_000_000, Vec::new());
+        let mut forged = crl.clone();
+        let last = forged.signature.len() - 1;
+        forged.signature[last] ^= 0x01;
+        assert!(
+            !forged
+                .verify_signature(&root, &DigestVerifier)
+                .expect("verify")
+        );
+        assert_eq!(
+            forged.verify_signature(&root, &crate::x509::RejectingVerifier),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn crl_signature_rejects_wrong_issuer() {
+        let other = cert("Other", 200, "Other", true, 9);
+        let crl = signed_crl("Root", 1_600_000_000, 1_700_000_000, Vec::new());
+        assert!(
+            !crl.verify_signature(&other, &DigestVerifier)
+                .expect("verify")
+        );
+    }
+
+    #[test]
+    fn crl_signature_requires_crl_sign_key_usage() {
+        let subject = name_der("Root");
+        let mut tbs = Vec::new();
+        tbs.extend_from_slice(
+            &crate::der::encode_context(0, true, &encode_integer(2)).expect("ctx0"),
+        );
+        tbs.extend_from_slice(&encode_integer(101));
+        tbs.extend_from_slice(&alg_id());
+        tbs.extend_from_slice(&subject);
+        tbs.extend_from_slice(&validity());
+        tbs.extend_from_slice(&subject);
+        let mut spki = alg_id();
+        spki.extend_from_slice(&bit_string(&[5u8; 32]));
+        tbs.extend_from_slice(&encode_sequence(&spki));
+        let mut exts = Vec::new();
+        exts.extend_from_slice(&basic_constraints_ext(true));
+        exts.extend_from_slice(&key_usage_ext(KeyUsage::KEY_CERT_SIGN.bits()));
+        tbs.extend_from_slice(
+            &crate::der::encode_context(3, true, &encode_sequence(&exts)).expect("ctx3"),
+        );
+        let tbs = encode_sequence(&tbs);
+        let mut out = tbs.clone();
+        out.extend_from_slice(&alg_id());
+        out.extend_from_slice(&bit_string(&crate::crypto::sha::sha256(&tbs)[..16]));
+        let no_crl_sign = Certificate::parse(&encode_sequence(&out)).expect("CA without cRLSign");
+
+        let crl = signed_crl("Root", 1_600_000_000, 1_700_000_000, Vec::new());
+        assert_eq!(
+            crl.verify_signature(&no_crl_sign, &DigestVerifier),
+            Err(SecurityError::CertificateKeyUsageViolation("cRLSign"))
+        );
+    }
+
+    #[test]
+    fn crl_signature_missing_is_typed_error() {
+        let root = cert("Root", 100, "Root", true, 1);
+        let unsigned = Crl::new(&name_der("Root"), 1_600_000_000, 1_700_000_000, Vec::new())
+            .expect("unsigned CRL");
+        assert!(!unsigned.is_signed());
+        assert_eq!(
+            unsigned.verify_signature(&root, &DigestVerifier),
+            Err(SecurityError::CrlSignatureMissing)
+        );
+    }
+
+    #[test]
+    fn crl_signed_der_round_trips_and_preserves_signature() {
+        let root = cert("Root", 100, "Root", true, 1);
+        let crl = signed_crl(
+            "Root",
+            1_600_000_000,
+            1_700_000_000,
+            vec![RevokedCertificate::new(
+                7,
+                1_640_000_000,
+                RevocationReason::KeyCompromise,
+            )],
+        );
+        let der = crl.to_der();
+        assert_eq!(crl.to_der(), der);
+        let parsed = Crl::from_der(&der).expect("round trip");
+        assert_eq!(parsed, crl);
+        assert!(parsed.is_signed());
+        assert!(
+            parsed
+                .verify_signature(&root, &DigestVerifier)
+                .expect("verify")
+        );
+    }
+
+    #[test]
+    fn stale_this_update_is_reported_with_signed_crl() {
+        let mgr = manager(1_650_000_000).with_revocation_policy(RevocationPolicy::strict());
+        let (leaf, _root) = chain();
+        let stale = signed_crl("Root", 1_000_000, 1_100_000, Vec::new());
+        let report = mgr
+            .evaluate(&leaf, &[], &[stale], &DigestVerifier)
+            .expect("report");
+        assert_eq!(report.revocation()[0].status(), RevocationStatus::Stale);
+        assert!(report.revocation()[0].crl_signature_verified());
+        assert_eq!(
+            report.decision(),
+            TrustDecision::Untrusted {
+                reason: TrustFailureReason::RevocationStale { serial: 7 }
+            }
+        );
+    }
+
+    #[test]
+    fn evaluate_with_crl_signature_verification_accepts_signed_crl() {
+        let mgr = manager(1_650_000_000).with_revocation_policy(RevocationPolicy::strict());
+        let (leaf, _root) = chain();
+        let good = root_crl(vec![RevokedCertificate::new(
+            999,
+            1_640_000_000,
+            RevocationReason::Unspecified,
+        )]);
+        let report = mgr
+            .evaluate(&leaf, &[], &[good], &DigestVerifier)
+            .expect("report");
+        assert!(report.is_trusted());
+        assert_eq!(report.revocation()[0].status(), RevocationStatus::Good);
+        assert!(report.revocation()[0].crl_signature_verified());
+
+        let revoked = root_crl(vec![RevokedCertificate::new(
+            7,
+            1_640_000_000,
+            RevocationReason::KeyCompromise,
+        )]);
+        let report = mgr
+            .evaluate(&leaf, &[], &[revoked], &DigestVerifier)
+            .expect("report");
+        assert_eq!(
+            report.decision(),
+            TrustDecision::Untrusted {
+                reason: TrustFailureReason::Revoked { serial: 7 }
+            }
+        );
+        assert!(report.revocation()[0].crl_signature_verified());
+    }
+
+    #[test]
+    fn evaluate_with_crl_signature_verification_rejects_forged_crl() {
+        let mgr = manager(1_650_000_000).with_revocation_policy(RevocationPolicy::strict());
+        let (leaf, _root) = chain();
+        let mut forged = root_crl(Vec::new());
+        let last = forged.signature.len() - 1;
+        forged.signature[last] ^= 0x40;
+        let report = mgr
+            .evaluate(&leaf, &[], &[forged], &DigestVerifier)
+            .expect("report");
+        assert_eq!(
+            report.decision(),
+            TrustDecision::Untrusted {
+                reason: TrustFailureReason::CrlSignatureInvalid { serial: 7 }
+            }
+        );
+        assert_eq!(report.revocation()[0].status(), RevocationStatus::Unknown);
+        assert!(!report.revocation()[0].crl_signature_verified());
+    }
+
+    #[test]
+    fn evaluate_with_crl_signature_verification_rejects_wrong_signer() {
+        let mgr = manager(1_650_000_000).with_revocation_policy(RevocationPolicy::strict());
+        let (leaf, _root) = chain();
+        // CRL claims issuer "Root" but is signed with a different key.
+        let base = Crl::new(&name_der("Root"), 1_600_000_000, 1_700_000_000, Vec::new())
+            .expect("base CRL");
+        let signature = crate::crypto::sha::sha256(base.tbs_der())[..16].to_vec();
+        let mut wrong_signer = base.with_signature(SignatureAlgorithm::Sha256WithRsa, signature);
+        wrong_signer.signature[0] ^= 0x7f;
+        let report = mgr
+            .evaluate(&leaf, &[], &[wrong_signer], &DigestVerifier)
+            .expect("report");
+        assert_eq!(
+            report.decision(),
+            TrustDecision::Untrusted {
+                reason: TrustFailureReason::CrlSignatureInvalid { serial: 7 }
             }
         );
     }

@@ -15,7 +15,8 @@
 //! - [`Protector`] — a trait for encrypt/decrypt/permissions with a
 //!   [`MockProtector`] test double.
 //! - [`crypto`] — dependency-free MD5, SHA-2, RC4, and AES primitives with
-//!   published known-answer tests.
+//!   published known-answer tests, plus RFC 3394 AES-KW authenticated key
+//!   wrapping ([`crypto::keywrap`]).
 //! - [`standard_handler`] — real password authentication and per-object
 //!   decryption for PDF encryption revisions 2–6
 //!   ([`StandardSecurityHandler`], [`Decryptor`], [`SecurityParameters`]).
@@ -45,11 +46,15 @@
 //!   checks, caller-clocked chain validation at `genTime`, a replay/skew guard,
 //!   nonce verification, and a conservative mapping onto [`SignatureStatus`].
 //! - [`certificate_encryption`] — certificate-based enveloped encryption with a
-//!   recipient list, per-recipient wrapped keys behind a caller-supplied
-//!   [`KeyWrapProvider`], a SHA-256 key commitment, and sender permissions.
-//! - [`trust_manager`] — a local trust manager, CRL model, and deterministic
-//!   trust/revocation reports with typed failure reasons. Callers supply every
-//!   CRL; there is no network access and no host-clock read.
+//!   recipient list, per-recipient CEK wrapping under RFC 3394 AES-KW, a caller-
+//!   supplied [`KeyWrapProvider`] KEK boundary ([`AesKwKeyWrapProvider`]), a
+//!   SHA-256 key commitment, and sender permissions. The XOR test double was
+//!   replaced by real AES-KW.
+//! - [`trust_manager`] — a local trust manager, CRL model with RFC 5280-style
+//!   signature verification through the shared [`CertificateVerifier`] path,
+//!   and deterministic trust/revocation reports with typed failure reasons.
+//!   Callers supply every CRL and issuer certificate; there is no network
+//!   access and no host-clock read.
 //! - [`security_envelope`] — local, tamper-evident file envelopes carrying a
 //!   payload, recipient list, and permissions (SEC-010). No rights-management
 //!   server or network access is involved.
@@ -87,9 +92,9 @@ pub mod trust_manager;
 pub mod x509;
 
 pub use certificate_encryption::{
-    ContentCipher, EnvelopedData, InMemoryKeyWrapProvider, KeyWrapProvider, OpenedEnvelope,
-    Recipient, RecipientEnvelopeKey, RecipientList, RecipientSelector, build_envelope,
-    open_envelope,
+    AesKwKeyWrapProvider, ContentCipher, EnvelopedData, InMemoryKeyWrapProvider, KeyWrapProvider,
+    OpenedEnvelope, Recipient, RecipientEnvelopeKey, RecipientList, RecipientSelector,
+    build_envelope, open_envelope,
 };
 pub use cms::{
     InMemorySignatureProvider, SignatureProvider, SignedDataParams, SignerIdentifier,

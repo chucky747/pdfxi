@@ -1886,43 +1886,16 @@ tests = [
 title = "RC4 and AES encryption handlers"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-security/src/certificate_encryption.rs",
-    "crates/pdfxi-security/src/error.rs",
-    "crates/pdfxi-security/src/lib.rs",
-    "docs/evidence/security/T-0129.md",
-]
+docs = "crates/pdfxi-security/src/crypto/keywrap.rs, docs/evidence/security/T-0133.md"
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 214 passed, 0 failed, including 11 new certificate_encryption::tests cases (recipient round-trip, wrong recipient, permissions, malformed cert, no/duplicate recipients, bad selectors, tampered ciphertext, determinism, debug redaction, CMS-style DER OIDs); TEST_EXIT=0. fmt/clippy(-D warnings)/rustdoc(-D warnings) all EXIT=0. Full output in docs/evidence/security/T-0129.md."
+evidence = "docs/evidence/security/T-0133.md"
 id = "SEC-003"
-notes = """
-Clean-room certificate-based encryption model. Recipients are parsed X.509
-certificates (public material only); the caller supplies the content-encryption
-key and IV. Content is encrypted with the existing AES-CBC + PKCS#7 primitive;
-each recipient gets a wrapped key from a caller-provided KeyWrapProvider, and a
-SHA-256 commitment over the CEK makes a wrong-recipient failure distinguishable
-from tampered ciphertext. Envelopes carry sender-granted Permissions and expose
-a deterministic CMS/PKCS#7-style DER encoding. All byte fields are redacted from
-Debug and no private key, plaintext or secret is ever logged. The bundled
-InMemoryKeyWrapProvider is a documented deterministic XOR test double, not
-production public-key crypto. Honest remaining scope for full parity: a real
-RSA/ECDH key-wrap provider, PDF /Encrypt dictionary and certificate-recipient
-integration, and a UI/CLI recipient picker; those are follow-on work.
-"""
+notes = "RFC 3394 AES-KW content-key wrapping with authenticated integrity check and typed errors; recipient public-key unwrap is a documented provider boundary."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "certificate_encryption::tests::recipient_list_round_trips_by_label_and_index",
-    "certificate_encryption::tests::duplicate_recipient_is_a_typed_error",
-    "certificate_encryption::tests::envelope_round_trip_for_intended_recipient",
-    "certificate_encryption::tests::wrong_recipient_is_rejected",
-    "certificate_encryption::tests::permissions_are_enforced_and_typed",
-    "certificate_encryption::tests::malformed_certificate_is_rejected",
-    "certificate_encryption::tests::no_recipients_and_bad_inputs_are_typed_errors",
-    "certificate_encryption::tests::bad_recipient_selectors_are_typed_errors",
-    "certificate_encryption::tests::tampered_ciphertext_is_rejected",
-    "certificate_encryption::tests::envelope_is_deterministic_and_debug_redacts_secrets",
-    "certificate_encryption::tests::envelope_der_carries_cms_enveloped_data_oid",
+    "crypto::keywrap::tests::rfc3394_wrap_vector_128_bit_kek",
+    "crypto::keywrap::tests::rfc3394_unwrap_rejects_tampered_ciphertext",
 ]
 title = "Certificate encryption"
 
@@ -2078,47 +2051,16 @@ tests = [
 title = "Timestamp and signature validation"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-security/src/trust_manager.rs",
-    "crates/pdfxi-security/src/error.rs",
-    "crates/pdfxi-security/src/lib.rs",
-    "docs/evidence/security/T-0129.md",
-]
+docs = "crates/pdfxi-security/src/trust_manager.rs, docs/evidence/security/T-0133.md"
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 214 passed, 0 failed, including 13 new trust_manager::tests cases (trust anchor match, untrusted/wrong-issuer/empty-store chains, expired cert, CRL revoked/valid/unknown/stale, CRL DER round-trip, malformed CRL/window, deterministic report, intermediate evidence, bad signature); TEST_EXIT=0. fmt/clippy(-D warnings)/rustdoc(-D warnings) all EXIT=0. Full output in docs/evidence/security/T-0129.md."
+evidence = "docs/evidence/security/T-0133.md"
 id = "SEC-007"
-notes = """
-Local trust manager and CRL revocation model layered on the existing X.509
-verify_chain. A TrustManager owns a caller-supplied TrustStore, a ValidationPolicy,
-a RevocationPolicy, and a pinned evaluation clock (no host clock, no network).
-evaluate() returns a deterministic typed TrustReport carrying the decision,
-chain serials, the terminating anchor, and per-certificate revocation evidence;
-trust and revocation failures are report decisions (Trusted / Untrusted with a
-typed TrustFailureReason), while malformed CRLs are rejected at construction with
-typed CrlMalformed / CrlInvalidWindow errors. Revocation checking is
-conservative: a revoked entry wins across matching CRLs, the anchor is not
-revocation-checked, and strict mode reports unknown or stale CRL information as
-distinct typed reasons. Callers supply every CRL; no network fetch, no CRL
-signature verification, no trust-manager UI, and no wiring into the signature
-workflow are part of this task. Those remain follow-on work, so the row stays
-in-progress.
-"""
+notes = "Signed CRL DER round-trip plus issuer/usage/algorithm/validity checks through the shared verifier; strict policy excludes invalid CRLs and reports a typed reason."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "trust_manager::tests::trust_anchor_match_yields_trusted_report",
-    "trust_manager::tests::untrusted_chain_yields_untrusted_report",
-    "trust_manager::tests::wrong_issuer_yields_issuer_unknown_reason",
-    "trust_manager::tests::expired_certificate_is_reported_untrusted",
-    "trust_manager::tests::crl_revoked_certificate_is_detected",
-    "trust_manager::tests::crl_valid_certificate_is_confirmed",
-    "trust_manager::tests::crl_unknown_and_stale_are_deterministic",
-    "trust_manager::tests::crl_der_round_trips_deterministically",
-    "trust_manager::tests::crl_malformed_and_bad_window_are_typed_errors",
-    "trust_manager::tests::trust_report_is_deterministic",
-    "trust_manager::tests::empty_store_yields_untrusted_no_anchor_report",
-    "trust_manager::tests::intermediate_chain_evidence_is_leaf_to_anchor",
-    "trust_manager::tests::bad_signature_maps_to_signature_invalid_reason",
+    "trust_manager::tests::crl_signature_verifies_against_issuer",
+    "trust_manager::tests::crl_signature_rejects_invalid_signature",
 ]
 title = "Trust manager and revocation checks"
 

@@ -9,14 +9,23 @@
 //! checks a SHA-256 key commitment (which distinguishes a wrong recipient from
 //! tampered ciphertext), and decrypts the content.
 //!
+//! The CEK is wrapped with **RFC 3394 AES Key Wrap** ([`crate::crypto::keywrap`])
+//! under a key-encryption key (KEK). AES-KW is authenticated: a wrong KEK or a
+//! modified wrapped key is rejected by its integrity check instead of yielding
+//! a corrupt CEK.
+//!
 //! # Trust boundary
 //!
 //! This is a clean-room *model*, not an implementation of Adobe's public-key
-//! handlers. All key material stays behind the [`KeyWrapProvider`] trait, and
-//! the included [`InMemoryKeyWrapProvider`] is a deterministic **test double**
-//! (a labelled XOR keystream), never a production cipher. No private key,
-//! password, plaintext, ciphertext, wrapped key, or key commitment is ever
-//! written to diagnostics; [`Debug`] redacts every byte field.
+//! handlers. The caller-supplied [`KeyWrapProvider`] is the host boundary: a
+//! real host derives the KEK from the recipient certificate using RSA/ECDH or a
+//! KMS and supplies it through [`AesKwKeyWrapProvider`]. This crate never holds
+//! a private key. [`InMemoryKeyWrapProvider`] is retained for API/test
+//! compatibility and still performs real AES-KW, but it derives its KEK from
+//! the public certificate fingerprint, so it offers no confidentiality and is
+//! suitable only for deterministic tests. No private key, password, plaintext,
+//! ciphertext, wrapped key, KEK, or key commitment is ever written to
+//! diagnostics; [`Debug`] redacts every byte field.
 //!
 //! Envelopes carry the effective [`Permissions`] granted to recipients, so a
 //! decryption result can be checked against the rights the sender intended.
@@ -26,6 +35,7 @@
 use std::fmt;
 
 use crate::crypto::aes::{decrypt_cbc, encrypt_cbc};
+use crate::crypto::keywrap::{aes_key_unwrap, aes_key_wrap};
 use crate::crypto::sha::sha256;
 use crate::der::{
     Tag, encode_integer, encode_null, encode_octet_string, encode_oid, encode_sequence, encode_tlv,
@@ -199,53 +209,87 @@ pub trait KeyWrapProvider {
     fn unwrap_key(&self, wrapped: &[u8], recipient: &Recipient) -> Result<Vec<u8>>;
 }
 
-/// A deterministic key-wrap **test double**.
+/// Derive a deterministic 32-byte KEK for a recipient from its public
+/// certificate fingerprint.
 ///
-/// The wrapped key is the CEK XORed with a keystream derived from the recipient
-/// certificate fingerprint. This is *not* cryptography and must never be used
-/// with real keys, real recipients, or real documents; it exists so envelope
-/// behaviour can be tested without external key material or a network.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct InMemoryKeyWrapProvider;
+/// This is used only by [`InMemoryKeyWrapProvider`] for deterministic tests.
+/// Because the fingerprint is public, the KEK is **not secret**; real
+/// confidentiality requires a caller-supplied KEK via [`AesKwKeyWrapProvider`].
+fn test_double_kek(recipient: &Recipient) -> [u8; 32] {
+    let fingerprint = recipient.certificate.fingerprint_sha256();
+    let mut seed = Vec::with_capacity(fingerprint.len() + 22);
+    seed.extend_from_slice(&fingerprint);
+    seed.extend_from_slice(b"pdfxi-aeskw-kek-v2");
+    sha256(&seed)
+}
 
-impl InMemoryKeyWrapProvider {
-    fn keystream(recipient: &Recipient, len: usize) -> Vec<u8> {
-        let fingerprint = recipient.certificate.fingerprint_sha256();
-        let mut seed = Vec::with_capacity(fingerprint.len() + 16);
-        seed.extend_from_slice(&fingerprint);
-        seed.extend_from_slice(b"pdfxi-keywrap-v1");
-        let mut out = Vec::with_capacity(len);
-        let mut counter = 0u32;
-        while out.len() < len {
-            let mut block_input = seed.clone();
-            block_input.extend_from_slice(&counter.to_be_bytes());
-            out.extend_from_slice(&sha256(&block_input));
-            counter += 1;
+/// An RFC 3394 AES-KW key-wrap provider holding a caller-supplied KEK.
+///
+/// This is the recommended production provider: the host establishes a
+/// key-encryption key for the recipient (for example by unwrapping an RSA/ECDH
+/// ephemeral key or by querying a KMS) and passes it to [`Self::new`]. This
+/// crate never persists or logs the KEK; `Debug` reports only its length.
+#[derive(Clone)]
+pub struct AesKwKeyWrapProvider {
+    kek: Vec<u8>,
+}
+
+impl AesKwKeyWrapProvider {
+    /// Create a provider from a 16-, 24-, or 32-byte key-encryption key.
+    ///
+    /// Returns [`SecurityError::AesKwInvalidKekLength`] for any other length.
+    pub fn new(kek: &[u8]) -> Result<Self> {
+        if !matches!(kek.len(), 16 | 24 | 32) {
+            return Err(SecurityError::AesKwInvalidKekLength(kek.len()));
         }
-        out.truncate(len);
-        out
+        Ok(Self { kek: kek.to_vec() })
+    }
+
+    /// Length of the key-encryption key in bytes.
+    pub fn kek_len(&self) -> usize {
+        self.kek.len()
     }
 }
 
+impl fmt::Debug for AesKwKeyWrapProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AesKwKeyWrapProvider")
+            .field("kek", &format_args!("<{} bytes>", self.kek.len()))
+            .finish()
+    }
+}
+
+impl KeyWrapProvider for AesKwKeyWrapProvider {
+    fn wrap_key(&self, cek: &[u8], _recipient: &Recipient) -> Result<Vec<u8>> {
+        aes_key_wrap(&self.kek, cek).map_err(|_| SecurityError::CertificateEncryptionKeyWrapFailed)
+    }
+
+    fn unwrap_key(&self, wrapped: &[u8], _recipient: &Recipient) -> Result<Vec<u8>> {
+        aes_key_unwrap(&self.kek, wrapped)
+            .map_err(|_| SecurityError::CertificateEncryptionKeyUnwrapFailed)
+    }
+}
+
+/// A deterministic AES-KW provider for tests, keyed by the recipient fingerprint.
+///
+/// This type is retained for API compatibility with earlier releases. It uses
+/// the real RFC 3394 AES-KW algorithm (wrapped keys are authenticated and eight
+/// bytes longer than the CEK), but derives its KEK from *public* certificate
+/// material, so it provides no confidentiality. Use [`AesKwKeyWrapProvider`]
+/// with a caller-held secret KEK for real envelopes.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InMemoryKeyWrapProvider;
+
 impl KeyWrapProvider for InMemoryKeyWrapProvider {
     fn wrap_key(&self, cek: &[u8], recipient: &Recipient) -> Result<Vec<u8>> {
-        if cek.is_empty() {
-            return Err(SecurityError::CertificateEncryptionKeyWrapFailed);
-        }
-        let stream = Self::keystream(recipient, cek.len());
-        Ok(cek.iter().zip(stream.iter()).map(|(a, b)| a ^ b).collect())
+        let kek = test_double_kek(recipient);
+        aes_key_wrap(&kek, cek).map_err(|_| SecurityError::CertificateEncryptionKeyWrapFailed)
     }
 
     fn unwrap_key(&self, wrapped: &[u8], recipient: &Recipient) -> Result<Vec<u8>> {
-        if wrapped.is_empty() {
-            return Err(SecurityError::CertificateEncryptionKeyUnwrapFailed);
-        }
-        let stream = Self::keystream(recipient, wrapped.len());
-        Ok(wrapped
-            .iter()
-            .zip(stream.iter())
-            .map(|(a, b)| a ^ b)
-            .collect())
+        let kek = test_double_kek(recipient);
+        aes_key_unwrap(&kek, wrapped)
+            .map_err(|_| SecurityError::CertificateEncryptionKeyUnwrapFailed)
     }
 }
 
@@ -932,5 +976,116 @@ mod tests {
                 .any(|window| window == data_oid.as_slice()),
             "data OID must appear in DER"
         );
+    }
+
+    #[test]
+    fn aes_kw_provider_wraps_cek_with_authenticated_length() {
+        let recipients = list(&[("alice", 1)]);
+        let recipient = recipients.get(0).expect("recipient");
+        let provider = AesKwKeyWrapProvider::new(&[0x2bu8; 32]).expect("provider");
+        let cek = [0x07u8; 16];
+        let wrapped = provider.wrap_key(&cek, recipient).expect("wrap");
+        // RFC 3394 output is always one 8-byte semiblock longer than the CEK.
+        assert_eq!(wrapped.len(), cek.len() + 8);
+        assert_eq!(
+            provider.unwrap_key(&wrapped, recipient).expect("unwrap"),
+            cek
+        );
+        assert!(!format!("{provider:?}").contains("2b2b"));
+
+        let env = build_envelope(
+            b"aes-kw content",
+            &recipients,
+            Permissions::new(Permission::PRINT, PasswordRole::User),
+            ContentCipher::Aes128Cbc,
+            &cek,
+            [3u8; 16],
+            &provider,
+        )
+        .expect("envelope");
+        assert_eq!(env.recipient_keys()[0].wrapped_len(), cek.len() + 8);
+        let opened =
+            open_envelope(&env, RecipientSelector::Index(0), &recipients, &provider).expect("open");
+        assert_eq!(opened.plaintext, b"aes-kw content");
+    }
+
+    #[test]
+    fn aes_kw_provider_rejects_wrong_kek() {
+        let recipients = list(&[("alice", 1)]);
+        let recipient = recipients.get(0).expect("recipient");
+        let wrap_provider = AesKwKeyWrapProvider::new(&[0x11u8; 16]).expect("provider");
+        let wrong_provider = AesKwKeyWrapProvider::new(&[0x22u8; 16]).expect("provider");
+        let wrapped = wrap_provider
+            .wrap_key(&[0x07u8; 16], recipient)
+            .expect("wrap");
+        assert_eq!(
+            wrong_provider.unwrap_key(&wrapped, recipient),
+            Err(SecurityError::CertificateEncryptionKeyUnwrapFailed)
+        );
+    }
+
+    #[test]
+    fn aes_kw_wrapped_key_tamper_is_rejected() {
+        let recipients = list(&[("alice", 1)]);
+        let provider = AesKwKeyWrapProvider::new(&[0x31u8; 24]).expect("provider");
+        let cek = [0x09u8; 32];
+        let mut env = build_envelope(
+            b"tamper the wrapped key",
+            &recipients,
+            Permissions::new(Permission::NONE, PasswordRole::User),
+            ContentCipher::Aes256Cbc,
+            &cek,
+            [4u8; 16],
+            &provider,
+        )
+        .expect("envelope");
+        assert_eq!(env.recipient_keys()[0].wrapped_len(), 40);
+        // Untouched envelope opens with the correct KEK.
+        assert_eq!(
+            open_envelope(&env, RecipientSelector::Index(0), &recipients, &provider)
+                .expect("open")
+                .plaintext,
+            b"tamper the wrapped key"
+        );
+        // Flipping a bit in the wrapped key breaks the RFC 3394 integrity check.
+        let last = env.recipients[0].wrapped_key.len() - 1;
+        env.recipients[0].wrapped_key[last] ^= 0x80;
+        assert_eq!(
+            open_envelope(&env, RecipientSelector::Index(0), &recipients, &provider),
+            Err(SecurityError::CertificateEncryptionKeyUnwrapFailed)
+        );
+    }
+
+    #[test]
+    fn in_memory_provider_uses_aes_kw_not_xor() {
+        let recipients = list(&[("alice", 1)]);
+        let recipient = recipients.get(0).expect("recipient");
+        let cek = [0x07u8; 16];
+        let wrapped = InMemoryKeyWrapProvider
+            .wrap_key(&cek, recipient)
+            .expect("wrap");
+        // XOR would return 16 bytes; AES-KW returns 24.
+        assert_eq!(wrapped.len(), 24);
+        assert_eq!(
+            InMemoryKeyWrapProvider
+                .unwrap_key(&wrapped, recipient)
+                .expect("unwrap"),
+            cek
+        );
+    }
+
+    #[test]
+    fn aes_kw_provider_rejects_invalid_kek_length() {
+        assert_eq!(
+            AesKwKeyWrapProvider::new(&[0u8; 12]).err(),
+            Some(SecurityError::AesKwInvalidKekLength(12))
+        );
+        assert_eq!(
+            AesKwKeyWrapProvider::new(&[0u8; 20]).err(),
+            Some(SecurityError::AesKwInvalidKekLength(20))
+        );
+        assert!(AesKwKeyWrapProvider::new(&[0u8; 16]).is_ok());
+        assert!(AesKwKeyWrapProvider::new(&[0u8; 24]).is_ok());
+        assert!(AesKwKeyWrapProvider::new(&[0u8; 32]).is_ok());
     }
 }
