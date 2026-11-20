@@ -1,0 +1,18 @@
+{
+  "id": "T-0237",
+  "lane": "author",
+  "title": "Redaction content removal on real pages",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0233"
+  ],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/hardening/T-0237.md",
+    "orchestration/feature-updates/T-0237.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit; redacted text is absent from re-extraction and from the raw bytes, and image-based redaction is pixel-verified on a real fixture",
+  "notes": "Library half of the redaction pair per ADR 0012. Serves acceptance items O-06 (redaction removes content, verified by re-extraction and a byte scan) and A-30 (Protect PDF redaction entry point) from docs/design/FEATURE_ACCEPTANCE.md. Redaction marks regions/areas and search matches, then removes the underlying text operators, overlapping annotations, form field values and link destinations rather than covering them. For overlapping images, decode the image, redact the pixels and re-encode: the workspace already depends on the `image` crate (MIT OR Apache-2.0, already in deny.toml's allow list), so no new licence is introduced; report if that changes. Every redaction is a full rewrite to a new file per ADR 0010 (never an incremental append that leaves the old operators recoverable). Expose a verification helper that re-extracts text and scans raw bytes for the removed strings so the caller can fail closed. A serialised app shell task follows once this lands; matrix rows stay `library` until that shell task verifies them.",
+  "evidence": "docs/evidence/hardening/T-0237.md"
+}

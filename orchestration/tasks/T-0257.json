@@ -1,0 +1,18 @@
+{
+  "id": "T-0257",
+  "lane": "security",
+  "title": "Redaction sanitize and independent verification",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0237"
+  ],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/hardening/T-0257.md",
+    "orchestration/feature-updates/T-0257.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security; a redacted file passes an independent byte scan, metadata sanitization and a second-reader extraction",
+  "notes": "Security half of the redaction pair, opened but not claimed until T-0237 lands per ADR 0012. Serves O-06 and A-30 alongside T-0237. Adds sanitization around redaction: strip or sanitize document metadata, XMP, embedded thumbnails, annotations, form values, link destinations, optional content and incremental-history remnants that could still carry redacted content, and verify with an independent reader (PDFium extraction plus a raw byte scan) that the removed strings cannot be recovered. Must run after T-0237 because it depends on that removal API; it must not duplicate the text-operator removal logic. Matrix rows stay `library` until the app shell task exposes redaction.",
+  "evidence": "docs/evidence/hardening/T-0257.md"
+}
