@@ -3,7 +3,7 @@
   "lane": "convert",
   "title": "Create rows closure for print scanning and portfolios",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0165"],
   "owns": [
     "crates/pdfxi-convert/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0174.toml"
   ],
   "acceptance": "cargo test -p pdfxi-convert",
-  "evidence": ""
+  "evidence": "docs/evidence/convert/T-0174.md"
 }

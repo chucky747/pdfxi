@@ -116,6 +116,23 @@
 //!   and confidence; the module deterministically assembles page text, maps
 //!   boxes into invisible text positions, thresholds confidence, and reports
 //!   kept/rejected/suspect words. No Tesseract dependency is added.
+//! - [`create_assembly`] joins the print-capture and virtual-printer envelopes
+//!   (CREATE-001/002) into one deterministic [`PdfAssemblyPlan`] with per-page
+//!   media boxes, image fit-to-media layout, and collated copy order. It is a
+//!   pure planning layer: no spooler, driver, decoder, or GUI is involved.
+//! - [`office_contract`] completes the Office intake contract (CREATE-006):
+//!   explicit envelope validation, a deterministic conversion plan with a
+//!   sanitized output part name, and typed unsupported constructs. No ZIP,
+//!   COM, or extractor process is added.
+//! - [`portfolio_builder`] adds deterministic creation/customization of a
+//!   [`PortfolioManifest`] (CREATE-010): case-insensitive add/remove/edit of
+//!   named entries followed by validation and stable XML serialization.
+//! - [`postscript_contract`] turns the bounded DSC reader (CREATE-013) into a
+//!   deterministic page layout plan with supported-construct counts and typed
+//!   unsupported constructs; it is not a PostScript interpreter.
+//! - [`watched_contract`] provides the file-system-free library half of the
+//!   watched-folder adapter (CREATE-014): config validation and a deterministic
+//!   per-file plan. The OS watcher itself remains a host concern.
 //!
 //! The text/JSON modules are always compiled and add no dependencies, so a
 //! `--no-default-features` build stays dependency-free.
@@ -150,6 +167,7 @@ pub mod capture;
 pub mod conformance;
 mod converter;
 pub mod create;
+pub mod create_assembly;
 pub mod email;
 mod error;
 mod export;
@@ -159,13 +177,16 @@ pub mod image;
 mod json;
 mod mime;
 pub mod ocr_pipeline;
+pub mod office_contract;
 pub mod office_export;
 pub mod office_import;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
 pub mod portfolio;
+pub mod portfolio_builder;
 pub mod postscript;
+pub mod postscript_contract;
 pub mod postscript_ingest;
 pub mod preflight;
 pub mod print_capture;
@@ -176,6 +197,7 @@ mod source;
 mod tagged_text;
 mod text;
 mod text_converter;
+pub mod watched_contract;
 
 pub use capture::{
     CAPTURE_MAX_BYTES, CAPTURE_MAX_PARTS, CaptureError, CaptureOptions, CaptureResult,
@@ -193,6 +215,10 @@ pub use create::{
     Margins, PageSize, create_from_html, create_from_html_with_options, create_from_image,
     create_from_markdown, create_from_text, create_pdf_from_file, create_pdf_from_html_file,
     create_pdf_from_html_file_with_options, create_pdf_from_path,
+};
+pub use create_assembly::{
+    ASSEMBLY_MAX_OUTPUT_PAGES, AssemblyError, AssemblyOptions, AssemblyPage, ImagePlacement,
+    PdfAssemblyPlan, build_pdf_assembly_plan,
 };
 pub use email::{
     EMAIL_MAX_ATTACHMENTS, EMAIL_MAX_BYTES, EMAIL_MAX_DEPTH, EMAIL_MAX_PARTS, EmailBodyKind,
@@ -221,6 +247,11 @@ pub use ocr_pipeline::{
     OcrOptions, OcrPageText, OcrPipelineError, OcrWord, PixelFormat, PlacedWord,
     SearchableTextLayer, SearchableTextPlan, TextPosition, run_ocr_pipeline,
 };
+pub use office_contract::{
+    OFFICE_CONTRACT_MAX_TITLE_BYTES, OfficeConversionPlan, OfficeEnvelopeError, OfficeUnsupported,
+    build_office_conversion_plan, build_office_conversion_plan_strict, target_format,
+    validate_office_envelope,
+};
 pub use office_export::{
     CellValue, DocxExportError, DocxExporter, ModelError, OfficeBlock, OfficeCell, OfficeDocument,
     OfficeExport, OfficeExportError, OfficeExportReport, OfficeExporter, OfficeFormat, OfficePage,
@@ -244,11 +275,16 @@ pub use portfolio::{
     PORTFOLIO_MAX_TITLE_BYTES, PortfolioEntry, PortfolioError, PortfolioManifest,
     serialize_portfolio,
 };
+pub use portfolio_builder::{PortfolioBuildError, PortfolioBuilder};
 pub use postscript::{
     MAX_PAGES as POSTSCRIPT_MAX_PAGES, MAX_TITLE_BYTES as POSTSCRIPT_MAX_TITLE_BYTES,
     MAX_TOTAL_CONTENT as POSTSCRIPT_MAX_TOTAL_CONTENT, PsContent, PsDocument, PsExportError,
     PsExportReport, PsFont, PsImageRef, PsLine, PsPage, PsRect, PsText, PsUnsupportedItem,
     export_postscript, export_postscript_with_report,
+};
+pub use postscript_contract::{
+    PsAssemblyOptions, PsAssemblyPlan, PsContentCounts, PsPlannedPage, PsUnsupportedConstruct,
+    build_ps_assembly_plan,
 };
 pub use postscript_ingest::{
     PS_INGEST_MAX_BYTES, PS_INGEST_MAX_LINES, PS_INGEST_MAX_PAGES, PS_INGEST_MAX_TOKENS_PER_PAGE,
@@ -284,6 +320,11 @@ pub use text::{
     export_text,
 };
 pub use text_converter::TextConverter;
+pub use watched_contract::{
+    PlannedWatchedFile, WATCHED_MAX_EXTENSIONS, WATCHED_MAX_FILES, WATCHED_MAX_NAME_BYTES,
+    WatchedCandidate, WatchedConfig, WatchedConfigError, WatchedDisposition, WatchedPlan,
+    WatchedPlanError, build_watched_plan,
+};
 
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {

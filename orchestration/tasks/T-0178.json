@@ -1,0 +1,15 @@
+{
+  "id": "T-0178",
+  "lane": "convert",
+  "title": "Standards profiles closure with ICC validation",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0122"],
+  "owns": [
+    "crates/pdfxi-standards/**",
+    "docs/evidence/standards/T-0178.md",
+    "orchestration/feature-updates/T-0178.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-standards",
+  "evidence": ""
+}

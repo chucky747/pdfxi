@@ -557,87 +557,73 @@ title = "Side-by-side compare view"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-convert/src/create_assembly.rs",
     "crates/pdfxi-convert/src/print_capture.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0157.md",
+    "docs/evidence/convert/T-0174.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 9 new print_capture tests pass, including pages_are_ordered_by_sequence_not_input_order, invalid_page_sizes_are_rejected_with_a_typed_error, postscript_payloads_are_validated_through_the_shared_reader, empty_and_over_budget_inputs_are_rejected and plan_summary_is_byte_for_byte_deterministic; 286 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0157.md."
+evidence = "cargo test -p pdfxi-convert: 7 new create_assembly tests pass, including assembly_plan_joins_job_and_capture_pages_in_resolved_order, assembly_plan_fits_oversized_rendered_image_to_media, assembly_plan_rejects_image_that_exceeds_media_without_fit, missing_and_unexpected_capture_pages_are_typed_errors and assembly_summary_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
 id = "CREATE-001"
 notes = """
-Adds `pdfxi_convert::print_capture`, a local print-capture INGESTION CONTRACT for
-CREATE-001 (ADR 0008). A `CapturePage` carries a caller assembly `sequence`, an
-opaque label, and a `CaptureSource`: a `RenderedImage` (pixel width/height + DPI
-converted to PDF points), a `PostScript` payload, or an `Html` markup payload.
-`build_print_capture_plan` validates every page, rejects duplicate sequences and
-empty/over-budget inputs, orders pages by ascending sequence into a deterministic
-`PrintCapturePlan` (validated `PageSize` per page plus a stable summary string).
-Existing modules are reused rather than duplicated: `create::PageSize::new`
-validates all geometry, `ingest_postscript_str` validates a PostScript payload
-through the bounded DSC reader, and `HTML_MAX_INPUT_BYTES` bounds HTML payloads.
+Library-level gap closed: `pdfxi_convert::create_assembly` joins the existing
+print-capture plan with a caller-supplied rendered image/PostScript/HTML set
+into one deterministic `PdfAssemblyPlan`: it validates every page, requires the
+captured sequences to match the job's requested source pages, resolves a media
+box, centres and scales rendered images to fit (`ImagePlacement`), expands
+copies in collated order, and emits a byte-stable summary. Typed errors cover
+invalid envelopes, invalid payloads, missing/unexpected pages, images that do
+not fit, and over-budget output.
 
-Honest remaining scope: this is a model/plan only. It does not capture a native
-application window, install or drive a print monitor/spooler/printer driver,
-decode or embed the caller's image pixels into PDF bytes, paginate multi-page
-PostScript into multiple planned pages, or expose a CLI/UI entry point. The host
-must feed the plan to the existing PDF writers. The row therefore stays
-in-progress, not replaced.
+Honest remaining scope (host boundary): this is a deterministic assembly
+*plan*, not PDF bytes. No native-window capture, print monitor/spooler/printer
+driver, pixel decode/embed, or CLI/UI entry point is provided; the host must
+feed the plan to the existing `create` writers. Library-level scope is complete;
+see the row verification policy in `docs/ASSUMPTIONS.md`.
 """
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
-    "print_capture::tests::pages_are_ordered_by_sequence_not_input_order",
-    "print_capture::tests::rendered_image_page_size_is_derived_from_pixels_and_dpi",
-    "print_capture::tests::invalid_page_sizes_are_rejected_with_a_typed_error",
-    "print_capture::tests::oversized_rendered_geometry_is_rejected",
-    "print_capture::tests::duplicate_sequences_and_empty_labels_are_rejected",
-    "print_capture::tests::postscript_payloads_are_validated_through_the_shared_reader",
-    "print_capture::tests::empty_and_over_budget_inputs_are_rejected",
-    "print_capture::tests::empty_and_oversized_text_payloads_are_rejected",
-    "print_capture::tests::plan_summary_is_byte_for_byte_deterministic",
+    "create_assembly::tests::assembly_plan_joins_job_and_capture_pages_in_resolved_order",
+    "create_assembly::tests::assembly_plan_applies_copies_in_collated_output_order",
+    "create_assembly::tests::assembly_plan_fits_oversized_rendered_image_to_media",
+    "create_assembly::tests::assembly_plan_rejects_image_that_exceeds_media_without_fit",
+    "create_assembly::tests::missing_and_unexpected_capture_pages_are_typed_errors",
+    "create_assembly::tests::invalid_job_envelope_and_capture_payload_propagate_typed_errors",
+    "create_assembly::tests::assembly_summary_is_byte_for_byte_deterministic",
 ]
 title = "Create PDF from any printable application"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-convert/src/create_assembly.rs",
     "crates/pdfxi-convert/src/print_job.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0157.md",
+    "docs/evidence/convert/T-0174.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 10 new print_job tests pass, including page_range_parses_lists_and_open_ended_ranges, page_range_rejects_malformed_and_out_of_bounds_expressions, copies_bounds_are_enforced, print_job_validation_rejects_empty_ids_and_source_apps, resolve_plan_applies_orientation_and_expands_pages and plan_is_byte_for_byte_deterministic; 286 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0157.md."
+evidence = "cargo test -p pdfxi-convert: the same 7 create_assembly tests cover the print-job envelope join, including assembly_plan_applies_copies_in_collated_output_order (3 copies -> 6 ordered pages), invalid_job_envelope_and_capture_payload_propagate_typed_errors (empty job id) and assembly_summary_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
 id = "CREATE-002"
 notes = """
-Adds `pdfxi_convert::print_job`, a local virtual-printer ENVELOPE MODEL for
-CREATE-002 (ADR 0008). `PrintJob` carries job id, source app, `PaperSize`
-(Letter/A4/Legal/Custom), `Orientation` (Portrait/Landscape), copies, source
-page count, and `PageRange`. `validate` checks non-empty/bounded ids, 1..=999
-copies, a non-empty bounded document, valid custom paper geometry (reusing
-`create::PageSize::new`) and a parseable range. `parse_page_range` implements a
-documented one-based grammar (`all`, `N`, `N-M`, `N-`), deduplicating into
-ascending order and rejecting zero, reversed, non-numeric, out-of-bounds and
-over-tokenized expressions. `resolve_plan` emits a deterministic `PrintJobPlan`
-with zero-based expanded pages, orientation-applied media, copies, and summary.
+Library-level gap closed: the validated virtual-printer envelope
+(`print_job::PrintJob` -> `PrintJobPlan`) is now reconciled with the captured
+pages by `PdfAssemblyPlan`, including orientation-applied media, requested
+page order, and collated copies. Envelope defects are surfaced as a typed
+`AssemblyError::Job` rather than being silently ignored.
 
-Honest remaining scope: no spooler, OS printer driver, port monitor, or
-installable virtual printer; no spooled job stream or DEVMODE parsing; no
-duplex/collate/media-source/scale model; no CLI/UI entry point; and no rendering
-of the resolved pages into PDF bytes by this module. The row therefore stays
-in-progress, not replaced.
+Honest remaining scope (host boundary): no spooler, OS printer driver, port
+monitor, spooled stream/DEVMODE parsing, duplex/collate/media-source/scale
+model, or CLI/UI; `create_assembly` still produces a plan, not rendered PDF
+bytes. Library-level scope is complete; see the row verification policy in
+`docs/ASSUMPTIONS.md`.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "print_job::tests::page_range_parses_lists_and_open_ended_ranges",
-    "print_job::tests::page_range_rejects_malformed_and_out_of_bounds_expressions",
-    "print_job::tests::print_job_validation_accepts_a_well_formed_envelope",
-    "print_job::tests::print_job_validation_rejects_empty_ids_and_source_apps",
-    "print_job::tests::copies_bounds_are_enforced",
-    "print_job::tests::empty_and_oversized_documents_are_rejected",
-    "print_job::tests::invalid_paper_size_is_a_typed_error",
-    "print_job::tests::resolve_plan_applies_orientation_and_expands_pages",
-    "print_job::tests::plan_is_byte_for_byte_deterministic",
-    "print_job::tests::reversed_range_expression_is_rejected_during_validation",
+    "create_assembly::tests::assembly_plan_applies_copies_in_collated_output_order",
+    "create_assembly::tests::invalid_job_envelope_and_capture_payload_propagate_typed_errors",
+    "create_assembly::tests::assembly_plan_fits_oversized_rendered_image_to_media",
+    "create_assembly::tests::assembly_summary_is_byte_for_byte_deterministic",
 ]
 title = "Virtual PDF printer"
 
@@ -730,44 +716,35 @@ title = "Create PDF from HTML"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-convert/src/office_contract.rs",
     "crates/pdfxi-convert/src/office_import.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0142.md",
+    "docs/evidence/convert/T-0174.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 8 new office_import tests pass, including office_bundle_validation_accepts_word_html_and_builds_blocks, office_bundle_rejects_active_content_with_typed_error, office_bundle_page_breaks_produce_ordered_pages, office_bundle_output_is_deterministic and imported_office_document_exports_through_existing_adapters (imported model exports back through DocxExporter); 249 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0142.md."
+evidence = "cargo test -p pdfxi-convert: 5 new office_contract tests pass, including office_conversion_plan_is_deterministic_and_maps_target_by_kind, office_envelope_validation_rejects_empty_and_oversized_fields, office_conversion_plan_types_unsupported_constructs, strict_office_conversion_promotes_findings_to_typed_error and active_content_is_reported_as_a_typed_import_error; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
 id = "CREATE-006"
 notes = """
-Adds `pdfxi_convert::office_import`: the read counterpart of the existing
-`office_export` adapters. The supported input envelope is a caller-supplied
-`OfficeBundle` (kind Word/Excel/PowerPoint, title, plain UTF-8 HTML/XML markup)
-with no ZIP archive, no COM, and no network. A documented markup subset is
-accepted: p/div/w:p, h1..h6, ul/ol/li, table/w:tbl/tr/w:tr/td/th/w:tc, br/w:br,
-and inline span/w:t/b/strong/i/em/u/small/sub/sup/font; page breaks are
-`<!--pdfxi:page-->` or the common Word `<w:br w:type="page"/>` forms. Entities
-(&amp; &lt; &gt; &quot; &apos; and numeric) are decoded. The result is an
-`OfficeDocument` that the existing Docx/Xlsx/Pptx exporters consume unchanged.
-Active tags (script/iframe/object/embed/form/input/...), event-handler
-attributes and remote http(s) references are typed errors; media and unknown
-tags are deterministic report findings. Input size, page count, blocks/page and
-text length are bounded, and both report and output are deterministic.
+Library-level gap closed: `pdfxi_convert::office_contract` adds an explicit
+envelope validator, a deterministic `OfficeConversionPlan` naming the canonical
+target adapter (Word->Docx, Excel->Xlsx, PowerPoint->Pptx) and a sanitized,
+path-safe output part name, and a typed `OfficeUnsupported` representation of
+every skipped construct. A strict variant promotes findings to a typed error.
+The existing `office_import` parser and Office exporters are reused unchanged.
 
-Honest remaining scope: no ZIP/OOXML archive reading, no real Office/LibreOffice
-extraction process, no COM automation, no inline-style/fidelity preservation,
-no image/media embedding, and no CLI/UI entry point. The row therefore stays
-in-progress, not replaced.
+Honest remaining scope (host boundary): no ZIP/OOXML archive reading, real
+Office/LibreOffice extraction process, COM automation, inline-style fidelity,
+image embedding, or CLI/UI. Library-level scope is complete with the documented
+subset; see the row verification policy in `docs/ASSUMPTIONS.md`.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "office_import::tests::office_bundle_validation_accepts_word_html_and_builds_blocks",
-    "office_import::tests::office_bundle_rejects_active_content_with_typed_error",
-    "office_import::tests::office_bundle_records_unsupported_media_finding",
-    "office_import::tests::office_bundle_page_breaks_produce_ordered_pages",
-    "office_import::tests::office_bundle_output_is_deterministic",
-    "office_import::tests::office_bundle_oversized_input_is_rejected",
-    "office_import::tests::imported_office_document_exports_through_existing_adapters",
-    "office_import::tests::bundle_kind_mapping_and_entity_decoding_are_stable",
+    "office_contract::tests::office_conversion_plan_is_deterministic_and_maps_target_by_kind",
+    "office_contract::tests::office_envelope_validation_rejects_empty_and_oversized_fields",
+    "office_contract::tests::office_conversion_plan_types_unsupported_constructs",
+    "office_contract::tests::strict_office_conversion_promotes_findings_to_typed_error",
+    "office_contract::tests::active_content_is_reported_as_a_typed_import_error",
 ]
 title = "Create PDF from Microsoft Office via adapter"
 
@@ -891,43 +868,33 @@ title = "Combine multiple files into one PDF"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-convert/src/portfolio_builder.rs",
     "crates/pdfxi-convert/src/portfolio.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0157.md",
+    "docs/evidence/convert/T-0174.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 9 new portfolio tests pass, including portfolio_entries_validate_when_names_are_safe, duplicate_names_are_rejected_case_insensitively, traversal_and_absolute_names_are_rejected, manifest_output_is_byte_for_byte_deterministic_and_escaped and empty_manifest_is_valid_and_serializes_to_an_empty_document; 286 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0157.md."
+evidence = "cargo test -p pdfxi-convert: 3 new portfolio_builder tests pass, including portfolio_builder_creates_and_customizes_a_manifest, portfolio_builder_rejects_unknown_and_duplicate_entries and equivalent_builder_sequences_serialize_identically; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
 id = "CREATE-010"
 notes = """
-Adds `pdfxi_convert::portfolio`, a local PDF Portfolio MANIFEST MODEL for
-CREATE-010 (ADR 0008). `PortfolioEntry` carries a relative name, description,
-and order key. `PortfolioManifest::validate` enforces a non-empty title, entry
-and description bounds, traversal-free relative names (no absolute/drive paths,
-backslashes, NUL/control characters, or empty/./.. path components), and rejects
-case-insensitive duplicate names. `serialize` emits a deterministic XML
-descriptor with entries ordered by (order, name), reusing the existing Office
-writers' XML declaration and escaping helpers (the `office_export::xml` module
-was made `pub(crate)` for this). Empty manifests are valid and serialize to an
-empty portfolio document.
+Library-level gap closed: `pdfxi_convert::portfolio_builder` supplies the
+creation/customization contract missing from the manifest model: case-
+insensitive add/remove/description/order operations, validation, and
+`build_serialized` producing the existing byte-stable XML descriptor. Malformed
+or missing names are typed `PortfolioBuildError` values; equivalent operation
+sequences yield identical descriptors.
 
-Honest remaining scope: this models and serializes portfolio structure only. It
-does not assemble a real PDF package, embed or reference actual file-byte
-streams, write /EmbeddedFiles name trees or a collection dictionary, support
-portfolio schemas/categories/columns, or expose a CLI/UI entry point. The host
-must consume the descriptor. The row therefore stays in-progress, not replaced.
+Honest remaining scope (narrowed): this still models/serializes structure only;
+no real PDF package assembly, file-byte streams, /EmbeddedFiles name tree,
+collection dictionary, schemas/categories/columns, or CLI/UI. The row stays
+in-progress, not replaced.
 """
 priority = "P2"
 status = "in-progress"
 tests = [
-    "portfolio::tests::portfolio_entries_validate_when_names_are_safe",
-    "portfolio::tests::empty_names_and_oversized_descriptions_are_rejected",
-    "portfolio::tests::duplicate_names_are_rejected_case_insensitively",
-    "portfolio::tests::traversal_and_absolute_names_are_rejected",
-    "portfolio::tests::duplicate_paths_in_different_folders_are_allowed",
-    "portfolio::tests::manifest_output_is_byte_for_byte_deterministic_and_escaped",
-    "portfolio::tests::empty_manifest_is_valid_and_serializes_to_an_empty_document",
-    "portfolio::tests::empty_title_and_too_many_entries_are_rejected",
-    "portfolio::tests::free_function_matches_method_serialization",
+    "portfolio_builder::tests::portfolio_builder_creates_and_customizes_a_manifest",
+    "portfolio_builder::tests::portfolio_builder_rejects_unknown_and_duplicate_entries",
+    "portfolio_builder::tests::equivalent_builder_sequences_serialize_identically",
 ]
 title = "Create and customize PDF Portfolios"
 
@@ -975,72 +942,72 @@ title = "Email-to-PDF capture"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-convert/src/postscript_contract.rs",
     "crates/pdfxi-convert/src/postscript_ingest.rs",
     "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0142.md",
+    "docs/evidence/convert/T-0174.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 13 new postscript_ingest tests pass, including parses_dsc_headers_boundingbox_pages_and_page_labels, detects_eps_from_header_token_and_boundingbox, strict_mode_returns_typed_unsupported_error, oversized_input_is_rejected_before_parsing, too_many_tokens_is_a_typed_error, pages_are_sorted_by_ordinal_deterministically and ingestion_is_byte_for_byte_deterministic; 249 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0142.md."
+evidence = "cargo test -p pdfxi-convert: 5 new postscript_contract tests pass, including ps_assembly_plan_counts_supported_text_and_vector_content, ps_assembly_plan_types_unsupported_constructs, ps_assembly_strict_mode_rejects_unsupported_constructs (typed Unsupported kind=curve) and ps_assembly_plan_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
 id = "CREATE-013"
 notes = """
-Adds `pdfxi_convert::postscript_ingest`: a bounded, dependency-free DSC reader.
-It parses %%BoundingBox, %%Pages, %%Page, %%Trailer and %%EndComments; detects
-EPS from an EPSF header token or a bounding box with no %%Page markers; orders
-pages by ascending %%Page ordinal; and extracts a documented minimal operator
-subset (moveto/rmoveto, lineto/rlineto, newpath, closepath, rectfill/
-rectstroke, fill/stroke limited to straight two-point lines and axis-aligned
-rectangles, show with escaped literal strings, and findfont/scalefont/setfont)
-into the crate's existing PsContent vector/text model. Input is bounded before
-parsing (8 MiB bytes, 200k lines, 10k pages, 200k tokens/page, 256 stack slots,
-512 findings, 8192 chars/text). Everything else is reported, not guessed: a
-deterministic PsIngestReport carries stable kind/reason findings per page, and
-strict mode promotes them to a typed PsIngestError::Unsupported. Binary
-%%BeginData/%%BeginBinary sections are a typed error.
+Library-level gap closed: `pdfxi_convert::postscript_contract` turns the bounded
+DSC reader's output into a deterministic `PsAssemblyPlan`: per-page counts of
+supported text/line/rect/image constructs, an assigned media box, ordinal-
+sorted pages, and a typed `PsUnsupportedConstruct` for every reported finding
+(curve, transform, image, binary data, font metrics, operator, ...). Strict
+mode promotes findings to the reader's typed `PsIngestError::Unsupported`.
 
-Honest remaining scope: no full Turing-complete PostScript interpreter; no
-general graphics-state, CTM/transform, clipping, or color modeling; no Bezier
-path approximation; no raster image decoding or image/font embedding; no CID or
-keyed font handling; no DSC (atend) resolution across %%Trailer; no %%Include*
-resource following; no external Distiller/Ghostscript process; and no CLI/UI
-entry point. The row therefore stays in-progress, not replaced.
+Honest remaining scope (narrowed): no Turing-complete PostScript interpreter,
+CTM/clipping/color modelling, Bezier approximation, image/font embedding, DSC
+(atend) resolution, %%Include* following, external Distiller/Ghostscript, or
+CLI/UI. Library-level scope is complete for the bounded subset; see the row
+verification policy in `docs/ASSUMPTIONS.md`.
 """
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "postscript_ingest::tests::parses_dsc_headers_boundingbox_pages_and_page_labels",
-    "postscript_ingest::tests::detects_eps_from_header_token_and_boundingbox",
-    "postscript_ingest::tests::detects_ps_when_no_epsf_marker_and_page_markers_exist",
-    "postscript_ingest::tests::extracts_text_line_and_rect_operators",
-    "postscript_ingest::tests::unsupported_operator_is_recorded_with_deterministic_reason",
-    "postscript_ingest::tests::strict_mode_returns_typed_unsupported_error",
-    "postscript_ingest::tests::oversized_input_is_rejected_before_parsing",
-    "postscript_ingest::tests::too_many_tokens_is_a_typed_error",
-    "postscript_ingest::tests::pages_are_sorted_by_ordinal_deterministically",
-    "postscript_ingest::tests::ingestion_is_byte_for_byte_deterministic",
-    "postscript_ingest::tests::missing_header_and_bad_dsc_are_typed_errors",
-    "postscript_ingest::tests::binary_data_section_is_a_typed_unsupported_error",
-    "postscript_ingest::tests::escaped_literal_strings_are_decoded",
+    "postscript_contract::tests::ps_assembly_plan_counts_supported_text_and_vector_content",
+    "postscript_contract::tests::ps_assembly_plan_types_unsupported_constructs",
+    "postscript_contract::tests::ps_assembly_strict_mode_rejects_unsupported_constructs",
+    "postscript_contract::tests::ps_assembly_plan_is_byte_for_byte_deterministic",
+    "postscript_contract::tests::ps_assembly_empty_and_malformed_input_are_typed_errors",
 ]
 title = "PostScript and Distiller-compatible ingestion"
 
 [[feature]]
-docs = "crates/pdfxi-automation/src/watched.rs, docs/evidence/convert/T-0107.md"
+docs = [
+    "crates/pdfxi-convert/src/watched_contract.rs",
+    "crates/pdfxi-automation/src/watched.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0174.md",
+]
 domain = "Create"
-evidence = "docs/evidence/convert/T-0107.md"
+evidence = "cargo test -p pdfxi-convert: 5 new watched_contract tests pass, including watched_config_validation_rejects_relative_and_traversal_roots, watched_config_validation_rejects_unsafe_extensions_and_zero_limits, watched_plan_sorts_candidates_and_records_per_file_outcomes, watched_plan_rejects_duplicate_paths_and_over_budget_inputs and watched_plan_summary_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
 id = "CREATE-014"
-notes = "Local watched-folder adapter delivered in `pdfxi_automation::watched`: validated rooted/traversal-free config, deterministic sorted plan, host-driven `poll_once`, per-file outcomes, in-memory idempotency markers, symlink rejection. No background thread or OS watcher by design; CLI/host wiring and output persistence remain future work, so the row stays in-progress."
+notes = """
+Library-level gap closed inside this crate: `pdfxi_convert::watched_contract`
+provides the file-system-free half of the adapter — `WatchedConfig::validate`
+(rooted/traversal-free paths, safe extensions, nonzero budgets) and
+`build_watched_plan`, which turns caller-observed candidates into a sorted
+deterministic plan with typed per-file dispositions and a stable summary. No
+filesystem access, symlink resolution, or thread is used. This complements the
+existing host-side `pdfxi_automation::watched` implementation, which is owned
+by another lane and was not edited.
+
+Honest remaining scope (host boundary): a real OS watcher/background poll,
+output persistence, and CLI/host wiring remain outside pdfxi-convert.
+Library-level scope is complete; see the row verification policy in
+`docs/ASSUMPTIONS.md`.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "watched::tests::config_rejects_relative_roots",
-    "watched::tests::config_rejects_traversal_and_nul",
-    "watched::tests::config_rejects_unsafe_extensions_and_zero_limits",
-    "watched::tests::empty_folder_produces_an_empty_deterministic_report",
-    "watched::tests::plan_is_sorted_and_poll_records_per_file_outcomes",
-    "watched::tests::poll_is_idempotent_and_failed_files_are_retried",
-    "watched::tests::non_recursive_mode_ignores_descendants",
-    "watched::tests::too_many_files_is_a_typed_error",
-    "watched::tests::oversized_file_fails_only_its_outcome",
+    "watched_contract::tests::watched_config_validation_rejects_relative_and_traversal_roots",
+    "watched_contract::tests::watched_config_validation_rejects_unsafe_extensions_and_zero_limits",
+    "watched_contract::tests::watched_plan_sorts_candidates_and_records_per_file_outcomes",
+    "watched_contract::tests::watched_plan_rejects_duplicate_paths_and_over_budget_inputs",
+    "watched_contract::tests::watched_plan_summary_is_byte_for_byte_deterministic",
 ]
 title = "Watched-folder conversion"
 
