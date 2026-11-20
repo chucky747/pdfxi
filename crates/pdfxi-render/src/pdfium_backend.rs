@@ -56,7 +56,10 @@ use pdfxi_text::{
 };
 
 use crate::text_extract::{RawChar, chars_to_text_page};
-use crate::{CancellationToken, PageIndex, Progress, RenderError, RenderedPage, Renderer};
+use crate::{
+    CancellationToken, MAX_RASTER_PIXELS, PageIndex, Progress, RenderError, RenderedPage, Renderer,
+    clamp_render_scale,
+};
 
 /// The one PDFium instance shared by every renderer in this process.
 static PDFIUM: OnceLock<Mutex<Pdfium>> = OnceLock::new();
@@ -319,7 +322,15 @@ impl Renderer for PdfiumRenderer {
         progress(Progress::new(2, 4));
         cancellation.check()?;
 
-        // At scale 1.0 a PDF point maps to one pixel, i.e. 72 DPI.
+        // At scale 1.0 a PDF point maps to one pixel, i.e. 72 DPI. A very large
+        // page at a high zoom is clamped so one raster cannot allocate an
+        // unbounded buffer (MAX_RASTER_PIXELS = 16 Mpx = 64 MiB RGBA).
+        let scale = clamp_render_scale(
+            pdf_page.width().value,
+            pdf_page.height().value,
+            scale,
+            MAX_RASTER_PIXELS,
+        );
         let config = PdfRenderConfig::new().scale_page_by_factor(scale);
         let bitmap = pdf_page
             .render_with_config(&config)

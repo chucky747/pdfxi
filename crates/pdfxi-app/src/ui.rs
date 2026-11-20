@@ -155,6 +155,13 @@ const THUMB_TILE_HEIGHT: f32 = 124.0;
 #[cfg(feature = "pdfium")]
 const THUMBS_PER_FRAME: usize = 4;
 
+/// Maximum page rasters rendered synchronously in one frame.
+///
+/// A low-zoom spread can intersect many pages; rendering them all in one frame
+/// would freeze the window. The rest render on later frames.
+#[cfg(feature = "pdfium")]
+const RASTERS_PER_FRAME: usize = 2;
+
 /// Placeholder page count assigned to a demo tab (no real document is loaded).
 pub const DEMO_PAGE_COUNT: usize = 3;
 
@@ -730,6 +737,12 @@ pub struct PdfxiApp {
     /// The native renderer; `None` when the fixture could not be opened.
     #[cfg(feature = "pdfium")]
     pdfium_renderer: Option<PdfiumRenderer>,
+    /// Cancellation token for the open document's raster work.
+    ///
+    /// Held across frames so a long render can be cancelled when the user
+    /// switches documents instead of being scoped to one frame.
+    #[cfg(feature = "pdfium")]
+    raster_cancel: CancellationToken,
     /// One GPU texture per laid-out page, refreshed on zoom/rotation changes.
     #[cfg(feature = "pdfium")]
     textures: std::collections::HashMap<usize, LiveTexture>,
@@ -1180,7 +1193,27 @@ impl PdfxiApp {
         self.restore_scroll_from_active();
         self.pending_scroll = false;
         self.pending_page_scroll = None;
+        self.reset_raster_state();
     }
+
+    /// Drop per-document raster state and cancel outstanding work.
+    ///
+    /// Rasters are keyed by page index, scale and rotation, not by document, so
+    /// the cache must be cleared whenever the active document changes or a tab
+    /// closes; otherwise the next document could display another document's
+    /// page pixels. The cancellation token is cancelled first so any render in
+    /// flight for the old document stops.
+    #[cfg(feature = "pdfium")]
+    fn reset_raster_state(&mut self) {
+        self.raster_cancel.cancel();
+        self.raster_cancel = CancellationToken::new();
+        self.raster_cache.invalidate_all();
+        self.textures.clear();
+    }
+
+    /// No-op without the `pdfium` feature, which has no raster state.
+    #[cfg(not(feature = "pdfium"))]
+    fn reset_raster_state(&mut self) {}
 
     /// Increase the active tab's custom zoom by one `ZOOM_STEP`.
     pub fn zoom_in(&mut self) {
@@ -1617,11 +1650,15 @@ impl PdfxiApp {
             return;
         };
         let scroll = CanvasPoint::new(self.scroll_x, self.scroll_y);
-        let token = CancellationToken::new();
-        match self
-            .raster_cache
-            .ensure_visible(renderer, layout, scroll, &token, &mut |_| {})
-        {
+        let token = self.raster_cancel.clone();
+        match self.raster_cache.ensure_visible_capped(
+            renderer,
+            layout,
+            scroll,
+            &token,
+            RASTERS_PER_FRAME,
+            &mut |_| {},
+        ) {
             Ok(_) => {}
             Err(error) => self.status = format!("Render error: {error}"),
         }

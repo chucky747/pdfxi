@@ -457,6 +457,40 @@ pub enum RenderError {
     Backend(String),
 }
 
+/// Maximum pixels (width × height) a single page raster may allocate.
+///
+/// 16 Mpx is 64 MiB of RGBA pixels. Renderers clamp their scale so a hostile or
+/// very large page cannot request an unbounded allocation.
+pub const MAX_RASTER_PIXELS: u64 = 16 * 1024 * 1024;
+
+/// Smallest scale a clamped render falls back to.
+pub const MIN_RASTER_SCALE: f32 = 0.05;
+
+/// Clamp `scale` so `width_pt × height_pt × scale²` stays within `max_pixels`.
+///
+/// Returns `scale` unchanged when it is invalid or already within budget, and
+/// otherwise the largest scale that fits, floored at [`MIN_RASTER_SCALE`]. The
+/// helper is pure so callers can validate the policy without a renderer.
+#[must_use]
+pub fn clamp_render_scale(width_pt: f32, height_pt: f32, scale: f32, max_pixels: u64) -> f32 {
+    if !scale.is_finite() || scale <= 0.0 || max_pixels == 0 {
+        return scale;
+    }
+    if !width_pt.is_finite() || !height_pt.is_finite() || width_pt <= 0.0 || height_pt <= 0.0 {
+        return scale;
+    }
+    let points = f64::from(width_pt) * f64::from(height_pt);
+    let requested = points * f64::from(scale) * f64::from(scale);
+    if requested <= max_pixels as f64 {
+        return scale;
+    }
+    let allowed = (max_pixels as f64 / points).sqrt() * (1.0 - 1e-6);
+    if !allowed.is_finite() || allowed <= 0.0 {
+        return MIN_RASTER_SCALE;
+    }
+    (allowed as f32).clamp(MIN_RASTER_SCALE, scale)
+}
+
 /// A backend capable of rasterizing document pages.
 ///
 /// Implementations must:
@@ -488,6 +522,56 @@ pub trait Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clamp_render_scale_keeps_requests_within_the_pixel_budget() {
+        // 1000x1000 points at scale 2 is 4 Mpx, under the 16 Mpx budget.
+        assert_eq!(
+            clamp_render_scale(1000.0, 1000.0, 2.0, MAX_RASTER_PIXELS),
+            2.0
+        );
+        // At scale 8 the same page would be 64 Mpx, so it clamps to
+        // sqrt(16_777_216 / 1_000_000) = 4.096.
+        let clamped = clamp_render_scale(1000.0, 1000.0, 8.0, MAX_RASTER_PIXELS);
+        assert!((clamped - 4.096).abs() < 1e-4, "clamped scale: {clamped}");
+        // The clamped scale fits the budget exactly.
+        let pixels = 1000.0 * 1000.0 * f64::from(clamped) * f64::from(clamped);
+        assert!(pixels <= MAX_RASTER_PIXELS as f64 + 1.0);
+    }
+
+    #[test]
+    fn clamp_render_scale_floors_pathological_pages() {
+        // A 100000x100000 point page cannot fit even at very small scales.
+        let clamped = clamp_render_scale(100_000.0, 100_000.0, 1.0, MAX_RASTER_PIXELS);
+        assert_eq!(clamped, MIN_RASTER_SCALE);
+    }
+
+    #[test]
+    fn clamp_render_scale_passes_invalid_input_through() {
+        assert!(clamp_render_scale(100.0, 100.0, f32::NAN, MAX_RASTER_PIXELS).is_nan());
+        assert_eq!(clamp_render_scale(100.0, 100.0, 1.0, 0), 1.0);
+        assert_eq!(clamp_render_scale(0.0, 100.0, 4.0, MAX_RASTER_PIXELS), 4.0);
+        assert_eq!(clamp_render_scale(-1.0, 100.0, 4.0, MAX_RASTER_PIXELS), 4.0);
+        assert_eq!(
+            clamp_render_scale(100.0, 100.0, 0.5, MAX_RASTER_PIXELS),
+            0.5
+        );
+    }
+
+    #[test]
+    fn clamped_scale_is_never_above_the_requested_scale() {
+        for (width, height, scale) in [
+            (612.0, 792.0, 8.0),
+            (2384.0, 3370.0, 1.0),
+            (2384.0, 3370.0, 8.0),
+            (10.0, 10.0, 0.1),
+        ] {
+            let clamped = clamp_render_scale(width, height, scale, MAX_RASTER_PIXELS);
+            assert!(clamped <= scale, "{width}x{height} at {scale} -> {clamped}");
+            assert!(clamped > 0.0);
+            assert!(clamped.is_finite());
+        }
+    }
 
     /// A deterministic renderer used to exercise the contract.
     ///

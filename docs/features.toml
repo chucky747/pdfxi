@@ -4272,34 +4272,17 @@ tests = [
 title = "CLI text extraction for uncompressed content streams"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-app/src/raster.rs",
-    "crates/pdfxi-app/src/ui.rs",
-    "crates/pdfxi-app/Cargo.toml",
-]
+docs = "crates/pdfxi-render/src/lib.rs, crates/pdfxi-app/src/raster.rs, crates/pdfxi-app/src/ui.rs, docs/evidence/app/T-0191.md"
 domain = "View & Navigate"
-evidence = '''CARGO_TARGET_DIR=target/lanes/app; PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed; raster::tests::pdfium_raster_fills_cache_with_non_uniform_pixels opened fixtures/minimal.pdf with PdfiumRenderer, rendered page 0 at scale 1.0 (non-zero width/height, pixels.len() == width*height*4), then filled the app RasterCache and asserted a non-uniform raster (the 'Hello, PDFXI!' text). ui::tests::demo_fixture_fills_the_cache_without_a_window verified the demo tab takes its one-page count from the fixture and that ensure_rasters fills the cache. Also cargo test -p pdfxi-app: 42 passed; --features ui: 56 passed; clippy/fmt/doc clean.'''
+evidence = "docs/evidence/app/T-0191.md"
 id = "VIEW-016"
-notes = """
-End-to-end open/render slice. `pdfxi-app` now depends on `pdfxi-render` and its
-`pdfium` feature forwards to `pdfxi-render/pdfium`. `PdfxiApp::new()` opens
-fixtures/minimal.pdf through `PdfiumRenderer` when `pdfium` is enabled (failures
-are reported through status, never panics). `CanvasLayout` drives
-`RasterCache::ensure_visible`, which renders the visible pages at the resolved
-canvas scale into an LRU cache; `raster_texture` uploads the cached RGBA page
-into a reusable egui texture that `canvas_ui` paints inside the page rectangle.
-The cache and its tests are GUI-free and run under default features with a mock
-renderer. Fixture resolution is documented in `raster::workspace_fixture_path`:
-CARGO_MANIFEST_DIR for pdfxi-app is crates/pdfxi-app, so the workspace root is
-two levels up.
-"""
+notes = "Viewer rendering is pixel- and byte-bounded: 16 Mpx per raster clamp applied from real page geometry, 256 MiB LRU byte budget, two rasters per frame, and a document-scoped cancellation token reset on document change. Host boundary: rendering remains synchronous on the UI thread by design; a background worker is a follow-on."
 priority = "P0"
 status = "verified"
 tests = [
-    "raster::tests::pdfium_raster_fills_cache_with_non_uniform_pixels",
-    "ui::tests::demo_fixture_fills_the_cache_without_a_window",
-    "raster::tests::caching_avoids_a_second_render",
-    "raster::tests::empty_layout_renders_nothing",
+    "tests::clamp_render_scale_keeps_requests_within_the_pixel_budget",
+    "raster::tests::byte_budget_evicts_until_the_total_fits",
+    "raster::tests::per_frame_budget_caps_new_renders_and_promotes_cached_pages",
 ]
 title = "Open PDF and render pages in the viewer"
 

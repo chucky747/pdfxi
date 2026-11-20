@@ -51,6 +51,13 @@ use crate::view::Rotation;
 /// several zoom levels.
 pub const DEFAULT_RASTER_LIMIT: usize = 64;
 
+/// Default upper bound on the summed RGBA bytes retained by a [`RasterCache`].
+///
+/// 256 MiB covers dozens of letter-size pages at 2× zoom while keeping the
+/// process well below a typical desktop memory budget. The entry limit and this
+/// byte budget are enforced together.
+pub const DEFAULT_RASTER_BYTES: usize = 256 * 1024 * 1024;
+
 /// Identifies one cached raster: a page at a particular scale and rotation.
 ///
 /// See the [module docs](crate::raster#cache-key) for why the scale is stored as
@@ -116,6 +123,10 @@ pub struct RasterCache {
     /// Most-recently-used at the front, least-recently-used at the back.
     recency: VecDeque<RasterKey>,
     limit: usize,
+    /// Upper bound on the summed RGBA bytes of all cached rasters.
+    max_bytes: usize,
+    /// Summed RGBA bytes of the entries currently cached.
+    bytes: usize,
 }
 
 impl Default for RasterCache {
@@ -130,16 +141,35 @@ impl RasterCache {
     /// A `limit` of zero disables caching: [`Self::put`] becomes a no-op and
     /// [`Self::ensure_visible`] still renders but retains nothing.
     pub fn new(limit: usize) -> Self {
+        Self::with_limits(limit, DEFAULT_RASTER_BYTES)
+    }
+
+    /// Create a cache bounded by both entry count and summed raster bytes.
+    ///
+    /// A `max_bytes` of zero disables caching, as does a zero entry `limit`.
+    pub fn with_limits(limit: usize, max_bytes: usize) -> Self {
         Self {
             entries: HashMap::new(),
             recency: VecDeque::new(),
             limit,
+            max_bytes,
+            bytes: 0,
         }
     }
 
     /// The maximum number of rasters this cache retains.
     pub fn limit(&self) -> usize {
         self.limit
+    }
+
+    /// The maximum summed RGBA bytes this cache retains.
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
+    }
+
+    /// The summed RGBA bytes of the entries currently cached.
+    pub fn bytes(&self) -> usize {
+        self.bytes
     }
 
     /// The number of rasters currently cached.
@@ -166,22 +196,40 @@ impl RasterCache {
         self.entries.get(&key)
     }
 
-    /// Insert `page` under `key`, evicting the least-recently-used entry when
-    /// the cache is over capacity. No-op when the limit is zero.
+    /// Insert `page` under `key`, evicting least-recently-used entries until
+    /// both the entry limit and the byte budget hold. A raster larger than the
+    /// whole byte budget is not retained. No-op when caching is disabled.
     pub fn put(&mut self, key: RasterKey, page: RenderedPage) {
-        if self.limit == 0 {
+        if self.limit == 0 || self.max_bytes == 0 {
             return;
         }
+        let size = page.pixels().len();
+        if size > self.max_bytes {
+            self.remove(key);
+            return;
+        }
+        self.remove(key);
+        self.bytes = self.bytes.saturating_add(size);
         self.entries.insert(key, page);
         self.touch(key);
-        while self.entries.len() > self.limit {
+        while self.entries.len() > self.limit || self.bytes > self.max_bytes {
             match self.recency.pop_back() {
                 Some(lru) => {
-                    self.entries.remove(&lru);
+                    if let Some(removed) = self.entries.remove(&lru) {
+                        self.bytes = self.bytes.saturating_sub(removed.pixels().len());
+                    }
                 }
                 None => break,
             }
         }
+    }
+
+    /// Remove one key while keeping the byte counter accurate.
+    fn remove(&mut self, key: RasterKey) {
+        if let Some(removed) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(removed.pixels().len());
+        }
+        self.recency.retain(|entry| *entry != key);
     }
 
     /// Drop every raster belonging to `page` across all scales and rotations.
@@ -195,8 +243,7 @@ impl RasterCache {
             .filter(|key| key.page() == page)
             .collect();
         for key in doomed {
-            self.entries.remove(&key);
-            self.recency.retain(|entry| *entry != key);
+            self.remove(key);
         }
     }
 
@@ -204,6 +251,7 @@ impl RasterCache {
     pub fn invalidate_all(&mut self) {
         self.entries.clear();
         self.recency.clear();
+        self.bytes = 0;
     }
 
     /// Render every page visible in `layout` that is not already cached.
@@ -233,6 +281,27 @@ impl RasterCache {
         cancellation: &CancellationToken,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<usize, RasterError> {
+        self.ensure_visible_capped(renderer, layout, scroll, cancellation, usize::MAX, progress)
+    }
+
+    /// Render at most `max_renders` uncached visible pages.
+    ///
+    /// The UI calls this with a small per-frame budget so a page with many
+    /// visible spreads cannot block a single frame; the rest render on later
+    /// frames. Cached pages are promoted but never count against the budget.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::ensure_visible`].
+    pub fn ensure_visible_capped(
+        &mut self,
+        renderer: &dyn Renderer,
+        layout: &CanvasLayout,
+        scroll: CanvasPoint,
+        cancellation: &CancellationToken,
+        max_renders: usize,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<usize, RasterError> {
         let viewport = layout.viewport();
         let mut rendered = 0usize;
 
@@ -247,6 +316,9 @@ impl RasterCache {
             if self.entries.contains_key(&key) {
                 self.touch(key);
                 continue;
+            }
+            if rendered >= max_renders {
+                break;
             }
             let page = match renderer.render_page(
                 PageIndex::new(geometry.page),
@@ -489,6 +561,11 @@ mod tests {
         RenderedPage::new(PageIndex::new(page), 2, 2, vec![0x30u8; 16])
     }
 
+    /// A 4×4 RGBA raster: exactly 64 bytes, for byte-budget assertions.
+    fn byte_raster(page: usize) -> RenderedPage {
+        RenderedPage::new(PageIndex::new(page), 4, 4, vec![0x7fu8; 64])
+    }
+
     fn zero_scroll() -> CanvasPoint {
         CanvasPoint::new(0.0, 0.0)
     }
@@ -579,6 +656,80 @@ mod tests {
         assert!(cache.contains(k0), "recently used page 0 stays");
         assert!(!cache.contains(k1), "page 1 was the LRU victim");
         assert!(cache.contains(k2), "newly inserted page 2 stays");
+    }
+
+    #[test]
+    fn byte_budget_evicts_until_the_total_fits() {
+        let mut cache = RasterCache::with_limits(8, 192);
+        let keys: Vec<RasterKey> = (0..4)
+            .map(|page| RasterKey::new(page, 1.0, Rotation::Deg0))
+            .collect();
+        for (page, key) in keys.iter().enumerate() {
+            cache.put(*key, byte_raster(page));
+        }
+        assert_eq!(cache.len(), 3, "only three 64-byte rasters fit in 192");
+        assert_eq!(cache.bytes(), 192);
+        assert!(!cache.contains(keys[0]), "oldest raster evicted by bytes");
+        assert!(cache.contains(keys[3]), "newest raster stays");
+    }
+
+    #[test]
+    fn oversized_single_raster_is_not_retained() {
+        let mut cache = RasterCache::with_limits(8, 32);
+        let key = RasterKey::new(0, 1.0, Rotation::Deg0);
+        cache.put(key, byte_raster(0));
+        assert!(cache.is_empty(), "a raster above the budget is not cached");
+        assert_eq!(cache.bytes(), 0);
+    }
+
+    #[test]
+    fn replacing_and_invalidating_keep_the_byte_count_accurate() {
+        let mut cache = RasterCache::with_limits(8, 1024);
+        let key = RasterKey::new(0, 1.0, Rotation::Deg0);
+        cache.put(key, byte_raster(0));
+        let after_first = cache.bytes();
+        assert_eq!(after_first, 64);
+        cache.put(key, byte_raster(0));
+        assert_eq!(
+            cache.bytes(),
+            after_first,
+            "replacement must not double count"
+        );
+        cache.invalidate_page(0);
+        assert_eq!(cache.bytes(), 0);
+        cache.put(key, byte_raster(0));
+        cache.invalidate_all();
+        assert_eq!(cache.bytes(), 0);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn per_frame_budget_caps_new_renders_and_promotes_cached_pages() {
+        let renderer = CountingRenderer::new();
+        let layout = layout(&letter(3), 0.2);
+        let mut cache = RasterCache::new(8);
+        let token = CancellationToken::new();
+
+        let first = cache
+            .ensure_visible_capped(&renderer, &layout, zero_scroll(), &token, 1, &mut |_| {})
+            .expect("first frame renders");
+        assert_eq!(first, 1, "one raster per frame");
+        let second = cache
+            .ensure_visible_capped(&renderer, &layout, zero_scroll(), &token, 1, &mut |_| {})
+            .expect("second frame renders");
+        assert_eq!(second, 1);
+        assert_eq!(cache.len(), 2);
+
+        // Everything visible is cached: a zero budget must not error.
+        let _ = cache
+            .ensure_visible_capped(&renderer, &layout, zero_scroll(), &token, 2, &mut |_| {})
+            .expect("remaining page renders");
+        let cached = cache.len();
+        let promoted = cache
+            .ensure_visible_capped(&renderer, &layout, zero_scroll(), &token, 0, &mut |_| {})
+            .expect("cached pages do not consume the budget");
+        assert_eq!(promoted, 0);
+        assert_eq!(cache.len(), cached);
     }
 
     #[test]

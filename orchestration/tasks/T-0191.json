@@ -1,0 +1,16 @@
+{
+  "id": "T-0191",
+  "lane": "integrator",
+  "title": "R2 render pixel and byte bounds plus cross-frame cancellation",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0190"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "crates/pdfxi-render/**",
+    "docs/evidence/app/T-0191.md",
+    "orchestration/feature-updates/T-0191.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-render -p pdfxi-app --features ui,pdfium",
+  "evidence": "docs/evidence/app/T-0191.md"
+}
