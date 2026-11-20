@@ -157,6 +157,25 @@ pub enum SafeAction {
     ToggleFullScreen,
 }
 
+impl SafeAction {
+    /// Return a stable token for this action in an [`ActionPlan`] descriptor.
+    pub fn code(&self) -> String {
+        match self {
+            Self::GoTo { page } => format!("goto:{page}"),
+            Self::GoToNamed { name } => {
+                let mut out = String::from("goto-named:");
+                push_field(&mut out, name);
+                out
+            }
+            Self::NextPage => "next-page".to_owned(),
+            Self::PrevPage => "prev-page".to_owned(),
+            Self::FirstPage => "first-page".to_owned(),
+            Self::LastPage => "last-page".to_owned(),
+            Self::ToggleFullScreen => "toggle-full-screen".to_owned(),
+        }
+    }
+}
+
 /// Owned intermediate form of one `/AA` action.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdditionalActionInput {
@@ -284,6 +303,48 @@ impl ActionPlan {
     /// Return `true` when the plan contains no actions.
     pub fn is_empty(&self) -> bool {
         self.actions.is_empty()
+    }
+
+    /// Return a byte-stable, single-line descriptor of this plan.
+    ///
+    /// Actions are emitted in canonical trigger order with their declaration
+    /// sequence as a tie-breaker, so equal inputs always give an identical
+    /// string. Named targets are escaped and never carry code or host commands.
+    pub fn descriptor(&self) -> String {
+        let mut out = String::from("action-plan/v1|actions=");
+        for (index, planned) in self.actions.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(planned.event.code());
+            out.push(':');
+            out.push_str(&planned.action.code());
+            out.push('#');
+            out.push_str(&planned.sequence.to_string());
+        }
+        out.push_str("|events=");
+        for (index, event) in self.events.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(event.code());
+        }
+        out
+    }
+}
+
+/// Append `value` to `out`, escaping the descriptor's delimiter characters so
+/// distinct field values can never produce the same descriptor string.
+fn push_field(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '|' => out.push_str("\\|"),
+            ',' => out.push_str("\\,"),
+            ':' => out.push_str("\\:"),
+            '#' => out.push_str("\\#"),
+            _ => out.push(ch),
+        }
     }
 }
 
@@ -527,5 +588,49 @@ mod tests {
             .map(|planned| planned.event().code())
             .collect();
         assert_eq!(codes, reversed_codes);
+    }
+
+    #[test]
+    fn plan_descriptor_is_byte_stable_and_reflects_actions() {
+        let set = AaActionSet::parse(sample_inputs()).expect("valid");
+        let summary = set.resolve_plan().descriptor();
+        assert_eq!(summary, set.resolve_plan().descriptor());
+        assert!(summary.starts_with("action-plan/v1|actions=E:next-page#1,E:toggle-full-screen#3,D:goto-named:appendix#2,PV:goto:4#0|"));
+        assert!(summary.ends_with("|events=E,D,PV"));
+
+        // A different action set produces a different descriptor, and a named
+        // target with delimiter characters is escaped rather than collapsed.
+        let mut inputs = sample_inputs();
+        inputs[2] = input("D", "GoToNamed", "app,endix|x");
+        let changed = AaActionSet::parse(inputs)
+            .expect("valid")
+            .resolve_plan()
+            .descriptor();
+        assert_ne!(changed, summary);
+        assert!(changed.contains("goto-named:app\\,endix\\|x"));
+    }
+
+    #[test]
+    fn every_safe_action_has_a_stable_code() {
+        assert_eq!(SafeAction::GoTo { page: 7 }.code(), "goto:7");
+        assert_eq!(
+            SafeAction::GoToNamed {
+                name: "a:b".to_owned()
+            }
+            .code(),
+            "goto-named:a\\:b"
+        );
+        assert_eq!(SafeAction::NextPage.code(), "next-page");
+        assert_eq!(SafeAction::PrevPage.code(), "prev-page");
+        assert_eq!(SafeAction::FirstPage.code(), "first-page");
+        assert_eq!(SafeAction::LastPage.code(), "last-page");
+        assert_eq!(SafeAction::ToggleFullScreen.code(), "toggle-full-screen");
+
+        // The empty set still has a well-formed, deterministic descriptor.
+        let empty = AaActionSet::parse(vec![]).expect("empty set");
+        assert_eq!(
+            empty.resolve_plan().descriptor(),
+            "action-plan/v1|actions=|events="
+        );
     }
 }

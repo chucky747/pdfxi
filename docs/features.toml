@@ -2097,16 +2097,42 @@ tests = [
 title = "Distribute and collect forms locally"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/signatureplan.rs, docs/evidence/forms/T-0149.md"
+docs = [
+    "crates/pdfxi-forms/src/signature.rs",
+    "crates/pdfxi-forms/src/signatureplan.rs",
+    "crates/pdfxi-forms/src/signing.rs",
+    "crates/pdfxi-forms/src/fillworkflow.rs",
+    "docs/evidence/forms/T-0168.md",
+]
 domain = "Forms"
-evidence = "docs/evidence/forms/T-0149.md"
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 301 passed, 0 failed. signing::tests::byte_range_round_trip_excludes_placeholder, attach_bytes_updates_completed_v, verifier_is_invoked_and_outcome_is_recorded, verification_failure_is_a_typed_error_and_marks_invalid, lock_enforcement_covers_fill_and_attach_paths, certification_enforcement_covers_every_mutation_path, workflow_transitions_cover_all_states, lifecycle_report_is_deterministic, missing_field_and_stage_errors_are_typed all ok; fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0168.md."
 id = "FORMS-010"
-notes = "Placeholder contract, lock/certification guard and deterministic reports are complete at library level; cryptographic signing and validation stay with the security lane and the workflow UI with the app lane."
+notes = """
+Library-level electronic-signature workflow is complete: deterministic /ByteRange
+planning from serialized bytes with a /Contents placeholder, a caller-supplied
+SignatureVerifier seam with a structure-only default stub (no cryptography in this
+crate), a create -> sign-request -> attach caller-supplied bytes -> verify -> report
+lifecycle that writes /V, lock/certification enforcement on all fill/edit paths,
+and deterministic reports over every state and transition. Crypto implementation
+stays with the security lane and the workflow UI with the app lane; the boundary
+is documented in signing.rs and lib.rs.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "signatureplan::tests::placeholder_contract_accepts_generated_dictionaries",
-    "signatureplan::tests::certification_form_fill_allows_unlocked_fields",
+    "signing::tests::byte_range_math_is_computed_from_serialized_document",
+    "signing::tests::byte_range_round_trip_excludes_placeholder",
+    "signing::tests::placeholder_sizing_drives_byte_range_offsets",
+    "signing::tests::malformed_or_ambiguous_placeholder_is_a_typed_error",
+    "signing::tests::inconsistent_byte_range_is_rejected",
+    "signing::tests::attach_bytes_updates_completed_v",
+    "signing::tests::verifier_is_invoked_and_outcome_is_recorded",
+    "signing::tests::verification_failure_is_a_typed_error_and_marks_invalid",
+    "signing::tests::lock_enforcement_covers_fill_and_attach_paths",
+    "signing::tests::certification_enforcement_covers_every_mutation_path",
+    "signing::tests::workflow_transitions_cover_all_states",
+    "signing::tests::lifecycle_report_is_deterministic",
+    "signing::tests::missing_field_and_stage_errors_are_typed",
 ]
 title = "Electronic signature fields and workflows"
 
@@ -3622,33 +3648,27 @@ title = "Network and SharePoint-style integration"
 docs = [
     "crates/pdfxi-render/src/media.rs",
     "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0153.md",
+    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0153.md: 6 new media::tests pass (sound/movie parse, rendition selection, invalid activation, bounded input, plan reflection, determinism); full crate 163 passed, 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/render/T-0169.md: 3 new media::tests pass (MIME-preference rendition selection and typed miss, byte-stable playback-plan descriptor, escaped source descriptors); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-001"
 notes = """
-Validated `/Sound`, `/Movie` and `/Screen` annotation model: bounded media source
-(embedded stream name, local file name, or object reference), poster reference,
-a list of bounded renditions with MIME types, a deterministic rendition
-selection (first / named / clamped index), a typed activation trigger whitelist
-(PV/PI/PO/PC), volume in 0.0..=1.0, and a sorted/deduplicated playback-control
-whitelist. `resolve_plan` emits a deterministic PlaybackPlan listing the exact
-host-player capabilities required (MediaPlayer, PosterFrame, FullScreen).
-
-Honest scope: model + plan only. No codec is decoded, no OS media sink is opened,
-and no file/network source is read; a named rendition that does not exist and an
-unknown activation code are typed errors. Therefore `in-progress`, not verified.
+Host-agnostic multimedia annotation model is complete at library level: bounded
+/Sound, /Movie and /Screen sources, poster, typed activation whitelist, volume
+and control flags; rendition selection by default, named, MIME preference or
+clamped index (a missing named/MIME rendition is a typed MediaError). resolve_plan
+emits a deterministic PlaybackPlan with explicit host requirements and a
+byte-stable descriptor. Host boundary: no codec is decoded, no OS media sink or
+network source is opened, and PDF object streams are caller-supplied; those are
+native/host player work, so this is verified for the data/plan model only (ADR 0008).
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "media::tests::sound_and_movie_annotations_parse",
-    "media::tests::rendition_selection_resolves_named_default_and_indexed",
-    "media::tests::invalid_activation_trigger_is_a_typed_error",
-    "media::tests::bounded_input_is_enforced",
-    "media::tests::playback_plan_reflects_selection_poster_and_controls",
-    "media::tests::plan_is_deterministic_and_omits_unneeded_requirements",
+    "media::tests::preferred_mime_selection_resolves_from_the_rendition_set",
+    "media::tests::playback_plan_descriptor_is_byte_stable_and_reflects_flags",
+    "media::tests::media_source_descriptors_distinguish_variants_and_escape_delimiters",
 ]
 title = "Audio and video annotations"
 
@@ -3656,105 +3676,81 @@ title = "Audio and video annotations"
 docs = [
     "crates/pdfxi-render/src/html5_media.rs",
     "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0153.md",
+    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0153.md: 7 new html5_media::tests pass (local descriptor, markup determinism, audio element, remote/scheme rejection, absolute/traversal rejection, unsupported/unsafe rejection, bounded input); full crate 163 passed, 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/render/T-0169.md: 2 new html5_media::tests pass (control characters rejected in sources/posters, byte-stable descriptor reflecting element/flags); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-002"
 notes = """
-Local HTML5 playback envelope model. `Html5Descriptor` validates a bounded set of
-sources where each reference is either embedded (`@name`) or a relative local
-path with no traversal segments, with a MIME whitelist of common audio/video
-types and optional bounded poster/dimensions. Typed `Html5MediaError` variants
-reject remote/protocol-relative URLs, data/javascript/other schemes, absolute
-paths, parent-directory traversal, markup-unsafe characters and unsupported
-MIME types. `to_markup` emits deterministic, inert `<audio>`/`<video>` markup
-with attributes and sources in fixed order.
-
-Honest scope: descriptor + inert markup only. The host renders the element;
-nothing is fetched, decoded, or executed and no real Flash-to-HTML5 migration of
-a PDF's RichMedia/Flash content is performed. Therefore `in-progress`.
+Local-only HTML5 envelope is complete at library level: bounded sources that are
+embedded (@name) or relative local paths, with remote/protocol-relative URLs,
+schemes, absolute paths, traversal, markup punctuation and now all control
+characters rejected as typed Html5MediaError. to_markup emits deterministic inert
+<audio>/<video> markup and the new descriptor() gives a byte-stable identity.
+Host boundary: the host renders the element; nothing is fetched, decoded or
+executed, and no real Flash/RichMedia-to-HTML5 content migration of a PDF is
+performed here (the host builds the envelope input), so this is verified for the
+descriptor/markup model only (ADR 0008).
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "html5_media::tests::local_envelope_produces_a_video_descriptor",
-    "html5_media::tests::descriptor_markup_is_deterministic",
-    "html5_media::tests::audio_only_envelope_uses_audio_element",
-    "html5_media::tests::remote_and_scheme_sources_are_rejected",
-    "html5_media::tests::absolute_and_traversal_paths_are_rejected",
-    "html5_media::tests::unsupported_and_unsafe_sources_are_rejected",
-    "html5_media::tests::bounded_input_is_enforced",
+    "html5_media::tests::control_characters_in_references_are_rejected",
+    "html5_media::tests::descriptor_is_byte_stable_and_reflects_the_envelope",
 ]
 title = "HTML5 media replacement for Flash"
 
 [[feature]]
 docs = [
     "crates/pdfxi-render/src/three_d.rs",
-    "docs/evidence/render/T-0134.md",
+    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0134.md: cargo test -p pdfxi-render 142 passed (10 new three_d tests), EXIT=0; fmt/clippy/doc EXIT=0. Model + typed backend plan only; no U3D/PRC decoding or display."
+evidence = "docs/evidence/render/T-0169.md: 2 new three_d::tests pass (byte-stable plan descriptor reflecting activation policy, unknown format preserved in descriptor); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-003"
 notes = """
-Validated 3D annotation model: bounded /3D stream reference (named or object),
-named 3D views with a default-view selection that resolves deterministically,
-activation event (PV/PI/PO/PC) and state (L/F/U/U default) with typed errors,
-and an animation flag. resolve_plan emits a ThreeDPlan listing the exact
-decoder/animation/view-activation capabilities a native backend must provide.
-Unknown stream formats are preserved as ThreeDFormat::Unknown and reported as
-unsupported rather than claimed. No geometry is decoded and nothing is rendered.
+3D annotation plan is complete at library level: bounded /3D stream reference,
+named views with deterministic default/named/indexed selection, activation event
+(PV/PI/PO/PC) and state (L/F/U) with typed errors, animation flag, and a
+ThreeDPlan with explicit backend requirements and a byte-stable descriptor.
+Unknown formats stay ThreeDFormat::Unknown and appear prefixed in the descriptor
+rather than being claimed. Host boundary: no U3D/PRC geometry is decoded or
+displayed and no 3D graphics context is opened by this crate; a native 3D backend
+must do that, so this is verified for the data/plan model only (ADR 0008).
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "three_d::tests::parse_three_d_dictionary",
-    "three_d::tests::view_selection_resolves_named_and_default_views",
-    "three_d::tests::indexed_selection_is_clamped_to_the_view_range",
-    "three_d::tests::invalid_activation_event_and_state_are_typed_errors",
-    "three_d::tests::every_activation_code_round_trips",
-    "three_d::tests::bounded_input_is_enforced",
-    "three_d::tests::empty_views_and_missing_default_are_typed_errors",
-    "three_d::tests::object_stream_reference_is_accepted_without_a_name",
-    "three_d::tests::unknown_format_is_reported_honestly",
-    "three_d::tests::plan_is_deterministic_and_omits_unneeded_requirements",
+    "three_d::tests::plan_descriptor_is_byte_stable_and_reflects_activation_policy",
+    "three_d::tests::unknown_format_descriptor_preserves_the_name",
 ]
 title = "U3D and PRC 3D viewing"
 
 [[feature]]
 docs = [
     "crates/pdfxi-render/src/geospatial.rs",
-    "docs/evidence/render/T-0134.md",
+    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0134.md: cargo test -p pdfxi-render 142 passed (12 new geospatial tests), EXIT=0; fmt/clippy/doc EXIT=0. Model + deterministic affine mapping only; no real datum/projection engine."
+evidence = "docs/evidence/render/T-0169.md: 3 new geospatial::tests pass (LPTS out-of-bounds typed rejection, deterministic viewport_for_geo with no-match error, byte-stable plan descriptor reporting unsupported projections); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-004"
 notes = """
-Validated geospatial model: /VP viewport arrays paired with /GPTS bounds and
-per-viewport /Measure scale and units, /LPTS local points, and /GCS name/EPSG
-with a parsed projection. Every coordinate is checked for finiteness and a
-bounded magnitude; rectangles and geo bounds are validated. Deterministic
-linear PDF-to-geo and geo-to-PDF helpers (plus local-to-geo) are provided for
-geographic systems, with a typed UnsupportedProjection error and a plan note for
-WebMercator and unrecognised projections. Unknown units are preserved and
-reported rather than converted. Real projection/datum math remains native
-backend work, so this row stays in-progress.
+Geospatial model is complete at library level: /VP viewports with /GPTS bounds,
+per-viewport /Measure scale and units, /LPTS and /GCS, with finite/bounded
+validation. Deterministic affine PDF<->geo and LPTS->geo mapping (LPTS points
+outside the declared rectangle are now a typed error), deterministic
+viewport_for_geo selection with a typed no-match error, and a byte-stable plan
+descriptor. WebMercator and unrecognised projections return typed
+UnsupportedProjection and appear explicitly in the descriptor; unknown units are
+preserved. Host boundary: real datum/projection math is native backend work, so
+this is verified for the model/deterministic-affine-mapping only (ADR 0008).
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "geospatial::tests::parse_viewport_arrays",
-    "geospatial::tests::viewport_bounds_validation",
-    "geospatial::tests::gpts_and_gcs_parse",
-    "geospatial::tests::measure_scale_conversions",
-    "geospatial::tests::coordinate_mapping_is_deterministic",
-    "geospatial::tests::inverse_mapping_round_trips",
-    "geospatial::tests::point_outside_viewport_is_rejected",
-    "geospatial::tests::lpts_local_mapping",
-    "geospatial::tests::unsupported_projection_is_honest",
-    "geospatial::tests::plan_is_deterministic_and_reports_notes",
-    "geospatial::tests::invalid_input_is_rejected",
-    "geospatial::tests::unknown_unit_is_preserved_and_reported",
+    "geospatial::tests::local_point_outside_lpts_is_rejected",
+    "geospatial::tests::viewport_for_geo_selects_deterministically_and_reports_no_match",
+    "geospatial::tests::plan_descriptor_is_byte_stable_and_reports_unsupported",
 ]
 title = "Geospatial PDF support"
 
@@ -3762,36 +3758,27 @@ title = "Geospatial PDF support"
 docs = [
     "crates/pdfxi-render/src/actions.rs",
     "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0153.md",
+    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0153.md: 8 new actions::tests pass (AA event parsing, trigger ordering, dangerous-action rejection, unsupported-action rejection, safe navigation, invalid targets, bounded input, determinism); full crate 163 passed, 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/render/T-0169.md: 2 new actions::tests pass (byte-stable action-plan descriptor with escaped named targets, stable code for every SafeAction); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-005"
 notes = """
-Typed `/AA` additional-action model. `AaEvent` whitelists the eight annotation
-trigger codes E/X/D/U/Fo/Po/PV/PI with a stable canonical order. `AaActionSet`
-validates a bounded list of actions, rejects dangerous actions (JavaScript, JS,
-Launch, ImportData, SubmitForm, ResetForm) with `ActionError::DangerousAction`
-and network/multimedia actions (URI, GoToR, Movie, Sound, Rendition, unknown
-kinds) with `ActionError::UnsupportedAction`, then builds a deterministic
-`ActionPlan` whose actions are sorted by trigger rank with declaration order as
-a stable tie-breaker. Safe actions are navigation/view commands only.
-
-Honest scope: the plan is data for a host to consume; no script is executed, no
-external application is launched, and no PDF object stream is parsed here (a
-caller supplies the intermediate actions). Therefore `in-progress`.
+Additional-action whitelist is complete at library level: the eight /AA trigger
+codes with canonical ordering, bounded inputs, dangerous actions (JavaScript/JS/
+Launch/ImportData/SubmitForm/ResetForm) rejected as DangerousAction and
+network/multimedia/unknown kinds as UnsupportedAction. Actions carry stable codes
+and resolve_plan emits a deterministic ActionPlan with a byte-stable descriptor
+(declared order as tie-breaker). Host boundary: the plan is data for a host to
+consume; no script is executed, no external application launched, no network
+contacted and no PDF object stream parsed (caller supplies intermediate actions),
+so this is verified for the data/plan model only (ADR 0008).
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "actions::tests::aa_event_parsing_round_trips_every_code",
-    "actions::tests::actions_are_ordered_by_canonical_trigger_rank",
-    "actions::tests::dangerous_actions_are_rejected_without_a_plan",
-    "actions::tests::network_and_mmultimedia_actions_are_unsupported",
-    "actions::tests::safe_navigation_actions_are_planned",
-    "actions::tests::invalid_targets_and_empty_kinds_are_typed_errors",
-    "actions::tests::bounded_input_is_enforced",
-    "actions::tests::plan_is_deterministic_regardless_of_input_order",
+    "actions::tests::plan_descriptor_is_byte_stable_and_reflects_actions",
+    "actions::tests::every_safe_action_has_a_stable_code",
 ]
 title = "Interactive actions and triggers"
 

@@ -184,6 +184,20 @@ impl ThreeDFormat {
     pub fn is_known(&self) -> bool {
         matches!(self, Self::U3d | Self::Prc)
     }
+
+    /// Return a stable token for this format, preserving unknown names as a
+    /// prefixed, escaped value so they remain distinguishable and honest.
+    pub fn code(&self) -> String {
+        match self {
+            Self::U3d => "u3d".to_owned(),
+            Self::Prc => "prc".to_owned(),
+            Self::Unknown(name) => {
+                let mut out = String::from("unknown:");
+                push_field(&mut out, name);
+                out
+            }
+        }
+    }
 }
 
 /// A typed reference to the `/3D` stream that carries the 3D payload.
@@ -215,6 +229,19 @@ impl ThreeDStreamRef {
             }
         }
         Ok(())
+    }
+
+    /// Return a byte-stable descriptor distinguishing named from object
+    /// references, with the name escaped.
+    pub fn descriptor(&self) -> String {
+        match self {
+            Self::Named(key) => {
+                let mut out = String::from("named:");
+                push_field(&mut out, key);
+                out
+            }
+            Self::Object { number, generation } => format!("object:{number}:{generation}"),
+        }
     }
 }
 
@@ -437,6 +464,17 @@ pub enum BackendRequirement {
     ViewActivation,
 }
 
+impl BackendRequirement {
+    /// Return a stable token for this requirement in a plan descriptor.
+    pub fn code(&self) -> String {
+        match self {
+            Self::ThreeDDecoder(format) => format!("decoder:{}", format.code()),
+            Self::Animation => "animation".to_owned(),
+            Self::ViewActivation => "view-activation".to_owned(),
+        }
+    }
+}
+
 /// The deterministic plan a 3D backend must realise.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreeDPlan {
@@ -493,6 +531,47 @@ impl ThreeDPlan {
     /// Return `true` when the payload format is one this model names.
     pub fn is_supported_format(&self) -> bool {
         self.format.is_known()
+    }
+
+    /// Return a byte-stable, single-line descriptor of this plan.
+    ///
+    /// Fields appear in a fixed order and text is escaped, so equal plans give
+    /// an identical string. Unknown formats are preserved via
+    /// [`ThreeDFormat::code`] rather than collapsed, keeping the report honest.
+    pub fn descriptor(&self) -> String {
+        let mut out = String::from("three-d-plan/v1|stream=");
+        out.push_str(&self.stream.descriptor());
+        out.push_str("|format=");
+        out.push_str(&self.format.code());
+        out.push_str("|view=");
+        out.push_str(&self.active_view_index.to_string());
+        out.push_str("|event=");
+        out.push_str(self.activation_event.code());
+        out.push_str("|state=");
+        out.push_str(self.activation_state.code());
+        out.push_str("|animate=");
+        out.push_str(if self.animate { "1" } else { "0" });
+        out.push_str("|requirements=");
+        for (index, requirement) in self.requirements.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(&requirement.code());
+        }
+        out
+    }
+}
+
+/// Append `value` to `out`, escaping the descriptor's delimiter characters so
+/// distinct field values can never produce the same descriptor string.
+fn push_field(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '|' => out.push_str("\\|"),
+            ',' => out.push_str("\\,"),
+            _ => out.push(ch),
+        }
     }
 }
 
@@ -737,5 +816,48 @@ mod tests {
             quiet_plan.requirements(),
             &[BackendRequirement::ThreeDDecoder(ThreeDFormat::U3d)]
         );
+    }
+
+    #[test]
+    fn plan_descriptor_is_byte_stable_and_reflects_activation_policy() {
+        let annotation = ThreeDAnnotation::parse(sample_dictionary()).expect("valid");
+        let plan = annotation.resolve_plan();
+        let descriptor = plan.descriptor();
+        assert_eq!(descriptor, plan.descriptor());
+        assert_eq!(descriptor, annotation.resolve_plan().descriptor());
+        assert!(descriptor.starts_with("three-d-plan/v1|stream=named:CadModel|format=u3d|"));
+        assert!(descriptor.contains("|view=1|event=PV|state=L|animate=1|"));
+        assert!(descriptor.contains("decoder:u3d,animation,view-activation"));
+
+        let mut dict = sample_dictionary();
+        dict.activation_event = "PC".to_owned();
+        dict.activation_state = "U".to_owned();
+        dict.animate = false;
+        dict.views = vec!["only".to_owned()];
+        dict.default_view = None;
+        let changed = ThreeDAnnotation::parse(dict)
+            .expect("valid")
+            .resolve_plan()
+            .descriptor();
+        assert_ne!(changed, descriptor);
+        assert!(changed.contains("|view=0|event=PC|state=U|animate=0|"));
+        assert!(changed.ends_with("decoder:u3d"));
+    }
+
+    #[test]
+    fn unknown_format_descriptor_preserves_the_name() {
+        let mut dict = sample_dictionary();
+        dict.format = "GLTF".to_owned();
+        dict.stream = ThreeDStreamRef::Object {
+            number: 7,
+            generation: 2,
+        };
+        let descriptor = ThreeDAnnotation::parse(dict)
+            .expect("unknown format kept")
+            .resolve_plan()
+            .descriptor();
+        assert!(descriptor.contains("|stream=object:7:2|"));
+        assert!(descriptor.contains("|format=unknown:GLTF|"));
+        assert!(descriptor.contains("decoder:unknown:GLTF"));
     }
 }

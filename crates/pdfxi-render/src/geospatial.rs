@@ -120,6 +120,22 @@ pub enum GeospatialError {
     /// The coordinate system uses a projection this model does not support.
     #[error("unsupported geospatial projection '{0}'")]
     UnsupportedProjection(String),
+    /// A local `/LPTS` point fell outside the declared local rectangle.
+    #[error("local point ({x}, {y}) is outside the LPTS rectangle")]
+    PointOutsideLocalPoints {
+        /// The rejected local x value.
+        x: f64,
+        /// The rejected local y value.
+        y: f64,
+    },
+    /// No viewport's `/GPTS` bounds contained a queried geographic point.
+    #[error("no viewport contains geo point ({lon}, {lat})")]
+    NoViewportForPoint {
+        /// The rejected longitude.
+        lon: f64,
+        /// The rejected latitude.
+        lat: f64,
+    },
 }
 
 /// A unit of measure parsed from a `/Measure` dictionary.
@@ -198,6 +214,27 @@ impl Unit {
             Self::Radian => 1.0,
             Self::Unknown(_) => return None,
         })
+    }
+
+    /// Return a stable token for this unit, preserving unknown names with an
+    /// `unknown:` prefix so they stay distinguishable in a plan descriptor.
+    pub fn code(&self) -> String {
+        match self {
+            Self::Metre => "metre".to_owned(),
+            Self::Kilometre => "kilometre".to_owned(),
+            Self::Foot => "foot".to_owned(),
+            Self::UsSurveyFoot => "us-survey-foot".to_owned(),
+            Self::Inch => "inch".to_owned(),
+            Self::Mile => "mile".to_owned(),
+            Self::NauticalMile => "nautical-mile".to_owned(),
+            Self::Degree => "degree".to_owned(),
+            Self::Radian => "radian".to_owned(),
+            Self::Unknown(name) => {
+                let mut out = String::from("unknown:");
+                push_field(&mut out, name);
+                out
+            }
+        }
     }
 }
 
@@ -453,6 +490,13 @@ impl LocalPoints {
     pub fn y1(&self) -> f64 {
         self.y1
     }
+
+    fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x0 - EDGE_TOLERANCE
+            && x <= self.x1 + EDGE_TOLERANCE
+            && y >= self.y0 - EDGE_TOLERANCE
+            && y <= self.y1 + EDGE_TOLERANCE
+    }
 }
 
 /// The projection declared by a `/GCS` dictionary.
@@ -486,6 +530,20 @@ impl Projection {
     /// Return `true` only for the projection this model can map.
     pub fn is_supported(&self) -> bool {
         matches!(self, Self::Geographic)
+    }
+
+    /// Return a stable token for this projection, with prefixed escaped names
+    /// for the unsupported cases so a descriptor never hides them.
+    pub fn code(&self) -> String {
+        match self {
+            Self::Geographic => "geographic".to_owned(),
+            Self::WebMercator => "web-mercator".to_owned(),
+            Self::Unsupported(name) => {
+                let mut out = String::from("unsupported:");
+                push_field(&mut out, name);
+                out
+            }
+        }
     }
 }
 
@@ -695,15 +753,33 @@ impl GeospatialDocument {
     }
 
     /// Map a `/LPTS` local point to longitude/latitude of the first viewport.
+    ///
+    /// The point must lie inside the declared `/LPTS` rectangle; extrapolating
+    /// beyond it would produce a georeference the document never asserted.
     pub fn local_to_geo(&self, x: f64, y: f64) -> Result<(f64, f64), GeospatialError> {
         self.check_projection()?;
         let local = self.lpts.as_ref().ok_or(GeospatialError::NoLocalPoints)?;
+        if !local.contains(x, y) {
+            return Err(GeospatialError::PointOutsideLocalPoints { x, y });
+        }
         let first = self.viewport(0)?;
         let tx = (x - local.x0()) / (local.x1() - local.x0());
         let ty = (y - local.y0()) / (local.y1() - local.y0());
         let lon = first.gpts.lon0() + tx * (first.gpts.lon1() - first.gpts.lon0());
         let lat = first.gpts.lat0() + ty * (first.gpts.lat1() - first.gpts.lat0());
         Ok((lon, lat))
+    }
+
+    /// Find the first viewport whose `/GPTS` bounds contain a geographic point.
+    ///
+    /// Selection is deterministic (document order, first match) and independent
+    /// of any projection, so a host can route a longitude/latitude query to the
+    /// correct viewport before mapping it with [`Self::geo_to_pdf`].
+    pub fn viewport_for_geo(&self, lon: f64, lat: f64) -> Result<usize, GeospatialError> {
+        self.viewports
+            .iter()
+            .position(|viewport| viewport.gpts.contains(lon, lat))
+            .ok_or(GeospatialError::NoViewportForPoint { lon, lat })
     }
 
     fn viewport(&self, index: usize) -> Result<&Viewport, GeospatialError> {
@@ -754,6 +830,21 @@ pub enum PlanNote {
     NoLocalPoints,
 }
 
+impl PlanNote {
+    /// Return a stable token for this note in a plan descriptor.
+    pub fn code(&self) -> String {
+        match self {
+            Self::UnsupportedProjection(name) => {
+                let mut out = String::from("unsupported-projection:");
+                push_field(&mut out, name);
+                out
+            }
+            Self::UnknownUnit => "unknown-unit".to_owned(),
+            Self::NoLocalPoints => "no-local-points".to_owned(),
+        }
+    }
+}
+
 /// The deterministic plan a geospatial backend must realise.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeospatialPlan {
@@ -788,6 +879,43 @@ impl GeospatialPlan {
     /// Return reporting notes in stable order.
     pub fn notes(&self) -> &[PlanNote] {
         &self.notes
+    }
+
+    /// Return a byte-stable, single-line descriptor of this plan.
+    ///
+    /// Fields appear in a fixed order and notes keep their stable order, so
+    /// equal documents always produce an identical string. Unsupported
+    /// projections and unknown units are preserved rather than collapsed.
+    pub fn descriptor(&self) -> String {
+        let mut out = String::from("geospatial-plan/v1|supported=");
+        out.push_str(if self.supported { "1" } else { "0" });
+        out.push_str("|viewports=");
+        out.push_str(&self.viewport_count.to_string());
+        out.push_str("|projection=");
+        out.push_str(&self.projection.code());
+        out.push_str("|unit=");
+        out.push_str(&self.unit.code());
+        out.push_str("|notes=");
+        for (index, note) in self.notes.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(&note.code());
+        }
+        out
+    }
+}
+
+/// Append `value` to `out`, escaping the descriptor's delimiter characters so
+/// distinct field values can never produce the same descriptor string.
+fn push_field(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '|' => out.push_str("\\|"),
+            ',' => out.push_str("\\,"),
+            _ => out.push(ch),
+        }
     }
 }
 
@@ -1089,5 +1217,85 @@ mod tests {
         );
         assert_eq!(doc.viewports()[0].measure().x_step_base(), None);
         assert!(doc.resolve_plan().notes().contains(&PlanNote::UnknownUnit));
+    }
+
+    #[test]
+    fn local_point_outside_lpts_is_rejected() {
+        let doc = GeospatialDocument::parse(sample_dictionary()).expect("valid");
+        assert_eq!(
+            doc.local_to_geo(2000.0, 1000.0),
+            Err(GeospatialError::PointOutsideLocalPoints {
+                x: 2000.0,
+                y: 1000.0
+            })
+        );
+        assert_eq!(
+            doc.local_to_geo(500.0, 3000.0),
+            Err(GeospatialError::PointOutsideLocalPoints {
+                x: 500.0,
+                y: 3000.0
+            })
+        );
+        // An in-bounds point still maps, so the new guard does not break the
+        // documented affine interpolation.
+        assert!(doc.local_to_geo(0.0, 0.0).is_ok());
+    }
+
+    #[test]
+    fn viewport_for_geo_selects_deterministically_and_reports_no_match() {
+        let mut dict = sample_dictionary();
+        let second = ViewportInput {
+            pdf_rect: [0.0, 0.0, 10.0, 10.0],
+            gpts: [0.0, 0.0, 10.0, 10.0],
+            measure_subtype: "Linear".to_owned(),
+            x_step: 1.0,
+            y_step: 1.0,
+            measure_unit: "m".to_owned(),
+        };
+        dict.viewports.push(second);
+        let doc = GeospatialDocument::parse(dict).expect("two viewports");
+
+        assert_eq!(doc.viewport_for_geo(5.0, 5.0), Ok(1));
+        assert_eq!(doc.viewport_for_geo(-122.35, 37.75), Ok(0));
+        assert_eq!(
+            doc.viewport_for_geo(5.0, 5.0),
+            doc.viewport_for_geo(5.0, 5.0)
+        );
+        assert_eq!(
+            doc.viewport_for_geo(100.0, 100.0),
+            Err(GeospatialError::NoViewportForPoint {
+                lon: 100.0,
+                lat: 100.0
+            })
+        );
+    }
+
+    #[test]
+    fn plan_descriptor_is_byte_stable_and_reports_unsupported() {
+        let doc = GeospatialDocument::parse(sample_dictionary()).expect("valid");
+        let summary = doc.resolve_plan().descriptor();
+        assert_eq!(summary, doc.resolve_plan().descriptor());
+        assert!(summary.starts_with("geospatial-plan/v1|supported=1|viewports=1|"));
+        assert!(summary.contains("|projection=geographic|unit=metre|notes="));
+        assert!(summary.ends_with("notes="));
+
+        let mut dict = sample_dictionary();
+        dict.gcs_name = "EPSG:3857".to_owned();
+        let unsupported = GeospatialDocument::parse(dict)
+            .expect("web mercator")
+            .resolve_plan()
+            .descriptor();
+        assert_ne!(unsupported, summary);
+        assert!(unsupported.contains("|supported=0|"));
+        assert!(unsupported.contains("|projection=web-mercator|"));
+        assert!(unsupported.contains("unsupported-projection:WebMercator"));
+
+        let mut dict = sample_dictionary();
+        dict.gcs_name = "Albers Equal Area".to_owned();
+        let unknown = GeospatialDocument::parse(dict)
+            .expect("unknown projection")
+            .resolve_plan()
+            .descriptor();
+        assert!(unknown.contains("|projection=unsupported:Albers Equal Area|"));
     }
 }

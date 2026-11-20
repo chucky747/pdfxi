@@ -640,6 +640,10 @@ impl FillWorkflow {
         if field.field_type() != FieldType::Signature {
             return Err(FillWorkflowError::UnknownSignatureField(field_name));
         }
+        // Signature attachment writes the participant name into the field, so
+        // it is a fill/edit path and must respect the same lock/certification
+        // guard as `set`, `clear` and `reset_field`.
+        self.check_guard(&field_name)?;
         if self.signature_workflows.contains_key(&field_name) {
             return Err(FillWorkflowError::DuplicateSignatureWorkflow(field_name));
         }

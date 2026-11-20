@@ -49,6 +49,13 @@
 //!   deterministic local signing state machine with stable status reports; and
 //!   a byte-range planning boundary for a future security-layer signer. No
 //!   cryptography is implemented here.
+//! - [`plan_byte_range`] / [`validate_byte_range`] / [`signed_bytes`] — a
+//!   deterministic `/ByteRange` contract computed from serialized bytes with a
+//!   `/Contents` placeholder, plus the exact byte sequence a signer must cover.
+//! - [`SignatureVerifier`] / [`StructureOnlyVerifier`] / [`SignatureLifecycle`] —
+//!   a caller-supplied verification boundary (no cryptography in this crate)
+//!   and a `create -> sign-request -> attach bytes -> verify -> report` state
+//!   machine whose `/V` output carries caller-supplied bytes verbatim.
 //! - [`TabPolicy`] / [`TabOrder`] / [`TabNavigator`] — the AcroForm `/Tabs`
 //!   order (`/R`, `/C`, `/S`, `/A`), deterministic widget ordering by page, and
 //!   next/previous traversal with a configurable hidden/read-only skip policy.
@@ -127,6 +134,7 @@ mod rules;
 mod serialize;
 mod signature;
 mod signatureplan;
+mod signing;
 mod taborder;
 mod validation;
 mod xfdf;
@@ -208,6 +216,11 @@ pub use signature::{
 pub use signatureplan::{
     ContractError, PlaceholderContract, SignatureFieldPlanEntry, SignaturePlan, SignaturePlanError,
     SignaturePlanReport, workflow_report_lines,
+};
+pub use signing::{
+    ByteRangeError, LifecycleError, LifecycleReport, SignatureLifecycle, SignatureVerifier,
+    StructureOnlyVerifier, VerificationError, VerificationOutcome, VerificationRequest,
+    plan_byte_range, signed_bytes, validate_byte_range, workflow_transition_lines,
 };
 pub use taborder::{
     NavPolicy, TabNavigator, TabOrder, TabPolicy, TabWidget, parse_tabs, tabs_from_acroform,

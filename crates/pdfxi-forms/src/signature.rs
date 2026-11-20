@@ -709,6 +709,16 @@ impl SignatureDictionary {
         self.contact.as_deref()
     }
 
+    /// Returns the configured `/Filter`.
+    pub const fn filter(&self) -> SigFilter {
+        self.filter
+    }
+
+    /// Returns the configured `/SubFilter`.
+    pub const fn subfilter(&self) -> SubFilter {
+        self.subfilter
+    }
+
     /// Emits the placeholder signature dictionary.
     pub fn to_pdf(&self) -> PdfValue {
         let mut dict = BTreeMap::new();

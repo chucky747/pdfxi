@@ -73,6 +73,9 @@ pub enum MediaError {
     /// The selected rendition was not among the declared renditions.
     #[error("selected rendition '{0}' is not declared")]
     RenditionNotFound(String),
+    /// No declared rendition matched a preferred MIME type.
+    #[error("no rendition declares the preferred MIME type '{0}'")]
+    PreferredMimeNotFound(String),
     /// A MIME type was empty.
     #[error("media MIME type must not be empty")]
     EmptyMimeType,
@@ -202,6 +205,24 @@ pub enum PlaybackControl {
     FullScreen,
 }
 
+impl PlaybackControl {
+    /// Return a stable, lowercase token for this control.
+    ///
+    /// The token is used in [`PlaybackPlan::descriptor`] so a plan has a
+    /// byte-stable identity that a host can cache or compare.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Play => "play",
+            Self::Pause => "pause",
+            Self::Stop => "stop",
+            Self::Mute => "mute",
+            Self::Volume => "volume",
+            Self::Seek => "seek",
+            Self::FullScreen => "fullscreen",
+        }
+    }
+}
+
 /// A typed reference to the media payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MediaSource {
@@ -234,6 +255,29 @@ impl MediaSource {
         }
         Ok(())
     }
+
+    /// Return a byte-stable descriptor for this reference.
+    ///
+    /// The three variants are prefixed so an embedded stream, a local file and
+    /// an indirect object can never produce the same token. Hosts can use the
+    /// result as a cache key without inspecting the reference enum.
+    pub fn descriptor(&self) -> String {
+        match self {
+            Self::Embedded(name) => {
+                let mut out = String::from("embedded:");
+                push_field(&mut out, name);
+                out
+            }
+            Self::File(name) => {
+                let mut out = String::from("file:");
+                push_field(&mut out, name);
+                out
+            }
+            Self::Object { number, generation } => {
+                format!("object:{number}:{generation}")
+            }
+        }
+    }
 }
 
 /// How the active rendition is selected.
@@ -243,6 +287,10 @@ pub enum RenditionSelection {
     Default,
     /// Use the rendition with this name.
     Named(String),
+    /// Use the first rendition whose MIME type matches this preference
+    /// (case-insensitive). Selection is therefore a function of the declared
+    /// rendition set and never of host codec availability.
+    PreferredMime(String),
     /// Use the rendition at this zero-based index (clamped when out of range).
     Indexed(usize),
 }
@@ -458,8 +506,9 @@ impl MediaAnnotation {
 
     /// Resolve the zero-based index of the active rendition.
     ///
-    /// The result is deterministic and always in `0..renditions.len()`; a named
-    /// selection was validated during parsing and an indexed one is clamped.
+    /// The result is deterministic and always in `0..renditions.len()`; named and
+    /// MIME-preference selections were validated during parsing and an indexed
+    /// one is clamped.
     pub fn active_rendition_index(&self) -> usize {
         resolve_selection(&self.selection, &self.renditions_as_inputs()).unwrap_or(0)
     }
@@ -529,6 +578,17 @@ pub enum HostRequirement {
     PosterFrame,
     /// Support full-screen playback.
     FullScreen,
+}
+
+impl HostRequirement {
+    /// Return a stable, lowercase token for this requirement.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::MediaPlayer => "media-player",
+            Self::PosterFrame => "poster-frame",
+            Self::FullScreen => "full-screen",
+        }
+    }
 }
 
 /// The deterministic plan a host player must realise.
@@ -621,6 +681,67 @@ impl PlaybackPlan {
     pub fn needs_host_player(&self) -> bool {
         true
     }
+
+    /// Return a byte-stable, single-line descriptor of this plan.
+    ///
+    /// Every field is emitted in a fixed order with escaped text, so identical
+    /// annotations always yield an identical string and a differing plan never
+    /// collides with another. The format is `media-plan/v1|key=value|...`; it is
+    /// intended as a cache/identity key for a host, not as a wire format.
+    pub fn descriptor(&self) -> String {
+        let mut out = String::from("media-plan/v1|kind=");
+        out.push_str(self.kind.code());
+        out.push_str("|source=");
+        out.push_str(&self.source.descriptor());
+        out.push_str("|mime=");
+        push_field(&mut out, &self.mime_type);
+        out.push_str("|poster=");
+        push_field(&mut out, self.poster.as_deref().unwrap_or("-"));
+        out.push_str("|activation=");
+        out.push_str(self.activation.code());
+        out.push_str("|auto=");
+        out.push_str(if self.auto_play { "1" } else { "0" });
+        out.push_str("|loop=");
+        out.push_str(if self.loop_play { "1" } else { "0" });
+        out.push_str("|volume=");
+        // `to_bits` is a byte-stable, platform-independent representation of
+        // the validated finite f32 volume, unlike its Display formatting.
+        out.push_str(&self.volume.to_bits().to_string());
+        out.push_str("|muted=");
+        out.push_str(if self.muted { "1" } else { "0" });
+        out.push_str("|controls=");
+        for (index, control) in self.controls.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(control.code());
+        }
+        out.push_str("|rendition=");
+        out.push_str(&self.active_rendition_index.to_string());
+        out.push(':');
+        push_field(&mut out, &self.rendition_name);
+        out.push_str("|requirements=");
+        for (index, requirement) in self.requirements.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(requirement.code());
+        }
+        out
+    }
+}
+
+/// Append `value` to `out`, escaping the descriptor's delimiter characters so
+/// distinct field values can never produce the same descriptor string.
+fn push_field(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '|' => out.push_str("\\|"),
+            ',' => out.push_str("\\,"),
+            _ => out.push(ch),
+        }
+    }
 }
 
 fn validate_mime(mime: &str) -> Result<(), MediaError> {
@@ -673,6 +794,10 @@ fn resolve_selection(
             .iter()
             .position(|r| r.name == *name)
             .ok_or_else(|| MediaError::RenditionNotFound(name.clone())),
+        RenditionSelection::PreferredMime(mime) => renditions
+            .iter()
+            .position(|r| r.mime_type.eq_ignore_ascii_case(mime))
+            .ok_or_else(|| MediaError::PreferredMimeNotFound(mime.clone())),
         RenditionSelection::Indexed(index) => Ok((*index).min(renditions.len().saturating_sub(1))),
     }
 }
@@ -911,6 +1036,76 @@ mod tests {
                 HostRequirement::PosterFrame,
                 HostRequirement::FullScreen,
             ]
+        );
+    }
+
+    #[test]
+    fn preferred_mime_selection_resolves_from_the_rendition_set() {
+        let mut dict = sample_dictionary();
+        dict.renditions[1].mime_type = "video/webm".to_owned();
+        dict.selection = RenditionSelection::PreferredMime("VIDEO/WEBM".to_owned());
+        let annotation = MediaAnnotation::parse(dict).expect("preferred mime selection");
+        assert_eq!(annotation.active_rendition_index(), 1);
+        assert_eq!(
+            annotation.active_rendition().map(Rendition::name),
+            Some("low")
+        );
+        assert_eq!(annotation.resolve_plan().rendition_name(), "low");
+
+        // A preference no rendition declares is a typed parse error, so a plan
+        // can never be built against a rendition that does not exist.
+        let mut dict = sample_dictionary();
+        dict.selection = RenditionSelection::PreferredMime("video/webm".to_owned());
+        assert_eq!(
+            MediaAnnotation::parse(dict),
+            Err(MediaError::PreferredMimeNotFound("video/webm".to_owned()))
+        );
+    }
+
+    #[test]
+    fn playback_plan_descriptor_is_byte_stable_and_reflects_flags() {
+        let annotation = MediaAnnotation::parse(sample_dictionary()).expect("valid");
+        let plan = annotation.resolve_plan();
+        let descriptor = plan.descriptor();
+        assert_eq!(descriptor, plan.descriptor());
+        assert_eq!(descriptor, annotation.resolve_plan().descriptor());
+        assert!(descriptor.starts_with("media-plan/v1|kind=Screen|source=file:clip_low.mp4|"));
+        assert!(descriptor.contains("|activation=PV|auto=1|loop=0|"));
+        assert!(descriptor.contains("|controls=play,mute,seek|"));
+        assert!(descriptor.contains("|requirements=media-player,poster-frame"));
+
+        // Changing a single flag changes the descriptor, and control codes are
+        // emitted in the plan's canonical order.
+        let mut dict = sample_dictionary();
+        dict.loop_play = true;
+        dict.controls = vec![PlaybackControl::FullScreen, PlaybackControl::Play];
+        let changed = MediaAnnotation::parse(dict)
+            .expect("valid")
+            .resolve_plan()
+            .descriptor();
+        assert_ne!(changed, descriptor);
+        assert!(changed.contains("|loop=1|"));
+        assert!(changed.contains("|controls=play,fullscreen|"));
+        assert!(changed.contains("full-screen"));
+    }
+
+    #[test]
+    fn media_source_descriptors_distinguish_variants_and_escape_delimiters() {
+        assert_eq!(
+            MediaSource::Embedded("clip".to_owned()).descriptor(),
+            "embedded:clip"
+        );
+        assert_eq!(
+            MediaSource::File("a|b.mp4".to_owned()).descriptor(),
+            "file:a\\|b.mp4"
+        );
+        assert_eq!(
+            MediaSource::Object {
+                number: 12,
+                generation: 3
+            }
+            .descriptor(),
+            "object:12:3"
         );
     }
 }

@@ -3,7 +3,7 @@
   "lane": "forms",
   "title": "Signature workflow closure with security boundary",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0149"],
   "owns": [
     "crates/pdfxi-forms/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0168.toml"
   ],
   "acceptance": "cargo test -p pdfxi-forms",
-  "evidence": ""
+  "evidence": "docs/evidence/forms/T-0168.md"
 }

@@ -54,7 +54,8 @@ pub enum Html5MediaError {
     /// The reference contains a parent-directory traversal segment.
     #[error("media path '{0}' contains a parent-directory traversal")]
     TraversalPath(String),
-    /// The reference contains a character unsafe for markup attributes.
+    /// The reference contains a character unsafe for markup attributes,
+    /// including control characters that would break an attribute value.
     #[error("media source '{0}' contains an unsafe character")]
     UnsafeCharacter(String),
     /// A MIME type was empty.
@@ -96,6 +97,16 @@ pub enum MediaCategory {
     Video,
 }
 
+impl MediaCategory {
+    /// Return the stable HTML element tag for this category.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::Video => "video",
+        }
+    }
+}
+
 /// A validated, local-or-embedded medium reference.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LocalMediaRef {
@@ -103,6 +114,25 @@ pub enum LocalMediaRef {
     Embedded(String),
     /// A relative local path with no traversal segments.
     RelativePath(String),
+}
+
+impl LocalMediaRef {
+    /// Return a byte-stable descriptor that distinguishes embedded streams
+    /// from relative paths.
+    pub fn descriptor(&self) -> String {
+        match self {
+            Self::Embedded(name) => {
+                let mut out = String::from("embedded:");
+                push_field(&mut out, name);
+                out
+            }
+            Self::RelativePath(path) => {
+                let mut out = String::from("relative:");
+                push_field(&mut out, path);
+                out
+            }
+        }
+    }
 }
 
 /// Owned intermediate form of one `<source>` entry.
@@ -282,6 +312,45 @@ impl Html5Descriptor {
         self.element
     }
 
+    /// Return a byte-stable, single-line descriptor of this envelope.
+    ///
+    /// Sources are kept in preference order and all text is escaped, so equal
+    /// envelopes give an identical string and differing ones cannot collide.
+    /// This is an identity/cache key for a host, not a markup or wire format;
+    /// use [`Self::to_markup`] for the inert element description.
+    pub fn descriptor(&self) -> String {
+        let mut out = String::from("html5-plan/v1|element=");
+        out.push_str(self.element.code());
+        out.push_str("|sources=");
+        for (index, source) in self.sources.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(&source.reference().descriptor());
+            out.push('(');
+            push_field(&mut out, &source.mime_type);
+            out.push(')');
+        }
+        out.push_str("|poster=");
+        match &self.poster {
+            Some(poster) => out.push_str(&poster.descriptor()),
+            None => out.push('-'),
+        }
+        out.push_str("|controls=");
+        out.push_str(if self.controls { "1" } else { "0" });
+        out.push_str("|autoplay=");
+        out.push_str(if self.autoplay { "1" } else { "0" });
+        out.push_str("|loop=");
+        out.push_str(if self.loop_play { "1" } else { "0" });
+        out.push_str("|muted=");
+        out.push_str(if self.muted { "1" } else { "0" });
+        out.push_str("|width=");
+        out.push_str(&self.width.to_string());
+        out.push_str("|height=");
+        out.push_str(&self.height.to_string());
+        out
+    }
+
     /// Produce deterministic, inert HTML5 player markup.
     ///
     /// Attributes and sources are emitted in a fixed order so identical inputs
@@ -337,6 +406,21 @@ impl Html5Descriptor {
     }
 }
 
+/// Append `value` to `out`, escaping the descriptor's delimiter characters so
+/// distinct field values can never produce the same descriptor string.
+fn push_field(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '|' => out.push_str("\\|"),
+            ',' => out.push_str("\\,"),
+            '(' => out.push_str("\\("),
+            ')' => out.push_str("\\)"),
+            _ => out.push(ch),
+        }
+    }
+}
+
 fn push_reference(out: &mut String, reference: &LocalMediaRef) {
     match reference {
         LocalMediaRef::Embedded(name) => {
@@ -376,7 +460,10 @@ fn validate_reference(src: &str) -> Result<LocalMediaRef, Html5MediaError> {
         });
     }
     for ch in src.chars() {
-        if matches!(ch, '"' | '\'' | '<' | '>' | '&' | '\0') {
+        // Control characters (including NUL, newline and tab) would break an
+        // HTML attribute value or smuggle content past a host renderer, so they
+        // are rejected alongside the markup-significant punctuation.
+        if ch.is_control() || matches!(ch, '"' | '\'' | '<' | '>' | '&') {
             return Err(Html5MediaError::UnsafeCharacter(src.to_owned()));
         }
     }
@@ -651,5 +738,63 @@ mod tests {
                 limit: MAX_DIMENSION
             })
         );
+    }
+
+    #[test]
+    fn control_characters_in_references_are_rejected() {
+        for bad in [
+            "media/a\nb.mp4",
+            "media/a\tb.mp4",
+            "media/a\rb.mp4",
+            "media/a\0b.mp4",
+        ] {
+            let mut envelope = sample_envelope();
+            envelope.sources[0].src = bad.to_owned();
+            assert_eq!(
+                Html5Descriptor::parse(envelope),
+                Err(Html5MediaError::UnsafeCharacter(bad.to_owned())),
+                "control character in {bad:?} must be rejected"
+            );
+        }
+        // The poster reference goes through the same validator.
+        let mut envelope = sample_envelope();
+        envelope.poster = Some("poster\n.png".to_owned());
+        assert_eq!(
+            Html5Descriptor::parse(envelope),
+            Err(Html5MediaError::UnsafeCharacter("poster\n.png".to_owned()))
+        );
+    }
+
+    #[test]
+    fn descriptor_is_byte_stable_and_reflects_the_envelope() {
+        let descriptor = Html5Descriptor::parse(sample_envelope()).expect("valid envelope");
+        let summary = descriptor.descriptor();
+        assert_eq!(summary, descriptor.descriptor());
+        assert_eq!(
+            summary,
+            Html5Descriptor::parse(sample_envelope())
+                .expect("same envelope")
+                .descriptor()
+        );
+        assert!(summary.starts_with("html5-plan/v1|element=video|sources="));
+        assert!(summary.contains("relative:media/lecture.mp4(video/mp4)"));
+        assert!(summary.contains("embedded:embeddedFallback(video/webm)"));
+        assert!(summary.contains("|poster=relative:media/poster.png|"));
+        assert!(summary.ends_with("|controls=1|autoplay=0|loop=1|muted=1|width=640|height=360"));
+
+        // Changing one option changes the descriptor and the element tag is
+        // recomputed from the source set.
+        let mut envelope = sample_envelope();
+        envelope.sources = vec![Html5SourceInput {
+            src: "audio/theme.mp3".to_owned(),
+            mime_type: "audio/mpeg".to_owned(),
+        }];
+        envelope.poster = None;
+        let changed = Html5Descriptor::parse(envelope)
+            .expect("audio envelope")
+            .descriptor();
+        assert!(changed.starts_with("html5-plan/v1|element=audio|"));
+        assert!(changed.contains("|poster=-|"));
+        assert_ne!(changed, summary);
     }
 }
