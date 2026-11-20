@@ -50,6 +50,12 @@ if (Test-Path -LiteralPath $licenceSource -PathType Container) {
         Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $licenceTarget $file.Name) -Force
     }
 }
+# The user guide ships under docs\ so Help can open it from the install directory.
+$docsSource = Join-Path $source 'docs'
+if (Test-Path -LiteralPath $docsSource -PathType Container) {
+    $docsTarget = Join-Path $target 'docs'
+    Copy-Item -LiteralPath $docsSource -Destination $docsTarget -Recurse -Force
+}
 
 function New-ShellLink {
     param(

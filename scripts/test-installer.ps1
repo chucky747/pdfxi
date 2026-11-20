@@ -277,6 +277,9 @@ foreach ($relative in @(
     'NOTICE',
     'THIRD_PARTY.md',
     'pdfium-licenses\LICENSE.txt',
+    'docs\README.md',
+    'docs\security.md',
+    'docs\privacy.md',
     'unins000.exe'
 )) {
     $full = Join-Path $installDir $relative
@@ -284,6 +287,20 @@ foreach ($relative in @(
         Write-Pass "installed $relative"
     } else {
         Write-Fail "installed payload missing $relative"
+    }
+}
+
+foreach ($relative in @('docs\README.md', 'docs\security.md', 'docs\privacy.md')) {
+    $installedDoc = Join-Path $installDir $relative
+    $stagedDoc = Join-Path (Join-Path $staging 'docs') $relative.Substring('docs\'.Length)
+    if ((Test-Path -LiteralPath $installedDoc -PathType Leaf) -and (Test-Path -LiteralPath $stagedDoc -PathType Leaf)) {
+        $installedHash = (Get-FileHash -LiteralPath $installedDoc -Algorithm SHA256).Hash
+        $stagedHash = (Get-FileHash -LiteralPath $stagedDoc -Algorithm SHA256).Hash
+        if ($installedHash -eq $stagedHash) {
+            Write-Pass "installed $relative equals the staged guide page"
+        } else {
+            Write-Fail "installed $relative SHA256 $installedHash != staged $stagedHash"
+        }
     }
 }
 
