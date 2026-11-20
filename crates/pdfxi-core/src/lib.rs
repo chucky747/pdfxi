@@ -19,6 +19,7 @@ pub mod association;
 pub mod boxes;
 pub mod browser_handoff;
 pub mod compatibility;
+pub mod conformance;
 pub mod content;
 pub mod filter;
 pub mod font;
@@ -37,6 +38,7 @@ pub mod preferences;
 pub mod preservation;
 pub mod printer_marks;
 pub mod repair;
+pub mod structure;
 pub mod transparency;
 pub mod unicode;
 pub mod xref_stream;
@@ -60,6 +62,11 @@ pub use browser_handoff::{
 pub use compatibility::{
     CompatibilityReport, CompatibilityWarning, FeatureSupport, HEADER_SCAN_LIMIT, PdfFeature,
     PdfVersion, VersionSource, analyze_compatibility, feature_gate,
+};
+pub use conformance::{
+    CheckScope, ConformanceError, ConformanceFinding, ConformanceOperation, ConformancePlan,
+    ConformanceReport, ConformanceVerdict, DocumentFacts, FindingSeverity, MAX_FACT_NAMES,
+    MAX_FACT_PAGES, MAX_NAME_LEN, StandardRow,
 };
 pub use content::extract_text;
 pub use filter::{
@@ -114,6 +121,10 @@ pub use printer_marks::{
     PrinterMarks, generate_printer_marks,
 };
 pub use repair::{RepairError, RepairReport, RepairWarning, RepairedDocument, repair_document};
+pub use structure::{
+    MAX_ROLE_LEN, MAX_STRUCTURE_DEPTH, MAX_STRUCTURE_NODES, MAX_STRUCTURE_TOKEN_LEN,
+    ParentTreeEntry, StructureError, StructureNode, StructureRole, StructureTree,
+};
 pub use transparency::{
     BackendRequirement, BlendBackend, BlendCategory, BlendMode, BlendPlan, BlendSpec,
     GroupIsolation, GroupKnockout, MAX_ALPHA, MAX_STACK_DEPTH, MAX_TOKEN_LEN, NoBackend,

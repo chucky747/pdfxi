@@ -4271,217 +4271,77 @@ tests = [
 title = "Font embedding and CID fonts"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/transparency.rs",
-    "crates/pdfxi-render/src/blend.rs",
-    "docs/evidence/core/T-0152.md",
-]
+docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core): 300 core unit + 6 core integration + 74 standards passed, 0 failed; all 12 transparency::tests green; fmt/clippy -D warnings/rustdoc -D warnings EXIT=0. Full output in docs/evidence/core/T-0152.md."
+evidence = "docs/evidence/core/T-0166.md"
 id = "STD-005"
-notes = """
-Adds a rendering-free, deterministic transparency/blend planning contract in
-pdfxi-core::transparency (the render crate keeps pixel compositing). All 16 ISO
-32000 blend modes parse and round-trip; Hue/Saturation/Color/Luminosity are
-NonSeparable and require a ColorManagement backend capability. Group
-isolation/knockout, 9-bit alpha bounds (0..=256) and token-length limits are
-validated. BlendPlan packs mode/alpha/group flags into a stable u64, declares
-ordered backend requirements and records unsupported ones honestly instead of
-dropping them; check_support returns a typed UnsupportedBackend. The stack is
-bounded at MAX_STACK_DEPTH and plans preserve insertion order.
-
-The test double that previously claimed to support colour management was
-replaced with one that isolates that single missing capability, so the CMM
-requirement and error are actually exercised.
-
-Status stays in-progress honestly: real blend-mode rasterization is still
-deferred to the native backend milestone. This task adds the library-level
-planning layer only; it does not composite pixels.
-"""
+notes = "Blend-mode names and colour-management requirements are validated with deterministic plans; pixel compositing remains a render-backend responsibility."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "blend::tests::all_standard_blend_modes_parse_and_display",
-    "blend::tests::blend_category_separates_cmy_modes",
-    "blend::tests::isolation_and_knockout_parse_and_default",
-    "blend::tests::transparency_group_validation",
-    "blend::tests::blend_spec_alpha_validation",
-    "blend::tests::plan_is_deterministic_and_delegates_honestly",
-    "blend::tests::opaque_normal_without_group_needs_no_backend",
-    "blend::tests::plan_bits_encode_categorical_choices",
-    "transparency::tests::every_standard_mode_round_trips_name_and_category",
-    "transparency::tests::group_tokens_round_trip_and_default_to_spec_values",
-    "transparency::tests::descriptor_round_trips_with_and_without_a_group",
-    "transparency::tests::alpha_boundaries_are_valid_and_overflow_is_typed",
-    "transparency::tests::over_long_tokens_are_rejected_with_a_typed_error",
-    "transparency::tests::plan_is_deterministic_for_a_spec_and_backend",
-    "transparency::tests::plan_bits_encode_mode_alpha_and_group_flags",
-    "transparency::tests::nonseparable_mode_requires_color_management",
-    "transparency::tests::partial_alpha_and_group_flags_declare_their_requirements",
-    "transparency::tests::no_backend_returns_an_honest_typed_error",
-    "transparency::tests::stack_depth_is_bounded_and_plans_keep_order",
-    "transparency::tests::malformed_descriptors_return_typed_errors",
+    "conformance::tests::transparency_row_validates_blend_modes_and_flags_cmm",
+    "transparency::tests::stack_plans_are_deterministic_across_repeated_builds",
 ]
 title = "Transparency and blend modes"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-accessibility/src/structure.rs",
-    "docs/evidence/core/T-0118.md",
-]
+docs = "crates/pdfxi-core/src/structure.rs, docs/evidence/core/T-0166.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-accessibility structure (CARGO_TARGET_DIR=target/lanes/core, read-only): 17 passed, 0 failed, ACCESSIBILITY_EXIT=0, including structure::tests::role_mapping_uses_standard_pdf_names, parent_tree_matches_struct_parents_keys and round_trip_reconstructs_original_tree. No new tests added by this task. See docs/evidence/core/T-0118.md."
+evidence = "docs/evidence/core/T-0166.md"
 id = "STD-006"
-notes = """
-The tagged-structure writer/reader and its role-map, parent-tree and round-trip
-tests already exist in crates/pdfxi-accessibility, which is outside T-0118's
-owns list, so this task performed read-only verification only and added no
-tests. The requested role maps, parent tree and round-trip coverage are present
-and passing. Row stays in-progress: editor UI exposure and full PDF/UA
-validation remain future work. No new deps, unsafe or panics.
-"""
+notes = "Bounded structure-role model, canonical token round-trip, parent-tree index and typed validation; writing the tree into PDF objects and the reading-order editor remain."
 priority = "P2"
 status = "in-progress"
 tests = [
-    "structure::tests::role_pdf_names_are_distinct_and_reversible",
-    "structure::tests::role_mapping_uses_standard_pdf_names",
-    "structure::tests::parent_tree_matches_struct_parents_keys",
-    "structure::tests::round_trip_reconstructs_original_tree",
+    "structure::tests::nested_tree_round_trips_exactly",
+    "structure::tests::parent_tree_is_deterministic_and_resolves_paths",
 ]
 title = "Tagged PDF and structure tree"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-standards/src/document_profile.rs",
-    "docs/evidence/core/T-0118.md",
-]
+docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core, read-only): 74 passed, 0 failed, STANDARDS_TEST_EXIT=0, including profile_request::tests::request_resolves_every_canonical_label (PDF/A profiles reachable through public API) and document_profile::tests::finding_codes_are_stable_per_profile (deterministic findings). No new tests added by this task. See docs/evidence/core/T-0118.md."
+evidence = "docs/evidence/core/T-0166.md"
 id = "STD-007"
-notes = """
-PdfA1bProfile, PdfA2bProfile and PdfA3bProfile are reachable through
-ProfileRequest/ConformanceProfile and emit deterministic, stable-coded findings
-verified by the existing 74-test suite. crates/pdfxi-standards is outside
-T-0118's claim, so no new tests were added here (edit permission denied).
-This is a deterministic subset preflight, NOT certification: byte-level ICC
-validation and a veraPDF oracle run remain future work. No certification claim.
-"""
+notes = "Deterministic PDF/A-style facts and plans with Incomplete verdicts for unknown facts; ICC byte validation and an independent validator remain."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
-    "document_profile::tests::finding_codes_are_stable_per_profile",
-    "profile_request::tests::request_resolves_every_canonical_label",
-]
+tests = ["conformance::tests::version_and_encryption_facts_are_checked"]
 title = "PDF/A conformance"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-standards/src/document_profile.rs",
-    "docs/evidence/core/T-0118.md",
-]
+docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core, read-only): 74 passed, 0 failed, STANDARDS_TEST_EXIT=0, including profile_request::tests::request_resolves_every_canonical_label (PDF/X profiles reachable through public API), document_profile::tests::ordering_is_independent_of_input_collection_order and t0093_tests::t0093_missing_output_intent_is_an_error (deterministic findings). No new tests added by this task. See docs/evidence/core/T-0118.md."
+evidence = "docs/evidence/core/T-0166.md"
 id = "STD-008"
-notes = """
-PdfX1aProfile and PdfX4Profile are reachable through ProfileRequest/ConformanceProfile
-and emit deterministic, stable-coded findings verified by the existing 74-test
-suite. crates/pdfxi-standards is outside T-0118's claim, so no new tests were
-added here (edit permission denied). This is a deterministic subset preflight,
-NOT certification: full GTS_PDFX ICC profile validation and a veraPDF oracle run
-remain future work. No certification claim.
-"""
+notes = "Output-intent and forbidden-entry checks with sorted stable codes; independent PDF/X validation and ICC inspection remain."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
-    "document_profile::tests::ordering_is_independent_of_input_collection_order",
-    "profile_request::tests::request_resolves_every_canonical_label",
-]
+tests = ["conformance::tests::output_intent_and_forbidden_entries_are_checked"]
 title = "PDF/X conformance"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-standards/src/document_profile.rs",
-    "docs/evidence/core/T-0118.md",
-]
+docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core, read-only): 74 passed, 0 failed, STANDARDS_TEST_EXIT=0, including profile_request::tests::request_resolves_every_canonical_label (PdfUa1Profile reachable through public API) and document_profile::tests::severity_filtering_keeps_only_requested_levels (deterministic findings). No new tests added by this task. See docs/evidence/core/T-0118.md."
+evidence = "docs/evidence/core/T-0166.md"
 id = "STD-009"
-notes = """
-PdfUa1Profile is reachable through ProfileRequest/ConformanceProfile and emits
-deterministic findings (MarkInfo/Marked, StructTreeRoot, Lang, plus an
-informational manual-check note for AcroForm fields), verified by the existing
-74-test suite. crates/pdfxi-standards is outside T-0118's claim, so no new tests
-were added here (edit permission denied). This is a deterministic subset
-preflight, NOT certification: full tagged-PDF structure and reading-order checks
-belong to the accessibility lane. No certification claim.
-"""
+notes = "Tagging facts and structure validation drive a deterministic UA-style report; full reading-order and alt-text verification remain."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "document_profile::tests::severity_filtering_keeps_only_requested_levels",
-    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
-    "profile_request::tests::request_resolves_every_canonical_label",
-]
+tests = ["conformance::tests::tagged_structure_row_reports_invalid_tree"]
 title = "PDF/UA conformance"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/incremental.rs",
-    "crates/pdfxi-core/src/preservation.rs",
-    "docs/evidence/core/T-0152.md",
-]
+docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core): 300 core unit + 6 core integration + 74 standards passed, 0 failed; all 10 preservation::tests green; fmt/clippy -D warnings/rustdoc -D warnings EXIT=0. Full output in docs/evidence/core/T-0152.md."
+evidence = "docs/evidence/core/T-0166.md"
 id = "STD-010"
-notes = """
-Adds preservation validation for incrementally updated PDFs in
-pdfxi-core::preservation. validate_incremental_preservation and
-Document::validate_incremental check the exact original byte prefix, that a new
-revision exists and its /Prev chain reaches the original startxref, policy
-trailer keys, page count and optionally caller-supplied page text. A
-caller-supplied PageTextSource keeps the core text-extractor-agnostic. Every
-bound (revision count, policy keys, key length) is checked before work and all
-failures are typed PreservationError variants. Document::save_incremental_with
-remains the writer side from T-0108.
-
-Status stays in-progress honestly: cryptographic signing and long-term archival
-packaging are still out of scope and are reported as UnsupportedOperation rather
-than pretended. Validation - the previously missing piece - is now implemented
-and tested.
-"""
+notes = "Preservation facts report deterministically and signing/archival packaging are typed unsupported operations; cryptographic signing and packaging remain with the security lanes."
 priority = "P1"
 status = "in-progress"
 tests = [
-    "incremental::tests::single_object_update_writes_only_that_object",
-    "incremental::tests::multi_object_update_writes_both_in_number_order",
-    "incremental::tests::allocate_object_number_never_reuses_existing_or_staged_numbers",
-    "incremental::tests::reserve_rejects_every_in_use_number",
-    "incremental::tests::original_bytes_are_preserved_exactly",
-    "incremental::tests::trailer_points_prev_at_prior_startxref",
-    "incremental::tests::second_incremental_save_chains_three_sections",
-    "incremental::tests::id_first_is_preserved_and_second_is_regenerated",
-    "incremental::tests::seeded_id_is_deterministic_and_seed_dependent",
-    "incremental::tests::output_is_deterministic_for_a_change_set",
-    "incremental::tests::catalog_unknown_entries_labels_and_metadata_are_preserved",
-    "incremental::tests::explicit_catalog_change_is_reported_as_regenerated",
-    "incremental::tests::reparse_round_trip_keeps_page_count_and_text",
-    "incremental::tests::xref_stream_section_reparses",
-    "incremental::tests::malformed_prior_xref_returns_a_typed_error",
-    "incremental::tests::encrypted_document_is_rejected_with_a_typed_error",
-    "incremental::tests::empty_change_set_appends_a_valid_revision",
-    "incremental::tests::first_id_element_helper_handles_absent_and_malformed_ids",
-    "preservation::tests::valid_incremental_save_is_accepted",
-    "preservation::tests::validation_is_deterministic_for_the_same_inputs",
-    "preservation::tests::changed_prefix_is_rejected_before_any_parsing",
-    "preservation::tests::corrupt_updated_xref_is_a_typed_error",
-    "preservation::tests::broken_prev_chain_is_detected",
-    "preservation::tests::changed_preserved_trailer_key_is_detected",
-    "preservation::tests::caller_supplied_text_change_is_detected",
-    "preservation::tests::revision_and_key_limits_are_bounded",
-    "preservation::tests::two_incremental_revisions_form_a_valid_chain",
-    "preservation::tests::signing_and_packaging_are_honestly_unsupported",
+    "conformance::tests::preservation_row_reports_typed_unsupported_operations",
+    "preservation::tests::operation_checks_are_stable_and_typed_for_every_variant",
 ]
 title = "Incremental update and digital preservation"
 

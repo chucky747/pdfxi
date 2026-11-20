@@ -1109,6 +1109,40 @@ mod tests {
     }
 
     #[test]
+    fn stack_plans_are_deterministic_across_repeated_builds() {
+        let mut stack = TransparencyStack::new();
+        let group = TransparencyGroup::new(
+            GroupIsolation::Isolated,
+            GroupKnockout::NonKnockout,
+            BlendMode::Multiply,
+        );
+        stack
+            .push(BlendSpec::new(BlendMode::Normal, MAX_ALPHA, MAX_ALPHA).expect("plain spec"))
+            .expect("first push");
+        stack
+            .push(
+                BlendSpec::new(BlendMode::Hue, 128, 256)
+                    .expect("grouped spec")
+                    .with_group(group),
+            )
+            .expect("second push");
+        let first = stack.plans(&FullBackend).expect("first build");
+        let second = stack.plans(&FullBackend).expect("second build");
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert!(first.iter().all(|plan| plan.check_support().is_ok()));
+        // A partial backend records the same gaps, in the same order, every time.
+        let partial_a = stack.plans(&NoCmmBackend).expect("partial build");
+        let partial_b = stack.plans(&NoCmmBackend).expect("partial build");
+        assert_eq!(partial_a, partial_b);
+        assert!(
+            partial_a[1]
+                .blocked()
+                .contains(&BackendRequirement::ColorManagement)
+        );
+    }
+
+    #[test]
     fn malformed_descriptors_return_typed_errors() {
         assert!(
             BlendSpec::from_descriptor("")

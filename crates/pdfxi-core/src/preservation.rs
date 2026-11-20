@@ -620,6 +620,25 @@ mod tests {
     }
 
     #[test]
+    fn operation_checks_are_stable_and_typed_for_every_variant() {
+        for operation in [
+            PreservationOperation::Validate,
+            PreservationOperation::Sign,
+            PreservationOperation::LongTermPackaging,
+        ] {
+            let first = operation.check();
+            assert_eq!(first, operation.check(), "check must be deterministic");
+            match operation {
+                PreservationOperation::Validate => assert!(first.is_ok()),
+                _ => assert!(matches!(
+                    first,
+                    Err(PreservationError::UnsupportedOperation(_))
+                )),
+            }
+        }
+    }
+
+    #[test]
     fn signing_and_packaging_are_honestly_unsupported() {
         assert!(PreservationOperation::Validate.check().is_ok());
         assert_eq!(

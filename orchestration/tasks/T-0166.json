@@ -3,7 +3,7 @@
   "lane": "core",
   "title": "Standards profiles and tagged text closure",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0156"],
   "owns": [
     "crates/pdfxi-core/**",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0166.toml"
   ],
   "acceptance": "cargo test -p pdfxi-core -p pdfxi-standards",
-  "evidence": ""
+  "evidence": "docs/evidence/core/T-0166.md"
 }
