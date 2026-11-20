@@ -13,10 +13,14 @@
 
 - [Authoring](authoring.md)
 - [Forms](forms.md)
-- [Security](security.md)
 - [Accessibility](accessibility.md)
 - [Automation](automation.md)
 - [Standards and preflight](standards.md)
+
+# Security and privacy
+
+- [Security](security.md)
+- [Privacy and local data](privacy.md)
 
 # Reference
 

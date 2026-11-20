@@ -26,8 +26,10 @@ reference section.
 - [Authoring](authoring.md) — create from text and images, page boxes,
   headers/footers, watermarks, optimize, print.
 - [Forms](forms.md) — the AcroForm model, XFDF/FDF exchange, and flattening.
-- [Security](security.md) — AES-256, CMS signatures, X.509 digital IDs, and
-  redaction.
+- [Security](security.md) — password protection and advisory permissions, CMS
+  signatures, redaction, and untrusted input.
+- [Privacy and local data](privacy.md) — the local files PDFXI keeps, the
+  assistant's loopback lockdown, and what is never sent.
 - [Accessibility](accessibility.md) — tag trees, reading order, and the tagged
   writer.
 - [Automation](automation.md) — actions, droplets, and the sandboxed JavaScript

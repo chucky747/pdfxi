@@ -76,7 +76,7 @@ or the authoritative [docs/CLI.md](../../CLI.md) for exact JSON shapes.
 | Drive PDFXI from scripts and CI | [CLI reference](cli.md) |
 | Create and combine PDFs, edit pages, add headers, watermarks, print | [Authoring](authoring.md) |
 | Fill, exchange, and flatten forms | [Forms](forms.md) |
-| Encrypt, sign, and redact | [Security](security.md) |
+| Encrypt, sign, redact, and review privacy | [Security](security.md), [Privacy and local data](privacy.md) |
 | Tags, reading order, and tagged PDF | [Accessibility](accessibility.md) |
 | Actions, droplets, and the JavaScript subset | [Automation](automation.md) |
 | Preflight and standards profiles | [Standards and preflight](standards.md) |

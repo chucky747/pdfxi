@@ -30,8 +30,11 @@ be read, and a document that exceeds the input limit.
 Documents larger than 2 GiB are rejected with an error; the viewer does not
 read them partially.
 
-Password-protected PDFs are **not supported yet**. They are detected and
-reported in the error banner; there is no password prompt.
+Password-protected PDFs open through a masked password modal. A wrong password
+keeps the modal open with a typed message, Cancel opens no tab and explains why,
+and a document whose permissions deny modification opens read-only. The viewer
+does not re-encrypt on save, so saving an encrypted document is refused with a
+typed message and the tab stays open — see [Security](security.md).
 
 ## Navigating a document
 
@@ -90,12 +93,21 @@ The viewer stores only explicit user choices in a TOML file:
   (or `~/.config/PDFXI/settings.toml`)
 - macOS: `~/Library/Application Support/PDFXI/settings.toml`
 
-The file has two keys:
+The file holds explicit user choices only:
 
 ```toml
-theme = "system"          # "light", "dark", or "system"
+theme = "system"             # "light", "dark", or "system"
 window_controls = "windows"  # "windows" or "macos"
+display_name = "Reader"      # local author name; never the OS account by default
+# library_root = "~/Documents/PDFXI"
+# shared_folder = "~/Shared/PDFs"
 ```
+
+`display_name` is the local author shown on comments and signatures; a fresh
+install starts as the neutral `Reader`, not your OS account name. Paths expand
+`~`, `%VAR%`, `$VAR` and `${VAR}` on load and relative paths are rejected. The
+recents and stars live in `%APPDATA%\PDFXI\library.toml`; see
+[Privacy and local data](privacy.md) for the full list of local files.
 
 A missing, unreadable, or corrupt file falls back to the defaults (Follow
 system, and the platform's control style). Unknown keys are ignored. Writes are
@@ -125,31 +137,33 @@ first launch; see [Installing PDFXI](install.md).
 ## Known limitations
 
 - Find coverage on very large documents is progressive, as described above.
-- Password-protected documents are not supported. Detection is currently a
-  string match because the PDFium wrapper does not expose a typed load-time
-  password error.
+- Saving an encrypted document is refused: the session cannot re-encrypt, so the
+  file is opened, and shown read-only when its permissions require it, but not
+  written back.
 - The native file picker has **not been verified interactively** in the
   development environment; the code path is unit-tested and the picker is the
   platform dialog.
 - Snap Layouts and native non-client hit-testing are absent (custom caption).
-- Rotation and zoom are view state only; there is no save command in the viewer.
+- Rotation and zoom are view state only; they do not mark the document dirty or
+  change the saved file. Byte-changing edits go through the document session,
+  and Save / Save As are the only commands that write a file.
 - The viewer is Windows-first. The other configuration paths exist in the
   settings module, but no macOS or Linux viewer build is verified.
 
-## Not in the viewer yet
+## Not available in the viewer yet
 
-The following were removed from the shell because nothing real was behind them,
-and they are not available as viewer features today:
+These commands are present and report that they are not available in this build;
+they are not dead controls, and several have a tested document-level
+implementation behind them:
 
-- demo or sample documents, and any startup document;
-- the AI assistant and canned answers;
-- cloud storage, accounts, avatars, and notifications;
-- comments, review threads, and annotation tools;
-- the left rail and the tools/export cards;
-- layers, bookmarks, attachments, and links panes;
-- split and tile panes, and the print dialog;
-- text selection and copy, export, editing, forms, redaction, and signing.
+- Edit PDF;
+- Fill & Sign and Sign (the signing library is real; see [Security](security.md));
+- Organize Pages, Add page, and the page menu;
+- Export, Convert to PDF, and Combine Files;
+- Protect PDF (the protection and redaction libraries are real; see
+  [Security](security.md));
+- the AI assistant (the client exists; the panel says the assistant appears when
+  it is connected — see [Privacy and local data](privacy.md)).
 
-Some of these have library implementations with no GUI caller. Check the
-[feature matrix](../../FEATURES.md): `library` and `model` rows are not
+Check the [feature matrix](../../FEATURES.md): `library` and `model` rows are not
 end-user features, and only `verified` rows are reachable.
