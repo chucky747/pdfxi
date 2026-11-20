@@ -4327,7 +4327,7 @@ docs = [
     "docs/THIRD_PARTY.md",
 ]
 domain = "Platform"
-evidence = "docs/evidence/release/T-0202.md"
+evidence = "docs/evidence/release/T-0202-final-install.md"
 id = "VIEW-020"
 notes = '''
 Release pdfxi-ui.exe links with the Windows GUI subsystem, embeds a nine-size
@@ -4356,7 +4356,7 @@ docs = [
     "docs/evidence/release/T-0202.md",
 ]
 domain = "Platform"
-evidence = "docs/evidence/release/T-0202.md"
+evidence = "docs/evidence/release/T-0202-final-install.md"
 id = "PKG-003"
 notes = """
 installer/pdfxi.iss installs per user (PrivilegesRequired=lowest) into the per-user

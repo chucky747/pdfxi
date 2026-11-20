@@ -1,5 +1,18 @@
 # Product shell UI review
 
+> **2026-11-20 — historical note.** The v16 mock-up shell described below was
+> replaced by the honest shell in T-0203. The viewer now starts on an empty Home
+> screen, and the demo documents, proposal page, comment thread, cloud storage,
+> avatar, notifications, AI assistant, tools/export cards, left rail,
+> print dialog, split/tile panes, and layers/bookmarks/attachments/links panes
+> shown in the v16 captures were removed from the product. `light-v16.png`,
+> `dark-v16.png`, and `acceptance-b.png` therefore show removed content and are
+> not evidence of the shipped UI. Current evidence:
+> `docs/evidence/ui/T-0203.md` (five captures and limitations) and
+> `docs/evidence/ui/T-0201.md` (window controls and settings). The review
+> process and the requirement that every visible control works or is removed
+> still apply to the replacement shell.
+
 ## Acceptance target
 
 The acceptance target is **image 2**, the light/dark Acrobat-style reference
@@ -106,9 +119,10 @@ viewer surface rather than the desktop behind it.
 - `cargo test -p pdfxi-app --features ui,pdfium`: **493 passed**, 0 failed.
 - `cargo fmt --all --check`: clean.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: clean.
-- `cargo xtask goal-verify --all`: `GOAL VERIFIED:
+- Historical verification of the v16 tree only: `cargo xtask goal-verify --all`: `GOAL VERIFIED:
   00275de2e0cf753c64675a4f9549b85fdf4f62c7`; transcript at
-  `docs/evidence/ui/goal-verify.log`.
+  `docs/evidence/ui/goal-verify.log`. The current matrix gate is intentionally
+  not green under ADR 0009; see `docs/evidence/ACCEPTANCE.md`.
 
 ## Sign-off
 

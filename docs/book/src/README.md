@@ -5,13 +5,17 @@ Acrobat XI Pro. This book is the friendly entry point to the project
 documentation: it has a getting-started path, task-oriented M2 chapters, and a
 reference section.
 
-> **Status:** milestone M1 (parse, render, navigate, search, text, CLI, save) is
-> verified; M2 authoring and later milestones are landing row by row. Nothing in
-> this book should be read as a shipped feature until its matrix row is
-> `verified`. Each chapter states the status of the rows it covers.
+> **Status:** 
+
+> `replaced` rows (ADR 0009). Only `verified` means an end user can reach a
+> feature, so `cargo xtask goal-verify --all` is not green and AC-04 is not met.
+> Nothing in this book should be read as shipped until its matrix row is
+> `verified`; each chapter states the status of the rows it covers.
 
 ## Start here
 
+- [Installing PDFXI](install.md) - installer, portable zip, and the pinned
+  PDFium policy.
 - [Getting started](getting-started.md) — build, run the first commands against
   `fixtures/minimal.pdf`, and find the right chapter.
 - [CLI reference](cli.md) — commands, flags, exit codes, JSON output, and

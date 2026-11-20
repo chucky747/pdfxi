@@ -5,11 +5,15 @@ Acrobat XI Pro. It is built as a headless core plus feature crates, a command-li
 binary (`pdfxi`), and an optional desktop shell. There are no Adobe assets,
 services, or trademarks, and normal operation needs no network access.
 
-> **Status:** milestone M1 (parse, render, navigate, search, text, CLI, save) is
-> verified; milestone M2 (authoring) and later milestones are landing row by
-> row. A capability is only "shipped" when its row in the
-> [feature matrix](../../FEATURES.md) is `verified`. The pages in this book say
-> which rows are implemented and which are still in progress.
+> **Status:** 
+
+> `replaced` rows (ADR 0009). Only `verified` means an end user can reach the
+> capability on a real document. M1 is **not** fully verified after the honest
+> reclassification: many viewer rows that were demonstrated with demo data are
+> `model`, and the milestone gates for M1-M7 require rows that are still
+> `library` or `model`. `cargo xtask goal-verify --all` reports 115 unfinished
+> rows and does not print `GOAL VERIFIED`. The pages in this book state which
+> rows are which; the [feature matrix](../../FEATURES.md) is authoritative.
 
 ## Prerequisites
 
@@ -17,8 +21,12 @@ services, or trademarks, and normal operation needs no network access.
   `rust-toolchain.toml`).
 - On Windows, a working linker. `scripts/bootstrap.ps1` locates or installs the
   toolchain non-interactively.
-- PDFium is optional. It is only needed for raster output (`pdfxi render`) and
-  for the PDFium-backed renderer in the desktop shell.
+- PDFium is needed for raster output (`pdfxi render`) and for the desktop
+  viewer. Fetch the pinned build with `scripts/fetch-pdfium.ps1`. Release
+  builds load `pdfium.dll` only from the executable's directory; developer
+  builds and tests additionally honour `PDFIUM_PATH` and
+  `%LOCALAPPDATA%\pdfxi\pdfium\bin`. Documents larger than 2 GiB are rejected
+  before loading.
 
 ## Build
 
@@ -82,8 +90,16 @@ Background material: [architecture](architecture.md),
 ```text
 cargo xtask verify
 cargo xtask docs
-cargo xtask goal-verify --milestone M1
+cargo xtask goal-verify --all
 ```
 
-Only a green `cargo xtask goal-verify --milestone <milestone>` counts as done.
-The full contract is in [GOAL.md](../../GOAL.md).
+`cargo xtask verify` is the working gate for a change: format, clippy with
+`-D warnings`, workspace tests, the `ui,pdfium` tests, the PDFium render tests,
+rustdoc, the documentation check, and a check that every cited feature test
+exists. It needs PDFium (see above).
+
+`cargo xtask goal-verify --all` is the end-condition gate. It currently fails on
+the 115 feature rows that are not `verified` or `replaced`, so it is not green and AC-04
+is not met. The full contract is in [GOAL.md](../../GOAL.md) and the
+classification rule is in
+[ADR 0009](../../decisions/0009-feature-status-honesty.md).

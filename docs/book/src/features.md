@@ -1,6 +1,6 @@
 # Feature matrix
 
-The canonical parity matrix is `docs/features.toml` (140 rows). Its human
+The canonical parity matrix is `docs/features.toml` (143 rows). Its human
 summary is [FEATURES.md](../../FEATURES.md).
 
 Detailed M1 pages:

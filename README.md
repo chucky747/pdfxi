@@ -1,67 +1,96 @@
 # PDFXI
 
-PDFXI is a clean-room, Rust-native functional remake of Adobe Acrobat XI Pro:
-view, create, edit, export, secure, sign, review, OCR, automate, and print PDFs
-without Adobe services or code.
+PDFXI is a clean-room, Rust-native remake of the Adobe Acrobat XI Pro feature
+set. It is organised as a headless core, feature libraries, a command-line
+binary (`pdfxi`), and a native desktop viewer (`pdfxi-ui`). It uses no Adobe
+code, assets, services, or trademarks, and normal operation needs no network
+access.
 
 ## Status
 
-Delivery is complete at the library and CLI level: **140 feature rows (137
-verified, 3 local replacements)** and `cargo xtask goal-verify --all` prints
-`GOAL VERIFIED` at the current HEAD. The authoritative plan is
-[`docs/PLAN.md`](docs/PLAN.md), the goal contract is
-[`docs/GOAL.md`](docs/GOAL.md), and the live board is
-[`orchestration/BOARD.md`](orchestration/BOARD.md).
+The feature matrix has 
 
-The desktop viewer (`pdfxi-ui`) opens real PDFs, renders pages through PDFium,
-and ships in the portable package. Most of the remaining feature surface is
-library/CLI-level; wiring more of it into the GUI is tracked in the release
-plan.
+3 `replaced`**. Under
+[ADR 0009](docs/decisions/0009-feature-status-honesty.md), `verified` means the
+capability runs on real document bytes and an end user can reach it through the
+viewer or the CLI. `library` means a tested byte-level implementation with no
+caller; `model` means an in-memory model, plan, or host-boundary stub.
+
+`cargo xtask goal-verify --all` therefore does **not** print `GOAL VERIFIED`.
+AC-04 (every row verified or replaced) is not met: 115 rows are unfinished. The
+authoritative row data is in [`docs/FEATURES.md`](docs/FEATURES.md) and
+[`docs/features.toml`](docs/features.toml).
+
+What works end to end today:
+
+- **Viewer**: an empty Home screen; opening real PDFs through the native file
+  picker, drag-and-drop, or a path argument; tabs; real page thumbnails; page
+  navigation; zoom, fit page/width, actual size, and view rotation; find over
+  the document's extracted text; light/dark/follow-system theme and Windows or
+  macOS window controls persisted to `%APPDATA%\PDFXI\settings.toml`; and a
+  dismissible error banner. Password-protected PDFs are not supported.
+- **CLI**: the commands backed by `verified` rows — `info`, `text`,
+  `create text`, `create image`, `repair`, `export tagged`, `preflight`, and
+  `marks`.
+- **Packaging**: a GUI-subsystem executable with icon, version resource, and
+  DPI manifest; pinned PDFium bundled next to the executable; a portable zip
+  and a per-user Inno Setup installer with an uninstall entry. All builds are
+  unsigned, so SmartScreen may warn.
+
+Everything else in the matrix is library- or model-level. That includes forms,
+redaction, signing, encryption, sanitization, optimisation, page operations,
+incremental save, most export paths, accessibility authoring, automation, and
+most standards work. See the matrix before relying on a capability.
 
 ## Install and run (Windows, user scope)
 
-Build the portable package and install it without elevation:
-
 ```powershell
-cargo build --workspace --release
+# Pinned PDFium for tests and packaging
+powershell -NoProfile -File scripts/fetch-pdfium.ps1
+
+# Viewer and CLI
 cargo build --release -p pdfxi-app --bin pdfxi-ui --features ui,pdfium
-powershell -NoProfile -File scripts/package.ps1 -SkipBuild -TargetDir target
-powershell -NoProfile -File target\package\staging\install.ps1 `
-    -TargetDir "$env:LOCALAPPDATA\Programs\PDFXI" -DesktopShortcut
+cargo build --release -p pdfxi-cli
+
+# Portable zip, plus the installer when Inno Setup's ISCC.exe is available
+powershell -NoProfile -File scripts/package.ps1 -SkipBuild
 ```
 
-That creates `%LOCALAPPDATA%\Programs\PDFXI`, a Start-Menu **PDFXI** viewer
-link, **PDFXI CLI**, and an optional Desktop shortcut. The portable archive is
-`target\package\pdfxi-portable-<version>-windows-x86_64.zip` with a SHA-256
-sidecar and manifest.
+Artefacts are written under `target/package/`:
 
-The renderer loads PDFium from `PDFIUM_PATH` or
-`%LOCALAPPDATA%\pdfxi\pdfium\bin\pdfium.dll`; without it the viewer runs with
-placeholder pages and the CLI still works.
+- `pdfxi-setup-0.1.0-windows-x86_64.exe` — per-user installer;
+- `pdfxi-portable-0.1.0-windows-x86_64.zip` — portable payload.
+
+The installer needs no elevation and creates a Start Menu group, an optional
+desktop icon, and an uninstall entry under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall`. The portable
+archive can be extracted and run directly; keep `pdfium.dll` next to
+`pdfxi-ui.exe`.
+
+The renderer loads PDFium from the executable's directory in release builds
+(developer builds also honour `PDFIUM_PATH` and
+`%LOCALAPPDATA%\pdfxi\pdfium\bin`). Documents larger than 2 GiB are rejected.
+
+Nothing is code-signed: no certificate exists in the build environment
+([blocker](orchestration/blockers/T-0202-code-signing.md)). SmartScreen
+warnings are expected.
+
+The full procedure, including uninstall and the resource-compiler note, is in
+[Installing PDFXI](docs/book/src/install.md).
 
 ### Using the viewer
 
-- **Open…** in the toolbar opens the path dialog; type or paste a PDF path.
+- **Open a PDF** or `Ctrl+O` opens the native picker; several files become tabs.
 - Drag one or more PDFs from Explorer onto the window.
-- Launching `pdfxi-ui.exe <file.pdf>` opens that document (also what the
-  desktop shortcut and "Open with" pass).
-- The thumbnail pane, fit/zoom, rotation, find bar, text selection/copy, print
-  dialog, layers, bookmarks and attachments are all available.
+- `pdfxi-ui.exe <file.pdf>` opens that document.
+- The gear menu sets Light/Dark/Follow system and Windows/macOS window controls;
+  `--light`, `--dark`, and `--controls=windows|macos` override them for one run
+  without being saved.
 
-### Product shell
-
-The desktop viewer uses a modern Acrobat-style shell: a light or charcoal title
-bar with traffic lights and two document tabs, a rounded command pill, a compact
-icon rail, a pages panel with thumbnails and cloud storage, a rich document
-canvas, a tools panel with AI Assistant and Export cards, and a floating
-page/zoom pill. Light and dark themes are built in, including a dark document
-page in dark mode.
-
-![PDFXI viewer, light](docs/evidence/ui/light-v16.png)
-![PDFXI viewer, dark](docs/evidence/ui/dark-v16.png)
-
-The visual review checklist and findings are in
-[`docs/design/UI_REVIEW.md`](docs/design/UI_REVIEW.md).
+The viewer has no sample document, AI assistant, cloud storage, comments,
+tools panel, export card, left rail, print dialog, or
+layers/bookmarks/attachments/links panes. They were removed because nothing
+real was behind them. See [Desktop viewer](docs/book/src/gui.md).
 
 ### CLI
 
@@ -74,28 +103,36 @@ pdfxi create text notes.txt out.pdf
 
 See [`docs/CLI.md`](docs/CLI.md) for the full command reference.
 
-## Build from source
+## Build and verify
 
 ```powershell
 .\scripts\bootstrap.ps1
 cargo xtask verify
-cargo xtask goal-verify --all
+cargo xtask docs
 ```
 
-The project is developed by an asynchronous multi-agent orchestra: a DeepSeek
-V4.1 Flash orchestrator and parallel lane agents in one canonical workspace.
-Read [`RULES.md`](RULES.md) before contributing.
+`cargo xtask verify` runs formatting, clippy with `-D warnings`, the workspace
+tests, the `ui,pdfium` application tests, the PDFium render tests, rustdoc, and
+the documentation check. It also fails when a cited feature test does not
+exist. It requires PDFium; `scripts/fetch-pdfium.ps1` installs the pinned copy.
+
+`cargo xtask goal-verify --all` is the end-condition gate. It currently stops on
+the 114 unfinished feature rows and must not be reported as green.
+
+The project is developed by an asynchronous multi-agent orchestra in one
+canonical workspace. Read [`RULES.md`](RULES.md) before contributing.
 
 ## Documentation
 
+- [Installing PDFXI](docs/book/src/install.md)
+- [Desktop viewer](docs/book/src/gui.md)
 - [Plan](docs/PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Feature matrix](docs/FEATURES.md)
+- [Feature status decision (ADR 0009)](docs/decisions/0009-feature-status-honesty.md)
 - [Platforms](docs/PLATFORMS.md)
 - [Orchestration](docs/ORCHESTRATION.md)
 - [Testing](docs/TESTING.md)
-- [Memory](docs/MEMORY.md)
-- [GUI guide](docs/book/src/gui.md)
 
 ## License
 

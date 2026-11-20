@@ -4,21 +4,22 @@ Source: `docs/GOAL.md`. A criterion is checked only when the listed command
 output or file evidence is current at HEAD. This file is the integrator's
 single view of the end condition; task evidence lives in `docs/evidence/`.
 
-Last updated: 2026-11-20 (release wave: GUI opens real files, bounded rendering,
-portable package and user-scope install; 140 rows = 137 verified + 3 replaced).
+Last updated: 2026-11-20 (review and hardening campaign: honest shell, pinned
+and bundled PDFium, real installer, honest feature matrix). Earlier v16 and
+release-wave claims below are marked superseded.
 
 | ID | Criterion | Status | Evidence | Caveat |
 |---|---|---|---|---|
 | AC-01 | Reproducible bootstrap | partial | `scripts/bootstrap.ps1 -Check` -> `CHECK result=PASS missing=0 verified_tools=5` with pinned `stable-x86_64-pc-windows-gnu` (`docs/evidence/bootstrap-check.md`); M0 gate row set satisfied | No physical clean-machine dry run; the winget elevation path is unexercised and recorded in `docs/ASSUMPTIONS.md` |
-| AC-02 | Build quality | met | `cargo build --workspace --release` and `cargo build --release -p pdfxi-app --bin pdfxi-ui --features ui,pdfium` exit 0 (`pdfxi.exe` 1,888,768 B, `pdfxi-ui.exe` 5,996,032 B); `cargo fmt --all --check`, workspace clippy `-D warnings`, workspace tests (47 suites) and warnings-denied rustdoc all exit 0 (`docs/evidence/release/T-0193.md`) | none |
+| AC-02 | Build quality | met | `cargo build --workspace --release` and `cargo build --release -p pdfxi-app --bin pdfxi-ui --features ui,pdfium` exit 0 (`pdfxi.exe` 1,888,768 B, `pdfxi-ui.exe` 5,996,032 B); `cargo fmt --all --check`, workspace clippy `-D warnings`, workspace tests (47 suites) and warnings-denied rustdoc all exit 0 (`docs/evidence/release/T-0193.md`) | Binary sizes shown are from T-0193; current packaged sizes and resource evidence are in `docs/evidence/release/T-0202.md` |
 | AC-03 | Tests | met | `cargo test --workspace` exit 0 (47 test binaries, 0 failures); `cargo xtask corpus smoke` 9/9; fuzz smoke 5 targets / 275 inputs / 555 accepted / 709 rejected; hostile fixture suite 18/18 (`docs/evidence/qa/T-0183.md`) | Doctests are host-limited (`AD-0005`, `docs/ASSUMPTIONS.md` item 11); no network, GUI, Adobe software or secret is used |
-| AC-04 | Feature parity | met | `docs/features.toml` 140 rows: 137 verified + 3 replaced; `cargo xtask features verify` -> `FEATURES OK: 140 rows, 137 verified`; `docs/FEATURES.md` generated from the matrix | Three retired integrations are local equivalents under ADR 0008 (CREATE-011, CREATE-012, MANAGE-006) |
+| AC-04 | Feature parity | **not met** | `docs/features.toml` 143 rows: 25 verified, 18 library, 96 model, 3 replaced, 1 in-progress; `cargo xtask goal-verify --all` stops with `115 feature rows are not verified or replaced` and does **not** print `GOAL VERIFIED` | Honest statuses per [ADR 0009](../../docs/decisions/0009-feature-status-honesty.md); 115 rows are explicitly unfinished (T-0205, T-0204 evidence) |
 | AC-05 | Performance | met | `cargo xtask bench` -> `metrics=18 breaches=0 regressions=0 status=pass` on 2026-11-19 and again on 2026-11-20 against the committed baseline (`docs/evidence/bench.md`, `docs/evidence/qa/bench-baseline.json`); every budget has two orders of magnitude of headroom | Baseline refreshed on the canonical host; run-to-run variance and host load are documented in the evidence |
 | AC-06 | Security | met | Encryption (AES-256/RC4), permissions, signature create/verify with keyed integrity, redaction that removes content from text and image extraction, sanitization/XMP scrubbing, and sandboxed JavaScript tests pass (`cargo test --workspace`; row evidence in `docs/evidence/security/`) | Reviewer findings were fixed in T-0176 and T-0185 (envelope redaction, keyed MAC, byte-range validation, authenticity reporting) |
 | AC-07 | Accessibility | met | Tagged structure tree with ActualText/expansion/Artifact and object projection, reading-order export, alt text, PDF/UA-style structure checks, keyboard/touch focus navigation, high-contrast tokens and fix planning (`cargo test --workspace`; `docs/evidence/author/T-0177.md`, `docs/evidence/app/T-0171.md`) | Independent veraPDF-style validation remains a CI oracle, not a runtime dependency |
 | AC-08 | Documentation | met | Workspace rustdoc with warnings denied exit 0; `cargo xtask docs` -> `DOCS OK`; mdBook under `docs/book/src/`; CLI reference `docs/CLI.md`; architecture, ADRs 0001-0008, `docs/THIRD_PARTY.md`, `docs/PLATFORMS.md` | none |
 | AC-09 | Orchestration evidence | met | Board, claims, 180+ task records, per-task evidence under `docs/evidence/`, blocker records, and memory inbox notes; full gate output committed at `docs/evidence/goal-verify.log` | Memory inbox notes are written per task; curated memory is owned by the memory-librarian |
-| AC-10 | Packaging and legal | met | `scripts/package.ps1 -SkipBuild` -> `PACKAGE OK target\package\pdfxi-portable-0.1.0-windows-x86_64.zip` (3,635,778 B, sha256 `da966e20…428ebae0`, 8 hashed files incl. both binaries); `-Check` -> `layout_and_notices=PASS`; `scripts/install.ps1 -DesktopShortcut` installed `%LOCALAPPDATA%\Programs\PDFXI` with Start-Menu `PDFXI`/`PDFXI CLI` and Desktop shortcuts; installed GUI launched with a document argument and CLI verified (`docs/evidence/release/T-0192.md`); notices, allowlist and secret scan included | No MSI/elevated installer and no code signing |
+| AC-10 | Packaging and legal | partial | Portable zip and per-user Inno Setup installer built, installed, launched, and uninstalled silently per user (`docs/evidence/release/T-0202.md`); payload includes pinned `pdfium.dll` and its licences; notices, allowlist, and secret scan pass; installed binary is GUI-subsystem with icon/version/DPI manifest. Final installed-build evidence: [T-0202-final-install.md](release/T-0202-final-install.md) (hashes, real install, captures) | **Unsigned** (no certificate; `orchestration/blockers/T-0202-code-signing.md`), so SmartScreen warns. The old `008...` package hash and v16 payload in T-0192 are superseded by T-0202. No MSI/elevated installer |
 
 ## Release wave (2026-11-20)
 
@@ -29,47 +30,44 @@ portable package and user-scope install; 140 rows = 137 verified + 3 replaced).
 | T-0192 | Portable zip with both binaries; user-scope install with Start-Menu/Desktop shortcuts | `docs/evidence/release/T-0192.md` |
 | T-0193 | Release verification: release builds, full gate, bench, package/install transcript | `docs/evidence/release/T-0193.md` |
 
-Installed payload: `%LOCALAPPDATA%\Programs\PDFXI` (`pdfxi-ui.exe`,
-`pdfxi.exe`, manifest, notices). Desktop shortcut `PDFXI.lnk` targets the
-installed viewer and survives `cargo clean`.
+Installed payload and artefact hashes from this wave are **superseded by
+T-0202**; use `docs/evidence/release/T-0202.md` for the current package,
+installer, and smoke evidence. The final installer hash is added by the
+integrator after signing (or as unsigned when the signing blocker remains).
 
-## Product shell (UI) — 2026-11-20
+## Honest shell (UI) — 2026-11-20
 
-The default egui shell was replaced with a modern Acrobat-style product shell
-matched to the recovered acceptance image (image 2): theme-following title bar
-with traffic lights and two named tabs, rounded command pill, compact icon rail,
-pages panel with thumbnails and cloud storage, rich document page, right tools
-panel with AI Assistant and Export cards, and a floating page/zoom pill. Light
-and dark themes are captured, including a dark document page in dark mode, and
-the review is recorded.
+The v16 Acrobat-style mock-up shell was replaced in T-0203. The viewer starts
+on an empty Home screen; demo documents, startup tabs, the proposal page,
+comment thread, cloud storage, avatar, notifications, AI answers, left rail,
+tools/export cards, print dialog, split/tile, and the
+layers/bookmarks/attachments/links panes were removed because nothing real was
+behind them. The remaining controls act on a real PDF: native open,
+drag-and-drop, path argument, tabs, real thumbnails, navigation, zoom/fit/actual
+size/rotate view, find over extracted text, persisted theme and window-control
+style, and a dismissible error banner.
 
 | Evidence | Path |
 |---|---|
-| Acceptance target (image 2) | `docs/evidence/ui/acceptance-b.png` |
-| Light acceptance screenshot | `docs/evidence/ui/light-v16.png` |
-| Dark acceptance screenshot | `docs/evidence/ui/dark-v16.png` |
-| Review process, checklist, findings, sign-off | `docs/design/UI_REVIEW.md` |
-| App tests | `cargo test -p pdfxi-app --features ui,pdfium` -> 493 passed |
-| Lint/format | `cargo clippy ... -D warnings`, `cargo fmt --all --check` -> clean |
+| Honest-shell evidence, five captures, known limitations | `docs/evidence/ui/T-0203.md` |
+| Window controls and settings | `docs/evidence/ui/T-0201.md` |
+| Post-v16 screenshots | `docs/evidence/ui/t0203-*.png` |
+| Dated supersession note for the v16 review | `docs/design/UI_REVIEW.md` |
 
-The shell is the product surface for the verified library/CLI features; it is
-not an additional feature-matrix row.
+The v16 screenshots (`light-v16.png`, `dark-v16.png`, `acceptance-b.png`) are
+historical review material only; they show removed demo content and are not
+evidence of the shipped shell.
 
 ## End condition
 
-```text
-$ cargo xtask goal-verify --all
-$ cargo fmt --all --check
-$ cargo clippy --workspace --all-targets --all-features -- -D warnings
-$ cargo test --workspace
-$ cargo doc --workspace --no-deps
-FEATURES OK: 140 rows, 137 verified
-VERIFY OK
-GOAL VERIFIED: 00275de2e0cf753c64675a4f9549b85fdf4f62c7 unix=1795161135
-```
+`cargo xtask goal-verify --all` is **not green** at this head. `cargo xtask
+verify` now runs the `ui,pdfium` tests and rejects a feature row whose cited
+test does not exist; it passes. The full-goal gate stops on the 115 rows that
+are `library` or `model` (AC-04). The gate output recorded for T-0204/T-0205 is
+the authoritative result; this file does not re-run or invent it.
 
-The full transcript of this clean-worktree run is committed at
-`docs/evidence/ui/goal-verify.log`.
+The end condition is not met until those rows are wired or replaced and
+`goal-verify --all` prints `GOAL VERIFIED`.
 
 ## Rule
 

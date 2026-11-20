@@ -1,0 +1,40 @@
+# T-0206 - user documentation matches the shipped viewer
+#
+# Documentation-only task. It proposes no feature-row status changes; the matrix
+# already reflects T-0205/ADR 0009 (23 verified, 18 library, 96 model,
+# 3 replaced). This fragment records the task and its evidence for the
+# integrator.
+
+task = "T-0206"
+lane = "docs"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0206.md"
+docs = [
+    "docs/book/src/gui.md",
+    "docs/book/src/install.md",
+    "docs/book/src/SUMMARY.md",
+    "docs/book/src/getting-started.md",
+    "docs/book/src/README.md",
+    "docs/book/src/security.md",
+    "README.md",
+    "docs/evidence/ACCEPTANCE.md",
+    "docs/evidence/release/T-0192.md",
+    "docs/design/UI_REVIEW.md",
+    "docs/evidence/hardening/T-0206.md",
+]
+notes = """
+Viewer documentation now describes the honest shell shipped by T-0203: empty
+Home, native picker/drag-and-drop/path open, tabs, real thumbnails, zoom/fit/
+actual size/rotate view, find over real extracted text with progressive page
+coverage, persisted light/dark/system theme and Windows/macOS controls in
+%APPDATA%\\PDFXI\\settings.toml, the --light/--dark/--controls flags, the
+dismissible error banner, and the explicit list of removed controls. A new
+install page documents the per-user Inno Setup installer, the portable zip,
+uninstall behaviour, the pinned PDFium chromium/8165 provenance and release
+loading policy, the 2 GiB input cap, the unsigned-binary warning, and the
+resource-compiler requirement. README, getting-started and security no longer
+claim 137 verified rows, M1 verification, or usable signing/redaction; they
+state the ADR 0009 counts and that AC-04 is not met. The stale v16 shell, old
+package hash and T-0192 payload are marked superseded by T-0202 without
+inventing replacement hashes.
+"""
