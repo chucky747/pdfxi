@@ -1,0 +1,15 @@
+{
+  "id": "T-0134",
+  "lane": "render",
+  "title": "3D and geospatial document models",
+  "priority": "P3",
+  "status": "queued",
+  "depends_on": ["T-0113"],
+  "owns": [
+    "crates/pdfxi-render/**",
+    "docs/evidence/render/T-0134.md",
+    "orchestration/feature-updates/T-0134.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-render",
+  "evidence": ""
+}

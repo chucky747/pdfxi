@@ -2760,36 +2760,42 @@ tests = [
 title = "Accessibility and PDF/UA checker"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/nav.rs, docs/evidence/app/T-0112.md"
 domain = "Accessibility"
-evidence = ""
+evidence = "docs/evidence/app/T-0112.md"
 id = "ACCESS-004"
-notes = ""
+notes = "Focus traversal, shortcut map, WCAG-audited contrast tokens, and reflow metrics."
 priority = "P1"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "nav::tests::focus_order_wraps_in_both_directions",
+    "nav::tests::high_contrast_tokens_meet_aaa_on_every_audited_pair",
+]
 title = "Reflow high contrast and keyboard navigation"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/read_aloud.rs, docs/evidence/app/T-0112.md"
 domain = "Accessibility"
-evidence = ""
+evidence = "docs/evidence/app/T-0112.md"
 id = "ACCESS-005"
-notes = ""
+notes = "Deterministic chunking and playback state behind a SpeechSink boundary; system speech is host-implemented."
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "read_aloud::tests::sentence_chunking_produces_ordered_sentences",
+    "read_aloud::tests::play_pause_and_resume_transition_correctly",
+]
 title = "Read aloud with system speech"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-app/src/a11y.rs, docs/evidence/app/T-0112.md"
 domain = "Accessibility"
-evidence = ""
+evidence = "docs/evidence/app/T-0112.md"
 id = "ACCESS-006"
-notes = ""
+notes = "Accessibility tree, focus announcements, and a ui-gated egui/accesskit bridge with no new dependency."
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = ["a11y::tests::tree_from_snapshot_is_deterministic_and_well_formed"]
 title = "Screen reader and accesskit integration"
 
 [[feature]]
@@ -3247,16 +3253,33 @@ tests = []
 title = "Unicode CJK and right-to-left text"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/compatibility.rs, docs/evidence/core/T-0118.md"
+docs = [
+    "crates/pdfxi-core/src/compatibility.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0118.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0118.md"
+evidence = "cargo test -p pdfxi-core --lib compatibility:: (CARGO_TARGET_DIR=target/lanes/core): 15 passed, 0 failed (9 pre-existing + 6 new feature-gate tests). Full suite core 259 unit + 6 integration passed; TEST_EXIT=0. See docs/evidence/core/T-0118.md."
 id = "STD-001"
-notes = "Header/catalog version resolution plus version-dependent feature gates for 1.5+/2.0 constructs."
+notes = """
+T-0118 closes the version-dependent gate half of STD-001: PdfFeature names 12
+constructs with their ISO 32000 minimum versions (1.4 transparency/tagging, 1.5
+xref+object streams/optional content, 1.6 crypt filters/3D, 1.7 embedded files/
+multimedia, 2.0 AES-256/associated files/encrypted metadata). PdfVersion::supports,
+FeatureSupport, feature_gate and CompatibilityReport::supports/unsupported_features
+evaluate the effective version, honoring a catalog /Version override. The row
+stays in-progress: automatic detection of every 1.5+/2.0 construct from raw PDF
+bytes is future work; this task provides the deterministic gate layer.
+"""
 priority = "P0"
-status = "verified"
+status = "in-progress"
 tests = [
-    "compatibility::tests::version_gates_reject_newer_constructs",
-    "compatibility::tests::catalog_version_overrides_header",
+    "compatibility::tests::feature_min_versions_match_the_pdf_specification",
+    "compatibility::tests::feature_support_boundaries_are_exact",
+    "compatibility::tests::feature_gate_reports_required_version",
+    "compatibility::tests::catalog_override_changes_feature_gates",
+    "compatibility::tests::unsupported_features_are_ordered_and_deterministic",
+    "compatibility::tests::every_feature_has_a_nonempty_label_and_all_is_unique",
 ]
 title = "PDF 1.0 through 2.0 compatibility"
 
@@ -3355,16 +3378,39 @@ tests = [
 title = "Object streams and linearization"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/font.rs, docs/evidence/core/T-0118.md"
+docs = [
+    "crates/pdfxi-core/src/font.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0118.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0118.md"
+evidence = "cargo test -p pdfxi-core --lib font:: (CARGO_TARGET_DIR=target/lanes/core): 11 new font tests passed, 0 failed. Full suite core 259 unit + 6 integration passed; TEST_EXIT=0. cargo clippy -p pdfxi-core -p pdfxi-standards --all-targets --no-deps -- -D warnings EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core -p pdfxi-standards --no-deps EXIT=0. See docs/evidence/core/T-0118.md."
 id = "STD-004"
-notes = "CID font writer, subset decision, ToUnicode generation, and metrics validation for caller-supplied font programs."
+notes = """
+T-0118 adds pdfxi_core::font, the writer-side embedding model: decide_embedding
+(EmbedFull/SubsetThenEmbed/Standard14 with base-14 detection), validated
+FontProgram, GlyphWidth/validate_metrics, ToUnicodeEntry/generate_tounicode
+(sorted BFChar with UTF-16 surrogate pairs), and build_cid_font producing a
+Type0 + CIDFont + FontDescriptor + FontFile stream + ToUnicode object graph with
+Identity-H encoding, grouped /W runs and deterministic subset tags. Typed
+FontError variants and hard caps cover hostile input. Honest scope: this stages
+a supplied program; it does not binary-subset font bytes or wire the objects
+into Document::save, so the row stays in-progress. No conformance claim.
+"""
 priority = "P1"
-status = "verified"
+status = "in-progress"
 tests = [
-    "font::tests::cid_font_writer_emits_required_entries",
-    "font::tests::to_unicode_cmap_round_trips",
+    "font::tests::font_program_validates_name_size_and_header",
+    "font::tests::standard14_detection_ignores_subset_prefix_and_case",
+    "font::tests::embedding_decision_respects_policy",
+    "font::tests::metrics_validation_rejects_empty_duplicate_and_oversized_tables",
+    "font::tests::tounicode_generation_is_sorted_and_deterministic",
+    "font::tests::tounicode_rejects_duplicates_empty_text_and_caps",
+    "font::tests::cid_font_writer_produces_complete_object_graph",
+    "font::tests::cid_font_widths_group_contiguous_equal_runs",
+    "font::tests::subset_decision_adds_a_deterministic_tag",
+    "font::tests::cid_font_writer_rejects_bad_options_and_overflow",
+    "font::tests::format_helpers_are_consistent",
 ]
 title = "Font embedding and CID fonts"
 
@@ -3407,47 +3453,105 @@ tests = [
 title = "Transparency and blend modes"
 
 [[feature]]
-docs = "docs/evidence/core/T-0118.md"
+docs = [
+    "crates/pdfxi-accessibility/src/structure.rs",
+    "docs/evidence/core/T-0118.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0118.md"
+evidence = "cargo test -p pdfxi-accessibility structure (CARGO_TARGET_DIR=target/lanes/core, read-only): 17 passed, 0 failed, ACCESSIBILITY_EXIT=0, including structure::tests::role_mapping_uses_standard_pdf_names, parent_tree_matches_struct_parents_keys and round_trip_reconstructs_original_tree. No new tests added by this task. See docs/evidence/core/T-0118.md."
 id = "STD-006"
-notes = "Structure writer/reader verified elsewhere; remaining checks need the accessibility crate, outside this claim."
+notes = """
+The tagged-structure writer/reader and its role-map, parent-tree and round-trip
+tests already exist in crates/pdfxi-accessibility, which is outside T-0118's
+owns list, so this task performed read-only verification only and added no
+tests. The requested role maps, parent tree and round-trip coverage are present
+and passing. Row stays in-progress: editor UI exposure and full PDF/UA
+validation remain future work. No new deps, unsafe or panics.
+"""
 priority = "P2"
 status = "in-progress"
-tests = ["structure::tests::role_pdf_names_are_distinct_and_reversible"]
+tests = [
+    "structure::tests::role_pdf_names_are_distinct_and_reversible",
+    "structure::tests::role_mapping_uses_standard_pdf_names",
+    "structure::tests::parent_tree_matches_struct_parents_keys",
+    "structure::tests::round_trip_reconstructs_original_tree",
+]
 title = "Tagged PDF and structure tree"
 
 [[feature]]
-docs = "docs/evidence/core/T-0118.md"
+docs = [
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "docs/evidence/core/T-0118.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0118.md"
+evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core, read-only): 74 passed, 0 failed, STANDARDS_TEST_EXIT=0, including profile_request::tests::request_resolves_every_canonical_label (PDF/A profiles reachable through public API) and document_profile::tests::finding_codes_are_stable_per_profile (deterministic findings). No new tests added by this task. See docs/evidence/core/T-0118.md."
 id = "STD-007"
-notes = "Profile checks reachable through standards; full conformance and independent validation remain open."
+notes = """
+PdfA1bProfile, PdfA2bProfile and PdfA3bProfile are reachable through
+ProfileRequest/ConformanceProfile and emit deterministic, stable-coded findings
+verified by the existing 74-test suite. crates/pdfxi-standards is outside
+T-0118's claim, so no new tests were added here (edit permission denied).
+This is a deterministic subset preflight, NOT certification: byte-level ICC
+validation and a veraPDF oracle run remain future work. No certification claim.
+"""
 priority = "P2"
 status = "in-progress"
-tests = ["document_profile::t0093_tests::pdfa1b_conforming_fixture_passes"]
+tests = [
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "document_profile::tests::finding_codes_are_stable_per_profile",
+    "profile_request::tests::request_resolves_every_canonical_label",
+]
 title = "PDF/A conformance"
 
 [[feature]]
-docs = "docs/evidence/core/T-0118.md"
+docs = [
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "docs/evidence/core/T-0118.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0118.md"
+evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core, read-only): 74 passed, 0 failed, STANDARDS_TEST_EXIT=0, including profile_request::tests::request_resolves_every_canonical_label (PDF/X profiles reachable through public API), document_profile::tests::ordering_is_independent_of_input_collection_order and t0093_tests::t0093_missing_output_intent_is_an_error (deterministic findings). No new tests added by this task. See docs/evidence/core/T-0118.md."
 id = "STD-008"
-notes = "PDF/X-4 subset checks reachable; full conformance and output-intent validation remain open."
+notes = """
+PdfX1aProfile and PdfX4Profile are reachable through ProfileRequest/ConformanceProfile
+and emit deterministic, stable-coded findings verified by the existing 74-test
+suite. crates/pdfxi-standards is outside T-0118's claim, so no new tests were
+added here (edit permission denied). This is a deterministic subset preflight,
+NOT certification: full GTS_PDFX ICC profile validation and a veraPDF oracle run
+remain future work. No certification claim.
+"""
 priority = "P2"
 status = "in-progress"
-tests = ["document_profile::t0093_tests::pdfx4_conforming_fixture_passes"]
+tests = [
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "document_profile::tests::ordering_is_independent_of_input_collection_order",
+    "profile_request::tests::request_resolves_every_canonical_label",
+]
 title = "PDF/X conformance"
 
 [[feature]]
-docs = "docs/evidence/core/T-0118.md"
+docs = [
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "docs/evidence/core/T-0118.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0118.md"
+evidence = "cargo test -p pdfxi-standards (CARGO_TARGET_DIR=target/lanes/core, read-only): 74 passed, 0 failed, STANDARDS_TEST_EXIT=0, including profile_request::tests::request_resolves_every_canonical_label (PdfUa1Profile reachable through public API) and document_profile::tests::severity_filtering_keeps_only_requested_levels (deterministic findings). No new tests added by this task. See docs/evidence/core/T-0118.md."
 id = "STD-009"
-notes = "PDF/UA-style checks live in the accessibility checker; independent cross-validation remains open."
+notes = """
+PdfUa1Profile is reachable through ProfileRequest/ConformanceProfile and emits
+deterministic findings (MarkInfo/Marked, StructTreeRoot, Lang, plus an
+informational manual-check note for AcroForm fields), verified by the existing
+74-test suite. crates/pdfxi-standards is outside T-0118's claim, so no new tests
+were added here (edit permission denied). This is a deterministic subset
+preflight, NOT certification: full tagged-PDF structure and reading-order checks
+belong to the accessibility lane. No certification claim.
+"""
 priority = "P2"
 status = "in-progress"
-tests = ["checker::tests::clean_document_passes"]
+tests = [
+    "document_profile::tests::severity_filtering_keeps_only_requested_levels",
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "profile_request::tests::request_resolves_every_canonical_label",
+]
 title = "PDF/UA conformance"
 
 [[feature]]

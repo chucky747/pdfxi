@@ -40,6 +40,15 @@
 //! deterministic workflows over caller-supplied page text: cross-file search
 //! with ranking/grouping/result caps and version compare with added/removed/
 //! changed hunks and a summary. They depend on no PDF or GUI backend.
+//! The [`nav`] module supplies the accessibility navigation model: a
+//! deterministic focus ring, toolkit-free navigation shortcuts, WCAG-audited
+//! high-contrast color tokens, and bounded reflow layout metrics. The
+//! [`read_aloud`] module builds ordered speech chunks with word/sentence
+//! boundaries and drives them with a window-free play/pause/step state machine
+//! behind an explicit host speech-sink boundary. The [`a11y`] module derives a
+//! deterministic accessibility node tree, focus announcements, and a screen-
+//! reader host adapter from a caller-supplied state snapshot; with the `ui`
+//! feature it registers that tree through `egui`'s AccessKit re-export.
 //! [`AppState`] is the tabbed document workspace: it owns an insertion-ordered
 //! set of stable-id tabs, each with its own path, dirty flag, and per-tab view
 //! state (page, zoom, layout, rotation, and scroll offset). Open, close,
@@ -53,6 +62,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod a11y;
 pub mod attachments;
 pub mod bookmarks;
 pub mod canvas;
@@ -63,10 +73,12 @@ pub mod find;
 pub mod home;
 pub mod layers;
 pub mod links;
+pub mod nav;
 pub mod open;
 pub mod page_text;
 pub mod print;
 pub mod raster;
+pub mod read_aloud;
 pub mod selection;
 pub mod split;
 mod state;
@@ -79,6 +91,10 @@ mod view;
 #[cfg(feature = "ui")]
 pub mod ui;
 
+pub use a11y::{
+    A11yNode, A11yRole, A11yTree, AccessibilityHost, AccessibilitySnapshot, AnnouncementLog,
+    FocusAnnouncement, NullAccessibilityHost,
+};
 pub use attachments::{
     Attachment, AttachmentError, AttachmentInfo, AttachmentModel, AttachmentOpenRequest,
     AttachmentRegistry, AttachmentState, AttachmentSummary, MAX_ATTACHMENT_DESCRIPTION_LEN,
@@ -117,6 +133,11 @@ pub use links::{
     Link, LinkError, LinkId, LinkInfo, LinkModel, LinkPoint, LinkRect, LinkRegistry, LinkSummary,
     LinkTarget, MAX_LINK_TEXT_LEN, MAX_LINKS, MAX_NAMES, ResolvedLink,
 };
+pub use nav::{
+    FocusOrder, FocusTarget, Focusable, HIGH_CONTRAST_TARGET, MAX_REFLOW_SCALE, MIN_CONTRAST_RATIO,
+    MIN_REFLOW_SCALE, NavCommand, NavKey, NavModifiers, ReflowMetrics, ReflowRequest, Rgb, Theme,
+    ThemeTokens, audited_contrast_pairs, contrast_ratio, map_nav_shortcut, reflow_metrics, tokens,
+};
 pub use open::{
     DocumentOpenPipeline, DocumentOpener, EncryptionState, MockDocumentOpener, MockResponse,
     OpenBackendKind, OpenError, OpenResult, OpenTabStates, OpenedDocument, RecentFiles,
@@ -128,6 +149,10 @@ pub use print::{
     PrintPageRange, PrintPlan,
 };
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
+pub use read_aloud::{
+    ChunkBoundary, ChunkMode, NullSpeechSink, PlaybackState, ReadAloudPlan, SpeechChunk,
+    SpeechRequest, SpeechSink, VoiceSettings, build_chunks,
+};
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
 };

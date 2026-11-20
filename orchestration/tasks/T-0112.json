@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Accessibility navigation high contrast and read aloud",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0096"],
   "owns": [
     "crates/pdfxi-app/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0112.toml"
   ],
   "acceptance": "cargo test -p pdfxi-app --features ui",
-  "evidence": ""
+  "evidence": "docs/evidence/app/T-0112.md"
 }
