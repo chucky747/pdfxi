@@ -1,0 +1,19 @@
+{
+  "id": "T-0222",
+  "lane": "app",
+  "title": "Save, Save As, dirty state, undo/redo, password prompt, permissions, bookmarks panel",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0214",
+    "T-0220"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/**",
+    "crates/pdfxi-app/Cargo.toml",
+    "docs/evidence/ui/T-0222.md",
+    "orchestration/feature-updates/T-0222.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-05, O-01, O-03, O-04 (open)",
+  "evidence": "docs/evidence/ui/T-0222.md"
+}

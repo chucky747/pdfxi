@@ -1,0 +1,20 @@
+{
+  "id": "T-0221",
+  "lane": "app",
+  "title": "Home, Files, Recent, Starred, Shared, storage, notifications, help, local identity",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0220"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/home.rs",
+    "crates/pdfxi-app/src/cross_file.rs",
+    "crates/pdfxi-app/src/shared_folder.rs",
+    "crates/pdfxi-app/src/shell/**",
+    "docs/evidence/ui/T-0221.md",
+    "orchestration/feature-updates/T-0221.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-02..A-04 and A-07..A-12 survive a restart",
+  "evidence": "docs/evidence/ui/T-0221.md"
+}

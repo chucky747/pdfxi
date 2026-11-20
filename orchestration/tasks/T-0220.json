@@ -1,0 +1,18 @@
+{
+  "id": "T-0220",
+  "lane": "app",
+  "title": "Acceptance shell layout: rail, command bar, tools panel with search, bottom bar, capability registry",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0211"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/shell/**",
+    "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/ui/T-0220.md",
+    "orchestration/feature-updates/T-0220.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-21, A-22 layout checked against the acceptance image in all four theme/control combinations",
+  "evidence": "docs/evidence/ui/T-0220.md"
+}
