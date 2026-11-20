@@ -1094,6 +1094,11 @@ fn bench_command(report: bool, update_baseline: bool) -> Result<()> {
     bench::run(report, update_baseline).map_err(|error| anyhow::anyhow!("{error}"))
 }
 
+/// Run the committed deterministic fixtures and the real-producer corpus.
+///
+/// The first suite builds or verifies the synthetic corpus; the second checks
+/// `fixtures/realworld/` against its manifest (checksums, page counts, marker
+/// words, and the recorded `known_failure` and encrypted limitations).
 fn corpus_smoke() -> Result<()> {
     run(
         "cargo",
@@ -1104,6 +1109,10 @@ fn corpus_smoke() -> Result<()> {
             "--test",
             "committed_fixtures",
         ],
+    )?;
+    run(
+        "cargo",
+        &["test", "-p", "pdfxi-testkit", "--test", "realworld_corpus"],
     )?;
     println!("CORPUS SMOKE OK");
     Ok(())
