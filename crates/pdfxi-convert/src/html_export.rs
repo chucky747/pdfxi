@@ -28,8 +28,12 @@
 //! 7. [`HtmlOutputMode::SingleFile`] yields one self-contained document with an
 //!    in-page navigation index; [`HtmlOutputMode::PageSet`] yields an
 //!    `index.html` plus one standalone `page-NNNN.html` per page.
-//! 8. Input sizes are bounded by documented constants so a hostile model cannot
-//!    make the writer allocate without limit.
+//! 8. Input sizes are bounded by documented constants (title, document-wide
+//!    span/link totals, stylesheet, class prefix) so a hostile model cannot make
+//!    the writer allocate without limit.
+//! 9. [`HtmlStyle`] exposes style hooks (a CSS class prefix and bounded extra
+//!    CSS), validated before emission. [`export_html_with_report`] returns a
+//!    deterministic [`HtmlExportReport`] describing mode, counts, and notes.
 
 use crate::export_options::LineEnding;
 use std::collections::HashSet;
@@ -41,6 +45,16 @@ pub const MAX_PAGES: usize = 100_000;
 pub const MAX_SPANS_PER_PAGE: usize = 1_000_000;
 /// Maximum number of links on one page.
 pub const MAX_LINKS_PER_PAGE: usize = 1_000_000;
+/// Maximum number of UTF-8 bytes in a document title.
+pub const MAX_TITLE_BYTES: usize = 16 * 1024;
+/// Maximum number of spans across the whole document.
+pub const MAX_TOTAL_SPANS: usize = 2_000_000;
+/// Maximum number of links across the whole document.
+pub const MAX_TOTAL_LINKS: usize = 2_000_000;
+/// Maximum number of UTF-8 bytes in a caller-supplied extra stylesheet.
+pub const MAX_STYLESHEET_BYTES: usize = 16 * 1024;
+/// Maximum number of bytes in a CSS class prefix.
+pub const MAX_CLASS_PREFIX_BYTES: usize = 64;
 
 /// A typed failure while validating or writing an HTML export.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -112,6 +126,32 @@ pub enum HtmlExportError {
         /// The rejected reference.
         reference: String,
         /// Why the reference was rejected.
+        reason: &'static str,
+    },
+    /// The document title exceeds [`MAX_TITLE_BYTES`].
+    #[error("document title exceeds {limit} bytes")]
+    DocumentTitleTooLarge {
+        /// The enforced title limit.
+        limit: usize,
+    },
+    /// A document-wide content budget was exceeded.
+    #[error("document has more than {limit} {what} in total")]
+    TooMuchContent {
+        /// The aggregated item kind (`spans` or `links`).
+        what: &'static str,
+        /// The enforced document-wide limit.
+        limit: usize,
+    },
+    /// A caller-supplied stylesheet is unsafe or too large.
+    #[error("unsafe stylesheet: {reason}")]
+    UnsafeStylesheet {
+        /// Why the stylesheet was rejected.
+        reason: &'static str,
+    },
+    /// A CSS class prefix is not a safe identifier fragment.
+    #[error("unsafe CSS class prefix: {reason}")]
+    UnsafeClassPrefix {
+        /// Why the prefix was rejected.
         reason: &'static str,
     },
 }
@@ -281,12 +321,72 @@ pub enum HtmlOutputMode {
     PageSet,
 }
 
+/// Deterministic style hooks for the generated HTML.
+///
+/// The `class_prefix` is prepended to every class the writer emits
+/// (`page`, `span`, `link`, `nav`, `image`), so a host stylesheet can target the
+/// output with its own namespace. The default is `pdfxi-`, which reproduces the
+/// historical class names. `extra_css` is appended verbatim inside the single
+/// `<style>` block. Both values are validated by [`export_html`]: the prefix
+/// must be a short CSS identifier fragment and the stylesheet must not contain
+/// markup, imports, or remote URLs, so hostile input can never break out of the
+/// style element or fetch a resource.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlStyle {
+    class_prefix: String,
+    extra_css: String,
+}
+
+impl HtmlStyle {
+    /// Returns style hooks with the default `pdfxi-` prefix and no extra CSS.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            class_prefix: "pdfxi-".to_owned(),
+            extra_css: String::new(),
+        }
+    }
+
+    /// Replaces the CSS class prefix (validated during export).
+    #[must_use]
+    pub fn with_class_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.class_prefix = prefix.into();
+        self
+    }
+
+    /// Appends caller-supplied CSS inside the generated `<style>` block.
+    #[must_use]
+    pub fn with_extra_css(mut self, css: impl Into<String>) -> Self {
+        self.extra_css = css.into();
+        self
+    }
+
+    /// Returns the configured class prefix.
+    #[must_use]
+    pub fn class_prefix(&self) -> &str {
+        &self.class_prefix
+    }
+
+    /// Returns the caller-supplied extra CSS.
+    #[must_use]
+    pub fn extra_css(&self) -> &str {
+        &self.extra_css
+    }
+}
+
+impl Default for HtmlStyle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Options for an HTML export.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HtmlOptions {
     mode: HtmlOutputMode,
     include_navigation: bool,
     line_ending: LineEnding,
+    style: HtmlStyle,
 }
 
 impl Default for HtmlOptions {
@@ -295,6 +395,7 @@ impl Default for HtmlOptions {
             mode: HtmlOutputMode::SingleFile,
             include_navigation: true,
             line_ending: LineEnding::Lf,
+            style: HtmlStyle::default(),
         }
     }
 }
@@ -325,6 +426,19 @@ impl HtmlOptions {
     pub fn with_line_ending(mut self, line_ending: LineEnding) -> Self {
         self.line_ending = line_ending;
         self
+    }
+
+    /// Replaces the style hooks used for generated classes and CSS.
+    #[must_use]
+    pub fn with_style(mut self, style: HtmlStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Returns the configured style hooks.
+    #[must_use]
+    pub fn style(&self) -> &HtmlStyle {
+        &self.style
     }
 
     /// Returns the output mode.
@@ -363,6 +477,129 @@ impl NamedHtml {
             name: name.into(),
             contents: contents.into(),
         }
+    }
+}
+
+/// One stable, deterministic note recorded by an HTML export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlFinding {
+    code: &'static str,
+    detail: String,
+}
+
+impl HtmlFinding {
+    /// Creates a finding with a stable code and a deterministic detail string.
+    #[must_use]
+    pub fn new(code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
+    }
+
+    /// Returns the stable machine code (for example `REPORT.MODE`).
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+
+    /// Returns the human-readable detail.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+/// A deterministic report describing what an HTML export produced.
+///
+/// The report is advisory and never claims that text was extracted from PDF
+/// bytes or that the output is a faithful rendering. It records the output mode,
+/// the style hooks in use, aggregate counts, and one note per referenced image,
+/// all in a canonical order so repeated exports compare byte-for-byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlExportReport {
+    files: usize,
+    pages: usize,
+    spans: usize,
+    links: usize,
+    images: usize,
+    findings: Vec<HtmlFinding>,
+}
+
+impl HtmlExportReport {
+    fn new(
+        files: usize,
+        pages: usize,
+        spans: usize,
+        links: usize,
+        images: usize,
+        mut findings: Vec<HtmlFinding>,
+    ) -> Self {
+        findings.sort_by(|a, b| a.code.cmp(b.code).then_with(|| a.detail.cmp(&b.detail)));
+        Self {
+            files,
+            pages,
+            spans,
+            links,
+            images,
+            findings,
+        }
+    }
+
+    /// Returns the number of named output files.
+    #[must_use]
+    pub const fn files(&self) -> usize {
+        self.files
+    }
+
+    /// Returns the number of pages written.
+    #[must_use]
+    pub const fn pages(&self) -> usize {
+        self.pages
+    }
+
+    /// Returns the number of positioned spans written.
+    #[must_use]
+    pub const fn spans(&self) -> usize {
+        self.spans
+    }
+
+    /// Returns the number of hyperlink overlays written.
+    #[must_use]
+    pub const fn links(&self) -> usize {
+        self.links
+    }
+
+    /// Returns the number of referenced (but never embedded) images.
+    #[must_use]
+    pub const fn images(&self) -> usize {
+        self.images
+    }
+
+    /// Returns the canonical findings.
+    #[must_use]
+    pub fn findings(&self) -> &[HtmlFinding] {
+        &self.findings
+    }
+
+    /// Returns `true` when the export produced no advisory findings.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.findings.is_empty()
+    }
+
+    /// Returns a stable, human-readable summary.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        format!(
+            "html: {} files, {} pages, {} spans, {} links, {} images ({} findings)",
+            self.files,
+            self.pages,
+            self.spans,
+            self.links,
+            self.images,
+            self.findings.len()
+        )
     }
 }
 
@@ -473,7 +710,67 @@ fn validate_image_ref(reference: &str, page: usize) -> Result<(), HtmlExportErro
     }
 }
 
-fn validate(doc: &HtmlDocument) -> Result<Validated<'_>, HtmlExportError> {
+/// Enforces the document-wide span and link budgets.
+fn check_document_totals(spans: usize, links: usize) -> Result<(), HtmlExportError> {
+    if spans > MAX_TOTAL_SPANS {
+        return Err(HtmlExportError::TooMuchContent {
+            what: "spans",
+            limit: MAX_TOTAL_SPANS,
+        });
+    }
+    if links > MAX_TOTAL_LINKS {
+        return Err(HtmlExportError::TooMuchContent {
+            what: "links",
+            limit: MAX_TOTAL_LINKS,
+        });
+    }
+    Ok(())
+}
+
+/// Validates the CSS class prefix as a short, safe identifier fragment.
+fn validate_class_prefix(prefix: &str) -> Result<(), HtmlExportError> {
+    let fail = |reason: &'static str| HtmlExportError::UnsafeClassPrefix { reason };
+    if prefix.is_empty() || prefix.len() > MAX_CLASS_PREFIX_BYTES {
+        return Err(fail("the prefix must be between 1 and 64 ASCII bytes"));
+    }
+    let mut chars = prefix.chars();
+    let first = chars.next().unwrap_or('\0');
+    if !first.is_ascii_alphabetic() {
+        return Err(fail("the prefix must start with an ASCII letter"));
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') {
+        return Err(fail("only ASCII letters, digits, '-' and '_' are accepted"));
+    }
+    Ok(())
+}
+
+/// Validates caller-supplied CSS so it cannot break out of `<style>` or fetch.
+fn validate_stylesheet(css: &str) -> Result<(), HtmlExportError> {
+    let fail = |reason: &'static str| HtmlExportError::UnsafeStylesheet { reason };
+    if css.len() > MAX_STYLESHEET_BYTES {
+        return Err(fail("the stylesheet exceeds the byte limit"));
+    }
+    let lowered = css.to_ascii_lowercase();
+    if css.contains('<') || css.contains('\0') {
+        return Err(fail("markup and NUL characters are not accepted"));
+    }
+    if lowered.contains("@import") || lowered.contains("url(") {
+        return Err(fail("remote imports and URLs are not accepted"));
+    }
+    Ok(())
+}
+
+fn validate<'a>(
+    doc: &'a HtmlDocument,
+    options: &HtmlOptions,
+) -> Result<Validated<'a>, HtmlExportError> {
+    if doc.title.len() > MAX_TITLE_BYTES {
+        return Err(HtmlExportError::DocumentTitleTooLarge {
+            limit: MAX_TITLE_BYTES,
+        });
+    }
+    validate_class_prefix(options.style.class_prefix())?;
+    validate_stylesheet(options.style.extra_css())?;
     if doc.pages.is_empty() {
         return Err(HtmlExportError::EmptyDocument);
     }
@@ -481,6 +778,7 @@ fn validate(doc: &HtmlDocument) -> Result<Validated<'_>, HtmlExportError> {
         return Err(HtmlExportError::TooManyPages { limit: MAX_PAGES });
     }
 
+    let mut total_spans = 0usize;
     let mut pages: Vec<&HtmlPage> = doc.pages.iter().collect();
     pages.sort_by_key(|page| page.page);
     let mut seen: HashSet<usize> = HashSet::with_capacity(pages.len());
@@ -501,6 +799,7 @@ fn validate(doc: &HtmlDocument) -> Result<Validated<'_>, HtmlExportError> {
                 limit: MAX_SPANS_PER_PAGE,
             });
         }
+        total_spans = total_spans.saturating_add(page.spans.len());
         if let Some(reference) = &page.image_ref {
             validate_image_ref(reference, page.page)?;
         }
@@ -528,6 +827,7 @@ fn validate(doc: &HtmlDocument) -> Result<Validated<'_>, HtmlExportError> {
         }
     }
 
+    check_document_totals(total_spans, doc.links.len())?;
     let mut links: Vec<&HtmlLink> = doc.links.iter().collect();
     links.sort_by_key(|link| (link.page, link.uri.clone()));
     for link in &links {
@@ -560,8 +860,14 @@ fn page_filename(page: usize) -> String {
     format!("page-{:04}.html", page + 1)
 }
 
-fn navigation_lines(pages: &[&HtmlPage], href_for: impl Fn(usize) -> String) -> Vec<String> {
-    let mut lines = vec!["<nav class=\"pdfxi-nav\" aria-label=\"Page navigation\">".to_owned()];
+fn navigation_lines(
+    pages: &[&HtmlPage],
+    prefix: &str,
+    href_for: impl Fn(usize) -> String,
+) -> Vec<String> {
+    let mut lines = vec![format!(
+        "<nav class=\"{prefix}nav\" aria-label=\"Page navigation\">"
+    )];
     for page in pages {
         lines.push(format!(
             "<a href=\"{href}\">{number}</a>",
@@ -573,17 +879,17 @@ fn navigation_lines(pages: &[&HtmlPage], href_for: impl Fn(usize) -> String) -> 
     lines
 }
 
-fn page_body_lines(page: &HtmlPage, links: &[&HtmlLink]) -> Vec<String> {
+fn page_body_lines(page: &HtmlPage, prefix: &str, links: &[&HtmlLink]) -> Vec<String> {
     let width = fmt_num(page.width);
     let height = fmt_num(page.height);
     let anchor = page_anchor(page.page);
     let mut lines = vec![format!(
-        "<section class=\"pdfxi-page\" id=\"{anchor}\" style=\"width:{width}px;height:{height}px\">"
+        "<section class=\"{prefix}page\" id=\"{anchor}\" style=\"width:{width}px;height:{height}px\">"
     )];
 
     if let Some(reference) = &page.image_ref {
         lines.push(format!(
-            "<img class=\"pdfxi-image\" src=\"{src}\" alt=\"Extracted page image\" style=\"position:absolute;inset:0;width:100%;height:100%\">",
+            "<img class=\"{prefix}image\" src=\"{src}\" alt=\"Extracted page image\" style=\"position:absolute;inset:0;width:100%;height:100%\">",
             src = escape_attr(reference),
         ));
     }
@@ -595,7 +901,7 @@ fn page_body_lines(page: &HtmlPage, links: &[&HtmlLink]) -> Vec<String> {
         let span_height = fmt_num(span.height);
         let font_size = fmt_num(span.font_size);
         lines.push(format!(
-            "<span class=\"pdfxi-span\" style=\"left:{left}px;top:{top}px;width:{span_width}px;height:{span_height}px;font-size:{font_size}px\">{}</span>",
+            "<span class=\"{prefix}span\" style=\"left:{left}px;top:{top}px;width:{span_width}px;height:{span_height}px;font-size:{font_size}px\">{}</span>",
             escape_text(&span.text),
         ));
     }
@@ -606,7 +912,7 @@ fn page_body_lines(page: &HtmlPage, links: &[&HtmlLink]) -> Vec<String> {
         let link_width = fmt_num(link.width);
         let link_height = fmt_num(link.height);
         lines.push(format!(
-            "<a class=\"pdfxi-link\" href=\"{href}\" aria-label=\"Link\" style=\"left:{left}px;top:{top}px;width:{link_width}px;height:{link_height}px\"></a>",
+            "<a class=\"{prefix}link\" href=\"{href}\" aria-label=\"Link\" style=\"left:{left}px;top:{top}px;width:{link_width}px;height:{link_height}px\"></a>",
             href = escape_attr(&link.uri),
         ));
     }
@@ -615,16 +921,31 @@ fn page_body_lines(page: &HtmlPage, links: &[&HtmlLink]) -> Vec<String> {
     lines
 }
 
-const STYLE_LINES: &[&str] = &[
-    "<style>",
-    ".pdfxi-page{position:relative;overflow:hidden;border:1px solid #ccc;margin:0 auto 1em}",
-    ".pdfxi-span{position:absolute;white-space:pre}",
-    ".pdfxi-link{position:absolute;outline:1px solid #06c}",
-    ".pdfxi-nav a{margin-right:.75em}",
-    "</style>",
-];
+/// Returns the fixed `<style>` block, with class names derived from `prefix`.
+fn style_lines(style: &HtmlStyle) -> Vec<String> {
+    let prefix = style.class_prefix();
+    let mut lines = vec![
+        "<style>".to_owned(),
+        format!(
+            ".{prefix}page{{position:relative;overflow:hidden;border:1px solid #ccc;margin:0 auto 1em}}"
+        ),
+        format!(".{prefix}span{{position:absolute;white-space:pre}}"),
+        format!(".{prefix}link{{position:absolute;outline:1px solid #06c}}"),
+        format!(".{prefix}nav a{{margin-right:.75em}}"),
+    ];
+    if !style.extra_css.is_empty() {
+        lines.push(style.extra_css.clone());
+    }
+    lines.push("</style>".to_owned());
+    lines
+}
 
-fn html_document(title: &str, body_lines: &[String], line_ending: LineEnding) -> String {
+fn html_document(
+    title: &str,
+    body_lines: &[String],
+    style: &HtmlStyle,
+    line_ending: LineEnding,
+) -> String {
     let mut lines = vec![
         "<!DOCTYPE html>".to_owned(),
         "<html lang=\"en\">".to_owned(),
@@ -632,7 +953,7 @@ fn html_document(title: &str, body_lines: &[String], line_ending: LineEnding) ->
         "<meta charset=\"utf-8\">".to_owned(),
         format!("<title>{}</title>", escape_text(title)),
     ];
-    lines.extend(STYLE_LINES.iter().map(|line| (*line).to_owned()));
+    lines.extend(style_lines(style));
     lines.push("</head>".to_owned());
     lines.push("<body>".to_owned());
     lines.extend(body_lines.iter().cloned());
@@ -656,10 +977,80 @@ pub fn export_html(
     doc: &HtmlDocument,
     options: &HtmlOptions,
 ) -> Result<Vec<NamedHtml>, HtmlExportError> {
-    let validated = validate(doc)?;
-    let line_ending = options.line_ending;
+    let (files, _) = export_html_with_report(doc, options)?;
+    Ok(files)
+}
 
-    if options.mode == HtmlOutputMode::PageSet {
+/// Exports a document and returns a deterministic report alongside the files.
+///
+/// The report records the output mode, style hooks, aggregate counts, and one
+/// note per referenced image in canonical order. It does not claim that text was
+/// extracted from PDF bytes or that the HTML is a faithful rendering; see
+/// [`HtmlExportReport`].
+///
+/// # Errors
+///
+/// Propagates every [`HtmlExportError`] from validation, including unsafe style
+/// hooks and document-wide content budgets.
+pub fn export_html_with_report(
+    doc: &HtmlDocument,
+    options: &HtmlOptions,
+) -> Result<(Vec<NamedHtml>, HtmlExportReport), HtmlExportError> {
+    let validated = validate(doc, options)?;
+    let line_ending = options.line_ending;
+    let prefix = options.style.class_prefix();
+
+    let span_count: usize = validated.pages.iter().map(|page| page.spans.len()).sum();
+    let image_count = validated
+        .pages
+        .iter()
+        .filter(|page| page.image_ref.is_some())
+        .count();
+    let navigation_detail = if options.mode == HtmlOutputMode::PageSet {
+        "page-set index"
+    } else if options.include_navigation {
+        "single-file anchors"
+    } else {
+        "disabled"
+    };
+    let mut findings = vec![
+        HtmlFinding::new(
+            "REPORT.CONTENT",
+            format!(
+                "{} pages, {span_count} spans, {} links, {image_count} images",
+                validated.pages.len(),
+                validated.links.len()
+            ),
+        ),
+        HtmlFinding::new(
+            "REPORT.MODE",
+            if options.mode == HtmlOutputMode::PageSet {
+                "page-set"
+            } else {
+                "single-file"
+            },
+        ),
+        HtmlFinding::new("REPORT.NAVIGATION", navigation_detail),
+        HtmlFinding::new(
+            "REPORT.STYLE",
+            format!(
+                "prefix={prefix} extra_css_bytes={}",
+                options.style.extra_css().len()
+            ),
+        ),
+    ];
+    for page in validated
+        .pages
+        .iter()
+        .filter(|page| page.image_ref.is_some())
+    {
+        findings.push(HtmlFinding::new(
+            "REPORT.IMAGE_REFERENCED",
+            format!("page {}", page.page),
+        ));
+    }
+
+    let files = if options.mode == HtmlOutputMode::PageSet {
         let mut files = Vec::with_capacity(validated.pages.len() + 1);
 
         let mut index_lines = vec![
@@ -667,40 +1058,50 @@ pub fn export_html(
             escape_text(&doc.title),
             "</h1>".to_owned(),
         ];
-        index_lines.extend(navigation_lines(&validated.pages, page_filename));
+        index_lines.extend(navigation_lines(&validated.pages, prefix, page_filename));
         files.push(NamedHtml::new(
             "index.html",
-            html_document(&doc.title, &index_lines, line_ending),
+            html_document(&doc.title, &index_lines, &options.style, line_ending),
         ));
 
         for page in &validated.pages {
             let mut body = vec!["<p><a href=\"index.html\">&larr; Index</a></p>".to_owned()];
-            body.extend(page_body_lines(page, &validated.links));
+            body.extend(page_body_lines(page, prefix, &validated.links));
             files.push(NamedHtml::new(
                 page_filename(page.page),
-                html_document(&doc.title, &body, line_ending),
+                html_document(&doc.title, &body, &options.style, line_ending),
             ));
         }
-        return Ok(files);
-    }
+        files
+    } else {
+        let mut body: Vec<String> = Vec::new();
+        body.push(format!("<h1>{}</h1>", escape_text(&doc.title)));
+        if options.include_navigation {
+            body.extend(navigation_lines(&validated.pages, prefix, |page| {
+                format!("#{}", page_anchor(page))
+            }));
+        }
+        body.push("<main>".to_owned());
+        for page in &validated.pages {
+            body.extend(page_body_lines(page, prefix, &validated.links));
+        }
+        body.push("</main>".to_owned());
 
-    let mut body: Vec<String> = Vec::new();
-    body.push(format!("<h1>{}</h1>", escape_text(&doc.title)));
-    if options.include_navigation {
-        body.extend(navigation_lines(&validated.pages, |page| {
-            format!("#{}", page_anchor(page))
-        }));
-    }
-    body.push("<main>".to_owned());
-    for page in &validated.pages {
-        body.extend(page_body_lines(page, &validated.links));
-    }
-    body.push("</main>".to_owned());
+        vec![NamedHtml::new(
+            "document.html",
+            html_document(&doc.title, &body, &options.style, line_ending),
+        )]
+    };
 
-    Ok(vec![NamedHtml::new(
-        "document.html",
-        html_document(&doc.title, &body, line_ending),
-    )])
+    let report = HtmlExportReport::new(
+        files.len(),
+        validated.pages.len(),
+        span_count,
+        validated.links.len(),
+        image_count,
+        findings,
+    );
+    Ok((files, report))
 }
 
 /// Convenience export that returns the single-file document as a string.
@@ -966,5 +1367,110 @@ mod tests {
             export_html_string(&malformed),
             Err(HtmlExportError::InvalidPageGeometry { page: 0 })
         );
+    }
+
+    #[test]
+    fn html_report_counts_content_and_is_deterministic() {
+        let doc = HtmlDocument::new(
+            "T",
+            vec![sample_page(0).with_image_ref("p.png"), sample_page(1)],
+            vec![HtmlLink::new(0, "https://example.test", 0.0, 0.0, 1.0, 1.0)],
+        );
+        let (files, report) = export_html_with_report(&doc, &HtmlOptions::new()).expect("export");
+        assert_eq!(files.len(), 1);
+        assert_eq!(report.files(), 1);
+        assert_eq!(report.pages(), 2);
+        assert_eq!(report.spans(), 2);
+        assert_eq!(report.links(), 1);
+        assert_eq!(report.images(), 1);
+        assert!(!report.is_clean());
+        let codes: Vec<&str> = report.findings().iter().map(HtmlFinding::code).collect();
+        assert!(codes.contains(&"REPORT.IMAGE_REFERENCED"));
+        assert!(codes.contains(&"REPORT.STYLE"));
+        let mut sorted = codes.clone();
+        sorted.sort_unstable();
+        assert_eq!(codes, sorted, "findings are canonical");
+        assert!(report.summary().contains("2 pages"));
+
+        let (again, report_again) =
+            export_html_with_report(&doc, &HtmlOptions::new()).expect("re-export");
+        assert_eq!(files, again);
+        assert_eq!(report, report_again);
+    }
+
+    #[test]
+    fn style_hooks_change_classes_and_emit_extra_css() {
+        let doc = HtmlDocument::new("T", vec![sample_page(0)], Vec::new());
+        let options = HtmlOptions::new().with_style(
+            HtmlStyle::new()
+                .with_class_prefix("host-")
+                .with_extra_css(".host-page{color:red}"),
+        );
+        let files = export_html(&doc, &options).expect("export");
+        let html = &files[0].contents;
+        assert!(html.contains("class=\"host-page\""));
+        assert!(html.contains("class=\"host-span\""));
+        assert!(html.contains(".host-page{position:relative"));
+        assert!(html.contains(".host-page{color:red}"));
+        assert!(!html.contains("class=\"pdfxi-page\""));
+        assert_eq!(options.style().class_prefix(), "host-");
+        assert_eq!(options.style().extra_css(), ".host-page{color:red}");
+    }
+
+    #[test]
+    fn hostile_style_hooks_are_typed_errors() {
+        let doc = HtmlDocument::new("T", vec![sample_page(0)], Vec::new());
+        for css in [
+            "</style><script>alert(1)</script>",
+            "a{background:url(http://example.test/x)}",
+            "@import 'remote.css';",
+            "a\0b",
+        ] {
+            let options = HtmlOptions::new().with_style(HtmlStyle::new().with_extra_css(css));
+            assert!(
+                matches!(
+                    export_html(&doc, &options),
+                    Err(HtmlExportError::UnsafeStylesheet { .. })
+                ),
+                "expected stylesheet rejection for {css}"
+            );
+        }
+        let long = "a".repeat(MAX_CLASS_PREFIX_BYTES + 1);
+        for prefix in ["", "1bad", "a\"b", "a<b", long.as_str()] {
+            let options = HtmlOptions::new().with_style(HtmlStyle::new().with_class_prefix(prefix));
+            assert!(
+                matches!(
+                    export_html(&doc, &options),
+                    Err(HtmlExportError::UnsafeClassPrefix { .. })
+                ),
+                "expected prefix rejection for {prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn document_wide_content_budgets_are_enforced() {
+        assert!(check_document_totals(MAX_TOTAL_SPANS, MAX_TOTAL_LINKS).is_ok());
+        assert!(matches!(
+            check_document_totals(MAX_TOTAL_SPANS + 1, 0),
+            Err(HtmlExportError::TooMuchContent { what: "spans", .. })
+        ));
+        assert!(matches!(
+            check_document_totals(0, MAX_TOTAL_LINKS + 1),
+            Err(HtmlExportError::TooMuchContent { what: "links", .. })
+        ));
+    }
+
+    #[test]
+    fn oversized_title_is_a_typed_error() {
+        let doc = HtmlDocument::new(
+            "x".repeat(MAX_TITLE_BYTES + 1),
+            vec![sample_page(0)],
+            Vec::new(),
+        );
+        assert!(matches!(
+            export_html_string(&doc),
+            Err(HtmlExportError::DocumentTitleTooLarge { .. })
+        ));
     }
 }

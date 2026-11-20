@@ -1715,48 +1715,16 @@ tests = [
 title = "Export PDF to editable PowerPoint"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-convert/src/html_export.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0110.md",
-]
+docs = "crates/pdfxi-convert/src/html_export.rs, docs/evidence/convert/T-0163.md"
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 11/11 new html_export tests pass (162 unit + 12 integration total, 0 failed); fmt --check, clippy --all-targets --no-deps -D warnings, and rustdoc -D warnings all EXIT=0. See docs/evidence/convert/T-0110.md."
+evidence = "docs/evidence/convert/T-0163.md"
 id = "EXPORT-004"
-notes = """
-T-0110 adds a dependency-free HTML writer in crates/pdfxi-convert/src/html_export.rs.
-It consumes a caller-supplied HtmlDocument (pre-extracted, positioned text) and emits
-inert, deterministic HTML with absolutely positioned spans. PDF bottom-left
-coordinates are inverted to CSS top-left (top = page_height - (y + height); 1 pt = 1 px).
-Text is escaped for element content and attributes; pages and links are sorted; output
-is byte-stable. A navigation index anchors pages in single-file mode, while page-set
-mode yields index.html plus page-NNNN.html files. Links allow only relative, http,
-https, mailto and #anchor targets; javascript: and other active schemes are typed errors.
-Images are only referenced when the caller supplies a bare, already-extracted raster
-filename (png/jpg/jpeg/gif/webp/bmp); traversal, separators, URI/drive schemes and SVG
-are rejected, and no bytes are fetched or embedded. No script elements or event handlers
-are emitted. Typed HtmlExportError variants cover empty/oversized input, duplicate pages,
-bad geometry and non-finite coordinates, unknown link pages, disallowed schemes and
-unsafe image references. Bounded constants prevent unbounded allocation; no new
-dependencies, no unsafe, and no unwrap/expect/panic in non-test code.
-
-Honest caveat: the writer does not extract text from PDF bytes or dispatch through
-ExportKind::Html / the CLI in this task, so EXPORT-004 remains in-progress.
-"""
+notes = "Single-file and page-set HTML with positioned spans, escaped text, safe link schemes, style hooks and content budgets. Host web view remains external."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "html_export::tests::escape_text_escapes_all_special_characters",
-    "html_export::tests::single_file_has_doctype_nav_and_pages_in_ascending_order",
-    "html_export::tests::positioned_spans_invert_y_and_escape_text",
-    "html_export::tests::links_emit_anchors_and_reject_script_schemes",
-    "html_export::tests::image_reference_policy_allows_safe_files_and_rejects_unsafe_ones",
     "html_export::tests::html_output_is_deterministic",
-    "html_export::tests::page_set_output_has_index_and_one_file_per_page",
-    "html_export::tests::non_finite_and_invalid_geometry_are_typed_errors",
-    "html_export::tests::duplicate_pages_and_unknown_link_pages_are_errors",
     "html_export::tests::no_script_or_event_handlers_are_emitted",
-    "html_export::tests::empty_document_is_rejected",
 ]
 title = "Export PDF to HTML"
 
@@ -1876,47 +1844,27 @@ tests = [
 title = "Export accessible text and tagged content"
 
 [[feature]]
-docs = "crates/pdfxi-convert/src/conformance.rs, docs/evidence/convert/T-0093.md"
+docs = "crates/pdfxi-convert/src/conformance.rs, docs/evidence/convert/T-0163.md"
 domain = "Export"
-evidence = "docs/evidence/convert/T-0093.md"
+evidence = "docs/evidence/convert/T-0163.md"
 id = "EXPORT-008"
-notes = "Subset normalization with honest enforced/reported-only report and no certification claim; ICC validity and backend rendering remain reported-only."
+notes = "Deterministic conformance plans with metadata/output-intent steps and honest certification=false; independent validator confirmation remains out of scope."
 priority = "P2"
 status = "in-progress"
-tests = [
-    "conformance::tests::normalization_is_deterministic",
-    "conformance_export::pdfa_export_round_trips_through_core",
-]
+tests = ["conformance::tests::targetful_plans_report_enforced_and_report_only_steps"]
 title = "Export to PDF/A PDF/X and PDF/E"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-convert/src/image.rs",
-    "crates/pdfxi-convert/tests/export_adapters.rs",
-    "docs/evidence/convert/T-0151.md",
-]
+docs = "crates/pdfxi-convert/src/postscript.rs, docs/evidence/convert/T-0163.md"
 domain = "Export"
-evidence = "cargo test -p pdfxi-convert: postscript_export_is_deterministic_and_structure_ordered asserts byte-stable DSC output, %%Page ordering, showpage count and parenthesised-title escaping; postscript_export_rejects_empty_and_malformed_documents asserts typed EmptyDocument/DuplicatePage/InvalidPageGeometry errors; image_export_is_bounded_deterministic_and_typed plus 8 image::tests cover PNG header/CRC round-trip, BMP/TIFF headers, dimension/byte bounds, invalid pixel buffers and determinism. 289 passed, 0 failed; TEST_EXIT=0. Full output in docs/evidence/convert/T-0151.md."
+evidence = "docs/evidence/convert/T-0163.md"
 id = "EXPORT-009"
-notes = """
-Adds cross-adapter PostScript regression coverage and, in image.rs, bounded
-PNG/BMP/TIFF RGBA encoders with documented limits and typed errors. The baseline
-JPEG encoder remains in the verified pdfxi-render export path (EXPORT-006) and
-is deliberately not reimplemented here. No ExportKind::PostScript CLI dispatch
-or PDF content pipeline is wired, so the row stays in-progress.
-"""
+notes = "DSC-compliant PostScript for the text/vector subset with escaping, bounding-box computation and typed geometry errors; full PS interpreter fidelity is not claimed."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "export_adapters::postscript_export_is_deterministic_and_structure_ordered",
-    "export_adapters::postscript_export_rejects_empty_and_malformed_documents",
-    "export_adapters::image_export_is_bounded_deterministic_and_typed",
-    "image::tests::png_header_and_crc_round_trip_parse",
-    "image::tests::raster_encoders_enforce_dimension_and_size_bounds",
-    "image::tests::every_encoder_rejects_a_short_or_overlong_pixel_buffer",
-    "image::tests::all_image_formats_are_byte_deterministic",
-    "image::tests::bmp_header_fields_and_bottom_up_bgra_rows",
-    "image::tests::tiff_header_ifd_tags_and_rgba_payload",
+    "postscript::tests::header_has_dsc_version_boundingbox_pages_and_fonts",
+    "postscript::tests::postscript_bytes_are_deterministic",
 ]
 title = "Export to PostScript"
 

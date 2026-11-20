@@ -8,9 +8,10 @@
 //! # Output contract (all deterministic)
 //!
 //! 1. The program starts with `%!PS-Adobe-3.0` and carries `%%Creator`,
-//!    `%%Title`, `%%BoundingBox`, `%%Pages`, `%%DocumentFonts`, `%%EndComments`,
-//!    a prolog/setup pair, one `%%Page:` block per page, a `%%Trailer`, and
-//!    `%%EOF`. The bounding box is the ceiling of the largest page extent.
+//!    `%%Title`, `%%BoundingBox`, `%%Pages`, `%%LanguageLevel`, `%%DocumentData`,
+//!    `%%Orientation`, `%%DocumentFonts`, `%%EndComments`, a prolog/setup pair,
+//!    one `%%Page:` block per page, a `%%Trailer`, and `%%EOF`. The bounding box
+//!    is the ceiling of the largest page extent.
 //! 2. Pages are written in ascending zero-based index order; duplicate indices
 //!    and invalid geometry are typed errors. Each page emits exactly one
 //!    `showpage`.
@@ -24,8 +25,10 @@
 //!    report from [`export_postscript_with_report`] to see exactly what was
 //!    omitted, so unsupported content is documented honestly.
 //! 5. Every numeric field is checked for finiteness before formatting, and
-//!    input sizes are bounded by documented constants, so hostile input cannot
-//!    produce `NaN` tokens or drive unbounded allocation.
+//!    input sizes (pages, per-page and document-wide content, title bytes) are
+//!    bounded by documented constants. Titles must be single-line values. Hostile
+//!    input therefore cannot produce `NaN` tokens, DSC comment injection, or
+//!    unbounded allocation; every rejection is a typed [`PsExportError`].
 
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -34,6 +37,10 @@ use thiserror::Error;
 pub const MAX_PAGES: usize = 100_000;
 /// Maximum number of content items on one page.
 pub const MAX_CONTENT_PER_PAGE: usize = 1_000_000;
+/// Maximum number of UTF-8 bytes in a DSC title.
+pub const MAX_TITLE_BYTES: usize = 4096;
+/// Maximum number of content items across the whole document.
+pub const MAX_TOTAL_CONTENT: usize = 2_000_000;
 
 /// A typed failure while validating a PostScript export.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -79,6 +86,18 @@ pub enum PsExportError {
         /// The offending page index.
         page: usize,
         /// The enforced content limit.
+        limit: usize,
+    },
+    /// The DSC title is not a safe single-line value.
+    #[error("invalid document title: {reason}")]
+    InvalidTitle {
+        /// Why the title was rejected.
+        reason: &'static str,
+    },
+    /// The document-wide content budget was exceeded.
+    #[error("document has more than {limit} content items in total")]
+    DocumentTooLarge {
+        /// The enforced document-wide limit.
         limit: usize,
     },
 }
@@ -386,7 +405,38 @@ fn escape_ps_string(text: &str, page: usize, report: &mut PsExportReport) -> Str
     out
 }
 
+/// Validates the DSC title as a bounded, single-line value.
+fn validate_title(title: &str) -> Result<(), PsExportError> {
+    if title.is_empty() {
+        return Err(PsExportError::InvalidTitle {
+            reason: "must not be empty",
+        });
+    }
+    if title.len() > MAX_TITLE_BYTES {
+        return Err(PsExportError::InvalidTitle {
+            reason: "the title exceeds the byte limit",
+        });
+    }
+    if title.contains('\r') || title.contains('\n') {
+        return Err(PsExportError::InvalidTitle {
+            reason: "the title must be a single DSC line",
+        });
+    }
+    Ok(())
+}
+
+/// Enforces the document-wide content budget.
+fn check_total_content(total: usize) -> Result<(), PsExportError> {
+    if total > MAX_TOTAL_CONTENT {
+        return Err(PsExportError::DocumentTooLarge {
+            limit: MAX_TOTAL_CONTENT,
+        });
+    }
+    Ok(())
+}
+
 fn validate(doc: &PsDocument) -> Result<Validated<'_>, PsExportError> {
+    validate_title(&doc.title)?;
     if doc.pages.is_empty() {
         return Err(PsExportError::EmptyDocument);
     }
@@ -394,6 +444,7 @@ fn validate(doc: &PsDocument) -> Result<Validated<'_>, PsExportError> {
         return Err(PsExportError::TooManyPages { limit: MAX_PAGES });
     }
 
+    let mut total_content = 0usize;
     let mut pages: Vec<&PsPage> = doc.pages.iter().collect();
     pages.sort_by_key(|page| page.page);
 
@@ -415,6 +466,7 @@ fn validate(doc: &PsDocument) -> Result<Validated<'_>, PsExportError> {
                 limit: MAX_CONTENT_PER_PAGE,
             });
         }
+        total_content = total_content.saturating_add(page.content.len());
         for item in &page.content {
             match item {
                 PsContent::Text(text) => {
@@ -469,6 +521,7 @@ fn validate(doc: &PsDocument) -> Result<Validated<'_>, PsExportError> {
             }
         }
     }
+    check_total_content(total_content)?;
 
     Ok(Validated { pages })
 }
@@ -586,6 +639,9 @@ pub fn export_postscript_with_report(
         format!("%%Title: {}", escape_ps_string(&doc.title, 0, &mut report)),
         format!("%%BoundingBox: 0 0 {max_width} {max_height}"),
         format!("%%Pages: {}", validated.pages.len()),
+        "%%LanguageLevel: 2".to_owned(),
+        "%%DocumentData: Clean7Bit".to_owned(),
+        "%%Orientation: Portrait".to_owned(),
     ];
     let fonts = collect_fonts(&validated.pages);
     lines.push(format!(
@@ -822,5 +878,88 @@ mod tests {
             export_postscript(&doc),
             Err(PsExportError::EmptyDocument)
         ));
+    }
+
+    #[test]
+    fn dsc_headers_include_language_level_data_and_orientation() {
+        let doc = PsDocument::new("T", vec![sample_page(0)]);
+        let bytes = export_postscript(&doc).expect("export");
+        let text = String::from_utf8(bytes).expect("ascii");
+        assert!(text.starts_with("%!PS-Adobe-3.0\n"));
+        assert!(text.contains("%%LanguageLevel: 2\n"));
+        assert!(text.contains("%%DocumentData: Clean7Bit\n"));
+        assert!(text.contains("%%Orientation: Portrait\n"));
+        let language = text.find("%%LanguageLevel: 2").expect("language");
+        let comments = text.find("%%EndComments").expect("comments");
+        assert!(language < comments, "DSC headers precede EndComments");
+        assert!(text.trim_end().ends_with("%%EOF"));
+    }
+
+    #[test]
+    fn content_items_are_emitted_in_caller_order() {
+        let doc = PsDocument::new(
+            "T",
+            vec![PsPage::new(0, 100.0, 100.0).with_content(vec![
+                PsContent::Text(PsText::new("First", 1.0, 2.0, 3.0)),
+                PsContent::Rect(PsRect::new(10.0, 20.0, 30.0, 40.0)),
+                PsContent::Line(PsLine::new(3.0, 4.0, 5.0, 6.0, 1.0)),
+                PsContent::Text(PsText::new("Second", 7.0, 8.0, 9.0)),
+            ])],
+        );
+        let bytes = export_postscript(&doc).expect("export");
+        let text = String::from_utf8(bytes).expect("ascii");
+        let first = text.find("(First) show").expect("first text");
+        let rect = text.find("10 20 moveto").expect("rect");
+        let line = text.find("5 6 lineto").expect("line");
+        let second = text.find("(Second) show").expect("second text");
+        assert!(first < rect && rect < line && line < second);
+        assert_eq!(text.matches("showpage").count(), 1);
+    }
+
+    #[test]
+    fn hostile_and_oversized_titles_are_typed_errors() {
+        let long = "x".repeat(MAX_TITLE_BYTES + 1);
+        for title in ["", "first\nsecond", "first\rsecond", long.as_str()] {
+            let doc = PsDocument::new(title, vec![sample_page(0)]);
+            assert!(
+                matches!(
+                    export_postscript(&doc),
+                    Err(PsExportError::InvalidTitle { .. })
+                ),
+                "expected title rejection for {title:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_content_budget_is_enforced() {
+        assert!(check_total_content(MAX_TOTAL_CONTENT).is_ok());
+        assert!(matches!(
+            check_total_content(MAX_TOTAL_CONTENT + 1),
+            Err(PsExportError::DocumentTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn postscript_output_is_deterministic_with_full_dsc_header() {
+        let doc = PsDocument::new("T", vec![sample_page(1), sample_page(0)]);
+        let first = export_postscript(&doc).expect("export");
+        let second = export_postscript(&doc).expect("re-export");
+        assert_eq!(first, second);
+        let text = String::from_utf8(first).expect("ascii");
+        for header in [
+            "%!PS-Adobe-3.0",
+            "%%Title: T",
+            "%%BoundingBox: 0 0 200 300",
+            "%%Pages: 2",
+            "%%LanguageLevel: 2",
+            "%%DocumentData: Clean7Bit",
+            "%%Orientation: Portrait",
+            "%%DocumentFonts: Helvetica",
+            "%%Trailer",
+            "%%EOF",
+        ] {
+            assert!(text.contains(header), "missing DSC token {header}");
+        }
     }
 }

@@ -8,6 +8,13 @@
 //! [`ConformanceExportReport`] states exactly which constraints were enforced
 //! and which are reported only.
 //!
+//! A caller that needs to display requirements before any conversion can build
+//! a byte-free [`ConformancePlan`] from a [`ConformanceRequest`] (or directly
+//! from a [`ConformanceTarget`]). The plan exposes the minimum version, the
+//! required XMP metadata and output-intent steps, a canonical validation report,
+//! and the same typed errors for unsupported/contradictory combinations.
+//! Neither the plan nor its report ever claims certification.
+//!
 //! # Enforced subset
 //!
 //! - The `%PDF-x.y` header is raised to the target's minimum version, never
@@ -478,6 +485,359 @@ impl ConformanceExportReport {
             self.reported_only.len()
         )
     }
+}
+
+/// One required action in a byte-free conformance export plan.
+///
+/// `code` is a stable machine key; `enforced` distinguishes what the local
+/// normalizer actually enforces from what remains a caller responsibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanRequirement {
+    code: &'static str,
+    detail: String,
+    enforced: bool,
+}
+
+impl PlanRequirement {
+    /// Creates a requirement with a stable code, deterministic detail, and an
+    /// `enforced` flag indicating whether the local exporter performs it.
+    #[must_use]
+    pub fn new(code: &'static str, detail: impl Into<String>, enforced: bool) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+            enforced,
+        }
+    }
+
+    /// Returns the stable machine code (for example `PLAN.XMP_PRESENCE`).
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        self.code
+    }
+
+    /// Returns the deterministic human-readable detail.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// Returns `true` when this requirement is enforced locally.
+    #[must_use]
+    pub const fn is_enforced(&self) -> bool {
+        self.enforced
+    }
+
+    /// Returns `true` when this requirement is only reported to the caller.
+    #[must_use]
+    pub const fn is_reported_only(&self) -> bool {
+        !self.enforced
+    }
+}
+
+/// The output-intent a conformance target requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputIntentPlan {
+    subtype: &'static str,
+    dest_output_profile: bool,
+    placeholder: bool,
+}
+
+impl OutputIntentPlan {
+    /// Returns the required `/S` subtype, for example `GTS_PDFA1`.
+    #[must_use]
+    pub const fn subtype(&self) -> &'static str {
+        self.subtype
+    }
+
+    /// Returns `true` when a `/DestOutputProfile` is required.
+    #[must_use]
+    pub const fn requires_dest_output_profile(&self) -> bool {
+        self.dest_output_profile
+    }
+
+    /// Returns `true` because the locally emitted intent is a placeholder.
+    #[must_use]
+    pub const fn is_placeholder(&self) -> bool {
+        self.placeholder
+    }
+}
+
+/// A deterministic, byte-free plan describing what a conformance export needs.
+///
+/// The plan is built from a target or a validated [`ConformanceRequest`] without
+/// inspecting any PDF bytes, so a host can display it before conversion. It is
+/// derived from the same rule tables as [`export_conformance_pdf`] and never
+/// claims certification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConformancePlan {
+    target: ConformanceTarget,
+    minimum_version: String,
+    steps: Vec<PlanRequirement>,
+    reported_only: Vec<&'static str>,
+}
+
+impl ConformancePlan {
+    /// Builds the canonical plan for `target` without inspecting PDF bytes.
+    #[must_use]
+    pub fn for_target(target: ConformanceTarget) -> Self {
+        let (major, minor) = target.minimum_version();
+        let mut steps = vec![PlanRequirement::new(
+            "PLAN.VERSION_MINIMUM",
+            format!("header must be at least {major}.{minor}"),
+            true,
+        )];
+        if target.requires_xmp() {
+            steps.push(PlanRequirement::new(
+                "PLAN.XMP_PRESENCE",
+                "add a catalog /Metadata placeholder when absent",
+                true,
+            ));
+            steps.push(PlanRequirement::new(
+                "PLAN.XMP_REAL_CONTENT",
+                "replace the XMP placeholder with real document metadata",
+                false,
+            ));
+        }
+        if let Some(subtype) = target.output_intent_subtype() {
+            steps.push(PlanRequirement::new(
+                "PLAN.OUTPUT_INTENT_PRESENCE",
+                "add a catalog /OutputIntents entry when absent",
+                true,
+            ));
+            steps.push(PlanRequirement::new(
+                "PLAN.OUTPUT_INTENT_SUBTYPE",
+                format!("/S /{subtype}"),
+                true,
+            ));
+            steps.push(PlanRequirement::new(
+                "PLAN.DEST_OUTPUT_PROFILE",
+                "supply a valid ICC /DestOutputProfile (locally emitted as a placeholder)",
+                false,
+            ));
+        }
+        Self {
+            target,
+            minimum_version: format!("{major}.{minor}"),
+            steps,
+            reported_only: REPORTED_ONLY_CONSTRAINTS.to_vec(),
+        }
+    }
+
+    /// Resolves and validates `request`, then builds its canonical plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConformanceExportError::UnsupportedProfile`] for an unknown
+    /// target label and [`ConformanceExportError::ContradictoryRequest`] for an
+    /// output-intent subtype that does not match the target.
+    pub fn for_request(request: &ConformanceRequest) -> Result<Self, ConformanceExportError> {
+        let target = request.resolve()?;
+        Ok(Self::for_target(target))
+    }
+
+    /// Returns the target this plan was built for.
+    #[must_use]
+    pub const fn target(&self) -> ConformanceTarget {
+        self.target
+    }
+
+    /// Returns the minimum header version as `major.minor`.
+    #[must_use]
+    pub fn minimum_version(&self) -> &str {
+        &self.minimum_version
+    }
+
+    /// Returns every plan step in canonical order.
+    #[must_use]
+    pub fn steps(&self) -> &[PlanRequirement] {
+        &self.steps
+    }
+
+    /// Returns the XMP metadata requirements, in canonical order.
+    #[must_use]
+    pub fn required_metadata(&self) -> Vec<&PlanRequirement> {
+        self.steps
+            .iter()
+            .filter(|step| step.code.starts_with("PLAN.XMP"))
+            .collect()
+    }
+
+    /// Returns the output-intent plan, or `None` when the target uses none.
+    #[must_use]
+    pub const fn required_output_intent(&self) -> Option<OutputIntentPlan> {
+        match self.target.output_intent_subtype() {
+            Some(subtype) => Some(OutputIntentPlan {
+                subtype,
+                dest_output_profile: true,
+                placeholder: true,
+            }),
+            None => None,
+        }
+    }
+
+    /// Returns constraints this plan reports but never enforces.
+    #[must_use]
+    pub fn reported_only(&self) -> &[&'static str] {
+        &self.reported_only
+    }
+
+    /// Returns a stable, human-readable summary.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let enforced = self.steps.iter().filter(|step| step.enforced).count();
+        let reported = self.steps.len() - enforced;
+        format!(
+            "{} plan: minimum {}, {} steps ({} enforced, {} report-only), certification=false",
+            self.target,
+            self.minimum_version,
+            self.steps.len(),
+            enforced,
+            reported
+        )
+    }
+
+    /// Returns deterministic text lines describing the whole plan.
+    #[must_use]
+    pub fn to_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("target: {}", self.target.label()),
+            format!("minimum_version: {}", self.minimum_version),
+        ];
+        for step in &self.steps {
+            let mode = if step.enforced {
+                "enforced"
+            } else {
+                "report-only"
+            };
+            lines.push(format!("step: {} [{mode}] {}", step.code, step.detail));
+        }
+        for constraint in &self.reported_only {
+            lines.push(format!("reported-only: {constraint}"));
+        }
+        lines
+    }
+
+    /// Returns a deterministic validation report for this plan.
+    ///
+    /// Enforced steps become [`ExportSeverity::Info`] findings; report-only
+    /// steps and the explicit no-certification reminder become
+    /// [`ExportSeverity::Warning`] findings. No report ever claims certification.
+    #[must_use]
+    pub fn validation_report(&self) -> ConformancePlanReport {
+        let mut findings: Vec<ConformanceFinding> = self
+            .steps
+            .iter()
+            .map(|step| {
+                if step.enforced {
+                    ConformanceFinding::new(
+                        ExportSeverity::Info,
+                        step.code,
+                        step.detail.clone(),
+                        "plan",
+                    )
+                } else {
+                    ConformanceFinding::new(
+                        ExportSeverity::Warning,
+                        step.code,
+                        format!(
+                            "{} (supply real content before asserting conformance)",
+                            step.detail
+                        ),
+                        "plan",
+                    )
+                }
+            })
+            .collect();
+        findings.push(ConformanceFinding::new(
+            ExportSeverity::Warning,
+            "PLAN.CERTIFICATION_NOT_CLAIMED",
+            "run a real preflight validator and supply real metadata/profiles".to_owned(),
+            "plan",
+        ));
+        findings.sort_by(|a, b| {
+            a.severity
+                .cmp(&b.severity)
+                .then_with(|| a.code.cmp(&b.code))
+                .then_with(|| a.message.cmp(&b.message))
+        });
+        ConformancePlanReport {
+            target: self.target,
+            findings,
+            scope_note: SCOPE_NOTE,
+        }
+    }
+}
+
+/// A deterministic validation report for a [`ConformancePlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConformancePlanReport {
+    target: ConformanceTarget,
+    findings: Vec<ConformanceFinding>,
+    scope_note: &'static str,
+}
+
+impl ConformancePlanReport {
+    /// Returns the target whose plan was validated.
+    #[must_use]
+    pub const fn target(&self) -> ConformanceTarget {
+        self.target
+    }
+
+    /// Returns the canonical findings (severity, then code, then message).
+    #[must_use]
+    pub fn findings(&self) -> &[ConformanceFinding] {
+        &self.findings
+    }
+
+    /// Always `false`: a plan never certifies conformance.
+    #[must_use]
+    pub const fn certification_claimed(&self) -> bool {
+        false
+    }
+
+    /// Returns the stable scope statement.
+    #[must_use]
+    pub const fn scope_note(&self) -> &'static str {
+        self.scope_note
+    }
+
+    /// Returns `true` when the report contains at least one warning finding.
+    #[must_use]
+    pub fn is_actionable(&self) -> bool {
+        self.findings
+            .iter()
+            .any(|finding| finding.severity() == ExportSeverity::Warning)
+    }
+
+    /// Returns a stable, human-readable summary.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let warnings = self
+            .findings
+            .iter()
+            .filter(|finding| finding.severity() == ExportSeverity::Warning)
+            .count();
+        format!(
+            "{} plan report: {} findings, {warnings} warnings, certification=false",
+            self.target,
+            self.findings.len()
+        )
+    }
+}
+
+/// Builds a deterministic conformance plan for `request`.
+///
+/// This is a convenience wrapper over [`ConformancePlan::for_request`].
+///
+/// # Errors
+///
+/// Propagates typed errors for an unsupported target or a contradictory
+/// output-intent subtype.
+pub fn plan_conformance_export(
+    request: &ConformanceRequest,
+) -> Result<ConformancePlan, ConformanceExportError> {
+    ConformancePlan::for_request(request)
 }
 
 // ---------------------------------------------------------------------------
@@ -1521,5 +1881,113 @@ mod tests {
         assert!(second.report.applied().is_empty());
         assert_eq!(text(&first.bytes).matches("/Size ").count(), 1);
         assert_eq!(second.bytes, first.bytes);
+    }
+
+    #[test]
+    fn t0163_plan_is_byte_for_byte_deterministic_for_all_targets() {
+        for &target in ConformanceTarget::all() {
+            let first = ConformancePlan::for_target(target);
+            let second = ConformancePlan::for_target(target);
+            assert_eq!(first, second, "plan equality for {target}");
+            assert_eq!(first.to_lines().join("\n"), second.to_lines().join("\n"));
+            assert_eq!(first.summary(), second.summary());
+            assert_eq!(first.validation_report(), second.validation_report());
+            assert!(first.to_lines()[0].starts_with("target: "));
+        }
+        let via_request = ConformancePlan::for_request(
+            &ConformanceRequest::new("PDF/X-4").with_output_intent_subtype("GTS_PDFX"),
+        )
+        .unwrap_or_else(|error| panic!("test: plan failed: {error}"));
+        assert_eq!(
+            via_request,
+            ConformancePlan::for_target(ConformanceTarget::PdfX4)
+        );
+    }
+
+    #[test]
+    fn t0163_plan_required_metadata_and_output_intent_match_target() {
+        let pdf_a = ConformancePlan::for_target(ConformanceTarget::PdfA2b);
+        let metadata = pdf_a.required_metadata();
+        let codes: Vec<&str> = metadata.iter().map(|step| step.code()).collect();
+        assert_eq!(codes, vec!["PLAN.XMP_PRESENCE", "PLAN.XMP_REAL_CONTENT"]);
+        assert!(metadata[0].is_enforced());
+        assert!(metadata[1].is_reported_only());
+        assert_eq!(pdf_a.minimum_version(), "1.7");
+        let intent = pdf_a.required_output_intent().expect("PDF/A output intent");
+        assert_eq!(intent.subtype(), "GTS_PDFA1");
+        assert!(intent.requires_dest_output_profile());
+        assert!(intent.is_placeholder());
+
+        let pdf_x = ConformancePlan::for_target(ConformanceTarget::PdfX4);
+        assert_eq!(
+            pdf_x
+                .required_output_intent()
+                .expect("PDF/X output intent")
+                .subtype(),
+            "GTS_PDFX"
+        );
+
+        let pdf_e = ConformancePlan::for_target(ConformanceTarget::PdfE1);
+        assert!(pdf_e.required_metadata().is_empty());
+        assert!(pdf_e.required_output_intent().is_none());
+        assert_eq!(pdf_e.steps().len(), 1);
+        assert_eq!(pdf_e.minimum_version(), "1.6");
+    }
+
+    #[test]
+    fn t0163_plan_report_never_claims_certification() {
+        let plan = ConformancePlan::for_target(ConformanceTarget::PdfA1b);
+        let report = plan.validation_report();
+        assert_eq!(report.target(), ConformanceTarget::PdfA1b);
+        assert!(!report.certification_claimed());
+        assert!(report.scope_note().contains("no certification"));
+        assert!(report.summary().contains("certification=false"));
+        assert!(report.is_actionable());
+        assert!(
+            report
+                .findings()
+                .iter()
+                .any(|finding| finding.code() == "PLAN.CERTIFICATION_NOT_CLAIMED")
+        );
+        assert!(!plan.summary().contains("certification=true"));
+    }
+
+    #[test]
+    fn t0163_plan_rejects_unsupported_and_contradictory_requests() {
+        assert!(matches!(
+            ConformancePlan::for_request(&ConformanceRequest::new("PDF/VT-1")),
+            Err(ConformanceExportError::UnsupportedProfile { .. })
+        ));
+        assert!(matches!(
+            plan_conformance_export(
+                &ConformanceRequest::new("PDF/A-2b").with_output_intent_subtype("GTS_PDFX")
+            ),
+            Err(ConformanceExportError::ContradictoryRequest { .. })
+        ));
+        assert!(matches!(
+            plan_conformance_export(
+                &ConformanceRequest::new("PDF/E-1").with_output_intent_subtype("GTS_PDFA1")
+            ),
+            Err(ConformanceExportError::ContradictoryRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn t0163_plan_validation_report_findings_are_canonical() {
+        let plan = ConformancePlan::for_target(ConformanceTarget::PdfA1b);
+        let report = plan.validation_report();
+        let keys: Vec<(ExportSeverity, &str)> = report
+            .findings()
+            .iter()
+            .map(|finding| (finding.severity(), finding.code()))
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted, "findings follow severity then code order");
+        assert_eq!(plan.reported_only(), REPORTED_ONLY_CONSTRAINTS);
+        assert!(plan.steps().iter().all(|step| !step.code().is_empty()));
+        for line in plan.to_lines() {
+            assert!(!line.is_empty());
+        }
     }
 }

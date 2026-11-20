@@ -54,8 +54,9 @@
 //!   PDF/A, PDF/X and PDF/E targets. It adds XMP and output-intent placeholders,
 //!   raises the header version to the target minimum, regenerates the xref,
 //!   rejects unsupported or contradictory requests with typed errors, and
-//!   returns a report of enforced versus reported-only constraints. It never
-//!   claims certification.
+//!   returns a report of enforced versus reported-only constraints. A byte-free
+//!   [`ConformancePlan`] describes required metadata and output-intent steps
+//!   before conversion; neither it nor its report claims certification.
 //! - [`create_from_html`], [`create_from_html_with_options`], [`HtmlOptions`],
 //!   and [`create_pdf_from_html_file`] add a bounded, dependency-free HTML
 //!   importer: a documented element/CSS subset, typed rejection of active
@@ -65,7 +66,9 @@
 //!   page/text model: absolutely positioned spans (with PDF-to-CSS coordinate
 //!   inversion), page navigation, allow-listed hyperlinks, and local image
 //!   references only when the caller supplies an already-extracted, safe
-//!   filename. It emits no script and fetches nothing.
+//!   filename. Bounded [`HtmlStyle`] hooks expose CSS class naming and extra
+//!   CSS, and an [`HtmlExportReport`] records mode, counts, and notes. It emits
+//!   no script and fetches nothing.
 //! - [`capture`] replaces the retired browser-capture extension with local,
 //!   caller-supplied inputs: a saved HTML file, supplied markup, or an MHTML-like
 //!   payload. It renders through the bounded HTML subset, fetches nothing, and
@@ -81,8 +84,10 @@
 //!   network access is involved.
 //! - [`postscript`] writes a deterministic, DSC-conformant PostScript program
 //!   that draws text, rectangles, and lines with standard fonts and shows every
-//!   page. Unrepresentable glyphs and image content are skipped and recorded in
-//!   an explicit [`PsExportReport`] rather than silently faked.
+//!   page. Its DSC header includes language level, data encoding and
+//!   orientation; title and document-wide content are bounded. Unrepresentable
+//!   glyphs and image content are skipped and recorded in an explicit
+//!   [`PsExportReport`] rather than silently faked.
 //! - [`postscript_ingest`] is the bounded read counterpart: it parses DSC headers
 //!   (`%%BoundingBox`, `%%Pages`, `%%Page`), detects EPS versus PS, and extracts
 //!   a documented text/line/rectangle subset into the same [`PsContent`] model.
@@ -167,8 +172,9 @@ pub use capture::{
 };
 pub use conformance::{
     ConformanceExport, ConformanceExportError, ConformanceExportReport, ConformanceFinding,
-    ConformanceRequest, ConformanceTarget, ExportSeverity, NormalizationOptions,
-    REPORTED_ONLY_CONSTRAINTS, SCOPE_NOTE, export_conformance_pdf, looks_like_normalized_pdf,
+    ConformancePlan, ConformancePlanReport, ConformanceRequest, ConformanceTarget, ExportSeverity,
+    NormalizationOptions, OutputIntentPlan, PlanRequirement, REPORTED_ONLY_CONSTRAINTS, SCOPE_NOTE,
+    export_conformance_pdf, looks_like_normalized_pdf, plan_conformance_export,
 };
 pub use converter::{Converter, MockConverter};
 pub use create::{
@@ -186,8 +192,12 @@ pub use error::ConversionError;
 pub use export::ExportKind;
 pub use export_options::{ExportOptionError, ExportPageSelection, LineEnding};
 pub use html_export::{
-    HtmlDocument, HtmlExportError, HtmlLink, HtmlOptions as HtmlExportOptions, HtmlOutputMode,
-    HtmlPage, HtmlSpan, MAX_PAGES as HTML_MAX_PAGES, NamedHtml, export_html, export_html_string,
+    HtmlDocument, HtmlExportError, HtmlExportReport, HtmlFinding, HtmlLink,
+    HtmlOptions as HtmlExportOptions, HtmlOutputMode, HtmlPage, HtmlSpan, HtmlStyle,
+    MAX_CLASS_PREFIX_BYTES as HTML_MAX_CLASS_PREFIX_BYTES, MAX_PAGES as HTML_MAX_PAGES,
+    MAX_STYLESHEET_BYTES as HTML_MAX_STYLESHEET_BYTES, MAX_TITLE_BYTES as HTML_MAX_TITLE_BYTES,
+    MAX_TOTAL_LINKS as HTML_MAX_TOTAL_LINKS, MAX_TOTAL_SPANS as HTML_MAX_TOTAL_SPANS, NamedHtml,
+    export_html, export_html_string, export_html_with_report,
 };
 pub use image::{
     ImageFormat, MAX_IMAGE_BYTES, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS, encode, encode_bmp,
@@ -218,9 +228,10 @@ pub use portfolio::{
     serialize_portfolio,
 };
 pub use postscript::{
-    MAX_PAGES as POSTSCRIPT_MAX_PAGES, PsContent, PsDocument, PsExportError, PsExportReport,
-    PsFont, PsImageRef, PsLine, PsPage, PsRect, PsText, PsUnsupportedItem, export_postscript,
-    export_postscript_with_report,
+    MAX_PAGES as POSTSCRIPT_MAX_PAGES, MAX_TITLE_BYTES as POSTSCRIPT_MAX_TITLE_BYTES,
+    MAX_TOTAL_CONTENT as POSTSCRIPT_MAX_TOTAL_CONTENT, PsContent, PsDocument, PsExportError,
+    PsExportReport, PsFont, PsImageRef, PsLine, PsPage, PsRect, PsText, PsUnsupportedItem,
+    export_postscript, export_postscript_with_report,
 };
 pub use postscript_ingest::{
     PS_INGEST_MAX_BYTES, PS_INGEST_MAX_LINES, PS_INGEST_MAX_PAGES, PS_INGEST_MAX_TOKENS_PER_PAGE,
