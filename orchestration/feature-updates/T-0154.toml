@@ -1,0 +1,26 @@
+# T-0154 - acceptance-gate evidence pack (AC-02 / AC-03 / AC-10)
+#
+# This task produced the evidence pack referenced by docs/TESTING.md and the
+# guard test `t0154_evidence_pack_files_exist`. It introduces no new feature
+# row: it records the build, format, clippy, workspace-test, corpus-smoke and
+# docs-gate transcripts that back AC-02, AC-03 and AC-10.
+
+task = "T-0154"
+lane = "qa"
+status = "verified"
+evidence = "docs/evidence/qa/T-0154.md"
+docs = [
+    "docs/TESTING.md",
+    "docs/evidence/qa/T-0154.md",
+    "crates/pdfxi-testkit/tests/evidence_refs.rs",
+]
+notes = """
+Acceptance-gate evidence pack. The transcript cites every gate command the
+release promise relies on: workspace release build, `cargo fmt --all --check`,
+workspace clippy with `-D warnings`, `cargo test --workspace`,
+`cargo xtask corpus smoke`, and `cargo xtask docs`. No feature row changes.
+"""
+tests = [
+    "t0154_evidence_pack_files_exist",
+    "t0154_evidence_cites_every_gate_command",
+]
