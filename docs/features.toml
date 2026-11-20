@@ -2509,75 +2509,74 @@ title = "Metadata and XMP scrubbing"
 [[feature]]
 docs = [
     "crates/pdfxi-security/src/security_envelope.rs",
-    "crates/pdfxi-security/src/lib.rs",
     "crates/pdfxi-security/src/error.rs",
-    "docs/evidence/security/T-0116.md",
+    "crates/pdfxi-security/src/lib.rs",
+    "docs/evidence/security/T-0162.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 236 passed, 0 failed, including all 8 new security_envelope tests covering deterministic round-trip, tampered payload/label integrity failures, empty/duplicate recipients, authorization, and malformed-byte typed errors; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0116.md."
+evidence = "docs/evidence/security/T-0162.md"
 id = "SEC-010"
 notes = """
-Adds a local SecurityEnvelope file format: a deterministic, length-prefixed
-binary container with a magic header, version, payload, envelope-wide
-permissions, a recipient list (label + per-recipient permissions), and a SHA-256
-integrity tag computed with the crate's existing crypto::sha primitive.
-build_security_envelope validates input; open_security_envelope verifies the tag
-and returns an OpenedSecurityEnvelope plus a deterministic EnvelopeReport;
-authorize enforces recipient and envelope permissions with typed errors. This is
-a LOCAL file envelope, not Adobe's server Rights Management format: no network,
-licence server, or host clock. It provides integrity and a declarative access
-description, NOT confidentiality (payload is stored verbatim); callers needing
-secrecy should encrypt first with certificate_encryption or the standard
-handler. Honest scope: no attachment encryption beyond wrapping already-
-encrypted bytes and no host UI/CLI exposure, so the row stays in-progress.
-No unsafe/new deps/panics.
+Library-level closure. CertificateEnvelope is built from a caller-supplied
+RecipientList (each Recipient holds a public Certificate), one content-encryption
+key wrapped once per recipient through the existing KeyWrapProvider boundary,
+and an EncryptionScope that records whole-document vs selected-attachments
+encryption. EnvelopeDeliveryReport is deterministic (recipients and attachment
+names sorted) and carries only labels, lengths and stable identifiers. Typed
+errors cover empty/duplicate recipients, empty/duplicate attachment names, wrong
+CEK length, and wrap failures. The existing integrity-only SecurityEnvelope is
+retained. Confidentiality comes from the existing AES-CBC + RFC 3394 AES-KW
+certificate_encryption implementation; the byte-level application of the scope
+decision is the caller's job because this crate never opens document files.
+Local/offline equivalent of retired server Rights Management; no network,
+no licence server, no new deps, no unsafe/panics.
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "security_envelope::tests::round_trip_preserves_payload_recipients_and_permissions",
-    "security_envelope::tests::serialization_is_deterministic",
-    "security_envelope::tests::tampered_payload_fails_with_typed_integrity_error",
-    "security_envelope::tests::tampered_recipient_label_fails_integrity",
-    "security_envelope::tests::empty_payload_and_no_recipients_are_typed_errors",
-    "security_envelope::tests::duplicate_and_empty_labels_are_typed_errors",
-    "security_envelope::tests::authorization_honors_recipient_and_envelope_permissions",
-    "security_envelope::tests::malformed_bytes_are_typed_errors_not_panics",
+    "security_envelope::tests::certificate_envelope_recipients_are_ordered_and_deduplicated",
+    "security_envelope::tests::wrap_provider_is_invoked_once_per_recipient",
+    "security_envelope::tests::attachment_scope_selects_only_named_attachments",
+    "security_envelope::tests::empty_recipients_is_a_typed_error",
+    "security_envelope::tests::empty_and_duplicate_attachment_selection_are_typed_errors",
+    "security_envelope::tests::invalid_cek_length_is_a_typed_error",
+    "security_envelope::tests::certificate_envelope_is_deterministic_and_redacts_secrets",
+    "security_envelope::tests::envelope_input_debug_redacts_plaintext_and_key",
 ]
 title = "Security envelopes and attachment encryption"
 
 [[feature]]
 docs = [
     "crates/pdfxi-security/src/policy.rs",
-    "crates/pdfxi-security/src/lib.rs",
     "crates/pdfxi-security/src/error.rs",
-    "docs/evidence/security/T-0116.md",
+    "crates/pdfxi-security/src/lib.rs",
+    "docs/evidence/security/T-0162.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 236 passed, 0 failed, including all 7 new policy tests covering canonical plan order, watermark/expiry flags, compliant/expired validation, typed expiry and permission errors, deterministic reports, and policy-set lookups; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0116.md."
+evidence = "docs/evidence/security/T-0162.md"
 id = "SEC-011"
 notes = """
-Adds named local ProtectionPolicy values (permissions, optional expiry,
-watermark flag), a PolicySet with deterministic name ordering, and pure
-build_policy_plan / validate_policy / enforce_policy / check_permission helpers.
-Plans and reports are deterministic and in canonical action order (set
-permissions, apply watermark, check expiry). Time is a caller-supplied i64, so
-there is no host-clock read and reports are reproducible. Honest scope: this is
-a local, offline policy decision model with NO rights-management server, no
-network access, no cryptography, and no host UI/CLI exposure; enforcement is a
-decision made by the local reader, so the row stays in-progress. No
-unsafe/new deps/panics.
+Library-level closure. ProtectionPolicy now carries a named security handler,
+key length, permissions, and recipients (with with_protection / with_protection_id
+constructors). validate_policy_spec checks handler/key-length/recipient invariants;
+build_protection_plan yields a deterministic, canonically ordered ProtectionPlan
+(validate, set permissions, wrap recipient keys, optional watermark, optional
+expiry check); apply_protection_policy returns a deterministic ProtectionApplyReport
+against a caller-supplied time. Typed errors cover unknown handler, invalid key
+length, empty/duplicate recipients, expiry, and missing policy. The caller-supplied
+clock keeps reports reproducible. Local/offline decision model only: no rights-
+management server, no network policy fetch, no host clock, no cryptography in the
+policy itself; enforcement remains a local-reader decision. No new deps or panics.
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "policy::tests::policy_plan_is_deterministic_and_in_canonical_order",
-    "policy::tests::plan_reflects_watermark_and_expiry_flags",
-    "policy::tests::validate_policy_reports_compliant_and_expired_without_failing",
-    "policy::tests::enforce_expired_policy_returns_typed_error",
-    "policy::tests::policy_report_is_deterministic",
-    "policy::tests::permission_check_is_a_typed_error",
-    "policy::tests::policy_set_lookup_apply_and_name_validation",
+    "policy::tests::protection_policy_validates_handler_key_length_and_recipients",
+    "policy::tests::protection_policy_exposes_handler_key_length_and_recipients",
+    "policy::tests::protection_plan_is_deterministic_and_canonical",
+    "policy::tests::protection_apply_report_is_deterministic",
+    "policy::tests::protection_apply_rejects_expired_policy_with_typed_error",
+    "policy::tests::policy_set_applies_protection_plan",
 ]
 title = "Policy-based protection replacement"
 

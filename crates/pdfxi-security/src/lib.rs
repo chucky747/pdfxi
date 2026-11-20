@@ -69,12 +69,15 @@
 //!   and deterministic trust/revocation reports with typed failure reasons.
 //!   Callers supply every CRL and issuer certificate; there is no network
 //!   access and no host-clock read.
-//! - [`security_envelope`] — local, tamper-evident file envelopes carrying a
-//!   payload, recipient list, and permissions (SEC-010). No rights-management
-//!   server or network access is involved.
-//! - [`policy`] — named local protection policies with deterministic
-//!   plans/reports and caller-supplied time (SEC-011). No rights-management
-//!   server is involved.
+//! - [`security_envelope`] — both local, tamper-evident file envelopes carrying
+//!   a payload, recipient list, and permissions, and certificate envelopes that
+//!   wrap a content key per recipient through the [`KeyWrapProvider`] boundary
+//!   with an explicit attachment-encryption scope (SEC-010). No
+//!   rights-management server or network access is involved.
+//! - [`policy`] — named local protection policies with a handler, key length,
+//!   permissions and recipients, deterministic validation/apply plans/reports,
+//!   and caller-supplied time (SEC-011). No rights-management server is
+//!   involved.
 //! - [`digital_id_lifecycle`] — validated caller-supplied PKCS#8-style key plus
 //!   certificate pairs, a sorted and deterministic digital-ID store with
 //!   caller-clocked validity and rotation, and a password-protected store
@@ -150,8 +153,10 @@ pub use password_policy::{
 };
 pub use permissions::{PasswordRole, Permission, Permissions};
 pub use policy::{
-    PolicyAction, PolicyPlan, PolicyReport, PolicySet, PolicyStatus, ProtectionPolicy,
-    build_policy_plan, check_permission, enforce_policy, validate_policy,
+    PolicyAction, PolicyPlan, PolicyReport, PolicySet, PolicyStatus, PolicyValidationReport,
+    ProtectionAction, ProtectionApplyReport, ProtectionPlan, ProtectionPolicy,
+    apply_protection_policy, build_policy_plan, build_protection_plan, check_permission,
+    enforce_policy, validate_policy, validate_policy_spec,
 };
 pub use protector::{MockProtector, Protector};
 pub use redaction::{
@@ -173,8 +178,9 @@ pub use scrub::{
     XmpProperty, XmpPropertyKey, XmpStrategy,
 };
 pub use security_envelope::{
-    EnvelopeRecipient, EnvelopeReport, OpenedSecurityEnvelope, SecurityEnvelope,
-    build_security_envelope, open_security_envelope,
+    CertificateEnvelope, CertificateEnvelopeInput, EncryptionScope, EnvelopeDeliveryReport,
+    EnvelopeRecipient, EnvelopeReport, OpenedSecurityEnvelope, RecipientDelivery, SecurityEnvelope,
+    build_certificate_envelope, build_security_envelope, open_security_envelope,
 };
 pub use signature::{DigestAlgorithm, SignatureCoverage, SignatureInfo, SignatureStatus};
 pub use standard_handler::{

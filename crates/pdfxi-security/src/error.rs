@@ -266,6 +266,10 @@ pub enum SecurityError {
     EnvelopeIntegrityFailed,
     /// The caller was not granted a permission declared by the envelope.
     EnvelopePermissionDenied(&'static str),
+    /// A selected-attachments envelope named no attachments.
+    EnvelopeEmptyAttachmentSelection,
+    /// Two selected attachments shared a name in an envelope scope.
+    EnvelopeDuplicateAttachment(String),
     /// A protection policy had an empty name.
     PolicyEmptyName,
     /// Two protection policies shared a name.
@@ -276,6 +280,16 @@ pub enum SecurityError {
     PolicyExpired(String),
     /// The caller was denied an operation by a protection policy.
     PolicyPermissionDenied(&'static str),
+    /// A protection policy named an unknown security handler.
+    PolicyUnknownHandler(String),
+    /// A protection policy's key length did not match its handler.
+    PolicyInvalidKeyLength(u16),
+    /// A protection policy carried no recipients.
+    PolicyNoRecipients,
+    /// Two recipients shared a label in a protection policy.
+    PolicyDuplicateRecipient(String),
+    /// A protection policy contained an empty recipient label.
+    PolicyEmptyRecipient,
     /// A caller-supplied PKCS#8-style private key was structurally invalid.
     ///
     /// The static label names the offending field; key bytes are never carried.
@@ -545,6 +559,15 @@ impl fmt::Display for SecurityError {
             Self::EnvelopePermissionDenied(operation) => {
                 write!(f, "envelope permission denied for operation: {operation}")
             }
+            Self::EnvelopeEmptyAttachmentSelection => {
+                write!(
+                    f,
+                    "selected-attachments envelope must name at least one attachment"
+                )
+            }
+            Self::EnvelopeDuplicateAttachment(name) => {
+                write!(f, "duplicate attachment name in envelope scope: {name}")
+            }
             Self::PolicyEmptyName => write!(f, "protection policy name must not be empty"),
             Self::PolicyDuplicateName(name) => {
                 write!(f, "duplicate protection policy name: {name}")
@@ -557,6 +580,27 @@ impl fmt::Display for SecurityError {
             }
             Self::PolicyPermissionDenied(operation) => {
                 write!(f, "protection policy denied operation: {operation}")
+            }
+            Self::PolicyUnknownHandler(handler) => {
+                write!(
+                    f,
+                    "unknown security handler in protection policy: {handler}"
+                )
+            }
+            Self::PolicyInvalidKeyLength(bits) => {
+                write!(
+                    f,
+                    "protection policy key length is invalid for its handler: {bits} bits"
+                )
+            }
+            Self::PolicyNoRecipients => {
+                write!(f, "a protection policy requires at least one recipient")
+            }
+            Self::PolicyDuplicateRecipient(label) => {
+                write!(f, "duplicate recipient in protection policy: {label}")
+            }
+            Self::PolicyEmptyRecipient => {
+                write!(f, "protection policy recipient label must not be empty")
             }
             Self::DigitalIdKeyMalformed(field) => {
                 write!(f, "malformed PKCS#8 private key field: {field}")
