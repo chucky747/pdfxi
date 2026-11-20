@@ -4190,12 +4190,27 @@ title = "PDF/UA conformance"
 [[feature]]
 docs = "crates/pdfxi-core/src/preservation.rs, crates/pdfxi-core/src/incremental.rs, docs/evidence/core/T-0184.md"
 domain = "Standards"
-evidence = "docs/evidence/core/T-0184.md"
+evidence = "docs/evidence/hardening/T-0207.md"
 id = "STD-010"
-notes = "Deterministic incremental-save plans and chain validation (original prefix preserved, /Prev chain, preserved trailer keys, bounded revisions), with typed unsupported signing and archival-packaging operations. Host boundary: cryptographic signing and packaging belong to the security lane."
+notes = """
+Incremental save now accepts both classic-table and cross-reference-stream
+sources (ISO 32000-1 7.5.6/7.5.8). Document::save_incremental appends a section
+whose kind matches the source's final section: a /Type /XRef stream with /W,
+/Index, /Size, /Prev and carried-over /Root, /Info and /ID for stream sources,
+or a classic table for classic and hybrid sources (the /XRefStm marker is
+dropped). The original bytes remain an exact prefix; changed objects are written
+as plain type-1 entries and no new object streams are created. The Excel 2019
+hybrid fixture now round-trips with both pages and their text intact. Encrypted
+sources, full rewrite (save), the optimizer and page-plan output still decline
+xref-stream input; the xref stream writer uses 4-byte offsets and uncompressed
+entry rows.
+"""
 priority = "P1"
 status = "library"
 tests = [
+    "real_world_pdf_text_is_extractable",
+    "real_world_pdf_incremental_save_preserves_pages_and_text",
+    "xref_tests::incremental_save_of_xref_stream_source_appends_matching_stream_section",
     "preservation::tests::valid_incremental_save_is_accepted",
     "preservation::tests::broken_prev_chain_is_detected",
     "preservation::tests::signing_and_packaging_are_honestly_unsupported",

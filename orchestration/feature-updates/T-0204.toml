@@ -24,19 +24,17 @@ goal-verify, and the Windows CI jobs; the gate fails with an actionable
 message when the native PDFium library is absent. `features verify` now parses
 the citations actually used in docs/features.toml and resolves each final
 symbol against a one-pass index of `#[test]` functions under crates/. The
-current matrix has 16 unresolvable citations and 3 non-test command entries;
-this task intentionally does not edit docs/features.toml, so the new check
-fails until the integrator fixes them. The real-world fixture is a locally
+current matrix had 16 unresolvable citations and 3 non-test command entries;
+this task did not edit docs/features.toml, so the new check failed until the
+integrator merged the matrix fixes. The real-world fixture is a locally
 produced Microsoft Excel 2019 PDF (xref stream + object stream + Flate content
 + embedded subset font); its read/text path passes, and the incremental-save
-round trip is ignored with the exact core limitation.
-"""
+round trip (ignored at T-0204) is enabled and passing after T-0207.
 tests = [
     "citation_parser_accepts_supported_forms",
     "citation_parser_rejects_non_identifiers",
     "test_index_finds_annotated_functions",
     "test_index_ignores_unannotated_functions_and_comments",
-    "real_world_pdf_text_and_current_save_limitation",
-    "real_world_pdf_incremental_save_preserves_pages_and_text",
+    "real_world_pdf_text_is_extractable",
     "wall_clock_budget_stops_a_real_busy_loop",
 ]

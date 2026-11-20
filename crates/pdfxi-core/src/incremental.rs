@@ -42,7 +42,10 @@ use crate::{Document, Error, Result};
 /// Options controlling one incremental save.
 ///
 /// `Default` selects a classic `xref` table and a change-set-derived second
-/// `/ID` element, which makes repeated saves deterministic.
+/// `/ID` element, which makes repeated saves deterministic. When the source's
+/// final section is a cross-reference stream, prefer
+/// [`Document::save_incremental`], which selects the matching representation
+/// automatically; `xref_kind` here always wins for an explicit caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncrementalSaveOptions {
     /// Representation of the appended cross-reference section.
@@ -253,8 +256,10 @@ impl Document {
     ///
     /// Returns [`Error::MalformedPriorXref`] when the source cross-reference
     /// layer could not be parsed, [`Error::EncryptedDocument`] for encrypted
-    /// input, [`Error::UnsupportedState`] for xref-stream sources, and
-    /// serialization errors for staged objects that cannot be encoded.
+    /// input, and serialization errors for staged objects that cannot be
+    /// encoded. Both classic-table and cross-reference-stream sources are
+    /// accepted; the appended section uses `options.xref_kind` and its `/Prev`
+    /// always points at the source's final section.
     pub fn save_incremental_with(
         &self,
         options: &IncrementalSaveOptions,
@@ -267,11 +272,6 @@ impl Document {
         if prior_trailer.contains_key("Encrypt") {
             return Err(Error::EncryptedDocument);
         }
-        if structure.xref.uses_xref_stream {
-            return Err(Error::UnsupportedState(
-                "cross-reference streams are not supported",
-            ));
-        }
         let previous = parser::startxref_offset(&self.bytes)
             .map_err(|error| Error::MalformedPriorXref(error.to_string()))?;
 
@@ -280,6 +280,7 @@ impl Document {
             trailer.insert(key.clone(), value.clone());
         }
         trailer.remove("XRefStm");
+        strip_xref_stream_keys(&mut trailer);
         let root_preserved = prior_trailer.get("Root")
             == Some(&Object::Reference(ObjectId::new(
                 structure.root_id.number,
@@ -433,6 +434,27 @@ fn catalog_child_untouched(
     match catalog.get(key).and_then(Object::as_reference) {
         Some(id) => !changes.keys().any(|staged| staged.number == id.number),
         None => true,
+    }
+}
+
+/// Remove keys that only describe a cross-reference stream body.
+///
+/// A hybrid source's merged trailer carries the companion `/XRefStm` stream's
+/// `/Type`, `/W`, `/Index`, `/Length` and filter keys. Those must not leak into
+/// the appended revision: a new classic table would advertise a stream body it
+/// does not have, and a new stream would claim the old `/Filter` while carrying
+/// uncompressed entry rows.
+fn strip_xref_stream_keys(trailer: &mut Dictionary) {
+    for key in [
+        "Type",
+        "W",
+        "Index",
+        "Length",
+        "Filter",
+        "DecodeParms",
+        "DL",
+    ] {
+        trailer.remove(key);
     }
 }
 
@@ -1051,8 +1073,7 @@ impl Document {
     /// # Errors
     ///
     /// Returns [`Error::MalformedPriorXref`] for an unreadable source xref,
-    /// [`Error::EncryptedDocument`] for encrypted input,
-    /// [`Error::UnsupportedState`] for xref-stream sources, and serialization
+    /// [`Error::EncryptedDocument`] for encrypted input, and serialization
     /// errors for staged objects that cannot be encoded.
     pub fn plan_incremental_update(
         &self,

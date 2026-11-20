@@ -5,14 +5,14 @@
 //! cross-reference stream, an object stream, FlateDecode content streams, and
 //! an embedded subset TrueType font.
 //!
-//! The read path is fully supported. `Document::save_incremental()` currently
-//! declines cross-reference-stream sources with a typed error, so the
-//! non-ignored test records that limitation and the ignored test holds the
-//! round-trip assertions we need once the writer supports such sources.
+//! The read and incremental-save paths are supported: `save_incremental()`
+//! appends a revision whose cross-reference section matches the source's final
+//! section (classic here, because the Excel hybrid file ends in a classic table
+//! with `/XRefStm`), leaving the original bytes as an exact prefix.
 
 use std::path::PathBuf;
 
-use pdfxi_core::{Document, Error};
+use pdfxi_core::{Document, XrefSectionKind};
 
 fn fixture() -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -21,7 +21,7 @@ fn fixture() -> Vec<u8> {
 }
 
 #[test]
-fn real_world_pdf_text_and_current_save_limitation() {
+fn real_world_pdf_text_is_extractable() {
     let doc = Document::from_bytes(fixture()).expect("real-world fixture parses");
 
     assert_eq!(doc.page_count().expect("page count"), 2);
@@ -51,29 +51,32 @@ fn real_world_pdf_text_and_current_save_limitation() {
             "page 2 is missing {word:?}: {second:?}"
         );
     }
-
-    match doc.save_incremental() {
-        Err(Error::UnsupportedState(reason)) => assert_eq!(
-            reason, "cross-reference streams are not supported",
-            "the current limitation must stay a typed, explicit error"
-        ),
-        Ok(bytes) => panic!(
-            "incremental save unexpectedly wrote {} bytes for an xref-stream source",
-            bytes.len()
-        ),
-        Err(other) => panic!("incremental save returned an unexpected error: {other}"),
-    }
 }
 
 #[test]
-#[ignore = "pdfxi-core save_incremental rejects xref-stream sources (crates/pdfxi-core/src/lib.rs:925): Error::UnsupportedState(\"cross-reference streams are not supported\")"]
 fn real_world_pdf_incremental_save_preserves_pages_and_text() {
-    let original = Document::from_bytes(fixture()).expect("real-world fixture parses");
+    let original_bytes = fixture();
+    let original = Document::from_bytes(original_bytes.clone()).expect("real-world fixture parses");
     let saved = original
         .save_incremental()
         .expect("incremental save must support xref-stream sources");
+    assert!(
+        saved.starts_with(&original_bytes),
+        "an incremental save must preserve the original bytes as an exact prefix"
+    );
 
-    let reopened = Document::from_bytes(saved).expect("incremental revision parses");
+    let reopened = Document::from_bytes(saved.clone()).expect("incremental revision parses");
+    let report = reopened.xref_report().expect("saved xref report");
+    assert_eq!(
+        report.sections[0].kind,
+        XrefSectionKind::Classic,
+        "a hybrid source whose final section is a classic table must keep the classic representation"
+    );
+    let appended = &saved[original_bytes.len()..];
+    assert!(
+        !appended.windows(7).any(|window| window == b"/XRefStm"),
+        "the appended classic section must not advertise a hybrid companion"
+    );
     assert_eq!(reopened.page_count().expect("page count"), 2);
     for index in 0..2 {
         assert_eq!(

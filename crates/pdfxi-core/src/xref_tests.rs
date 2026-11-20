@@ -6,6 +6,7 @@
 //! no dependency on another crate. Every byte offset is computed while writing,
 //! which keeps the cross-reference data self-consistent.
 
+use crate::object::{Dictionary, Object};
 use crate::parser;
 use crate::{Document, Error, ObjectId, ObjectStreamOptions, XrefSectionKind, inspect_xref};
 
@@ -387,7 +388,7 @@ fn xref_stream_parses_page_tree_content_and_decode_parms() {
     };
     let pdf = build_xref_stream_pdf(&[], &objects, 5, 6, &entries, "", options);
 
-    let document = Document::from_bytes(pdf).expect("xref stream fixture parses");
+    let document = Document::from_bytes(pdf.clone()).expect("xref stream fixture parses");
     assert_eq!(document.page_count().expect("page count"), 1);
     assert_eq!(document.root().expect("root"), ObjectId::new(1, 0));
     assert_eq!(document.trailer_size().expect("size"), Some(6));
@@ -399,19 +400,92 @@ fn xref_stream_parses_page_tree_content_and_decode_parms() {
         document.page_text(0).expect("decoded page text"),
         "Stream XRef!"
     );
-    // Saving an xref-stream input must be declined, not silently rewritten.
+    // A full rewrite still declines xref-stream input, but an incremental
+    // update is supported and must append a matching stream section.
     assert!(matches!(
         document.save(),
         Err(Error::UnsupportedState(
             "cross-reference streams are not supported"
         ))
     ));
-    assert!(matches!(
-        document.save_incremental(),
-        Err(Error::UnsupportedState(
-            "cross-reference streams are not supported"
-        ))
-    ));
+    let saved = document
+        .save_incremental()
+        .expect("incremental save must support xref-stream sources");
+    assert!(saved.starts_with(&pdf), "source bytes must be a prefix");
+}
+
+#[test]
+fn incremental_save_of_xref_stream_source_appends_matching_stream_section() {
+    let content = b"BT (Stream XRef!) Tj ET";
+    let stream_body = format!(
+        "<< /Length {} >>\nstream\n{}\nendstream",
+        content.len(),
+        String::from_utf8_lossy(content)
+    )
+    .into_bytes();
+    let objects = vec![
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+        (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
+        (
+            3,
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        ),
+        (4, stream_body),
+    ];
+    let entries = vec![
+        (0, Entry::Free),
+        (1, Entry::Object(1)),
+        (2, Entry::Object(2)),
+        (3, Entry::Object(3)),
+        (4, Entry::Object(4)),
+        (5, Entry::XrefSelf),
+    ];
+    let pdf = build_xref_stream_pdf(&[], &objects, 5, 6, &entries, "", XrefOptions::default());
+
+    let mut document = Document::from_bytes(pdf.clone()).expect("xref stream fixture parses");
+    let replacement = b"BT (Updated XRef!) Tj ET";
+    let mut dictionary = Dictionary::new();
+    dictionary.insert(
+        "Length".to_owned(),
+        Object::Integer(i64::try_from(replacement.len()).expect("small fixture")),
+    );
+    document
+        .set_object(
+            ObjectId::new(4, 0),
+            Object::Stream {
+                dictionary,
+                data: replacement.to_vec(),
+            },
+        )
+        .expect("stage replacement content stream");
+
+    let saved = document
+        .save_incremental()
+        .expect("incremental save must support xref-stream sources");
+    assert!(
+        saved.starts_with(&pdf),
+        "the original bytes must remain an exact prefix"
+    );
+
+    let original_startxref = inspect_xref(&pdf).expect("source xref report").startxref;
+    let report = inspect_xref(&saved).expect("saved xref report");
+    assert_eq!(
+        report.sections[0].kind,
+        XrefSectionKind::Stream,
+        "the appended section must match the source kind"
+    );
+    assert_eq!(
+        report.sections[0].previous,
+        Some(original_startxref),
+        "the appended section must /Prev chain to the source section"
+    );
+
+    let reopened = Document::from_bytes(saved).expect("incremental revision parses");
+    assert_eq!(reopened.page_count().expect("page count"), 1);
+    assert_eq!(
+        reopened.page_text(0).expect("updated page text"),
+        "Updated XRef!"
+    );
 }
 
 #[test]

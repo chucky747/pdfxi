@@ -804,46 +804,45 @@ impl Document {
     /// Append a revision to the original bytes without rewriting them.
     ///
     /// Staged changes from [`Document::set_object`] are written as new indirect
-    /// objects, followed by a new xref section whose trailer carries a `/Prev`
-    /// entry pointing at the original `startxref`. The returned bytes start
-    /// with the complete, byte-for-byte source document.
+    /// objects, followed by a new cross-reference section whose trailer carries
+    /// a `/Prev` entry pointing at the original `startxref`. The returned bytes
+    /// start with the complete, byte-for-byte source document.
+    ///
+    /// The appended section matches the kind of the source's final section
+    /// (ISO 32000-1, 7.5.6 and 7.5.8): a cross-reference-stream source gets a
+    /// new `/Type /XRef` stream whose `/Prev` points at the previous section,
+    /// while a classic table — including a hybrid file whose final revision is
+    /// a classic table with `/XRefStm` — gets a new classic table. The hybrid
+    /// marker is dropped because the new revision has no companion stream.
     ///
     /// # Errors
     ///
     /// Returns the stored structural error when the source is malformed,
-    /// [`Error::UnsupportedState`] for encrypted documents or cross-reference
-    /// streams, and serialization errors when a staged object cannot be
-    /// encoded (see [`Error::CannotSerialize`]).
+    /// [`Error::UnsupportedState`] for encrypted documents, and serialization
+    /// errors when a staged object cannot be encoded (see
+    /// [`Error::CannotSerialize`]).
     pub fn save_incremental(&self) -> Result<Vec<u8>> {
-        let structure = self.supported_structure()?;
+        match &self.structure {
+            Ok(structure) => {
+                if structure.xref.trailer().contains_key("Encrypt") {
+                    return Err(Error::UnsupportedState(
+                        "encrypted documents cannot be saved",
+                    ));
+                }
+            }
+            Err(error) => return Err(error.clone()),
+        }
         let previous = parser::startxref_offset(&self.bytes)?;
-        let mut out = self.bytes.clone();
-        out.push(b'\n');
-
-        let mut offsets = BTreeMap::new();
-        let mut highest = 0u32;
-        for (id, object) in &self.changes {
-            offsets.insert(id.number, out.len());
-            writer::serialize_indirect(*id, object, &mut out)?;
-            out.push(b'\n');
-            highest = highest.max(id.number);
-        }
-
-        let xref_offset = out.len();
-        writer::write_xref_section(&mut out, &offsets, false);
-
-        let mut trailer = structure.xref.trailer();
-        for (key, value) in &self.trailer_entries {
-            trailer.insert(key.clone(), value.clone());
-        }
-        let size = trailer_size(&trailer, highest);
-        trailer.insert("Size".to_owned(), Object::Integer(i64::from(size)));
-        trailer.insert("Root".to_owned(), Object::Reference(structure.root_id));
-        let previous = i64::try_from(previous)
-            .map_err(|_| Error::CannotSerialize("previous startxref exceeds i64".to_owned()))?;
-        trailer.insert("Prev".to_owned(), Object::Integer(previous));
-        writer::write_trailer(&mut out, &trailer, xref_offset)?;
-        Ok(out)
+        let xref_kind = if parser::looks_like_xref_stream(&self.bytes, previous) {
+            XrefSectionKind::Stream
+        } else {
+            XrefSectionKind::Classic
+        };
+        let options = IncrementalSaveOptions {
+            xref_kind,
+            id_seed: None,
+        };
+        Ok(self.save_incremental_with(&options)?.bytes)
     }
 
     /// Begin a page plan whose sole source and initial selection are this
