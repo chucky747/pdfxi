@@ -2513,14 +2513,39 @@ tests = [
 title = "Ink manager and overprint preview"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/trapping.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/render/T-0113.md",
+]
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-render (CARGO_TARGET_DIR=target/lanes/render): 120 passed, 0 failed; 7 new trapping::tests cover preset defaults, validation of widths/names/colours/sliding/tokens/resolution/depth, deterministic policy-bit encoding, and honest backend-limit warnings. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0113.md."
 id = "PRINT-006"
-notes = ""
+notes = """
+Adds `pdfxi_render::trapping`: TrappingPreset carries trap width, black trap
+width, black trap colour (Auto/Knockout/CustomCmyk), join style and a sliding
+policy; FlattenPolicy carries resolution (72..=2400 DPI), vector/raster balance,
+overprint handling and a bounded group depth. All values are validated for
+finiteness and documented bounds with typed TrapError variants. TrapPlan::build
+is pure and deterministic, encodes categorical choices in `policy_bits`, and
+reports backend-only features (custom CMYK transform, sliding geometry,
+simulated overprint, raster-biased flattening) through needs_backend_prepress
+and warnings. Backend limits are documented in the module rustdoc: this crate
+plans traps and flattening but never paints traps, flattens transparency, or
+touches page pixels -- a native prepress backend must do that work. Status stays
+in-progress because no such backend consumer or UI/CLI surface is wired here.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "trapping::tests::default_preset_and_policy_are_valid",
+    "trapping::tests::preset_validation_rejects_bad_widths_and_names",
+    "trapping::tests::categorical_tokens_parse_and_display",
+    "trapping::tests::trap_colour_and_sliding_validation",
+    "trapping::tests::flatten_policy_validation",
+    "trapping::tests::plan_is_deterministic_and_encodes_policy",
+    "trapping::tests::plan_reports_backend_limits_honestly",
+]
 title = "Trapping presets and transparency flattening"
 
 [[feature]]
@@ -2565,14 +2590,41 @@ tests = [
 title = "Page boxes bleed crop and printer marks"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/droplet.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/render/T-0113.md",
+]
 domain = "Print Production"
-evidence = ""
+evidence = "cargo test -p pdfxi-render (CARGO_TARGET_DIR=target/lanes/render): 120 passed, 0 failed; 8 new droplet::tests cover rooted-path acceptance, rejection of relative/traversal/NUL/control/oversized paths, profile parsing, config validation, deterministic sorted batch plans with pass/fail/skip counts and FNV-1a digest, empty batches, duplicate/invalid logical names, and the file-count cap. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0113.md."
 id = "PRINT-008"
-notes = ""
+notes = """
+Adds `pdfxi_render::droplet`: FolderWatchConfig validates a watch folder, an
+output folder, a PreflightProfile (built-ins or a validated custom name), a file
+pattern, recursion flag and a bounded poll interval. WatchedPath is a lexically
+validated newtype (rooted, no NUL/control bytes, no `..` component); only a
+trusted host boundary may resolve it into a real directory -- the crate does no
+filesystem I/O, symlink resolution or access checks. The host supplies
+FilePreflightInput facts (logical relative name, verdict, findings), and
+BatchPlan::build produces a deterministically sorted FileOutcomePlan list plus a
+BatchSummary with pass/fail/skip counts, all_passed and a canonical FNV-1a digest
+that is byte-identical across runs. Findings are sorted and duplicate logical
+names and oversized batches are typed errors. Status stays in-progress because
+actual folder watching and preflight execution belong to a host adapter; no
+watcher thread or CLI/UI is wired in this render-lane task.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "droplet::tests::watched_path_accepts_rooted_paths",
+    "droplet::tests::watched_path_rejects_unsafe_inputs",
+    "droplet::tests::preflight_profiles_parse_and_custom",
+    "droplet::tests::folder_watch_config_validation",
+    "droplet::tests::batch_plan_is_sorted_deterministic_and_summarised",
+    "droplet::tests::empty_batch_is_a_deterministic_pass",
+    "droplet::tests::invalid_and_duplicate_logical_names_are_rejected",
+    "droplet::tests::oversized_batch_is_rejected_without_allocating",
+]
 title = "Droplets hot folders and batch preflight"
 
 [[feature]]
@@ -3302,17 +3354,40 @@ tests = [
 title = "Font embedding and CID fonts"
 
 [[feature]]
-docs = "crates/pdfxi-render/src/lib.rs"
+docs = [
+    "crates/pdfxi-render/src/blend.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/render/T-0113.md",
+]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-render -p pdfxi-text (T-0009)"
+evidence = "cargo test -p pdfxi-render (CARGO_TARGET_DIR=target/lanes/render): 120 passed, 0 failed; 8 new blend::tests cover all standard blend-mode tokens, separable/non-separable categories, isolation/knockout parsing, transparency-group validation, alpha validation, deterministic plans with honest CMM/alpha warnings, the no-backend default case, and bit encoding. fmt/clippy/doc EXIT=0. Full output in docs/evidence/render/T-0113.md. Existing STD-005 tests (mock_renderer_produces_expected_raster_and_progress and the two pdfxi-text search tests) remain green in their crates."
 id = "STD-005"
-notes = "Raster contract uses tightly packed RGBA with explicit width/height so a future PDFium backend can carry transparency and blend results. Actual blend-mode fidelity is deferred to the backend milestone."
+notes = """
+Extends the raster/color contract with `pdfxi_render::blend`: BlendMode covers
+all ISO 32000 extended blend modes with tolerant token parsing and canonical
+names; BlendCategory marks Hue/Saturation/Color/Luminosity as non-separable;
+GroupIsolation and GroupKnockout describe transparency-group behaviour and a
+validated TransparencyGroup combines them. BlendSpec validates source/backdrop
+alpha, and BlendPlan::build is pure and deterministic, packing categorical
+choices into `bits`. Honest backend delegation: non-separable modes set
+needs_backend_cmm, partial alpha / isolated / knockout groups set
+needs_backend_alpha, and warnings name each requirement. The crate never
+composites pixels -- a native renderer must consume the plan. Status stays
+in-progress for the same reason as before: real blend-mode rasterization is
+deferred to the native backend milestone; this task adds the deterministic
+descriptor/plan layer only.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
-    "pdfxi-render::tests::mock_renderer_produces_expected_raster_and_progress",
-    "pdfxi-text::tests::search_returns_exact_byte_offsets_in_reading_order",
-    "pdfxi-text::tests::search_is_case_insensitive_by_default_and_can_be_exact",
+    "blend::tests::all_standard_blend_modes_parse_and_display",
+    "blend::tests::blend_category_separates_cmy_modes",
+    "blend::tests::isolation_and_knockout_parse_and_default",
+    "blend::tests::transparency_group_validation",
+    "blend::tests::blend_spec_alpha_validation",
+    "blend::tests::plan_is_deterministic_and_delegates_honestly",
+    "blend::tests::opaque_normal_without_group_needs_no_backend",
+    "blend::tests::plan_bits_encode_categorical_choices",
 ]
 title = "Transparency and blend modes"
 

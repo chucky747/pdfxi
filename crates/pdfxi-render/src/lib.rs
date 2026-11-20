@@ -42,6 +42,21 @@
 //! management, and overprint policy. It produces a deterministic [`PreviewPlan`]
 //! a backend can consume, derives process plates from the colour structures in
 //! [`mod@color`], and reports unsupported conversions honestly.
+//!
+//! The [`mod@trapping`] module models trapping presets and transparency
+//! flattening (feature PRINT-006). It validates widths, colours, join/sliding
+//! choices and flatten resolution, then emits a deterministic [`TrapPlan`]
+//! whose backend requirements are stated explicitly.
+//!
+//! The [`mod@droplet`] module models droplet and hot-folder batch preflight
+//! planning (feature PRINT-008). It validates watch paths lexically at the host
+//! boundary, selects a preflight profile, and turns per-file facts into a
+//! deterministic [`BatchPlan`] and [`BatchSummary`] without any filesystem I/O.
+//!
+//! The [`mod@blend`] module extends the raster/color contract with blend-mode
+//! and group-isolation descriptors (feature STD-005). It produces a
+//! deterministic [`BlendPlan`] and honestly reports which compositing steps a
+//! native renderer must perform.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -84,6 +99,26 @@ pub mod color;
 /// unsupported conversions honestly.
 pub mod preview;
 
+/// Trapping presets and transparency-flattening policy (feature PRINT-006).
+///
+/// Validates trap widths, black trap colour, join and sliding choices, and
+/// flatten resolution/balance/overprint, then emits a deterministic [`TrapPlan`]
+/// with explicit backend requirements.
+pub mod trapping;
+
+/// Droplet and hot-folder batch-preflight planning (feature PRINT-008).
+///
+/// Validates watch paths lexically, selects a preflight profile, and builds a
+/// deterministic [`BatchPlan`] and [`BatchSummary`] from in-memory per-file
+/// facts. Performs no filesystem I/O.
+pub mod droplet;
+
+/// Blend-mode and transparency-group isolation descriptors (feature STD-005).
+///
+/// Extends the raster/color contract with deterministic compositing plans and
+/// honest backend delegation for non-separable modes and isolated groups.
+pub mod blend;
+
 pub use color::{
     ColorError, ConversionPlan, DeviceClass, DeviceColor, DeviceColorSpace, ICC_HEADER_SIZE,
     IccColorSpace, IccHeader, IccProfile, MAX_ICC_PROFILE_BYTES, MAX_ICC_TAG_COUNT,
@@ -94,6 +129,25 @@ pub use color::{
 pub use preview::{
     InkEntry, InkKind, InkManager, InkSummary, MAX_INK_NAME_BYTES, MAX_INKS, OverprintPolicy,
     PreviewConfig, PreviewError, PreviewMode, PreviewPlan, SoftProofIntent,
+};
+
+pub use trapping::{
+    DEFAULT_BLACK_WIDTH_PT, DEFAULT_FLATTEN_DEPTH, DEFAULT_FLATTEN_DPI, DEFAULT_TRAP_WIDTH_PT,
+    FlattenOverprint, FlattenPolicy, MAX_BLACK_WIDTH_PT, MAX_FLATTEN_DEPTH, MAX_FLATTEN_DPI,
+    MAX_PRESET_NAME_BYTES, MAX_SLIDE_PT, MAX_TRAP_WIDTH_PT, MIN_FLATTEN_DPI, TrapColor, TrapError,
+    TrapJoinStyle, TrapPlan, TrapSliding, TrappingPreset, VectorRasterBalance,
+};
+
+pub use droplet::{
+    BatchPlan, BatchSummary, DEFAULT_POLL_INTERVAL_MS, DropletError, FileOutcomePlan,
+    FilePreflightInput, FolderWatchConfig, MAX_BATCH_FILES, MAX_LOGICAL_NAME_BYTES, MAX_NAME_BYTES,
+    MAX_PATH_BYTES, MAX_POLL_INTERVAL_MS, MIN_POLL_INTERVAL_MS, PreflightProfile, PreflightResult,
+    WatchedPath,
+};
+
+pub use blend::{
+    BlendCategory, BlendError, BlendMode, BlendPlan, BlendSpec, GroupIsolation, GroupKnockout,
+    MAX_GROUP_NAME_BYTES, TransparencyGroup,
 };
 
 pub use print::{

@@ -3,7 +3,7 @@
   "lane": "render",
   "title": "Output preview trapping and transparency flattening",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0103"],
   "owns": [
     "crates/pdfxi-render/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0113.toml"
   ],
   "acceptance": "cargo test -p pdfxi-render",
-  "evidence": ""
+  "evidence": "docs/evidence/render/T-0113.md"
 }
