@@ -72,7 +72,12 @@
 
 use std::path::Path;
 
+use crate::{
+    OpenError, PaperSize, PrintContext, PrintDialogState, PrintModelError, PrintPageRange,
+    PrintPlan,
+};
 use egui::Key;
+use pdfxi_render::{Duplex, Orientation, PageScaleMode};
 
 use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
@@ -501,6 +506,12 @@ pub struct PdfxiApp {
     status: String,
     /// Unsaved-change policy consulted by every tab-close action.
     close_policy: UiClosePolicy,
+    /// Window-free print-dialog state; submitting never contacts a printer.
+    print_dialog: PrintDialogState,
+    /// Typed errors surfaced by recent document-open attempts.
+    open_errors: Vec<OpenError>,
+    /// Zero-based pages used by the Selection print range.
+    print_selection: Vec<usize>,
     scroll_x: f32,
     scroll_y: f32,
     selection: SelectionModel,
@@ -1506,6 +1517,9 @@ impl PdfxiApp {
             if ui.button("Close").clicked() {
                 self.close_active_tab();
             }
+            if ui.button("Print...").clicked() {
+                self.open_print_dialog();
+            }
             ui.separator();
             if ui.button("Zoom -").clicked() {
                 self.zoom_out();
@@ -1890,6 +1904,180 @@ impl PdfxiApp {
     }
 }
 
+impl PdfxiApp {
+    /// Borrow the window-free print-dialog model.
+    pub fn print_dialog(&self) -> &PrintDialogState {
+        &self.print_dialog
+    }
+
+    /// Show the print dialog.
+    pub fn open_print_dialog(&mut self) {
+        self.print_dialog.show();
+    }
+
+    /// Hide the print dialog.
+    pub fn close_print_dialog(&mut self) {
+        self.print_dialog.hide();
+    }
+
+    /// Select which pages the print job includes.
+    pub fn set_print_range(&mut self, range: PrintPageRange) {
+        self.print_dialog.model_mut().range = range;
+    }
+
+    /// Set the number of copies.
+    pub fn set_print_copies(&mut self, copies: u32) {
+        self.print_dialog.model_mut().copies = copies;
+    }
+
+    /// Set the duplex mode recorded for the host adapter.
+    pub fn set_print_duplex(&mut self, duplex: Duplex) {
+        self.print_dialog.model_mut().duplex = duplex;
+    }
+
+    /// Set portrait or landscape orientation.
+    pub fn set_print_orientation(&mut self, orientation: Orientation) {
+        self.print_dialog.model_mut().orientation = orientation;
+    }
+
+    /// Set fit, actual-size, or custom-percent scaling.
+    pub fn set_print_scale(&mut self, scale: PageScaleMode) {
+        self.print_dialog.model_mut().scale = scale;
+    }
+
+    /// Set the paper size used for fitting and recorded in the plan.
+    pub fn set_print_paper(&mut self, paper: PaperSize) {
+        self.print_dialog.model_mut().paper = paper;
+    }
+
+    /// Replace the zero-based pages used by the `Selection` print range.
+    pub fn set_print_selected_pages(&mut self, pages: Vec<usize>) {
+        self.print_selection = pages;
+    }
+
+    /// Build a print context from the active tab's page count and current page.
+    pub fn print_context(&self) -> PrintContext {
+        let (page_count, current_page) = self
+            .state
+            .active_tab()
+            .map(|tab| (tab.page_count(), tab.current_page()))
+            .unwrap_or((0, 0));
+        PrintContext {
+            page_count,
+            current_page,
+            selected_pages: self.print_selection.clone(),
+        }
+    }
+
+    /// Submit the dialog's model without contacting a printer.
+    ///
+    /// This returns a data-only [`PrintPlan`]; a host adapter must spool it
+    /// through `pdfxi_render::print` and forward the rasters to a driver.
+    ///
+    /// # Errors
+    ///
+    /// Propagates every [`PrintModelError`] from dialog submission.
+    pub fn submit_print(&mut self) -> Result<PrintPlan, PrintModelError> {
+        let context = self.print_context();
+        self.print_dialog.submit(&context)
+    }
+
+    /// Record a typed document-open error for display in the shell.
+    pub fn record_open_error(&mut self, error: OpenError) {
+        self.open_errors.push(error);
+    }
+
+    /// Borrow the typed open errors recorded so far.
+    pub fn open_errors(&self) -> &[OpenError] {
+        &self.open_errors
+    }
+
+    /// Forget all recorded open errors.
+    pub fn clear_open_errors(&mut self) {
+        self.open_errors.clear();
+    }
+
+    fn print_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label("Submit builds a plan only; a host adapter performs printing.");
+        {
+            let model = self.print_dialog.model_mut();
+            ui.horizontal(|ui| {
+                ui.label("Pages:");
+                ui.radio_value(&mut model.range, PrintPageRange::All, "All");
+                ui.radio_value(&mut model.range, PrintPageRange::Current, "Current");
+                ui.radio_value(&mut model.range, PrintPageRange::Selection, "Selection");
+            });
+            let mut custom = match &model.range {
+                PrintPageRange::Custom(text) => text.clone(),
+                _ => String::new(),
+            };
+            ui.horizontal(|ui| {
+                ui.label("Custom:");
+                if ui.text_edit_singleline(&mut custom).changed() && !custom.is_empty() {
+                    model.range = PrintPageRange::Custom(custom.clone());
+                }
+            });
+            ui.add(
+                egui::DragValue::new(&mut model.copies)
+                    .range(1..=999)
+                    .prefix("Copies: "),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Orientation:");
+                ui.radio_value(&mut model.orientation, Orientation::Portrait, "Portrait");
+                ui.radio_value(&mut model.orientation, Orientation::Landscape, "Landscape");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Scale:");
+                ui.radio_value(&mut model.scale, PageScaleMode::Actual, "Actual");
+                ui.radio_value(&mut model.scale, PageScaleMode::Fit, "Fit");
+            });
+            let mut percent = match model.scale {
+                PageScaleMode::CustomPercent(value) => value,
+                _ => 100.0,
+            };
+            ui.horizontal(|ui| {
+                ui.label("Custom %:");
+                if ui
+                    .add(egui::DragValue::new(&mut percent).range(1.0..=1000.0))
+                    .changed()
+                {
+                    model.scale = PageScaleMode::CustomPercent(percent);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Duplex:");
+                ui.radio_value(&mut model.duplex, Duplex::None, "None");
+                ui.radio_value(&mut model.duplex, Duplex::LongEdge, "Long edge");
+                ui.radio_value(&mut model.duplex, Duplex::ShortEdge, "Short edge");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Paper:");
+                ui.radio_value(&mut model.paper, PaperSize::Letter, "Letter");
+                ui.radio_value(&mut model.paper, PaperSize::A4, "A4");
+                ui.radio_value(&mut model.paper, PaperSize::Legal, "Legal");
+            });
+        }
+        if ui.button("Submit (build plan)").clicked() {
+            let _ = self.submit_print();
+        }
+        let status = self.print_dialog.status().to_owned();
+        if !status.is_empty() {
+            ui.label(status);
+        }
+    }
+
+    fn open_errors_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label("Recent document-open failures:");
+        let messages: Vec<String> = self.open_errors.iter().map(ToString::to_string).collect();
+        for message in messages {
+            ui.label(message);
+        }
+        if ui.button("Clear").clicked() {
+            self.clear_open_errors();
+        }
+    }
+}
 impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_keyboard(ctx);
@@ -1908,6 +2096,24 @@ impl eframe::App for PdfxiApp {
             egui::TopBottomPanel::top("pdfxi_find").show(ctx, |ui| self.find_ui(ui));
         }
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
+        if self.print_dialog.is_open() {
+            let mut open = true;
+            egui::Window::new("Print")
+                .open(&mut open)
+                .show(ctx, |ui| self.print_ui(ui));
+            if !open {
+                self.print_dialog.hide();
+            }
+        }
+        if !self.open_errors.is_empty() {
+            let mut open = true;
+            egui::Window::new("Open errors")
+                .open(&mut open)
+                .show(ctx, |ui| self.open_errors_ui(ui));
+            if !open {
+                self.clear_open_errors();
+            }
+        }
     }
 }
 
@@ -2808,5 +3014,98 @@ mod tests {
                 .expect("plan")
                 .is_visible("oc-bg")
         );
+    }
+}
+
+#[cfg(test)]
+mod open_print_tests {
+    use super::*;
+
+    fn app_with_pages(pages: usize, current: usize) -> PdfxiApp {
+        let mut app = PdfxiApp::new();
+        let id = app.state.open_tab(format!("doc-{pages}.pdf"));
+        if let Some(tab) = app.state.tab_mut(id) {
+            tab.set_page_count(pages);
+            tab.set_current_page(current);
+        }
+        app
+    }
+
+    #[test]
+    fn print_context_is_derived_from_the_active_tab() {
+        let app = app_with_pages(6, 4);
+        let ctx = app.print_context();
+        assert_eq!(ctx.page_count, 6);
+        assert_eq!(ctx.current_page, 4);
+        assert!(ctx.selected_pages.is_empty());
+
+        let empty = PdfxiApp::new();
+        let ctx = empty.print_context();
+        assert_eq!(ctx.page_count, 0);
+    }
+
+    #[test]
+    fn print_dialog_open_close_and_submit_never_contact_a_printer() {
+        let mut app = app_with_pages(4, 2);
+        assert!(!app.print_dialog().is_open());
+        app.open_print_dialog();
+        assert!(app.print_dialog().is_open());
+
+        app.set_print_range(PrintPageRange::Current);
+        let plan = app.submit_print().expect("plan built without a printer");
+        assert_eq!(plan.pages, vec![2]);
+        assert_eq!(plan.summary, app.print_dialog().status());
+        assert_eq!(
+            app.print_dialog().last_plan().map(|p| p.raster_count()),
+            Some(1)
+        );
+
+        app.close_print_dialog();
+        assert!(!app.print_dialog().is_open());
+    }
+
+    #[test]
+    fn print_dialog_setters_update_the_model() {
+        let mut app = app_with_pages(4, 0);
+        app.set_print_copies(2);
+        app.set_print_duplex(Duplex::ShortEdge);
+        app.set_print_orientation(Orientation::Landscape);
+        app.set_print_scale(PageScaleMode::Fit);
+        app.set_print_paper(PaperSize::A4);
+        app.set_print_selected_pages(vec![3, 1]);
+        app.set_print_range(PrintPageRange::Selection);
+
+        let model = app.print_dialog().model();
+        assert_eq!(model.copies, 2);
+        assert_eq!(model.duplex, Duplex::ShortEdge);
+        assert_eq!(model.orientation, Orientation::Landscape);
+        assert_eq!(model.scale, PageScaleMode::Fit);
+        assert_eq!(model.paper, PaperSize::A4);
+        assert_eq!(model.range, PrintPageRange::Selection);
+        assert_eq!(app.print_context().selected_pages, vec![3, 1]);
+
+        let plan = app.submit_print().expect("selection plan");
+        assert_eq!(plan.pages, vec![1, 1, 3, 3]);
+    }
+
+    #[test]
+    fn open_errors_are_recorded_and_cleared() {
+        let mut app = PdfxiApp::new();
+        assert!(app.open_errors().is_empty());
+        app.record_open_error(OpenError::UnsupportedFormat);
+        app.record_open_error(OpenError::Encrypted);
+        assert_eq!(app.open_errors().len(), 2);
+        assert_eq!(app.open_errors()[0], OpenError::UnsupportedFormat);
+        app.clear_open_errors();
+        assert!(app.open_errors().is_empty());
+    }
+
+    #[test]
+    fn invalid_print_range_is_reported_through_the_shell() {
+        let mut app = app_with_pages(4, 0);
+        app.set_print_range(PrintPageRange::Custom("nope".to_owned()));
+        assert!(app.submit_print().is_err());
+        assert!(app.print_dialog().last_error().is_some());
+        assert!(app.print_dialog().last_plan().is_none());
     }
 }

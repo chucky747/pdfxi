@@ -2503,6 +2503,9 @@ dependencies = [
 [[package]]
 name = "pdfxi-security"
 version = "0.1.0"
+dependencies = [
+ "pdfxi-core",
+]
 
 [[package]]
 name = "pdfxi-standards"

@@ -46,7 +46,7 @@
 pub mod pdfium_backend;
 
 #[cfg(feature = "pdfium")]
-pub use pdfium_backend::PdfiumRenderer;
+pub use pdfium_backend::{DocumentMeta, PdfiumRenderer};
 
 /// Dependency-free page-thumbnail generation and LRU caching on top of the
 /// [`Renderer`] contract.

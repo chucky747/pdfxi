@@ -46,7 +46,9 @@ use std::{
     sync::{Mutex, MutexGuard, OnceLock},
 };
 
-use pdfium_render::prelude::{PdfRenderConfig, Pdfium, PdfiumError};
+use pdfium_render::prelude::{
+    PdfDocumentMetadataTagType, PdfRenderConfig, PdfSecurityHandlerRevision, Pdfium, PdfiumError,
+};
 
 use pdfxi_text::{
     CancellationToken as TextCancellationToken, Progress as TextProgress, TextError, TextExtractor,
@@ -160,6 +162,28 @@ fn lock_pdfium() -> Result<MutexGuard<'static, Pdfium>, RenderError> {
         .map_err(|_| RenderError::Backend("PDFium render lock is poisoned".to_owned()))
 }
 
+/// Metadata read from a loaded PDF document by the native backend.
+///
+/// Produced by [`PdfiumRenderer::document_meta`] as the native counterpart of
+/// the app layer's window-free open record. Page count, title, and encryption
+/// state are validated before this value is returned.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DocumentMeta {
+    /// Number of pages in the document.
+    pub page_count: usize,
+    /// Title from the document information dictionary, when present and non-empty.
+    pub title: Option<String>,
+    /// Security handler revision reported by PDFium; `-1` means unprotected.
+    pub security_revision: i32,
+}
+
+impl DocumentMeta {
+    /// Return `true` when the document reports an active security handler.
+    pub fn is_encrypted(&self) -> bool {
+        self.security_revision >= 0
+    }
+}
+
 /// A [`Renderer`] that rasterizes documents with the native PDFium library.
 ///
 /// Construct one with [`PdfiumRenderer::from_file`] or
@@ -219,6 +243,40 @@ impl PdfiumRenderer {
     /// Return the source path, if this renderer was opened from a file.
     pub fn source(&self) -> Option<&Path> {
         self.source.as_deref()
+    }
+    /// Read page count, information-dictionary title, and encryption state from
+    /// the loaded document.
+    ///
+    /// The native library is bound on first use and one process-wide lock covers
+    /// the whole load to metadata copy sequence, matching [`Self::render_page`].
+    /// Every failure is a structured [`RenderError`]; malformed metadata is
+    /// normalized rather than panicking.
+    pub fn document_meta(&self) -> Result<DocumentMeta, RenderError> {
+        let pdfium = lock_pdfium()?;
+        let document = pdfium
+            .load_pdf_from_byte_slice(&self.bytes, None)
+            .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
+        let page_count = document.pages().len() as usize;
+        let title = document
+            .metadata()
+            .get(PdfDocumentMetadataTagType::Title)
+            .map(|tag| tag.value().to_owned())
+            .filter(|value| !value.is_empty());
+        let security_revision = document
+            .permissions()
+            .security_handler_revision()
+            .map(|revision| match revision {
+                PdfSecurityHandlerRevision::Unprotected => -1,
+                PdfSecurityHandlerRevision::Revision2 => 2,
+                PdfSecurityHandlerRevision::Revision3 => 3,
+                PdfSecurityHandlerRevision::Revision4 => 4,
+            })
+            .unwrap_or(-1);
+        Ok(DocumentMeta {
+            page_count,
+            title,
+            security_revision,
+        })
     }
 }
 

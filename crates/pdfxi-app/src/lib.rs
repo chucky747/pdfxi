@@ -37,6 +37,8 @@ pub mod canvas;
 pub mod commands;
 pub mod find;
 pub mod layers;
+pub mod open;
+pub mod print;
 pub mod raster;
 pub mod selection;
 mod state;
@@ -58,6 +60,15 @@ pub use find::{DEFAULT_MATCH_CAP, FindMatch, FindOptions, FindState};
 pub use layers::{
     LayerError, LayerInfo, LayerModel, LayerRegistry, LayerState, OcPropertiesSummary, OcgId,
     OcgInfo, RadioGroup, VisibilityPlan,
+};
+pub use open::{
+    DocumentOpenPipeline, DocumentOpener, EncryptionState, MockDocumentOpener, MockResponse,
+    OpenBackendKind, OpenError, OpenResult, OpenTabStates, OpenedDocument, RecentFiles,
+    TabOpenState,
+};
+pub use print::{
+    DEFAULT_PRINT_DPI, PaperSize, PrintContext, PrintDialogState, PrintModel, PrintModelError,
+    PrintPageRange, PrintPlan,
 };
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use selection::{

@@ -1,59 +1,64 @@
 [[feature]]
 docs = [
-    "crates/pdfxi-render/src/print.rs",
+    "crates/pdfxi-app/src/open.rs",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-render/src/pdfium_backend.rs",
     "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/app/T-0106.md",
 ]
 domain = "View & Navigate"
-evidence = '''
-CARGO_TARGET_DIR=target/lanes/render, PDFIUM_PATH=C:\Users\cmabr\AppData\Local\pdfxi\pdfium\bin\pdfium.dll.
-cargo test -p pdfxi-render: 42 unit passed + 0 integration (0 tests in 3 feature-gated harnesses) + 0 doc tests, 0 failed, EXIT=0.
-cargo test -p pdfxi-render --features pdfium: 42 unit passed + 12 integration passed (pdfium_backend 4, pdfium_text 6, thumbnail_pdfium 2) + 0 doc tests, 0 failed, EXIT=0.
-cargo fmt -p pdfxi-render -- --check: EXIT=0.
-cargo clippy -p pdfxi-render --all-targets --all-features -- -D warnings: EXIT=0.
-cargo doc -p pdfxi-render --no-deps with RUSTDOCFLAGS=-D warnings: EXIT=0.
-'''
+evidence = """
+CARGO_TARGET_DIR=target/lanes/app, PDFIUM_PATH set by scripts/env.ps1 -Lane app.
+cargo test -p pdfxi-app: 130 passed, 0 failed, EXIT=0.
+cargo test -p pdfxi-app --features ui: 179 passed, 0 failed, EXIT=0.
+cargo test -p pdfxi-app --features ui,pdfium: 182 passed, 0 failed, EXIT=0 (includes open::tests::pdfium_opener_reads_the_real_fixture).
+cargo fmt -p pdfxi-app -p pdfxi-render -- --check: EXIT=0.
+cargo clippy -p pdfxi-app -p pdfxi-render --all-targets --all-features -- -D warnings: EXIT=0.
+cargo doc -p pdfxi-app -p pdfxi-render --no-deps --all-features with RUSTDOCFLAGS=-D warnings: EXIT=0.
+29 new tests. Full output in docs/evidence/app/T-0106.md.
+"""
 id = "VIEW-001"
 notes = """
-T-0049 adds a dependency-free `print` module to pdfxi-render. It defines a
-validated `PrintSettings` job model (page selection: all/single/inclusive
-range/explicit list; copies; fit/actual/custom-percent scale; orientation;
-duplex; named paper; margins; target DPI) with structured `PrintError`
-variants. `parse_page_ranges` parses 1-based expressions such as "1-3,5,7-",
-supports open spans, suppresses duplicates, sorts results, and rejects
-malformed/out-of-range/zero input with stable errors. `PrintJob` resolves a
-selection against a page count into a sorted, deduplicated, copy-expanded
-(page-major) list; `PrintJob::from_pages` accepts already-parsed zero-based
-indices. `PrintSpooler::spool` renders through `&dyn Renderer` at the chosen
-scale (measuring once at scale 1.0 for Fit), checks cancellation before the
-first page and between pages, reports whole-raster progress, and returns
-`PrintPage { page, width_px, height_px, rgba, dpi }` rasters plus a stable
-`SpoolSummary { pages, first_page, last_page, total_pixels }`.
+T-0106 adds pdfxi_app::open, a window-free document-open pipeline. DocumentOpenPipeline checks a CancellationToken before and after the load, records a typed OpenResult against a TabId in per-tab OpenTabStates, captures page count, metadata title, and EncryptionState in a plain OpenedDocument, and keeps a bounded most-recent-first RecentFiles list. Failures use typed OpenError variants. MockDocumentOpener is deterministic and available by default; PdfiumDocumentOpener (feature pdfium) opens real PDFs with PDFium and reads metadata through PdfiumRenderer::document_meta, added to pdfxi-render as DocumentMeta with page count, title, and security revision.
 
-This produces rasters only; handing them to a platform printer is explicitly a
-later adapter and is why VIEW-001 remains in-progress. All public items have
-rustdoc, the crate denies missing docs and forbids unsafe code, and non-test
-code uses no unwrap/expect/panic.
+T-0106 adds pdfxi_app::print, an app-level front end to pdfxi_render::print. PrintModel covers all/current/selection/custom page ranges (custom expressions parsed by pdfxi-render), copies, orientation, fit/actual/custom-percent scale, duplex, and Letter/A4/Legal/custom paper. It validates with typed PrintModelError variants and resolves a deterministic PrintPlan (zero-based expanded pages, full PrintSettings, stable summary) through pdfxi_render::print::PrintJob. PrintDialogState holds window-free dialog state; submitting only resolves data.
+
+The ui feature wires a Print dialog and an open-errors window into PdfxiApp with window-free helper methods and tests (no GUI or printer needed). Host boundary: this task produces plan and raster data only; sending pdfxi-render::print rasters to a platform printer driver remains a later adapter, so VIEW-001 stays in-progress. All public items have rustdoc; both crates deny missing docs and forbid unsafe; non-test code uses no unwrap/expect/panic.
 """
 priority = "P0"
 status = "in-progress"
 tests = [
-    "print::tests::parse_handles_singles_closed_ranges_and_open_ranges",
-    "print::tests::parse_suppresses_duplicates_and_sorts",
-    "print::tests::parse_rejects_out_of_range_and_zero",
-    "print::tests::settings_validation_rejects_bad_fields",
-    "print::tests::out_of_range_selection_is_rejected",
-    "print::tests::empty_selection_is_rejected",
-    "print::tests::explicit_list_is_sorted_deduplicated_and_page_major_with_copies",
-    "print::tests::range_and_all_selections_resolve_to_zero_based_pages",
-    "print::tests::actual_percent_and_fit_scaling_produce_expected_dimensions",
-    "print::tests::orientation_and_margins_change_fit_dimensions",
-    "print::tests::dpi_scales_raster_dimensions",
-    "print::tests::cancellation_before_spool_does_not_render",
-    "print::tests::cancellation_between_pages_stops_after_first_page",
-    "print::tests::progress_is_monotone_and_complete",
-    "print::tests::summary_is_stable_and_counts_copies_and_pixels",
-    "print::tests::deterministic_order_and_copy_expansion_are_byte_stable",
-    "print::tests::zero_sized_fit_measurement_is_rejected",
+    "open::tests::open_success_records_page_count_and_title",
+    "open::tests::open_error_is_typed_and_recorded",
+    "open::tests::encrypted_document_state_is_recorded",
+    "open::tests::unsupported_renderer_error_is_typed",
+    "open::tests::open_bytes_uses_lowercased_label_key",
+    "open::tests::recent_files_are_bounded_and_most_recent_first",
+    "open::tests::zero_capacity_recent_list_drops_everything",
+    "open::tests::per_tab_open_state_is_isolated",
+    "open::tests::attempts_counter_tracks_reopen_on_same_tab",
+    "open::tests::cancellation_before_open_does_not_touch_backend_or_recent",
+    "open::tests::cancellation_after_backend_result_is_honoured",
+    "open::tests::opening_bytes_never_touches_recent_files",
+    "open::tests::pdfium_opener_reads_the_real_fixture",
+    "print::tests::range_all_resolves_every_page",
+    "print::tests::range_current_uses_current_page",
+    "print::tests::range_selection_uses_selected_pages",
+    "print::tests::range_custom_parses_and_rejects_invalid",
+    "print::tests::copies_duplex_and_scale_are_recorded_in_plan",
+    "print::tests::plan_is_deterministic",
+    "print::tests::invalid_copies_and_scale_are_rejected",
+    "print::tests::current_and_selection_out_of_range_are_typed_errors",
+    "print::tests::empty_selection_is_a_typed_error",
+    "print::tests::paper_size_maps_to_render_paper",
+    "print::tests::print_dialog_state_submits_without_a_printer",
+    "ui::open_print_tests::print_context_is_derived_from_the_active_tab",
+    "ui::open_print_tests::print_dialog_open_close_and_submit_never_contact_a_printer",
+    "ui::open_print_tests::print_dialog_setters_update_the_model",
+    "ui::open_print_tests::open_errors_are_recorded_and_cleared",
+    "ui::open_print_tests::invalid_print_range_is_reported_through_the_shell",
 ]
 title = "Open and print PDF documents"
 
