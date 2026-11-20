@@ -44,7 +44,14 @@
 //! code. [`WatchedFolder`] adds a deterministic watched-folder plan and execution
 //! adapter with host-driven `poll_once` calls, validated rooted folder config,
 //! per-file outcomes, and in-memory idempotency markers; no thread or OS watcher
-//! is started. The plugin host remains future work.
+//! is started.
+//! - [`PluginManifest`] / [`Capability`] / [`CapabilityGrants`] / [`PluginHost`]
+//!   / [`PluginRegistry`] / [`PluginInvocation`] / [`InvocationReport`] — a
+//!   local, dependency-free WASM-style plugin host *contract* with a closed
+//!   capability allowlist (no filesystem/network/process), deny-by-default
+//!   grants, deterministic id-ordered registration, and an allow/deny
+//!   [`plan_invocation`] report with budgets and sorted deny reasons. No WASM
+//!   runtime is loaded or executed.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -57,6 +64,7 @@ mod error;
 mod js;
 mod json;
 mod library;
+mod plugin;
 mod toolset;
 mod watched;
 
@@ -80,6 +88,14 @@ pub use js::{
 };
 pub use json::{JsonError, JsonValue, MAX_DEPTH, MAX_NODES};
 pub use library::ActionLibrary;
+pub use plugin::{
+    BudgetField, Capability, CapabilityGrants, CapabilityParseError, DenyReason, InvocationBudget,
+    InvocationDecision, InvocationReport, LocalPluginHost, MAX_BUDGET_MEMORY_BYTES,
+    MAX_BUDGET_STEPS, MAX_BUDGET_WALL_CLOCK_MS, MAX_CAPABILITIES, MAX_ID_BYTES,
+    MAX_MANIFEST_JSON_BYTES, MAX_NAME_BYTES, MAX_OPERATION_BYTES, MAX_PLUGINS, MAX_VERSION_BYTES,
+    PLUGIN_API_VERSION, PluginError, PluginHost, PluginInvocation, PluginManifest, PluginRegistry,
+    plan_invocation, validate_manifest_json_size,
+};
 pub use toolset::{TOOLSET_VERSION, Tool, Toolset, ToolsetError};
 pub use watched::{
     FileOutcome, FileOutcomeState, FolderConverter, FolderPlan, PassthroughConverter, PollReport,

@@ -3032,14 +3032,53 @@ tests = [
 title = "Custom toolsets and commands"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-automation/src/plugin.rs",
+    "crates/pdfxi-automation/src/lib.rs",
+    "docs/evidence/automation/T-0136.md",
+]
 domain = "Automation"
-evidence = ""
+evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 147 passed, 0 failed, including 12 new plugin tests covering manifest validation, unsupported api version, duplicate id, forbidden/unknown capability, deny-by-default grants, budget validation, deterministic registry order, invocation deny reasons, allow path, oversized manifest, JSON round-trip stability, bad JSON types, and actionable errors; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0136.md."
 id = "AUTO-008"
-notes = ""
+notes = """
+Local WASM-style plugin host contract, dependency-free. PluginManifest (id, name,
+version, api_version, required capabilities) has structural validation, ABI
+compatibility checks, and canonical JSON round-trip via the crate's JsonValue.
+Capability is a closed four-variant allowlist (DocumentText, DocumentMetadata,
+PageImages, ExportBytes): there is no filesystem, network, process, shell, or
+environment capability, and such names are rejected with a typed Forbidden
+parse error. CapabilityGrants is deny by default; PluginHost is an audited trait
+with a concrete LocalPluginHost. PluginRegistry is BTreeMap-id-ordered, enforces
+one plugin per id, and bounds plugin count and serialized manifest size.
+PluginInvocation/InvocationBudget/InvocationReport/InvocationDecision model
+allow/deny planning (plan_invocation) with fuel/steps, memory-byte, and
+wall-clock-ms budgets and canonical sorted, deduplicated deny reasons. Typed
+errors; no new dependencies, unsafe, or non-test panics.
+
+Honest scope: this is the contract only, not an executing WASM host, so the row
+stays in-progress. Remaining: a WASM runtime with module load/instantiate/
+execute, runtime host-function bindings for the four capabilities, actual
+budget metering, plugin install/enable/signing CLI or UI, and reviewer/fuzz
+sign-off. Per ADR 0008 this partial local equivalent is recorded rather than
+falsely marked replaced.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "plugin::tests::manifest_validation_accepts_valid_and_rejects_empty_fields",
+    "plugin::tests::unsupported_api_version_is_rejected",
+    "plugin::tests::duplicate_id_is_rejected_by_registry",
+    "plugin::tests::unknown_and_forbidden_capabilities_are_rejected",
+    "plugin::tests::capability_grants_are_deny_by_default_and_enforced",
+    "plugin::tests::budget_validation_checks_zero_and_ceiling",
+    "plugin::tests::registry_order_is_deterministic_regardless_of_insertion_order",
+    "plugin::tests::invocation_deny_reasons_are_ordered_and_cover_each_case",
+    "plugin::tests::allowed_invocation_has_empty_reasons_and_requested_budget",
+    "plugin::tests::oversized_manifest_and_field_bounds_are_rejected",
+    "plugin::tests::serialization_round_trips_byte_for-byte",
+    "plugin::tests::json_parsing_rejects_forbidden_capability_and_bad_types",
+    "plugin::tests::error_messages_are_actionable",
+]
 title = "WASM plugin host"
 
 [[feature]]
