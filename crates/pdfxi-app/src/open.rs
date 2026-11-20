@@ -4,7 +4,7 @@
 //! a live renderer handle, so the whole workflow is deterministic and testable
 //! without a GUI or a native PDF library. A [`DocumentOpener`] backend performs
 //! the actual load: [`MockDocumentOpener`] is available in every build and is
-//! fully deterministic, while [`PdfiumDocumentOpener`] (behind the `pdfium`
+//! fully deterministic, while `PdfiumDocumentOpener` (behind the `pdfium`
 //! feature) validates a real PDF with PDFium and reads its page count, title,
 //! and encryption state.
 //!

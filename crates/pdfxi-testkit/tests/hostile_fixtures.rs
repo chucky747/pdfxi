@@ -74,10 +74,8 @@ fn run_all_probes(bytes: &[u8]) {
 fn hostile_corpus_has_the_declared_count() {
     assert_eq!(all().len(), HOSTILE_COUNT);
     assert_eq!(committed_manifest().len(), HOSTILE_COUNT);
-    assert!(
-        HOSTILE_COUNT >= 12,
-        "the batch must add at least 12 fixtures"
-    );
+    let declared = HOSTILE_COUNT;
+    assert!(declared >= 12, "the batch must add at least 12 fixtures");
 }
 
 #[test]

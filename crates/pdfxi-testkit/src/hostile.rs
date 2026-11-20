@@ -330,7 +330,7 @@ fn zlib_stored(data: &[u8]) -> Vec<u8> {
         a = (a + u32::from(*byte)) % 65521;
         b = (b + a) % 65521;
     }
-    out.extend_from_slice(&(((b << 16) | a) as u32).to_be_bytes());
+    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
     out
 }
 
@@ -740,15 +740,17 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// Decode a lowercase/uppercase hexadecimal string, returning `None` if invalid.
 fn hex_decode(text: &str) -> Option<Vec<u8>> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return None;
     }
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        let high = (pair[0] as char).to_digit(16)?;
-        let low = (pair[1] as char).to_digit(16)?;
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        let high = (bytes[index] as char).to_digit(16)?;
+        let low = (bytes[index + 1] as char).to_digit(16)?;
         out.push(((high << 4) | low) as u8);
+        index += 2;
     }
     Some(out)
 }

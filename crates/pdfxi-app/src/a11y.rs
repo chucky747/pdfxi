@@ -7,7 +7,7 @@
 //! announcements through the [`AccessibilityHost`] trait — this crate never
 //! talks to a screen reader directly.
 //!
-//! With the `ui` feature, [`ui_bridge`] translates the deterministic tree into
+//! With the `ui` feature, `ui_bridge` translates the deterministic tree into
 //! the AccessKit object model that `egui`/`eframe` expose to platform screen
 //! readers. `egui` re-exports its `accesskit` dependency, so no new crate
 //! dependency is introduced.

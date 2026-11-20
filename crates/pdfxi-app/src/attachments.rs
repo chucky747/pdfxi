@@ -20,7 +20,7 @@
 //! attachment produces an [`AttachmentOpenRequest`]; the host shell that owns a
 //! stream backend is responsible for extracting the bytes and opening or saving
 //! them. The model never performs filesystem or network I/O. See
-//! [`AttachmentOpenRequest`] and [`crate::ui`] (with the `ui` feature) for the
+//! [`AttachmentOpenRequest`] and `crate::ui` (with the `ui` feature) for the
 //! shell-side boundary.
 
 use std::collections::HashMap;
