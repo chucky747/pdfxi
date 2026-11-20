@@ -501,6 +501,17 @@ fn measure(text: &str, size: f32) -> f32 {
     text.chars().map(|ch| char_width_factor(ch) * size).sum()
 }
 
+/// Measures `text` at `size` points with the documented average-width
+/// heuristic.
+///
+/// This is the same approximation [`layout_text`] uses: each character advances
+/// by `size` times a per-character factor ([`AVERAGE_WIDTH`],
+/// [`NARROW_WIDTH`] or [`WIDE_WIDTH`]). It is deterministic and platform
+/// independent; it is not the exact advance from an embedded font program.
+pub fn measure_text(text: &str, size: f32) -> f32 {
+    measure(text, size)
+}
+
 /// Formats a number compactly and deterministically for a content stream.
 fn fmt_num(value: f32) -> String {
     if !value.is_finite() {
@@ -526,12 +537,103 @@ pub fn format_number(value: f32) -> String {
     fmt_num(value)
 }
 
+/// Text encoded for one PDF string operand.
+///
+/// The variant selects the operand syntax: a literal string `( ... )` or a
+/// hexadecimal string `< ... >`. Hexadecimal strings are required for
+/// composite (Type0) fonts, whose character codes are two or more bytes wide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncodedText {
+    /// A literal string; the bytes are escaped by
+    /// [`escape_literal_bytes`] when rendered.
+    Literal(Vec<u8>),
+    /// A hexadecimal string; the bytes are written as uppercase hex digits.
+    Hex(Vec<u8>),
+}
+
+impl EncodedText {
+    /// Renders the operand exactly as it appears in a content stream.
+    pub fn render(&self) -> String {
+        match self {
+            Self::Literal(bytes) => format!("({})", escape_literal_bytes(bytes)),
+            Self::Hex(bytes) => {
+                let mut out = String::with_capacity(bytes.len() * 2 + 2);
+                out.push('<');
+                for byte in bytes {
+                    out.push_str(&format!("{byte:02X}"));
+                }
+                out.push('>');
+                out
+            }
+        }
+    }
+}
+
+/// Encodes Unicode text into the character codes of one font.
+///
+/// [`build_appearance_with_encoder`] calls this for every displayed line, so a
+/// caller can substitute a font-specific encoder (for example the `/DA` font of
+/// an AcroForm field) without teaching the layout code about fonts. `None` means
+/// the font cannot represent the text; the renderer then tries an ASCII
+/// ellipsis and skips the line if that also fails.
+pub trait TextEncoder {
+    /// Encodes `text`, or returns `None` when a character has no code.
+    fn encode(&self, text: &str) -> Option<EncodedText>;
+}
+
+/// The default encoder: ASCII stays a literal string, anything else becomes a
+/// UTF-16BE literal with a `FE FF` byte-order mark.
+///
+/// This is the behaviour [`build_appearance`] has always used and the correct
+/// fallback for a base-14 font read with the viewer's own encoding.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DefaultTextEncoder;
+
+impl TextEncoder for DefaultTextEncoder {
+    fn encode(&self, text: &str) -> Option<EncodedText> {
+        let bytes = if text.is_ascii() {
+            text.as_bytes().to_vec()
+        } else {
+            let mut bytes = vec![0xFE, 0xFF];
+            for unit in text.encode_utf16() {
+                bytes.extend_from_slice(&unit.to_be_bytes());
+            }
+            bytes
+        };
+        Some(EncodedText::Literal(bytes))
+    }
+}
+
 /// Escapes one byte as a three-digit octal PDF literal escape.
 fn push_octal(out: &mut String, byte: u8) {
     out.push('\\');
     out.push(char::from(b'0' + (byte >> 6)));
     out.push(char::from(b'0' + ((byte >> 3) & 0x07)));
     out.push(char::from(b'0' + (byte & 0x07)));
+}
+
+/// Escapes `bytes` for use inside a PDF literal string `( ... )`.
+///
+/// Backslash, `(` and `)` are escaped with a backslash; newlines, carriage
+/// returns and tabs use short escapes; other bytes outside printable ASCII use
+/// three-digit octal escapes. Unlike [`escape_literal_string`], no character
+/// encoding is inferred: the caller has already encoded the text to the target
+/// font's codes.
+pub fn escape_literal_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() + 8);
+    for &byte in bytes {
+        match byte {
+            b'\\' => out.push_str("\\\\"),
+            b'(' => out.push_str("\\("),
+            b')' => out.push_str("\\)"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x20..=0x7E => out.push(char::from(byte)),
+            _ => push_octal(&mut out, byte),
+        }
+    }
+    out
 }
 
 /// Escapes `text` for use inside a PDF literal string `( ... )`.
@@ -706,25 +808,43 @@ pub fn layout_text(text: &str, widget: &WidgetAppearance, multiline: bool) -> Te
 ///
 /// Each line is positioned with a `Td` relative to the previous line's origin,
 /// which is correct because `Td` moves the text-line matrix rather than the
-/// text matrix advanced by `Tj`.
-fn render_text_content(layout: &TextLayout, widget: &WidgetAppearance) -> Vec<u8> {
+/// text matrix advanced by `Tj`. `encoder` supplies the font's character codes;
+/// a line the encoder rejects is replaced by an ASCII ellipsis, and a line that
+/// still cannot be encoded is skipped rather than written as invalid codes.
+fn render_text_content(
+    layout: &TextLayout,
+    widget: &WidgetAppearance,
+    encoder: &dyn TextEncoder,
+) -> Vec<u8> {
     let mut out = String::new();
     out.push_str("BT\n");
     out.push_str(&format!("/F1 {} Tf\n", fmt_num(widget.font.size)));
     let mut prev_x = 0.0_f32;
     let mut prev_y = 0.0_f32;
     for line in &layout.lines {
+        let Some(operand) = encode_line(encoder, &line.text) else {
+            continue;
+        };
         out.push_str(&format!(
             "{} {} Td\n",
             fmt_num(line.offset_x - prev_x),
             fmt_num(line.baseline_y - prev_y)
         ));
-        out.push_str(&format!("({}) Tj\n", escape_literal_string(&line.text)));
+        out.push_str(&operand);
+        out.push_str(" Tj\n");
         prev_x = line.offset_x;
         prev_y = line.baseline_y;
     }
     out.push_str("ET\n");
     out.into_bytes()
+}
+
+/// Returns the rendered string operand for `text`, degrading to `...`.
+fn encode_line(encoder: &dyn TextEncoder, text: &str) -> Option<String> {
+    if let Some(encoded) = encoder.encode(text) {
+        return Some(encoded.render());
+    }
+    encoder.encode("...").map(|encoded| encoded.render())
 }
 
 /// Returns the named appearance states for a button field, sorted by name.
@@ -935,6 +1055,7 @@ fn render_choice_list(
     widget: &WidgetAppearance,
     options: &[String],
     selected: &[String],
+    encoder: &dyn TextEncoder,
 ) -> Vec<u8> {
     let size = widget.font.size;
     let line_height = size * LINE_HEIGHT_FACTOR;
@@ -971,6 +1092,9 @@ fn render_choice_list(
             ));
         }
         let (display, _) = fit_with_ellipsis(option, max_width, size);
+        let Some(operand) = encode_line(encoder, &display) else {
+            continue;
+        };
         out.push_str("BT\n");
         out.push_str(&format!("/F1 {} Tf\n", fmt_num(size)));
         out.push_str(&format!(
@@ -980,7 +1104,8 @@ fn render_choice_list(
             fmt_num(tb)
         ));
         out.push_str(&format!("{} {} Td\n", fmt_num(offset_x), fmt_num(baseline)));
-        out.push_str(&format!("({}) Tj\n", escape_literal_string(&display)));
+        out.push_str(&operand);
+        out.push_str(" Tj\n");
         out.push_str("ET\n");
     }
     out.push_str("Q\n");
@@ -996,6 +1121,66 @@ fn value_to_text(value: &FieldValue) -> String {
         FieldValue::Choice(values) => values.first().cloned().unwrap_or_default(),
         FieldValue::Empty => String::new(),
     }
+}
+
+/// Returns `true` when a text field lays its value out on multiple lines.
+fn is_multiline(field: &Field) -> bool {
+    field.field_type() == FieldType::Text
+        && field.flags().contains(FieldFlags::MULTILINE)
+        && !field.flags().contains(FieldFlags::PASSWORD)
+}
+
+/// Returns the text laid out by a widget, in widget-local points.
+///
+/// The extent is the union of the line boxes produced by the same layout that
+/// [`build_appearance`] uses, with a nominal glyph height of `0.8 × font size`
+/// above and `0.2 × font size` below each baseline. It is clamped to the widget
+/// rectangle. `None` means the widget draws no text (buttons, list boxes, or an
+/// empty value).
+///
+/// This is what a caller needs to prove a generated appearance still lands
+/// inside a transformed widget rectangle.
+pub fn text_extent(
+    field: &Field,
+    widget: &WidgetAppearance,
+    value: &FieldValue,
+) -> Option<WidgetRect> {
+    let layout = match field.field_type() {
+        FieldType::Text | FieldType::Signature | FieldType::Unknown => {
+            layout_text(&value_to_text(value), widget, is_multiline(field))
+        }
+        FieldType::Choice if field.flags().contains(FieldFlags::COMBO) => {
+            let selected: &[String] = value.as_choices().unwrap_or(&[]);
+            let label = selected.first().map(String::as_str).unwrap_or("");
+            layout_text(label, widget, false)
+        }
+        FieldType::CheckBox | FieldType::Radio | FieldType::Choice | FieldType::Button => {
+            return None;
+        }
+    };
+    let size = widget.font.size;
+    let mut bounds: Option<(f32, f32, f32, f32)> = None;
+    for line in &layout.lines {
+        if line.text.is_empty() {
+            continue;
+        }
+        let left = line.offset_x;
+        let right = line.offset_x + line.width;
+        let bottom = line.baseline_y - size * 0.2;
+        let top = line.baseline_y + size * 0.8;
+        bounds = Some(match bounds {
+            None => (left, bottom, right, top),
+            Some((l, b, r, t)) => (l.min(left), b.min(bottom), r.max(right), t.max(top)),
+        });
+    }
+    let (left, bottom, right, top) = bounds?;
+    let clamp = |value: f32, max: f32| value.clamp(0.0, max.max(0.0));
+    Some(WidgetRect::new(
+        clamp(left, widget.rect.width),
+        clamp(bottom, widget.rect.height),
+        (clamp(right, widget.rect.width) - clamp(left, widget.rect.width)).max(0.0),
+        (clamp(top, widget.rect.height) - clamp(bottom, widget.rect.height)).max(0.0),
+    ))
 }
 
 /// Builds the appearance dictionary for one widget.
@@ -1018,6 +1203,27 @@ pub fn build_appearance(
     widget: &WidgetAppearance,
     value: &FieldValue,
 ) -> Result<AppearanceDictionary, AppearanceError> {
+    build_appearance_with_encoder(field, widget, value, &DefaultTextEncoder)
+}
+
+/// Builds the appearance dictionary using a font-specific text encoder.
+///
+/// This is [`build_appearance`] with the string operands produced by `encoder`
+/// instead of the default ASCII/UTF-16 literal. The layout, geometry, colours
+/// and button drawings are identical; only the `Tj` operand bytes differ. Use
+/// it when the appearance must reference the font named by a field's `/DA`
+/// rather than a base-14 substitute.
+///
+/// # Errors
+///
+/// Returns an [`AppearanceError`] when `widget` fails
+/// [`WidgetAppearance::validate`].
+pub fn build_appearance_with_encoder(
+    field: &Field,
+    widget: &WidgetAppearance,
+    value: &FieldValue,
+    encoder: &dyn TextEncoder,
+) -> Result<AppearanceDictionary, AppearanceError> {
     widget.validate()?;
     let bbox = WidgetRect::new(0.0, 0.0, widget.rect.width, widget.rect.height);
 
@@ -1036,9 +1242,9 @@ pub fn build_appearance(
             let content = if combo {
                 let label = selected.first().map(String::as_str).unwrap_or("");
                 let layout = layout_text(label, widget, false);
-                render_text_content(&layout, widget)
+                render_text_content(&layout, widget, encoder)
             } else {
-                render_choice_list(widget, field.choices(), selected)
+                render_choice_list(widget, field.choices(), selected, encoder)
             };
             Ok(AppearanceDictionary {
                 normal: NormalAppearance::Stream(AppearanceStream::new(bbox, content)),
@@ -1046,12 +1252,9 @@ pub fn build_appearance(
             })
         }
         FieldType::Text | FieldType::Signature | FieldType::Unknown => {
-            let multiline = field.field_type() == FieldType::Text
-                && field.flags().contains(FieldFlags::MULTILINE)
-                && !field.flags().contains(FieldFlags::PASSWORD);
             let text = value_to_text(value);
-            let layout = layout_text(&text, widget, multiline);
-            let content = render_text_content(&layout, widget);
+            let layout = layout_text(&text, widget, is_multiline(field));
+            let content = render_text_content(&layout, widget, encoder);
             Ok(AppearanceDictionary {
                 normal: NormalAppearance::Stream(AppearanceStream::new(bbox, content)),
                 active_state: None,

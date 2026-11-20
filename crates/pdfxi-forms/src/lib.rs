@@ -141,6 +141,7 @@ mod fill;
 mod fillworkflow;
 mod flatten;
 mod form;
+mod matrix;
 mod properties;
 mod propertyedit;
 mod reader_enable;
@@ -168,10 +169,12 @@ pub use actions::{
 };
 pub use appearance::{
     AVERAGE_WIDTH, Alignment, AppearanceDictionary, AppearanceError, AppearanceStream, BorderStyle,
-    DEFAULT_FONT_RESOURCE, FontSpec, HORIZONTAL_PADDING, LINE_HEIGHT_FACTOR, NARROW_WIDTH,
-    NormalAppearance, RgbColor, STATE_OFF, STATE_ON, TextLayout, TextLine, VERTICAL_PADDING,
-    WIDE_WIDTH, WidgetAppearance, WidgetRect, build_appearance, button_state_names,
-    check_mark_content, escape_literal_string, format_number, layout_text,
+    DEFAULT_FONT_RESOURCE, DefaultTextEncoder, EncodedText, FontSpec, HORIZONTAL_PADDING,
+    LINE_HEIGHT_FACTOR, NARROW_WIDTH, NormalAppearance, RgbColor, STATE_OFF, STATE_ON, TextEncoder,
+    TextLayout, TextLine, VERTICAL_PADDING, WIDE_WIDTH, WidgetAppearance, WidgetRect,
+    build_appearance, build_appearance_with_encoder, button_state_names, check_mark_content,
+    escape_literal_bytes, escape_literal_string, format_number, layout_text, measure_text,
+    text_extent,
 };
 pub use build::{CreationError, FieldSpec, MAX_OPTIONS, acroform_dictionary};
 pub use calculation::{
@@ -186,10 +189,12 @@ pub use distribution::{
     merge_responses, parse_bundle,
 };
 pub use document_form::{
-    AcroFormError, AcroFormModel, FlattenFormReport, FormField, FormFieldKind, FormRect,
-    FormWidget, export_xfdf as export_xfdf_document, flatten, import_xfdf as import_xfdf_document,
-    needs_appearances, read_acroform, regenerate_appearances, set_checkbox, set_choice, set_radio,
-    set_text,
+    AcroFormError, AcroFormModel, AppearanceFont, AppearanceReport, FallbackReason,
+    FlattenFormReport, FormField, FormFieldKind, FormRect, FormWidget, WidgetAppearanceReport,
+    export_xfdf as export_xfdf_document, fallback_reason_name, flatten,
+    import_xfdf as import_xfdf_document, needs_appearances, read_acroform, regenerate_appearances,
+    regenerate_appearances_reported, set_checkbox, set_checkbox_reported, set_choice,
+    set_choice_reported, set_radio, set_radio_reported, set_text, set_text_reported,
 };
 pub use fdf::{FdfDocument, FdfError, FdfField, export_fdf, export_xfdf, import_fdf};
 pub use field::{Field, FieldFlags, FieldType, FieldValue, TextConstraint, ValueKind};
@@ -203,6 +208,7 @@ pub use flatten::{
     PageAnnotation, StoredAppearance, flatten_document, flatten_page,
 };
 pub use form::{Form, FormError};
+pub use matrix::Matrix;
 pub use properties::{FieldProperties, MAX_NAME_LEN, MAX_TOOLTIP_LEN, PropertyError, PropertySet};
 pub use propertyedit::{
     EditError, EditOperation, EditPlan, EditReport, EditSnapshot, FieldDictionarySet,

@@ -3,7 +3,7 @@
   "lane": "forms",
   "title": "Form appearance fidelity: embedded fonts and non-identity matrices",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0234"
   ],

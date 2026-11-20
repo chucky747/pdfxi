@@ -37,10 +37,15 @@ use std::collections::HashMap;
 use pdfxi_core::{Dictionary, Document, Object, ObjectId};
 
 use crate::appearance::{
-    Alignment, AppearanceError, FontSpec, NormalAppearance, RgbColor, WidgetAppearance, WidgetRect,
-    build_appearance,
+    Alignment, AppearanceError, FontSpec, NormalAppearance, RgbColor, TextEncoder,
+    WidgetAppearance, WidgetRect, build_appearance_with_encoder, text_extent,
 };
 use crate::field::{Field, FieldFlags, FieldType, FieldValue};
+use crate::matrix::Matrix;
+
+mod font;
+
+use font::{FieldFont, FontChoice, WinAnsiEncoder, resolve_font, sanitise_name};
 
 /// The kind of a terminal AcroForm field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -303,6 +308,101 @@ pub struct FlattenFormReport {
     pub widgets: usize,
     /// Number of pages whose content changed.
     pub pages: usize,
+}
+
+/// The font actually used to write a text appearance.
+///
+/// [`AppearanceFont::FieldFont`] means the value was encoded with the font
+/// resource named by the field `/DA` and resolved through the page or AcroForm
+/// resources. [`AppearanceFont::Fallback`] means the declared font could not be
+/// used; the appearance was written with the base-14 Helvetica path and the
+/// reason records why, so callers never have to guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppearanceFont {
+    /// The document's own font resource was used.
+    FieldFont {
+        /// `/DA` resource name written before `Tf`.
+        resource: String,
+        /// Whether the resolved font has an embedded program.
+        embedded: bool,
+    },
+    /// The base-14 Helvetica path was used instead.
+    Fallback {
+        /// The `/DA` resource name that was requested.
+        requested: String,
+        /// Why the document font could not be used.
+        reason: FallbackReason,
+    },
+}
+
+/// Why a text appearance could not use the field's declared font.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallbackReason {
+    /// The `/DA` name is in neither the page `/Resources /Font` nor
+    /// `/AcroForm /DR /Font`.
+    MissingResource,
+    /// The font dictionary is missing, malformed, or uses an encoding this
+    /// build cannot write (for example a named non-identity CMap).
+    UnsupportedFont,
+    /// The font cannot represent at least one character of the value.
+    CannotEncode,
+}
+
+impl FallbackReason {
+    /// Returns a stable ASCII label for diagnostics and XFDF status output.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingResource => "missing_resource",
+            Self::UnsupportedFont => "unsupported_font",
+            Self::CannotEncode => "cannot_encode",
+        }
+    }
+}
+
+/// Returns the stable ASCII label of a [`FallbackReason`].
+pub const fn fallback_reason_name(reason: FallbackReason) -> &'static str {
+    reason.as_str()
+}
+
+/// Per-widget appearance report produced while filling or regenerating.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WidgetAppearanceReport {
+    /// Widget object identifier, when the widget is an indirect object.
+    pub widget: Option<ObjectId>,
+    /// Font decision for text-like widgets; `None` for buttons.
+    pub font: Option<AppearanceFont>,
+    /// `/MK /R` rotation applied to the appearance, normalized to `0`, `90`,
+    /// `180` or `270` degrees counter-clockwise.
+    pub rotation: i32,
+    /// The `/Matrix` written to the appearance stream (`identity` when upright).
+    pub matrix: Matrix,
+    /// Appearance-space `/BBox` (`(0, 0, width, height)` before the matrix).
+    pub bbox: FormRect,
+    /// Union of the laid-out text line boxes in appearance space, when the
+    /// widget draws text.
+    pub text_rect: Option<FormRect>,
+}
+
+/// Appearance decisions for one fill or regeneration call.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AppearanceReport {
+    /// One entry per widget whose appearance was regenerated.
+    pub widgets: Vec<WidgetAppearanceReport>,
+}
+
+impl AppearanceReport {
+    /// Returns the font used by the first text widget, if any.
+    pub fn font(&self) -> Option<&AppearanceFont> {
+        self.widgets.iter().find_map(|widget| widget.font.as_ref())
+    }
+
+    /// Returns `true` when every text widget used its document font.
+    pub fn all_field_fonts(&self) -> bool {
+        self.widgets
+            .iter()
+            .filter_map(|widget| widget.font.as_ref())
+            .all(|font| matches!(font, AppearanceFont::FieldFont { .. }))
+    }
 }
 
 #[derive(Clone, Default)]
@@ -842,10 +942,29 @@ struct AppearanceUpdate {
 /// [`AcroFormError::ReadOnlyField`], [`AcroFormError::UnaddressableField`], or
 /// a reader/writer error.
 pub fn set_text(doc: &mut Document, name: &str, value: &str) -> Result<(), AcroFormError> {
+    set_text_reported(doc, name, value).map(|_| ())
+}
+
+/// Set a text field value and report the appearance decisions.
+///
+/// Behaves exactly like [`set_text`] but returns an [`AppearanceReport`] that
+/// names the font used for every regenerated widget and whether it was the
+/// field's own `/DA` font or the base-14 fallback.
+///
+/// # Errors
+///
+/// Same as [`set_text`].
+pub fn set_text_reported(
+    doc: &mut Document,
+    name: &str,
+    value: &str,
+) -> Result<AppearanceReport, AcroFormError> {
     let (model, index) = locate(doc, name)?;
-    let field = &model.fields[index];
-    ensure_kind(field, FormFieldKind::Text)?;
-    ensure_mutable(field)?;
+    {
+        let field = &model.fields[index];
+        ensure_kind(field, FormFieldKind::Text)?;
+        ensure_mutable(field)?;
+    }
     apply_value(
         doc,
         &model,
@@ -870,22 +989,42 @@ pub fn set_choice(
     name: &str,
     value: Option<&str>,
 ) -> Result<(), AcroFormError> {
+    set_choice_reported(doc, name, value).map(|_| ())
+}
+
+/// Set a choice field value and report the appearance decisions.
+///
+/// Behaves exactly like [`set_choice`] but returns an [`AppearanceReport`].
+///
+/// # Errors
+///
+/// Same as [`set_choice`].
+pub fn set_choice_reported(
+    doc: &mut Document,
+    name: &str,
+    value: Option<&str>,
+) -> Result<AppearanceReport, AcroFormError> {
     let (model, index) = locate(doc, name)?;
-    let field = &model.fields[index];
-    ensure_kind(field, FormFieldKind::Choice)?;
-    ensure_mutable(field)?;
-    let next = match value {
-        Some(value) => {
-            let editable = field.flags.contains(FieldFlags::CHOICE_EDIT);
-            if !field.options.is_empty() && !editable && !field.options.iter().any(|o| o == value) {
-                return Err(AcroFormError::ValueNotAllowed {
-                    field: name.to_owned(),
-                    value: value.to_owned(),
-                });
+    let next = {
+        let field = &model.fields[index];
+        ensure_kind(field, FormFieldKind::Choice)?;
+        ensure_mutable(field)?;
+        match value {
+            Some(value) => {
+                let editable = field.flags.contains(FieldFlags::CHOICE_EDIT);
+                if !field.options.is_empty()
+                    && !editable
+                    && !field.options.iter().any(|option| option == value)
+                {
+                    return Err(AcroFormError::ValueNotAllowed {
+                        field: name.to_owned(),
+                        value: value.to_owned(),
+                    });
+                }
+                FieldValue::Choice(vec![value.to_owned()])
             }
-            FieldValue::Choice(vec![value.to_owned()])
+            None => FieldValue::Empty,
         }
-        None => FieldValue::Empty,
     };
     apply_value(doc, &model, index, &next, true)
 }
@@ -898,10 +1037,27 @@ pub fn set_choice(
 /// [`AcroFormError::ReadOnlyField`] or [`AcroFormError::UnaddressableField`],
 /// plus reader/writer errors.
 pub fn set_checkbox(doc: &mut Document, name: &str, checked: bool) -> Result<(), AcroFormError> {
+    set_checkbox_reported(doc, name, checked).map(|_| ())
+}
+
+/// Set a checkbox on or off and report the appearance decisions.
+///
+/// Behaves exactly like [`set_checkbox`] but returns an [`AppearanceReport`].
+///
+/// # Errors
+///
+/// Same as [`set_checkbox`].
+pub fn set_checkbox_reported(
+    doc: &mut Document,
+    name: &str,
+    checked: bool,
+) -> Result<AppearanceReport, AcroFormError> {
     let (model, index) = locate(doc, name)?;
-    let field = &model.fields[index];
-    ensure_kind(field, FormFieldKind::Checkbox)?;
-    ensure_mutable(field)?;
+    {
+        let field = &model.fields[index];
+        ensure_kind(field, FormFieldKind::Checkbox)?;
+        ensure_mutable(field)?;
+    }
     apply_value(doc, &model, index, &FieldValue::Bool(checked), true)
 }
 
@@ -913,19 +1069,36 @@ pub fn set_checkbox(doc: &mut Document, name: &str, checked: bool) -> Result<(),
 /// [`AcroFormError::ReadOnlyField`] or [`AcroFormError::ValueNotAllowed`] when
 /// the name is not an on-state of any widget, plus reader/writer errors.
 pub fn set_radio(doc: &mut Document, name: &str, value: &str) -> Result<(), AcroFormError> {
+    set_radio_reported(doc, name, value).map(|_| ())
+}
+
+/// Select one radio button and report the appearance decisions.
+///
+/// Behaves exactly like [`set_radio`] but returns an [`AppearanceReport`].
+///
+/// # Errors
+///
+/// Same as [`set_radio`].
+pub fn set_radio_reported(
+    doc: &mut Document,
+    name: &str,
+    value: &str,
+) -> Result<AppearanceReport, AcroFormError> {
     let (model, index) = locate(doc, name)?;
-    let field = &model.fields[index];
-    ensure_kind(field, FormFieldKind::Radio)?;
-    ensure_mutable(field)?;
-    let allowed = field
-        .widgets
-        .iter()
-        .any(|widget| widget.on_states.iter().any(|state| state == value));
-    if !allowed {
-        return Err(AcroFormError::ValueNotAllowed {
-            field: name.to_owned(),
-            value: value.to_owned(),
-        });
+    {
+        let field = &model.fields[index];
+        ensure_kind(field, FormFieldKind::Radio)?;
+        ensure_mutable(field)?;
+        let allowed = field
+            .widgets
+            .iter()
+            .any(|widget| widget.on_states.iter().any(|state| state == value));
+        if !allowed {
+            return Err(AcroFormError::ValueNotAllowed {
+                field: name.to_owned(),
+                value: value.to_owned(),
+            });
+        }
     }
     apply_value(
         doc,
@@ -942,7 +1115,7 @@ fn apply_value(
     field_index: usize,
     value: &FieldValue,
     write_value: bool,
-) -> Result<(), AcroFormError> {
+) -> Result<AppearanceReport, AcroFormError> {
     let field = model
         .fields
         .get(field_index)
@@ -952,6 +1125,7 @@ fn apply_value(
         .ok_or_else(|| AcroFormError::UnaddressableField(field.name.clone()))?;
     let acroform = acroform_dictionary(doc, model)?;
     let allocator = Allocator::new(doc, model)?;
+    let mut report = AppearanceReport::default();
 
     let mut field_dictionary = dictionary_of(doc, &Object::Reference(field_id))?;
     let mut field_dirty = write_value;
@@ -1009,7 +1183,7 @@ fn apply_value(
         } else {
             dictionary_of(doc, &Object::Reference(widget_id))?
         };
-        if let Some(update) = build_widget_appearance(
+        if let Some((update, widget_report)) = build_widget_appearance(
             doc,
             &acroform,
             &allocator,
@@ -1027,6 +1201,7 @@ fn apply_value(
                     dictionary.remove("AS");
                 }
             }
+            report.widgets.push(widget_report);
             if widget_id == field_id {
                 field_dictionary = dictionary;
                 field_dirty = true;
@@ -1039,7 +1214,7 @@ fn apply_value(
     if field_dirty {
         doc.set_object(field_id, Object::Dictionary(field_dictionary))?;
     }
-    Ok(())
+    Ok(report)
 }
 
 fn checkbox_on_state(field: &FormField) -> String {
@@ -1060,7 +1235,7 @@ fn build_widget_appearance(
     field_index: usize,
     widget_index: usize,
     value: &FieldValue,
-) -> Result<Option<AppearanceUpdate>, AcroFormError> {
+) -> Result<Option<(AppearanceUpdate, WidgetAppearanceReport)>, AcroFormError> {
     let field = &model.fields[field_index];
     let widget = match field.widgets.get(widget_index) {
         Some(widget) => widget,
@@ -1069,8 +1244,14 @@ fn build_widget_appearance(
     if widget.rect.is_empty() {
         return Ok(None);
     }
-    let width = widget.rect.width() as f32;
-    let height = widget.rect.height() as f32;
+    let width = widget.rect.width();
+    let height = widget.rect.height();
+    let rotation = widget_rotation(doc, widget.object);
+    let (local_width, local_height) = if matches!(rotation, 90 | 270) {
+        (height, width)
+    } else {
+        (width, height)
+    };
 
     let mut appearance = Field::new(field.name.clone(), field_type(field.kind))
         .with_flags(field.flags)
@@ -1091,9 +1272,14 @@ fn build_widget_appearance(
     let font_size = if da.size > 0.0 {
         da.size
     } else {
-        ((height - 4.0).max(2.0) * 0.8).clamp(4.0, 24.0)
+        auto_font_size(local_height as f32)
     };
-    let mut widget_appearance = WidgetAppearance::new(WidgetRect::new(0.0, 0.0, width, height));
+    let mut widget_appearance = WidgetAppearance::new(WidgetRect::new(
+        0.0,
+        0.0,
+        local_width as f32,
+        local_height as f32,
+    ));
     widget_appearance.alignment = match field.alignment {
         1 => Alignment::Center,
         2 => Alignment::Right,
@@ -1105,33 +1291,87 @@ fn build_widget_appearance(
         appearance.set_flags(field.flags.union(FieldFlags::COMBO));
     }
 
-    let generated = build_appearance(&appearance, &widget_appearance, value)?;
+    let matrix = Matrix::rotation_into_box(
+        i64::from(rotation),
+        widget_appearance.rect.width.into(),
+        widget_appearance.rect.height.into(),
+    )
+    .unwrap_or(Matrix::IDENTITY);
+    let text_rect = text_extent(&appearance, &widget_appearance, value).map(|rect| {
+        FormRect::new(
+            f64::from(rect.x),
+            f64::from(rect.y),
+            f64::from(rect.right()),
+            f64::from(rect.top()),
+        )
+    });
+    let mut report = WidgetAppearanceReport {
+        widget: widget.object,
+        font: None,
+        rotation,
+        matrix,
+        bbox: FormRect::new(0.0, 0.0, local_width, local_height),
+        text_rect,
+    };
+
+    let generated = if matches!(field.kind, FormFieldKind::Text | FormFieldKind::Choice) {
+        let (field_font, font_report) = choose_font(doc, acroform, field, value, &da.font);
+        report.font = Some(font_report);
+        let fallback = WinAnsiEncoder;
+        match &field_font {
+            Some(font) => {
+                build_appearance_with_encoder(&appearance, &widget_appearance, value, font)?
+            }
+            None if fallback.encode(&appearance_text(value)).is_some() => {
+                build_appearance_with_encoder(&appearance, &widget_appearance, value, &fallback)?
+            }
+            None => crate::appearance::build_appearance(&appearance, &widget_appearance, value)?,
+        }
+    } else {
+        crate::appearance::build_appearance(&appearance, &widget_appearance, value)?
+    };
+
     match generated.normal {
         NormalAppearance::Stream(stream) => {
-            let (font_name, font_object) = font_resource(doc, acroform, &da.font, allocator.font)?;
-            let content =
-                if field.kind == FormFieldKind::Choice || field.kind == FormFieldKind::Text {
-                    replace_token(
-                        &stream.content,
-                        b"/F1 ",
-                        format!("/{font_name} ").as_bytes(),
-                    )
-                } else {
-                    stream.content
-                };
+            let (font_name, font_object) = match &report.font {
+                Some(AppearanceFont::FieldFont { resource, .. }) => {
+                    let object = font_object_for(doc, acroform, field, resource);
+                    (resource.clone(), object)
+                }
+                Some(AppearanceFont::Fallback { .. }) => {
+                    fallback_font(doc, &da.font, allocator.font)?
+                }
+                None => ("Helv".to_owned(), Object::Null),
+            };
+            let content = if matches!(field.kind, FormFieldKind::Choice | FormFieldKind::Text) {
+                replace_token(
+                    &stream.content,
+                    b"/F1 ",
+                    format!("/{font_name} ").as_bytes(),
+                )
+            } else {
+                stream.content
+            };
+            let font_resource = match font_object {
+                Object::Null => None,
+                object => Some((font_name.as_str(), object)),
+            };
             let id = allocator.stream(field_index, widget_index, 0);
             let reference = write_stream(
                 doc,
                 id,
-                width,
-                height,
+                (local_width, local_height),
                 content,
-                Some((font_name.as_str(), font_object)),
+                font_resource,
+                matrix,
             )?;
-            Ok(Some(AppearanceUpdate {
-                ap: single_normal(Object::Reference(reference)),
-                active_state: None,
-            }))
+            Ok(Some((
+                AppearanceUpdate {
+                    ap: single_normal(Object::Reference(reference)),
+                    active_state: None,
+                },
+                report,
+            )))
         }
         NormalAppearance::States(states) => {
             let mut named = Dictionary::new();
@@ -1143,7 +1383,14 @@ fn build_widget_appearance(
                     state.clone()
                 };
                 let id = allocator.stream(field_index, widget_index, state_index);
-                let reference = write_stream(doc, id, width, height, stream.content.clone(), None)?;
+                let reference = write_stream(
+                    doc,
+                    id,
+                    (local_width, local_height),
+                    stream.content.clone(),
+                    None,
+                    matrix,
+                )?;
                 named.insert(state_name.clone(), Object::Reference(reference));
                 if field.kind == FormFieldKind::Checkbox {
                     let checked = value.as_bool().unwrap_or(false);
@@ -1165,11 +1412,120 @@ fn build_widget_appearance(
                     });
                 }
             }
-            Ok(Some(AppearanceUpdate {
-                ap: single_normal(Object::Dictionary(named)),
-                active_state: active,
-            }))
+            Ok(Some((
+                AppearanceUpdate {
+                    ap: single_normal(Object::Dictionary(named)),
+                    active_state: active,
+                },
+                report,
+            )))
         }
+    }
+}
+
+/// Returns the widget `/MK /R` rotation normalized to `0`, `90`, `180` or
+/// `270` degrees counter-clockwise.
+///
+/// A missing, malformed or non-right-angle value is treated as upright; the
+/// widget is still filled and its appearance remains inside the rectangle.
+fn widget_rotation(doc: &Document, object: Option<ObjectId>) -> i32 {
+    let Some(object) = object else {
+        return 0;
+    };
+    let Ok(value) = doc.object(object) else {
+        return 0;
+    };
+    let Some(dictionary) = value.as_dictionary() else {
+        return 0;
+    };
+    let Some(rotation) = dictionary
+        .get("MK")
+        .and_then(Object::as_dictionary)
+        .and_then(|mk| mk.get("R"))
+        .and_then(Object::as_i64)
+    else {
+        return 0;
+    };
+    let normalized = rotation.rem_euclid(360);
+    if matches!(normalized, 90 | 180 | 270) {
+        i32::try_from(normalized).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Returns the standard automatic font size for a field `height`.
+///
+/// PDF uses `/DA` size `0` for "auto": the size is the largest that fits the
+/// field, capped at 12 points. The 4-point inset matches the generator's
+/// vertical padding and border.
+fn auto_font_size(height: f32) -> f32 {
+    (height - 4.0).clamp(4.0, 12.0)
+}
+
+/// The text drawn by a text-like field value, for the encoding test.
+fn appearance_text(value: &FieldValue) -> String {
+    match value {
+        FieldValue::Text(text) => text.clone(),
+        FieldValue::Choice(values) => values.first().cloned().unwrap_or_default(),
+        FieldValue::Number(number) => number.to_string(),
+        FieldValue::Bool(flag) => if *flag { "On" } else { "Off" }.to_owned(),
+        FieldValue::Empty => String::new(),
+    }
+}
+
+/// Chooses the text encoder for a field.
+///
+/// Returns the encoder plus its report value. A `None` encoder means the caller
+/// must build the appearance with the default Helvetica path; the report still
+/// explains why.
+fn choose_font(
+    doc: &Document,
+    acroform: &Dictionary,
+    field: &FormField,
+    value: &FieldValue,
+    requested: &str,
+) -> (Option<FieldFont>, AppearanceFont) {
+    let text = appearance_text(value);
+    match resolve_font(doc, acroform, field, requested) {
+        FontChoice::Field(font) => {
+            if font.encode(&text).is_some() {
+                let report = font.report();
+                (Some(font), report)
+            } else {
+                (
+                    None,
+                    AppearanceFont::Fallback {
+                        requested: sanitise_name(requested),
+                        reason: FallbackReason::CannotEncode,
+                    },
+                )
+            }
+        }
+        FontChoice::Fallback(reason) => (
+            None,
+            AppearanceFont::Fallback {
+                requested: sanitise_name(requested),
+                reason,
+            },
+        ),
+    }
+}
+
+/// Returns the object for a resolved `/DA` font resource.
+///
+/// The lookup is repeated rather than carried through the report so the report
+/// stays a plain value; the font was resolved from the same document moments
+/// earlier, so a miss means the document changed under the fill.
+fn font_object_for(
+    doc: &Document,
+    acroform: &Dictionary,
+    field: &FormField,
+    resource: &str,
+) -> Object {
+    match resolve_font(doc, acroform, field, resource) {
+        FontChoice::Field(font) => font.object,
+        FontChoice::Fallback(_) => Object::Null,
     }
 }
 
@@ -1182,11 +1538,12 @@ fn single_normal(normal: Object) -> Dictionary {
 fn write_stream(
     doc: &mut Document,
     id: u32,
-    width: f32,
-    height: f32,
+    extents: (f64, f64),
     content: Vec<u8>,
     font: Option<(&str, Object)>,
+    matrix: Matrix,
 ) -> Result<ObjectId, AcroFormError> {
+    let (width, height) = extents;
     let mut dictionary = Dictionary::new();
     dictionary.insert("Type".to_owned(), Object::Name("XObject".to_owned()));
     dictionary.insert("Subtype".to_owned(), Object::Name("Form".to_owned()));
@@ -1196,10 +1553,16 @@ fn write_stream(
         Object::Array(vec![
             Object::Integer(0),
             Object::Integer(0),
-            number(f64::from(width)),
-            number(f64::from(height)),
+            number(width),
+            number(height),
         ]),
     );
+    if !matrix.is_identity() {
+        dictionary.insert(
+            "Matrix".to_owned(),
+            Object::Array(matrix.to_array().into_iter().map(number).collect()),
+        );
+    }
     if let Some((name, object)) = font {
         let mut fonts = Dictionary::new();
         fonts.insert(name.to_owned(), object);
@@ -1218,22 +1581,19 @@ fn write_stream(
     Ok(identifier)
 }
 
-fn font_resource(
+/// Creates the base-14 Helvetica font used by the fallback appearance path.
+///
+/// The returned resource name is the sanitised `/DA` name, so the emitted `Tf`
+/// operator still refers to the name the document asked for even though the
+/// glyphs come from Helvetica. The appearance stream carries its own
+/// `/Resources /Font` mapping, which shadows any page or AcroForm entry of the
+/// same name for this stream only.
+fn fallback_font(
     doc: &mut Document,
-    acroform: &Dictionary,
     requested: &str,
     font_id: u32,
 ) -> Result<(String, Object), AcroFormError> {
-    let name = sanitise_font_name(requested);
-    if let Some(fonts) = acroform
-        .get("DR")
-        .and_then(|dr| dictionary_of(doc, dr).ok())
-        .and_then(|dr| dr.get("Font").cloned())
-        .and_then(|font| dictionary_of(doc, &font).ok())
-        && let Some(existing) = fonts.get(&name)
-    {
-        return Ok((name, existing.clone()));
-    }
+    let name = sanitise_name(requested);
     let mut font = Dictionary::new();
     font.insert("Type".to_owned(), Object::Name("Font".to_owned()));
     font.insert("Subtype".to_owned(), Object::Name("Type1".to_owned()));
@@ -1242,20 +1602,9 @@ fn font_resource(
         "Encoding".to_owned(),
         Object::Name("WinAnsiEncoding".to_owned()),
     );
-    doc.set_object(ObjectId::new(font_id, 0), Object::Dictionary(font))?;
-    Ok((name, Object::Reference(ObjectId::new(font_id, 0))))
-}
-
-fn sanitise_font_name(requested: &str) -> String {
-    let candidate: String = requested
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
-        .collect();
-    if candidate.is_empty() {
-        "Helv".to_owned()
-    } else {
-        candidate
-    }
+    let identifier = ObjectId::new(font_id, 0);
+    doc.set_object(identifier, Object::Dictionary(font))?;
+    Ok((name, Object::Reference(identifier)))
 }
 
 struct DefaultAppearance {
@@ -1360,18 +1709,34 @@ pub fn needs_appearances(doc: &Document) -> Result<bool, AcroFormError> {
 /// Returns [`AcroFormError::Core`] or [`AcroFormError::Malformed`] when the
 /// document or AcroForm cannot be read or written.
 pub fn regenerate_appearances(doc: &mut Document) -> Result<usize, AcroFormError> {
+    regenerate_appearances_reported(doc).map(|(count, _)| count)
+}
+
+/// Regenerate every field appearance and report the appearance decisions.
+///
+/// Behaves exactly like [`regenerate_appearances`] but returns the number of
+/// regenerated fields together with the per-widget [`AppearanceReport`].
+///
+/// # Errors
+///
+/// Same as [`regenerate_appearances`].
+pub fn regenerate_appearances_reported(
+    doc: &mut Document,
+) -> Result<(usize, AppearanceReport), AcroFormError> {
     let model = read_acroform(doc)?;
     if !model.present {
-        return Ok(0);
+        return Ok((0, AppearanceReport::default()));
     }
     let mut regenerated = 0;
+    let mut report = AppearanceReport::default();
     for index in 0..model.fields.len() {
         let field = &model.fields[index];
         if field.field_object.is_none() {
             continue;
         }
         let value = field.value.clone();
-        apply_value(doc, &model, index, &value, false)?;
+        let field_report = apply_value(doc, &model, index, &value, false)?;
+        report.widgets.extend(field_report.widgets);
         regenerated += 1;
     }
 
@@ -1384,7 +1749,7 @@ pub fn regenerate_appearances(doc: &mut Document) -> Result<usize, AcroFormError
         dictionary.insert("NeedAppearances".to_owned(), Object::Boolean(false));
         doc.set_object(id, Object::Dictionary(dictionary))?;
     }
-    Ok(regenerated)
+    Ok((regenerated, report))
 }
 
 /// Flatten every widget into page content and remove the catalog AcroForm.
@@ -1488,22 +1853,30 @@ pub fn flatten(doc: &mut Document) -> Result<FlattenFormReport, AcroFormError> {
                 .as_dictionary()
                 .cloned()
                 .ok_or(AcroFormError::Malformed("widget is not a dictionary"))?;
-            let Some((stream_id, bbox)) = normal_appearance(doc, &widget)? else {
+            let Some((stream_id, bbox, appearance_matrix)) = normal_appearance(doc, &widget)?
+            else {
+                continue;
+            };
+            let Some(placement) = Matrix::fit_bbox(
+                appearance_matrix,
+                (bbox.left, bbox.bottom, bbox.right, bbox.top),
+                rect.left,
+                rect.bottom,
+                rect.width(),
+                rect.height(),
+            ) else {
                 continue;
             };
             let name = unique_xobject_name(&xobjects);
             xobjects.insert(name.clone(), Object::Reference(stream_id));
-            let (bbox_width, bbox_height) = (bbox.width().max(0.001), bbox.height().max(0.001));
-            let scale_x = rect.width() / bbox_width;
-            let scale_y = rect.height() / bbox_height;
-            let translate_x = rect.left - bbox.left * scale_x;
-            let translate_y = rect.bottom - bbox.bottom * scale_y;
             paint_content.push_str(&format!(
-                "q\n{} 0 0 {} {} {} cm\n/{} Do\nQ\n",
-                fmt(scale_x),
-                fmt(scale_y),
-                fmt(translate_x),
-                fmt(translate_y),
+                "q\n{} {} {} {} {} {} cm\n/{} Do\nQ\n",
+                fmt(placement.a),
+                fmt(placement.b),
+                fmt(placement.c),
+                fmt(placement.d),
+                fmt(placement.e),
+                fmt(placement.f),
                 name
             ));
             painted += 1;
@@ -1574,7 +1947,7 @@ fn page_has_widget(
 fn normal_appearance(
     doc: &Document,
     widget: &Dictionary,
-) -> Result<Option<(ObjectId, FormRect)>, AcroFormError> {
+) -> Result<Option<(ObjectId, FormRect, Matrix)>, AcroFormError> {
     let normal = widget
         .get("AP")
         .and_then(Object::as_dictionary)
@@ -1611,7 +1984,7 @@ fn normal_appearance(
 fn appearance_bbox(
     doc: &Document,
     stream_id: ObjectId,
-) -> Result<Option<(ObjectId, FormRect)>, AcroFormError> {
+) -> Result<Option<(ObjectId, FormRect, Matrix)>, AcroFormError> {
     let stream = doc.object(stream_id)?;
     let dictionary = stream.as_dictionary().ok_or(AcroFormError::Malformed(
         "appearance stream is not a stream",
@@ -1620,7 +1993,22 @@ fn appearance_bbox(
         .get("BBox")
         .and_then(FormRect::from_object)
         .unwrap_or_else(|| FormRect::new(0.0, 0.0, 1.0, 1.0));
-    Ok(Some((stream_id, bbox)))
+    let matrix = dictionary
+        .get("Matrix")
+        .and_then(Object::as_array)
+        .and_then(|values| {
+            if values.len() < 6 {
+                return None;
+            }
+            let mut coefficients = [0.0_f64; 6];
+            for (slot, value) in coefficients.iter_mut().zip(values.iter()) {
+                *slot = value.as_f64()?;
+            }
+            Some(Matrix::from_array(coefficients))
+        })
+        .filter(|matrix| matrix.is_finite())
+        .unwrap_or(Matrix::IDENTITY);
+    Ok(Some((stream_id, bbox, matrix)))
 }
 
 fn unique_xobject_name(xobjects: &Dictionary) -> String {

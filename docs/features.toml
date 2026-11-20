@@ -1711,23 +1711,31 @@ title = "Export to PostScript"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-forms/src/appearance.rs",
     "crates/pdfxi-forms/src/document_form.rs",
-    "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/hardening/T-0234.md",
+    "crates/pdfxi-forms/src/document_form/font.rs",
+    "crates/pdfxi-forms/src/matrix.rs",
+    "crates/pdfxi-forms/tests/real_document_form.rs",
+    "crates/pdfxi-forms/tests/appearance_fidelity.rs",
+    "docs/evidence/hardening/T-0248.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 318 unit + 7 integration passed, 0 failed; fmt/clippy/doc EXIT=0. Real fixture fixtures/realworld/pdfxi-forms-selfmade.pdf read, filled, full-saved, reopened and re-read; artifact target/lanes/forms/t0234-out/filled.pdf. Full output in docs/evidence/hardening/T-0234.md."
+evidence = "docs/evidence/hardening/T-0248.md"
 id = "FORMS-001"
 notes = """
-The fill path now starts from real bytes: read_acroform resolves the catalog
-/AcroForm, inherited field attributes and fully qualified names against
-pdfxi_core::Document; set_text/set_checkbox/set_radio/set_choice write /V, widget
-/AS and regenerated /AP /N streams; needs_appearances and
-regenerate_appearances implement the NeedAppearances repair path. The model
-reports name, kind, value, options, read-only/required flags, rects and page
-indices. Text, checkbox, radio, choice, signature and pushbutton are covered,
-with radio states read from each widget /AP /N. The app shell still has to call
-the library and promote this row.
+T-0248 extends the real-document fill path from T-0234. Appearances now resolve
+the /DA font resource through the widget page /Resources /Font and the AcroForm
+/DR /Font, detect embedded programs, encode simple fonts as literal strings and
+Type0/Identity-H fonts through an inverted ToUnicode CMap as two-byte hex CIDs,
+and reference the document's existing font object. A font that cannot encode
+the value falls back to WinAnsi Helvetica (WinAnsi bytes when possible) and
+reports AppearanceFont::Fallback with MissingResource, UnsupportedFont or
+CannotEncode. /MK /R rotation produces a rotated local BBox and /Matrix, and
+auto size uses the 0..12 heuristic. Reported setters expose the per-widget
+decision; the original setter signatures are unchanged. Limits: no glyph
+coverage parsing, no CID subsetting, named non-identity CMaps unsupported,
+MacRoman/Standard/Differences ASCII-only, page /Rotate not composed. The app
+shell still has to call the library and promote this row.
 """
 priority = "P1"
 status = "library"
@@ -1736,6 +1744,10 @@ tests = [
     "fills_saves_reopens_and_writes_appearances",
     "radio_group_fills_widget_states_on_a_derived_fixture",
     "need_appearances_is_detected_and_repair_clears_it",
+    "embedded_true_type_appearance_uses_the_field_font",
+    "rotated_widget_matrix_places_the_text_inside_the_rect",
+    "unencodable_values_report_the_fallback_and_the_character",
+    "rotated_checkbox_keeps_its_active_state_and_gains_a_matrix",
 ]
 title = "Fill existing AcroForm fields"
 
@@ -1876,23 +1888,30 @@ title = "Import and export FDF and XFDF"
 [[feature]]
 docs = [
     "crates/pdfxi-forms/src/document_form.rs",
-    "crates/pdfxi-forms/src/flatten.rs",
-    "docs/evidence/hardening/T-0234.md",
+    "crates/pdfxi-forms/src/matrix.rs",
+    "crates/pdfxi-forms/tests/real_document_form.rs",
+    "crates/pdfxi-forms/tests/appearance_fidelity.rs",
+    "docs/evidence/hardening/T-0248.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): flatten on the filled real fixture reports 3 fields / 3 widgets / 1 page, the saved reopen has no catalog /AcroForm and no widget annotations, and page text still contains 'Form page'. Output in docs/evidence/hardening/T-0234.md."
+evidence = "docs/evidence/hardening/T-0248.md"
 id = "FORMS-007"
 notes = """
-flatten(&mut Document) is the real-document counterpart of the existing
-adapter-model flatten_page/flatten_document. It resolves each widget's /AP /N
-stream (or /AS state), adds it to the page /Resources /XObject, appends a
-q ... cm /FmN Do Q block to /Contents, removes the widget annotation and removes
-the catalog AcroForm. Original page content is preserved, so existing page text
-is unchanged. Identity appearance /Matrix only in round A.
+Flatten now composes an appearance stream's /Matrix with its /BBox and the
+widget /Rect through Matrix::fit_bbox (ISO 32000-1 12.5.5) instead of assuming
+an identity matrix and scaling the BBox only. A /MK /R 90 widget painted by the
+staged fixture tests yields the composed operator 0 1 -1 0 500 450 cm and keeps
+the text inside the widget rectangle. A degenerate transformed box or a
+non-finite/singular existing /Matrix is skipped rather than aborting the whole
+flatten. Page /Rotate is still not composed. The shell task owns the verified
+row.
 """
 priority = "P2"
 status = "library"
-tests = ["flatten_paints_widgets_removes_acroform_and_keeps_page_text"]
+tests = [
+    "flatten_paints_widgets_removes_acroform_and_keeps_page_text",
+    "rotated_widget_matrix_places_the_text_inside_the_rect",
+]
 title = "Flatten forms and preserve appearance"
 
 [[feature]]
