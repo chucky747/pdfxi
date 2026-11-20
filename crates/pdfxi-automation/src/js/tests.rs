@@ -934,3 +934,32 @@ fn empty_string_coerces_to_zero_and_isnan_handles_undefined() {
     assert_eq!(eval("var u; isNaN(u);"), Value::Bool(true));
     assert_eq!(eval("isNaN('xyz');"), Value::Bool(true));
 }
+
+#[test]
+fn wall_clock_budget_stops_a_real_busy_loop() {
+    let limits = Limits::default()
+        .with_max_steps(u64::MAX)
+        .with_max_loop_iterations(u64::MAX)
+        .with_max_total_iterations(u64::MAX)
+        .with_wall_clock(Duration::from_millis(20));
+    let started = std::time::Instant::now();
+    let failure = run_script(
+        "var spins = 0; while (true) { spins = spins + 1; }",
+        &limits,
+        &CancelToken::new(),
+    )
+    .expect_err("a busy loop must hit the wall-clock budget");
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(failure, JsError::WallClockExceeded { .. }),
+        "unexpected error: {failure}"
+    );
+    assert!(
+        limits.wall_clock.is_some_and(|budget| elapsed >= budget),
+        "the budget must have elapsed before the limit fired: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "wall-clock enforcement took {elapsed:?}, expected well under one second"
+    );
+}

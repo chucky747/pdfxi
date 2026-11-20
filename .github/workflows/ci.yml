@@ -20,12 +20,19 @@ jobs:
         run: |
           choco install mingw --no-progress -y
           "C:\ProgramData\mingw64\bin" | Out-File -Append $env:GITHUB_PATH
+      - name: Fetch PDFium
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-pdfium.ps1
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Test UI and PDFium features
+        run: cargo test -p pdfxi-app --features ui,pdfium
+      - name: Test render PDFium feature
+        run: cargo test -p pdfxi-render --features pdfium
       - name: Docs
         run: cargo doc --workspace --no-deps
       - name: Features
@@ -41,8 +48,15 @@ jobs:
         with:
           toolchain: stable-x86_64-pc-windows-msvc
           components: rustfmt, clippy
+      - name: Fetch PDFium
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-pdfium.ps1
       - name: Test
         run: cargo test --workspace
+      - name: Test UI and PDFium features
+        run: cargo test -p pdfxi-app --features ui,pdfium
+      - name: Test render PDFium feature
+        run: cargo test -p pdfxi-render --features pdfium
 
   linux-x11:
     runs-on: ubuntu-latest

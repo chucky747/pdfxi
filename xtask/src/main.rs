@@ -7,7 +7,7 @@ mod bench;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -35,7 +35,15 @@ const REQUIRED_M0_PATHS: &[&str] = &[
     "scripts/goal.ps1",
 ];
 
-const ALLOWED_STATUS: &[&str] = &["planned", "in-progress", "verified", "replaced", "deferred"];
+const ALLOWED_STATUS: &[&str] = &[
+    "planned",
+    "in-progress",
+    "verified",
+    "library",
+    "model",
+    "replaced",
+    "deferred",
+];
 
 #[derive(Debug, Parser)]
 #[command(name = "xtask", about = "PDFXI workspace automation")]
@@ -239,6 +247,7 @@ fn verify(no_docs: bool) -> Result<()> {
         ],
     )?;
     run("cargo", &["test", "--workspace"])?;
+    run_feature_tests()?;
     if !no_docs {
         run("cargo", &["doc", "--workspace", "--no-deps"])?;
     }
@@ -425,6 +434,7 @@ fn goal_verify(milestone: Option<&str>, all: bool, allow_dirty: bool) -> Result<
         }
         run("cargo", &["fmt", "--all", "--check"])?;
         run("cargo", &["test", "--workspace"])?;
+        run_feature_tests()?;
         run("cargo", &["doc", "--workspace", "--no-deps"])?;
         if !allow_dirty {
             require_clean_worktree()?;
@@ -515,13 +525,208 @@ fn load_features() -> Result<Vec<FeatureRow>> {
     Ok(file.feature)
 }
 
+/// Extract the final path segment from a `docs/features.toml` test citation.
+///
+/// The matrix uses module paths (`ui::tests::name`), crate-qualified paths
+/// (`pdfxi-edit::annotation::tests::name`), file-qualified paths
+/// (`cli.rs::name`), and bare symbols (`name`). In every shape the symbol that
+/// must resolve to a `#[test]` function is the final `::`-separated segment.
+fn citation_symbol(citation: &str) -> Option<&str> {
+    let trimmed = citation.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let symbol = trimmed.rsplit("::").next().unwrap_or(trimmed);
+    let mut chars = symbol.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return None,
+    }
+    if chars.all(|character| character.is_ascii_alphanumeric() || character == '_') {
+        Some(symbol)
+    } else {
+        None
+    }
+}
+
+/// Return the function name when `text` begins with a function item.
+fn fn_item_name(text: &str) -> Option<String> {
+    let mut rest = text.trim_start();
+    if rest.starts_with("pub(") {
+        let close = rest.find(')')?;
+        rest = rest[close + 1..].trim_start();
+    } else if let Some(after) = rest.strip_prefix("pub ") {
+        rest = after.trim_start();
+    }
+    loop {
+        let mut stripped = false;
+        for modifier in ["async ", "unsafe ", "const "] {
+            if let Some(after) = rest.strip_prefix(modifier) {
+                rest = after.trim_start();
+                stripped = true;
+                break;
+            }
+        }
+        if !stripped {
+            break;
+        }
+    }
+    let rest = rest.strip_prefix("fn ")?;
+    let name: String = rest
+        .chars()
+        .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Collect the names of functions annotated with `#[test]` in one source file.
+///
+/// The scanner is line based so a commented-out or quoted `#[test]` does not
+/// create an entry. Multi-line attributes between `#[test]` and `fn` are
+/// tracked with a bracket depth so feature-gated tests still resolve.
+fn test_fn_names(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut pending_test = false;
+    let mut attribute_depth = 0usize;
+    for line in source.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if attribute_depth > 0 {
+            attribute_depth += line.matches('[').count();
+            attribute_depth = attribute_depth.saturating_sub(line.matches(']').count());
+            continue;
+        }
+        if line.starts_with("//") {
+            continue;
+        }
+        if line.starts_with("#[") {
+            if let Some(stripped) = line.strip_prefix("#[test]") {
+                pending_test = true;
+                let remainder = stripped.trim_start();
+                if let Some(name) = fn_item_name(remainder) {
+                    names.push(name);
+                    pending_test = false;
+                }
+            }
+            let opens = line.matches('[').count();
+            let closes = line.matches(']').count();
+            if opens > closes {
+                attribute_depth = opens - closes;
+            }
+            continue;
+        }
+        if pending_test {
+            if let Some(name) = fn_item_name(line) {
+                names.push(name);
+            }
+            pending_test = false;
+        }
+    }
+    names
+}
+
+/// Recursively collect `*.rs` files below `directory`.
+fn collect_rust_sources(directory: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(directory).with_context(|| format!("read {}", directory.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_sources(&path, out)?;
+        } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Index every `#[test]` function name under `crates/` exactly once.
+fn workspace_test_index() -> Result<BTreeSet<String>> {
+    let mut sources = Vec::new();
+    collect_rust_sources(&root().join("crates"), &mut sources)?;
+    let mut index = BTreeSet::new();
+    for source in sources {
+        let text =
+            fs::read_to_string(&source).with_context(|| format!("read {}", source.display()))?;
+        index.extend(test_fn_names(&text));
+    }
+    Ok(index)
+}
+
+/// Locate a PDFium shared library using the same candidates as the renderer.
+fn pdfium_library_candidates() -> Vec<PathBuf> {
+    let library = if cfg!(windows) {
+        "pdfium.dll"
+    } else if cfg!(target_os = "macos") {
+        "libpdfium.dylib"
+    } else {
+        "libpdfium.so"
+    };
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("PDFIUM_PATH")
+        && !path.is_empty()
+    {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(
+            Path::new(&local_app_data)
+                .join("pdfxi")
+                .join("pdfium")
+                .join("bin")
+                .join(library),
+        );
+    }
+    candidates.push(root().join(library));
+    if let Ok(current) = std::env::current_dir() {
+        candidates.push(current.join(library));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|directory| directory.join(library)));
+    }
+    candidates
+}
+
+/// Fail early with an actionable message when the native PDFium library is absent.
+fn require_pdfium() -> Result<()> {
+    if pdfium_library_candidates()
+        .iter()
+        .any(|candidate| candidate.is_file())
+    {
+        return Ok(());
+    }
+    bail!(
+        "the `pdfium` feature tests need the native PDFium library, but none of the \
+         candidate paths exist. Run `./scripts/fetch-pdfium.ps1` (which installs \
+         $LOCALAPPDATA/pdfxi/pdfium/bin/pdfium.dll) or set PDFIUM_PATH to the library file."
+    )
+}
+
+/// Run the tests that the default workspace build would compile out.
+fn run_feature_tests() -> Result<()> {
+    require_pdfium()?;
+    run(
+        "cargo",
+        &["test", "-p", "pdfxi-app", "--features", "ui,pdfium"],
+    )?;
+    run(
+        "cargo",
+        &["test", "-p", "pdfxi-render", "--features", "pdfium"],
+    )?;
+    Ok(())
+}
+
 fn features_verify() -> Result<()> {
     let rows = load_features()?;
     if rows.is_empty() {
         bail!("docs/features.toml has no [[feature]] rows");
     }
+    let test_index = workspace_test_index()?;
     let mut ids = BTreeSet::new();
     let mut verified = 0usize;
+    let mut unresolved = Vec::new();
+    let mut non_test_entries = Vec::new();
     for row in &rows {
         if !ids.insert(row.id.clone()) {
             bail!("duplicate feature id: {}", row.id);
@@ -544,11 +749,44 @@ fn features_verify() -> Result<()> {
                 bail!("verified feature {} has no evidence", row.id);
             }
         }
+        for citation in &row.tests {
+            match citation_symbol(citation) {
+                Some(symbol) if test_index.contains(symbol) => {}
+                Some(symbol) => unresolved.push(format!(
+                    "{}: {} (no `#[test] fn {symbol}` in crates/)",
+                    row.id, citation
+                )),
+                // A path-like entry with `::` still claims to name a test, so an
+                // invalid leaf is a matrix error. Entries with no `::` that are
+                // not identifiers are commands or prose in the `tests` array;
+                // report them separately instead of pretending they are tests.
+                None if citation.contains("::") => unresolved.push(format!(
+                    "{}: {} (not a resolvable test citation)",
+                    row.id, citation
+                )),
+                None => non_test_entries.push(format!("{}: {}", row.id, citation)),
+            }
+        }
+    }
+    if !non_test_entries.is_empty() {
+        eprintln!(
+            "warning: {} `tests` entr(ies) are not test citations and were skipped:",
+            non_test_entries.len()
+        );
+        for entry in &non_test_entries {
+            eprintln!("  {entry}");
+        }
+    }
+    if !unresolved.is_empty() {
+        bail!(
+            "{} cited test(s) do not resolve to a `#[test]` function:\n{}",
+            unresolved.len(),
+            unresolved.join("\n")
+        );
     }
     println!("FEATURES OK: {} rows, {} verified", rows.len(), verified);
     Ok(())
 }
-
 fn docs_present(docs: &Option<toml::Value>) -> bool {
     match docs {
         Some(toml::Value::String(value)) => !value.trim().is_empty(),
@@ -920,5 +1158,43 @@ mod tests {
             target.get("title").and_then(toml::Value::as_str),
             Some("Open")
         );
+    }
+
+    #[test]
+    fn citation_parser_accepts_supported_forms() {
+        assert_eq!(
+            citation_symbol("ui::tests::opens_a_document"),
+            Some("opens_a_document")
+        );
+        assert_eq!(
+            citation_symbol("pdfxi-edit::annotation::tests::bounds"),
+            Some("bounds")
+        );
+        assert_eq!(
+            citation_symbol("cli.rs::repair_repairs"),
+            Some("repair_repairs")
+        );
+        assert_eq!(citation_symbol("bare_symbol"), Some("bare_symbol"));
+    }
+
+    #[test]
+    fn citation_parser_rejects_non_identifiers() {
+        assert_eq!(citation_symbol(""), None);
+        assert_eq!(citation_symbol("ui::tests::"), None);
+        assert_eq!(citation_symbol("ui::tests::not a name"), None);
+        assert_eq!(citation_symbol("9starts_with_a_digit"), None);
+    }
+
+    #[test]
+    fn test_index_finds_annotated_functions() {
+        let source = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn first() {}\n\n    #[test]\n    #[should_panic]\n    fn second() {}\n}\nfn helper() {}\n";
+        assert_eq!(test_fn_names(source), vec!["first", "second"]);
+    }
+
+    #[test]
+    fn test_index_ignores_unannotated_functions_and_comments() {
+        let source =
+            "fn plain() {}\n// #[test]\n// fn commented() {}\nconst TEXT: &str = \"#[test]\";\n";
+        assert!(test_fn_names(source).is_empty());
     }
 }

@@ -4,7 +4,7 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 46 verified, 47 in-progress, 47 planned.
+Current status: 23 verified, 18 library, 96 model, 3 replaced (140 rows; see ADR 0009).
 
 ## Detailed feature pages
 
@@ -27,7 +27,7 @@ Task-oriented M2 chapters live in the [mdBook](book/src/README.md):
 |---|---|
 | `planned` | Scoped, not started |
 | `in-progress` | Claimed and being implemented |
-| `verified` | Implemented, tested, documented, evidence recorded |
+| `verified` | End-user reachable on real documents through the GUI or CLI; tested, documented, evidence recorded |
 | `replaced` | Adobe cloud/proprietary behavior replaced by a local equivalent |
 | `deferred` | P3 only, with a note and an ADR |
 
