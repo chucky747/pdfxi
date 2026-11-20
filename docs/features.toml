@@ -337,11 +337,12 @@ docs = [
     "crates/pdfxi-app/src/ui.rs",
     "crates/pdfxi-app/src/lib.rs",
     "docs/evidence/app/T-0089.md",
+    "docs/evidence/app/T-0119.md",
 ]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-app --features ui: EXIT=0 (151 passed); cargo test -p pdfxi-app: EXIT=0 (107 passed); clippy all-targets/all-features -D warnings and rustdoc -D warnings clean. Full output in docs/evidence/app/T-0089.md."
+evidence = "docs/evidence/app/T-0119.md"
 id = "VIEW-010"
-notes = "OCG layer model, per-tab state, radio/locked handling, visibility plan, and Layers UI panel implemented and tested. Actual optional-content rasterization depends on a renderer backend without an OC API (pdfxi-render exposes only rasters), so VIEW-010 remains in-progress."
+notes = "T-0119 reviewer fix: radio-group exclusivity enforced at construction (deterministic winner: first declared locked-visible, else first declared visible, else first member) and preserved by show_all/set_visible with locked members. Three negative tests added; default 257 passed, ui 320 passed; fmt/clippy/doc clean. VIEW-010 remains in-progress because actual optional-content rasterization needs a renderer backend with an OC API; see docs/evidence/app/T-0119.md."
 priority = "P2"
 status = "in-progress"
 tests = [
@@ -355,6 +356,9 @@ tests = [
     "layers::tests::unknown_ocg_returns_a_typed_error",
     "layers::tests::visibility_plan_reflects_state_in_display_order",
     "layers::tests::visibility_plan_updates_after_state_changes_and_registry_access",
+    "layers::tests::construction_normalizes_multiple_visible_radio_members",
+    "layers::tests::show_all_with_locked_visible_member_keeps_exclusivity",
+    "layers::tests::set_visible_on_second_member_is_blocked_by_locked_member",
 ]
 title = "Optional content layers"
 
@@ -3170,25 +3174,73 @@ tests = []
 title = "HTML5 media replacement for Flash"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/three_d.rs",
+    "docs/evidence/render/T-0134.md",
+]
 domain = "Multimedia and 3D"
-evidence = ""
+evidence = "docs/evidence/render/T-0134.md: cargo test -p pdfxi-render 142 passed (10 new three_d tests), EXIT=0; fmt/clippy/doc EXIT=0. Model + typed backend plan only; no U3D/PRC decoding or display."
 id = "MEDIA-003"
-notes = ""
+notes = """
+Validated 3D annotation model: bounded /3D stream reference (named or object),
+named 3D views with a default-view selection that resolves deterministically,
+activation event (PV/PI/PO/PC) and state (L/F/U/U default) with typed errors,
+and an animation flag. resolve_plan emits a ThreeDPlan listing the exact
+decoder/animation/view-activation capabilities a native backend must provide.
+Unknown stream formats are preserved as ThreeDFormat::Unknown and reported as
+unsupported rather than claimed. No geometry is decoded and nothing is rendered.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "three_d::tests::parse_three_d_dictionary",
+    "three_d::tests::view_selection_resolves_named_and_default_views",
+    "three_d::tests::indexed_selection_is_clamped_to_the_view_range",
+    "three_d::tests::invalid_activation_event_and_state_are_typed_errors",
+    "three_d::tests::every_activation_code_round_trips",
+    "three_d::tests::bounded_input_is_enforced",
+    "three_d::tests::empty_views_and_missing_default_are_typed_errors",
+    "three_d::tests::object_stream_reference_is_accepted_without_a_name",
+    "three_d::tests::unknown_format_is_reported_honestly",
+    "three_d::tests::plan_is_deterministic_and_omits_unneeded_requirements",
+]
 title = "U3D and PRC 3D viewing"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/geospatial.rs",
+    "docs/evidence/render/T-0134.md",
+]
 domain = "Multimedia and 3D"
-evidence = ""
+evidence = "docs/evidence/render/T-0134.md: cargo test -p pdfxi-render 142 passed (12 new geospatial tests), EXIT=0; fmt/clippy/doc EXIT=0. Model + deterministic affine mapping only; no real datum/projection engine."
 id = "MEDIA-004"
-notes = ""
+notes = """
+Validated geospatial model: /VP viewport arrays paired with /GPTS bounds and
+per-viewport /Measure scale and units, /LPTS local points, and /GCS name/EPSG
+with a parsed projection. Every coordinate is checked for finiteness and a
+bounded magnitude; rectangles and geo bounds are validated. Deterministic
+linear PDF-to-geo and geo-to-PDF helpers (plus local-to-geo) are provided for
+geographic systems, with a typed UnsupportedProjection error and a plan note for
+WebMercator and unrecognised projections. Unknown units are preserved and
+reported rather than converted. Real projection/datum math remains native
+backend work, so this row stays in-progress.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "geospatial::tests::parse_viewport_arrays",
+    "geospatial::tests::viewport_bounds_validation",
+    "geospatial::tests::gpts_and_gcs_parse",
+    "geospatial::tests::measure_scale_conversions",
+    "geospatial::tests::coordinate_mapping_is_deterministic",
+    "geospatial::tests::inverse_mapping_round_trips",
+    "geospatial::tests::point_outside_viewport_is_rejected",
+    "geospatial::tests::lpts_local_mapping",
+    "geospatial::tests::unsupported_projection_is_honest",
+    "geospatial::tests::plan_is_deterministic_and_reports_notes",
+    "geospatial::tests::invalid_input_is_rejected",
+    "geospatial::tests::unknown_unit_is_preserved_and_reported",
+]
 title = "Geospatial PDF support"
 
 [[feature]]

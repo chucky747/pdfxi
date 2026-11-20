@@ -3,7 +3,7 @@
   "lane": "render",
   "title": "3D and geospatial document models",
   "priority": "P3",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0113"],
   "owns": [
     "crates/pdfxi-render/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0134.toml"
   ],
   "acceptance": "cargo test -p pdfxi-render",
-  "evidence": ""
+  "evidence": "docs/evidence/render/T-0134.md"
 }

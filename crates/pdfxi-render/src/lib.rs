@@ -57,6 +57,17 @@
 //! and group-isolation descriptors (feature STD-005). It produces a
 //! deterministic [`BlendPlan`] and honestly reports which compositing steps a
 //! native renderer must perform.
+//!
+//! The [`mod@three_d`] module models a PDF 3D annotation (feature MEDIA-003):
+//! its `/3D` stream reference, named views and default view, activation policy,
+//! animation flag, and a typed plan whose backend requirements are stated
+//! honestly. It does not decode or display 3D geometry.
+//!
+//! The [`mod@geospatial`] module models geospatial PDF data (feature MEDIA-004):
+//! `/VP` viewports, `/Measure` scale and units, `/GPTS`/`/LPTS`/`/GCS`
+//! georeferences, bounds validation, and deterministic affine coordinate
+//! mapping for geographic systems. Unsupported projections are reported rather
+//! than silently mis-mapped.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -119,6 +130,20 @@ pub mod droplet;
 /// honest backend delegation for non-separable modes and isolated groups.
 pub mod blend;
 
+/// 3D annotation model (feature MEDIA-003).
+///
+/// Parses and validates the `/3D` stream reference, named views and default,
+/// activation policy, and animation flag, then produces a typed backend plan.
+/// It never decodes or displays 3D geometry.
+pub mod three_d;
+
+/// Geospatial PDF model (feature MEDIA-004).
+///
+/// Parses and validates `/VP` viewports, `/Measure` scale/units, and the
+/// `/GPTS`/`/LPTS`/`/GCS` georeferences, with deterministic affine coordinate
+/// mapping and honest reporting of unsupported projections.
+pub mod geospatial;
+
 pub use color::{
     ColorError, ConversionPlan, DeviceClass, DeviceColor, DeviceColorSpace, ICC_HEADER_SIZE,
     IccColorSpace, IccHeader, IccProfile, MAX_ICC_PROFILE_BYTES, MAX_ICC_TAG_COUNT,
@@ -148,6 +173,19 @@ pub use droplet::{
 pub use blend::{
     BlendCategory, BlendError, BlendMode, BlendPlan, BlendSpec, GroupIsolation, GroupKnockout,
     MAX_GROUP_NAME_BYTES, TransparencyGroup,
+};
+
+pub use three_d::{
+    ActivationEvent, ActivationState, BackendRequirement, MAX_NAME_BYTES as MAX_3D_NAME_BYTES,
+    MAX_VIEW_COUNT, ThreeDAnnotation, ThreeDDictionary, ThreeDError, ThreeDFormat, ThreeDPlan,
+    ThreeDStreamRef, ThreeDView, ViewSelection,
+};
+
+pub use geospatial::{
+    EDGE_TOLERANCE, GeoBounds, GeodeticCr, GeospatialDictionary, GeospatialDocument,
+    GeospatialError, GeospatialPlan, LocalPoints, MAX_COORD_ABS,
+    MAX_NAME_BYTES as MAX_GEO_NAME_BYTES, MAX_VIEWPORTS, Measure, MeasureSubtype, PdfRect,
+    PlanNote, Projection, Unit, Viewport, ViewportInput,
 };
 
 pub use print::{

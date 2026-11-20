@@ -409,14 +409,105 @@ pub struct LayerState {
 
 impl LayerState {
     /// Create the initial state from a model's default visibility flags.
+    ///
+    /// A hostile `/OCProperties` summary may mark more than one member of a
+    /// radio-button group as initially visible. This constructor normalizes
+    /// that state so no group ever shows two members: the first declared
+    /// locked-and-visible member wins, else the first declared visible member,
+    /// else the first declared member. Every other member of the group is
+    /// hidden.
     pub fn new(model: &LayerModel) -> Self {
-        Self {
-            visible: model
+        let visible: Vec<bool> = model
+            .layers
+            .iter()
+            .map(|layer| layer.initial_visible)
+            .collect();
+        let mut state = Self { visible };
+        state.normalize_radio_groups(model);
+        state
+    }
+
+    /// Enforce radio-group exclusivity on freshly constructed state.
+    ///
+    /// [`LayerModel::position`] records each OCG's declaration index, which is
+    /// used as the deterministic "first declared" ordering for group members.
+    fn normalize_radio_groups(&mut self, model: &LayerModel) {
+        for group in 0..model.radio_group_count {
+            let members: Vec<usize> = model
                 .layers
                 .iter()
-                .map(|layer| layer.initial_visible)
-                .collect(),
+                .enumerate()
+                .filter_map(|(position, layer)| {
+                    (layer.radio_group == Some(group)).then_some(position)
+                })
+                .collect();
+            if members.len() <= 1 {
+                continue;
+            }
+            let declared = |position: usize| {
+                model
+                    .position(&model.layers[position].id)
+                    .unwrap_or(position)
+            };
+            // Priority 1: first declared locked-and-visible member.
+            let winner = members
+                .iter()
+                .copied()
+                .filter(|&position| {
+                    model.layers[position].locked
+                        && self.visible.get(position).copied().unwrap_or(false)
+                })
+                .min_by_key(|&position| declared(position))
+                // Priority 2: first declared visible member.
+                .or_else(|| {
+                    members
+                        .iter()
+                        .copied()
+                        .filter(|&position| self.visible.get(position).copied().unwrap_or(false))
+                        .min_by_key(|&position| declared(position))
+                })
+                // Priority 3: first declared member.
+                .or_else(|| {
+                    members
+                        .iter()
+                        .copied()
+                        .min_by_key(|&position| declared(position))
+                });
+            if let Some(winner) = winner {
+                for position in members {
+                    if let Some(flag) = self.visible.get_mut(position) {
+                        *flag = position == winner;
+                    }
+                }
+            }
         }
+    }
+
+    /// The display position of a visible locked member of `group`, if any.
+    ///
+    /// `exclude` skips the named position so a member never counts itself as
+    /// the occupying locked member when `set_visible` consults this helper.
+    fn locked_visible_member(
+        &self,
+        model: &LayerModel,
+        group: usize,
+        exclude: Option<usize>,
+    ) -> Option<usize> {
+        model
+            .layers
+            .iter()
+            .enumerate()
+            .find_map(|(position, layer)| {
+                if layer.radio_group == Some(group)
+                    && layer.locked
+                    && Some(position) != exclude
+                    && self.visible.get(position).copied().unwrap_or(false)
+                {
+                    Some(position)
+                } else {
+                    None
+                }
+            })
     }
 
     /// Whether the named OCG is currently visible.
@@ -431,7 +522,10 @@ impl LayerState {
     ///
     /// Locked OCGs are rejected with [`LayerError::Locked`]. Setting a radio
     /// group member visible clears every other unlocked member of that group;
-    /// setting it hidden leaves the rest of the group unchanged.
+    /// setting it hidden leaves the rest of the group unchanged. A locked,
+    /// visible member owns its group and cannot be cleared, so a second member
+    /// can never be enabled alongside it: in that case the member stays hidden
+    /// and the effective (unchanged) value `false` is returned.
     pub fn set_visible(
         &mut self,
         model: &LayerModel,
@@ -444,7 +538,15 @@ impl LayerState {
         if model.layers[position].locked {
             return Err(LayerError::Locked(id.to_string()));
         }
-        if value && let Some(group) = model.layers[position].radio_group {
+        let group = model.layers[position].radio_group;
+        let blocked = if value && let Some(group) = group {
+            self.locked_visible_member(model, group, Some(position))
+                .is_some()
+        } else {
+            false
+        };
+        let effective = if blocked { false } else { value };
+        if effective && let Some(group) = group {
             for (other_position, layer) in model.layers.iter().enumerate() {
                 if other_position != position
                     && layer.radio_group == Some(group)
@@ -456,9 +558,9 @@ impl LayerState {
             }
         }
         if let Some(flag) = self.visible.get_mut(position) {
-            *flag = value;
+            *flag = effective;
         }
-        Ok(value)
+        Ok(effective)
     }
 
     /// Flip the named OCG's visibility, returning the new value.
@@ -469,16 +571,29 @@ impl LayerState {
 
     /// Show every unlocked OCG while preserving radio-group exclusivity.
     ///
-    /// Locked OCGs keep their current state. For each radio group the first
-    /// unlocked member in display order is shown and the rest are hidden, since
-    /// showing all members of a radio group is not a valid PDF viewing state.
+    /// Locked OCGs keep their current state. A visible locked member owns its
+    /// radio group, so no other member of that group is enabled; otherwise the
+    /// first unlocked member in display order is shown and the group's other
+    /// unlocked members are hidden. Showing all members of a radio group is not
+    /// a valid PDF viewing state.
     pub fn show_all(&mut self, model: &LayerModel) {
         let mut chosen: Vec<Option<usize>> = vec![None; model.radio_group_count];
+        // Pass 1: a visible locked member cannot be changed, so it wins its group.
         for (position, layer) in model.layers.iter().enumerate() {
-            if layer.locked {
-                continue;
+            if layer.locked
+                && self.visible.get(position).copied().unwrap_or(false)
+                && let Some(group) = layer.radio_group
+                && let Some(slot) = chosen.get_mut(group)
+                && slot.is_none()
+            {
+                *slot = Some(position);
             }
-            if let Some(group) = layer.radio_group
+        }
+        // Pass 2: for groups without a visible locked member, pick the first
+        // unlocked member in display order.
+        for (position, layer) in model.layers.iter().enumerate() {
+            if !layer.locked
+                && let Some(group) = layer.radio_group
                 && let Some(slot) = chosen.get_mut(group)
                 && slot.is_none()
             {
@@ -939,6 +1054,89 @@ mod tests {
                 .expect("previous state kept")
                 .is_visible(model, "oc2")
                 .expect("known ocg")
+        );
+    }
+
+    #[test]
+    fn construction_normalizes_multiple_visible_radio_members() {
+        // Hostile summary: every member of the radio group starts visible.
+        let hostile = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("a", "A", true, false))
+            .add_group(OcgInfo::new("b", "B", true, false))
+            .add_group(OcgInfo::new("c", "C", true, false))
+            .with_radio_group(RadioGroup::new(["a", "b", "c"]));
+        let model = LayerModel::from_summary(hostile).expect("valid summary");
+        let state = LayerState::new(&model);
+        // Only the first declared visible member survives.
+        assert!(state.is_visible(&model, "a").expect("known ocg"));
+        assert!(!state.is_visible(&model, "b").expect("known ocg"));
+        assert!(!state.is_visible(&model, "c").expect("known ocg"));
+        assert_eq!(state.visible_count(&model), 1);
+        assert_eq!(model.visibility_plan(&state).visible_ids(), &["a"]);
+
+        // A locked-and-visible member outranks an earlier unlocked visible one.
+        let locked = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("a", "A", true, false))
+            .add_group(OcgInfo::new("b", "B", true, true))
+            .with_radio_group(RadioGroup::new(["a", "b"]));
+        let model = LayerModel::from_summary(locked).expect("valid summary");
+        let state = LayerState::new(&model);
+        assert!(!state.is_visible(&model, "a").expect("known ocg"));
+        assert!(state.is_visible(&model, "b").expect("known ocg"));
+        assert_eq!(state.visible_count(&model), 1);
+
+        // With no initially visible member, the first declared member wins.
+        let none = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("a", "A", false, false))
+            .add_group(OcgInfo::new("b", "B", false, false))
+            .with_radio_group(RadioGroup::new(["a", "b"]));
+        let model = LayerModel::from_summary(none).expect("valid summary");
+        let state = LayerState::new(&model);
+        assert!(state.is_visible(&model, "a").expect("known ocg"));
+        assert!(!state.is_visible(&model, "b").expect("known ocg"));
+        assert_eq!(state.visible_count(&model), 1);
+    }
+
+    #[test]
+    fn show_all_with_locked_visible_member_keeps_exclusivity() {
+        let summary = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("a", "A", true, true))
+            .add_group(OcgInfo::new("b", "B", false, false))
+            .add_group(OcgInfo::new("c", "C", false, false))
+            .with_radio_group(RadioGroup::new(["a", "b", "c"]));
+        let model = LayerModel::from_summary(summary).expect("valid summary");
+        let mut state = LayerState::new(&model);
+        assert!(state.is_visible(&model, "a").expect("known ocg"));
+        assert!(!state.is_visible(&model, "b").expect("known ocg"));
+        assert!(!state.is_visible(&model, "c").expect("known ocg"));
+        state.show_all(&model);
+        // The locked member still owns the group; b and c must stay hidden.
+        assert!(state.is_visible(&model, "a").expect("known ocg"));
+        assert!(!state.is_visible(&model, "b").expect("known ocg"));
+        assert!(!state.is_visible(&model, "c").expect("known ocg"));
+        assert_eq!(state.visible_count(&model), 1);
+        assert_eq!(model.visibility_plan(&state).visible_ids(), &["a"]);
+    }
+
+    #[test]
+    fn set_visible_on_second_member_is_blocked_by_locked_member() {
+        let summary = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("a", "A", true, true))
+            .add_group(OcgInfo::new("b", "B", false, false))
+            .with_radio_group(RadioGroup::new(["a", "b"]));
+        let model = LayerModel::from_summary(summary).expect("valid summary");
+        let mut state = LayerState::new(&model);
+        assert!(state.is_visible(&model, "a").expect("known ocg"));
+        // Switching on the second member is refused; the returned value is the
+        // effective (still hidden) state.
+        assert_eq!(state.set_visible(&model, "b", true), Ok(false));
+        assert!(state.is_visible(&model, "a").expect("known ocg"));
+        assert!(!state.is_visible(&model, "b").expect("known ocg"));
+        assert_eq!(state.visible_count(&model), 1);
+        // The locked member still rejects direct changes.
+        assert_eq!(
+            state.set_visible(&model, "a", false),
+            Err(LayerError::Locked("a".into()))
         );
     }
 }
