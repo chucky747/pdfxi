@@ -17,7 +17,8 @@
 //! All traversals are iterative (no recursion), so arbitrarily deep trees are
 //! safe. The module forbids unsafe code and uses no `unwrap`/`expect`/`panic`
 //! outside tests. [`suggest_fixups`] returns human-readable suggestions and
-//! never mutates the tree.
+//! never mutates the tree; [`build_fix_plan`] turns a report into a deterministic,
+//! prioritized [`FixPlan`] with typed validation errors and a stable report.
 
 use core::fmt;
 use std::collections::{HashMap, HashSet};
@@ -734,6 +735,236 @@ pub fn suggest_fixups(report: &Report, tree: &A11yTree) -> Vec<FixupSuggestion> 
     suggestions
 }
 
+// ---------------------------------------------------------------------------
+// Deterministic fix-plan model
+// ---------------------------------------------------------------------------
+
+/// One ordered, actionable step in an accessibility [`FixPlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixStep {
+    /// One-based position of this step in the plan.
+    pub sequence: usize,
+    /// Rule whose finding prompted the step.
+    pub rule: Rule,
+    /// Severity inherited from the originating finding.
+    pub severity: Severity,
+    /// Node to edit, when the fix is node-specific.
+    pub node: Option<NodeId>,
+    /// Zero-based page index of the node, when known.
+    pub page: Option<usize>,
+    /// Human-readable description of the suggested edit.
+    pub description: String,
+}
+
+/// Typed errors produced while constructing a [`FixPlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FixPlanError {
+    /// A suggestion referenced a node that is not in the supplied tree.
+    UnknownNode(NodeId),
+    /// A suggestion referenced a rule with no matching finding in the report.
+    MissingFinding(Rule),
+}
+
+impl fmt::Display for FixPlanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownNode(id) => write!(f, "fix plan references unknown node {id}"),
+            Self::MissingFinding(rule) => {
+                write!(f, "fix plan step {rule} has no matching finding")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FixPlanError {}
+
+/// A deterministic summary of a [`FixPlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixPlanReport {
+    /// Total number of steps in the plan.
+    pub total: usize,
+    /// Number of error-severity steps.
+    pub errors: usize,
+    /// Number of warning-severity steps.
+    pub warnings: usize,
+    /// Number of informational steps.
+    pub info: usize,
+    /// Number of document-scoped steps (no node).
+    pub document_scoped: usize,
+    /// Number of node-scoped steps.
+    pub node_scoped: usize,
+}
+
+impl FixPlanReport {
+    /// Serializes the report as stable, single-line-key text.
+    pub fn to_text(&self) -> String {
+        format!(
+            "total={}\nerrors={}\nwarnings={}\ninfo={}\ndocument_scoped={}\nnode_scoped={}\n",
+            self.total,
+            self.errors,
+            self.warnings,
+            self.info,
+            self.document_scoped,
+            self.node_scoped
+        )
+    }
+}
+
+/// A deterministic, prioritized plan of fixes derived from a checker report.
+///
+/// Steps are ordered by severity (errors first), then rule identifier, page,
+/// node, and description. Sequence numbers are assigned after sorting so the
+/// same report always yields the same plan and the same [`Self::to_text`]
+/// output. Construction never mutates the report or the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixPlan {
+    steps: Vec<FixStep>,
+}
+
+impl FixPlan {
+    /// Builds a fix plan from a checker report and the tree it was produced from.
+    pub fn from_report(report: &Report, tree: &A11yTree) -> Result<Self, FixPlanError> {
+        let suggestions = suggest_fixups(report, tree);
+        Self::from_suggestions(report, tree, &suggestions)
+    }
+
+    /// Builds a fix plan from explicit suggestions, validating every step.
+    ///
+    /// Each suggestion must reference a node present in `tree` and a rule with a
+    /// matching finding in `report`; otherwise a typed [`FixPlanError`] is
+    /// returned. This is the validation seam used by hosts that supply their own
+    /// remediation catalogue.
+    pub fn from_suggestions(
+        report: &Report,
+        tree: &A11yTree,
+        suggestions: &[FixupSuggestion],
+    ) -> Result<Self, FixPlanError> {
+        for suggestion in suggestions {
+            if let Some(node) = suggestion.node
+                && tree.node(node).is_none()
+            {
+                return Err(FixPlanError::UnknownNode(node));
+            }
+            let matched = report.findings().iter().any(|finding| {
+                finding.rule == suggestion.rule
+                    && finding.node == suggestion.node
+                    && finding.page == suggestion.page
+            });
+            if !matched {
+                return Err(FixPlanError::MissingFinding(suggestion.rule));
+            }
+        }
+
+        let mut steps: Vec<FixStep> = suggestions
+            .iter()
+            .map(|suggestion| {
+                let severity = report
+                    .findings()
+                    .iter()
+                    .find(|finding| {
+                        finding.rule == suggestion.rule
+                            && finding.node == suggestion.node
+                            && finding.page == suggestion.page
+                    })
+                    .map_or(Severity::Warning, |finding| finding.severity);
+                FixStep {
+                    sequence: 0,
+                    rule: suggestion.rule,
+                    severity,
+                    node: suggestion.node,
+                    page: suggestion.page,
+                    description: suggestion.description.clone(),
+                }
+            })
+            .collect();
+
+        steps.sort_by(|left, right| {
+            (
+                left.severity.rank(),
+                left.rule.as_str(),
+                left.page.unwrap_or(usize::MAX),
+                left.node.map_or(u64::MAX, NodeId::get),
+                left.description.as_str(),
+            )
+                .cmp(&(
+                    right.severity.rank(),
+                    right.rule.as_str(),
+                    right.page.unwrap_or(usize::MAX),
+                    right.node.map_or(u64::MAX, NodeId::get),
+                    right.description.as_str(),
+                ))
+        });
+        for (index, step) in steps.iter_mut().enumerate() {
+            step.sequence = index.saturating_add(1);
+        }
+        Ok(Self { steps })
+    }
+
+    /// The plan's steps in execution order.
+    pub fn steps(&self) -> &[FixStep] {
+        &self.steps
+    }
+
+    /// Number of steps in the plan.
+    pub fn len(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Returns `true` when the plan has no steps.
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    /// Computes the deterministic summary of this plan.
+    pub fn report(&self) -> FixPlanReport {
+        let mut summary = FixPlanReport {
+            total: self.steps.len(),
+            errors: 0,
+            warnings: 0,
+            info: 0,
+            document_scoped: 0,
+            node_scoped: 0,
+        };
+        for step in &self.steps {
+            match step.severity {
+                Severity::Error => summary.errors += 1,
+                Severity::Warning => summary.warnings += 1,
+                Severity::Info => summary.info += 1,
+            }
+            if step.node.is_some() {
+                summary.node_scoped += 1;
+            } else {
+                summary.document_scoped += 1;
+            }
+        }
+        summary
+    }
+
+    /// Serializes the plan as stable text: the summary followed by one line per
+    /// step in execution order.
+    pub fn to_text(&self) -> String {
+        let mut text = self.report().to_text();
+        for step in &self.steps {
+            let node = step
+                .node
+                .map_or_else(|| "-".to_string(), |id| id.get().to_string());
+            let page = step
+                .page
+                .map_or_else(|| "-".to_string(), |page| page.to_string());
+            text.push_str(&format!(
+                "{}|{}|{}|{}|{}|{}\n",
+                step.sequence, step.severity, step.rule, node, page, step.description
+            ));
+        }
+        text
+    }
+}
+
+/// Builds a deterministic [`FixPlan`] from a checker report and its tree.
+pub fn build_fix_plan(report: &Report, tree: &A11yTree) -> Result<FixPlan, FixPlanError> {
+    FixPlan::from_report(report, tree)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1121,5 +1352,153 @@ mod tests {
         assert_eq!(Rule::MissingTitle.as_str(), "UA-0001");
         assert_eq!(Rule::DuplicateRole.as_str(), "UA-0012");
         assert_eq!(Rule::MissingAltText.to_string(), "UA-0004");
+    }
+
+    // --- fix-plan model ---------------------------------------------------
+
+    fn dirty_tree() -> A11yTree {
+        A11yTree::new(
+            vec![
+                node(1, TagRole::Document, 0, "", vec![NodeId::new(2)]),
+                node(
+                    2,
+                    TagRole::Page,
+                    0,
+                    "",
+                    vec![NodeId::new(3), NodeId::new(4), NodeId::new(5)],
+                ),
+                node(3, TagRole::Heading3, 0, "Jump", vec![]),
+                node(4, TagRole::Figure, 0, "", vec![]),
+                node(5, TagRole::Link, 0, "", vec![]),
+            ],
+            vec![NodeId::new(1)],
+        )
+        .expect("dirty tree must be valid")
+    }
+
+    fn report_with_finding(finding: Finding) -> Report {
+        Report::new(vec![finding])
+    }
+
+    #[test]
+    fn fix_plan_from_dirty_report_is_deterministic() {
+        let tree = dirty_tree();
+        let options = CheckOptions::new(Some("Doc"), None, 1);
+        let report = check(&tree, &options).expect("check succeeds");
+        assert!(
+            !report.findings().is_empty(),
+            "tree should produce findings"
+        );
+
+        let plan = build_fix_plan(&report, &tree).expect("plan builds");
+        let again = build_fix_plan(&report, &tree).expect("plan builds again");
+        assert_eq!(plan, again);
+        assert_eq!(plan.to_text(), again.to_text());
+        assert!(!plan.is_empty());
+        assert!(plan.steps().iter().all(|step| step.sequence > 0));
+    }
+
+    #[test]
+    fn fix_plan_steps_are_sorted_by_severity_then_rule() {
+        let tree = dirty_tree();
+        let options = CheckOptions::new(Some("Doc"), None, 1);
+        let report = check(&tree, &options).expect("check succeeds");
+        let plan = build_fix_plan(&report, &tree).expect("plan builds");
+
+        let mut previous_rank = 0u8;
+        let mut previous_rule = "";
+        for (index, step) in plan.steps().iter().enumerate() {
+            assert_eq!(step.sequence, index.saturating_add(1));
+            assert!(step.severity.rank() >= previous_rank);
+            if step.severity.rank() == previous_rank {
+                assert!(step.rule.as_str() >= previous_rule);
+            }
+            previous_rank = step.severity.rank();
+            previous_rule = step.rule.as_str();
+        }
+    }
+
+    #[test]
+    fn fix_plan_from_clean_report_is_empty() {
+        let tree = clean_tree();
+        let report = check(&tree, &options()).expect("check succeeds");
+        assert!(report.findings().is_empty());
+        let plan = build_fix_plan(&report, &tree).expect("plan builds");
+        assert!(plan.is_empty());
+        assert_eq!(plan.len(), 0);
+        let summary = plan.report();
+        assert_eq!(summary.total, 0);
+        assert_eq!(summary.errors, 0);
+        assert_eq!(summary.document_scoped, 0);
+        assert!(plan.to_text().starts_with("total=0\n"));
+    }
+
+    #[test]
+    fn fix_plan_report_counts_severities_and_scope() {
+        let tree = dirty_tree();
+        let options = CheckOptions::new(Some("Doc"), None, 1);
+        let report = check(&tree, &options).expect("check succeeds");
+        let plan = build_fix_plan(&report, &tree).expect("plan builds");
+        let summary = plan.report();
+
+        assert_eq!(summary.total, plan.len());
+        assert_eq!(summary.errors + summary.warnings + summary.info, plan.len());
+        assert_eq!(summary.document_scoped + summary.node_scoped, plan.len());
+        assert_eq!(summary.errors, 1, "missing /Lang is an error-severity fix");
+        assert!(summary.node_scoped >= 2);
+        assert!(summary.to_text().contains("document_scoped=1"));
+    }
+
+    #[test]
+    fn fix_plan_rejects_unknown_node_with_typed_error() {
+        let tree = clean_tree();
+        let report = report_with_finding(Finding {
+            rule: Rule::MissingAltText,
+            severity: Severity::Warning,
+            message: "phantom".to_string(),
+            node: Some(NodeId::new(999)),
+            page: Some(0),
+        });
+        let error = build_fix_plan(&report, &tree).expect_err("phantom node is rejected");
+        assert!(matches!(
+            error,
+            FixPlanError::UnknownNode(id) if id == NodeId::new(999)
+        ));
+        assert!(error.to_string().contains("unknown node"));
+        let _: &dyn std::error::Error = &error;
+    }
+
+    #[test]
+    fn fix_plan_rejects_suggestion_without_matching_finding() {
+        let tree = clean_tree();
+        let empty = check(&tree, &options()).expect("clean check succeeds");
+        let orphan = FixupSuggestion {
+            rule: Rule::MissingTitle,
+            node: None,
+            page: None,
+            description: "add a title".to_string(),
+        };
+        let error = FixPlan::from_suggestions(&empty, &tree, &[orphan])
+            .expect_err("suggestion without a finding is rejected");
+        assert!(matches!(
+            error,
+            FixPlanError::MissingFinding(Rule::MissingTitle)
+        ));
+        assert!(error.to_string().contains("no matching finding"));
+    }
+
+    #[test]
+    fn fix_plan_steps_carry_stable_rule_ids_and_nonempty_descriptions() {
+        let tree = dirty_tree();
+        let options = CheckOptions::new(Some("Doc"), None, 1);
+        let report = check(&tree, &options).expect("check succeeds");
+        let plan = build_fix_plan(&report, &tree).expect("plan builds");
+        for step in plan.steps() {
+            assert!(!step.description.is_empty());
+            assert!(step.rule.as_str().starts_with("UA-"));
+            let line = format!("{}", step.rule);
+            assert_eq!(line, step.rule.as_str());
+        }
+        assert!(plan.to_text().contains("|UA-0002|"), "missing /Lang step");
     }
 }

@@ -1,0 +1,15 @@
+{
+  "id": "T-0175",
+  "lane": "convert",
+  "title": "Export rows closure for images text and archives",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0174"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "docs/evidence/convert/T-0175.md",
+    "orchestration/feature-updates/T-0175.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert",
+  "evidence": ""
+}

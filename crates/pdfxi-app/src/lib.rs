@@ -65,7 +65,9 @@
 //! changed hunks and a summary. They depend on no PDF or GUI backend.
 //! The [`nav`] module supplies the accessibility navigation model: a
 //! deterministic focus ring, toolkit-free navigation shortcuts, WCAG-audited
-//! high-contrast color tokens, and bounded reflow layout metrics. The
+//! high-contrast color tokens, bounded reflow layout metrics, and a touch/assistive
+//! gesture model that reuses the same focus ring with typed gesture errors and a
+//! deterministic navigation report. The
 //! [`read_aloud`] module builds ordered speech chunks with word/sentence
 //! boundaries and drives them with a window-free play/pause/step state machine
 //! behind an explicit host speech-sink boundary. The [`reflow`] module builds a
@@ -187,9 +189,11 @@ pub use loupe::{
     LoupeSize, MAX_GESTURE_ACCUM, MAX_GESTURE_STEP, MAX_LOUPE_ZOOM, MIN_LOUPE_ZOOM,
 };
 pub use nav::{
-    FocusOrder, FocusTarget, Focusable, HIGH_CONTRAST_TARGET, MAX_REFLOW_SCALE, MIN_CONTRAST_RATIO,
-    MIN_REFLOW_SCALE, NavCommand, NavKey, NavModifiers, ReflowMetrics, ReflowRequest, Rgb, Theme,
-    ThemeTokens, audited_contrast_pairs, contrast_ratio, map_nav_shortcut, reflow_metrics, tokens,
+    FocusOrder, FocusTarget, Focusable, GestureError, HIGH_CONTRAST_TARGET, MAX_REFLOW_SCALE,
+    MIN_CONTRAST_RATIO, MIN_REFLOW_SCALE, NavCommand, NavKey, NavModifiers, ReflowMetrics,
+    ReflowRequest, Rgb, SwipeDirection, Theme, ThemeTokens, TouchAction, TouchGesture,
+    TouchNavigation, TouchNavigationReport, TouchStep, audited_contrast_pairs, contrast_ratio,
+    map_nav_shortcut, map_touch_gesture, reflow_metrics, tokens,
 };
 pub use open::{
     DocumentOpenPipeline, DocumentOpener, EncryptionState, MockDocumentOpener, MockResponse,

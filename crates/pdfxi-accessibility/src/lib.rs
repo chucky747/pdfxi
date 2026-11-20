@@ -10,11 +10,14 @@
 //! objects and reads it back for verification; and [`checker`] audits a tree
 //! plus document metadata with a deterministic, non-certifying PDF/UA-oriented
 //! rule set; [`editor`] adds copy-on-write tag-tree edits, reading-order edits,
-//! alt-text/table models, and a bounded undo/redo journal.
+//! alt-text/table models, and a bounded undo/redo journal; [`authoring`] layers
+//! deterministic, replayable authoring plans and reports with a structure-tree
+//! round-trip check and a validated reading-order export over those edits.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod authoring;
 pub mod builder;
 pub mod checker;
 pub mod editor;
@@ -23,13 +26,16 @@ pub mod reading_order;
 pub mod structure;
 pub mod tree;
 
+pub use authoring::{
+    AuthoringError, AuthoringPlan, AuthoringReport, AuthoringStep, export_reading_order,
+};
 pub use builder::{
     HEADING1_RATIO, HEADING2_RATIO, HEADING3_RATIO, PARAGRAPH_GAP_MULTIPLIER, ReadingOrderBuilder,
     TextBlock,
 };
 pub use checker::{
-    CheckError, CheckOptions, Finding, FixupSuggestion, Report, Rule, Severity, Summary, check,
-    suggest_fixups,
+    CheckError, CheckOptions, Finding, FixPlan, FixPlanError, FixPlanReport, FixStep,
+    FixupSuggestion, Report, Rule, Severity, Summary, build_fix_plan, check, suggest_fixups,
 };
 pub use editor::{
     AltRequirement, AltState, CellKind, CoverageReport, DEFAULT_JOURNAL_LIMIT, EditError,

@@ -328,6 +328,280 @@ pub fn map_nav_shortcut(key: NavKey, modifiers: NavModifiers) -> Option<NavComma
 }
 
 // ---------------------------------------------------------------------------
+// Touch / assistive navigation gestures
+// ---------------------------------------------------------------------------
+
+/// Direction of a swipe gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwipeDirection {
+    /// Swipe toward the left edge.
+    Left,
+    /// Swipe toward the right edge.
+    Right,
+    /// Swipe upward.
+    Up,
+    /// Swipe downward.
+    Down,
+}
+
+impl SwipeDirection {
+    /// A stable label for diagnostics and reports.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Left => "SwipeLeft",
+            Self::Right => "SwipeRight",
+            Self::Up => "SwipeUp",
+            Self::Down => "SwipeDown",
+        }
+    }
+}
+
+/// A window-free touch gesture used for assistive navigation.
+///
+/// Gestures are deliberately toolkit-independent: a host translates native
+/// recognizer events into these values and feeds them to [`TouchNavigation`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TouchGesture {
+    /// A single tap.
+    Tap,
+    /// A double tap.
+    DoubleTap,
+    /// A long press.
+    LongPress,
+    /// A directional swipe.
+    Swipe(SwipeDirection),
+    /// A pinch with a finite, strictly positive scale factor.
+    Pinch {
+        /// Scale factor (`> 1` zooms in, `< 1` zooms out).
+        scale: f32,
+    },
+    /// A vertical scroll with a finite delta.
+    Scroll {
+        /// Positive scrolls down, negative scrolls up.
+        delta_y: f32,
+    },
+}
+
+impl TouchGesture {
+    /// A stable label for diagnostics and reports.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Tap => "Tap",
+            Self::DoubleTap => "DoubleTap",
+            Self::LongPress => "LongPress",
+            Self::Swipe(direction) => direction.label(),
+            Self::Pinch { .. } => "Pinch",
+            Self::Scroll { .. } => "Scroll",
+        }
+    }
+}
+
+/// Typed errors produced while resolving a [`TouchGesture`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum GestureError {
+    /// A pinch scale was not a finite number.
+    NonFiniteScale(f32),
+    /// A pinch scale was zero, negative, or subnormal.
+    NonPositiveScale(f32),
+    /// A scroll delta was not a finite number.
+    NonFiniteDelta(f32),
+}
+
+impl fmt::Display for GestureError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonFiniteScale(value) => write!(f, "pinch scale must be finite, got {value}"),
+            Self::NonPositiveScale(value) => {
+                write!(f, "pinch scale must be positive, got {value}")
+            }
+            Self::NonFiniteDelta(value) => write!(f, "scroll delta must be finite, got {value}"),
+        }
+    }
+}
+
+impl std::error::Error for GestureError {}
+
+/// A host-facing action produced by a [`TouchGesture`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TouchAction {
+    /// A navigation command that also has a keyboard path.
+    Navigate(NavCommand),
+    /// A zoom request with a finite, positive factor.
+    Zoom(f32),
+    /// A vertical scroll request with a finite delta.
+    Scroll(f32),
+}
+
+fn action_label(action: TouchAction) -> String {
+    match action {
+        TouchAction::Navigate(command) => format!("Navigate:{}", command.shortcut_label()),
+        TouchAction::Zoom(scale) => format!("Zoom:{scale}"),
+        TouchAction::Scroll(delta) => format!("Scroll:{delta}"),
+    }
+}
+
+/// Resolves a touch gesture into a host action, rejecting hostile float values.
+pub fn map_touch_gesture(gesture: TouchGesture) -> Result<TouchAction, GestureError> {
+    match gesture {
+        TouchGesture::Tap | TouchGesture::Swipe(SwipeDirection::Up) => {
+            Ok(TouchAction::Navigate(NavCommand::FocusCanvas))
+        }
+        TouchGesture::DoubleTap | TouchGesture::Swipe(SwipeDirection::Down) => {
+            Ok(TouchAction::Navigate(NavCommand::FocusFind))
+        }
+        TouchGesture::LongPress => Ok(TouchAction::Navigate(NavCommand::ReadAloud)),
+        TouchGesture::Swipe(SwipeDirection::Right) => {
+            Ok(TouchAction::Navigate(NavCommand::NextPane))
+        }
+        TouchGesture::Swipe(SwipeDirection::Left) => {
+            Ok(TouchAction::Navigate(NavCommand::PreviousPane))
+        }
+        TouchGesture::Pinch { scale } => {
+            if !scale.is_finite() {
+                return Err(GestureError::NonFiniteScale(scale));
+            }
+            if scale <= 0.0 {
+                return Err(GestureError::NonPositiveScale(scale));
+            }
+            Ok(TouchAction::Zoom(scale))
+        }
+        TouchGesture::Scroll { delta_y } => {
+            if !delta_y.is_finite() {
+                return Err(GestureError::NonFiniteDelta(delta_y));
+            }
+            Ok(TouchAction::Scroll(delta_y))
+        }
+    }
+}
+
+fn apply_touch_command(focus: &mut FocusOrder, command: NavCommand) -> Option<FocusTarget> {
+    match command {
+        NavCommand::NextPane => focus.next(),
+        NavCommand::PreviousPane => focus.previous(),
+        NavCommand::FocusCanvas => {
+            focus.set_focused(FocusTarget::PageCanvas);
+            focus.focused()
+        }
+        NavCommand::FocusFind => {
+            focus.set_focused(FocusTarget::FindBar);
+            focus.focused()
+        }
+        NavCommand::ToggleHighContrast | NavCommand::ReadAloud => None,
+    }
+}
+
+/// One recorded step of a touch-navigation report.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TouchStep {
+    /// Gesture the host delivered.
+    pub gesture: TouchGesture,
+    /// Action the gesture resolved to.
+    pub action: TouchAction,
+    /// Focus target after applying a navigation action, when it changed focus.
+    pub target: Option<FocusTarget>,
+}
+
+/// Deterministic result of applying a sequence of touch gestures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TouchNavigationReport {
+    /// Gestures in the order they were applied.
+    pub steps: Vec<TouchStep>,
+    /// Focus target after the whole sequence.
+    pub focused: Option<FocusTarget>,
+}
+
+impl TouchNavigationReport {
+    /// Serializes the report as stable text for diagnostics and tests.
+    pub fn to_text(&self) -> String {
+        let mut text = String::new();
+        for step in &self.steps {
+            let target = step
+                .target
+                .map_or_else(|| "-".to_string(), |target| target.label().to_string());
+            text.push_str(&format!(
+                "{}|{}|{}\n",
+                step.gesture.label(),
+                action_label(step.action),
+                target
+            ));
+        }
+        let focused = self
+            .focused
+            .map_or_else(|| "-".to_string(), |target| target.label().to_string());
+        text.push_str(&format!("focused={focused}\n"));
+        text
+    }
+}
+
+/// Assistive navigation over a [`FocusOrder`] driven by touch gestures.
+///
+/// Navigation gestures reuse the same deterministic focus ring as the keyboard
+/// path; zoom and scroll gestures are emitted as host actions without moving
+/// focus. Sequence application is atomic: an invalid gesture leaves the ring
+/// untouched and returns a typed [`GestureError`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TouchNavigation {
+    focus: FocusOrder,
+}
+
+impl TouchNavigation {
+    /// Drives the supplied focus ring.
+    pub fn new(focus: FocusOrder) -> Self {
+        Self { focus }
+    }
+
+    /// Drives the canonical viewer focus order.
+    pub fn default_order() -> Self {
+        Self::new(FocusOrder::default_order())
+    }
+
+    /// The underlying focus ring.
+    pub fn focus(&self) -> &FocusOrder {
+        &self.focus
+    }
+
+    /// Mutable access to the underlying focus ring for host configuration.
+    pub fn focus_mut(&mut self) -> &mut FocusOrder {
+        &mut self.focus
+    }
+
+    /// Applies one gesture, returning its action and any new focus target.
+    pub fn apply(
+        &mut self,
+        gesture: TouchGesture,
+    ) -> Result<(TouchAction, Option<FocusTarget>), GestureError> {
+        let action = map_touch_gesture(gesture)?;
+        let target = match action {
+            TouchAction::Navigate(command) => apply_touch_command(&mut self.focus, command),
+            TouchAction::Zoom(_) | TouchAction::Scroll(_) => None,
+        };
+        Ok((action, target))
+    }
+
+    /// Applies a gesture sequence atomically and returns a deterministic report.
+    pub fn apply_sequence(
+        &mut self,
+        gestures: &[TouchGesture],
+    ) -> Result<TouchNavigationReport, GestureError> {
+        let mut trial = self.clone();
+        let mut steps = Vec::with_capacity(gestures.len());
+        for &gesture in gestures {
+            let (action, target) = trial.apply(gesture)?;
+            steps.push(TouchStep {
+                gesture,
+                action,
+                target,
+            });
+        }
+        *self = trial;
+        Ok(TouchNavigationReport {
+            steps,
+            focused: self.focus.focused(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // High-contrast theme tokens
 // ---------------------------------------------------------------------------
 
@@ -856,5 +1130,156 @@ mod tests {
                 target.label()
             );
         }
+    }
+
+    // --- touch / assistive navigation --------------------------------------
+
+    #[test]
+    fn touch_swipes_walk_the_focus_ring_and_wrap() {
+        let mut touch = TouchNavigation::default_order();
+        assert_eq!(touch.focus().focused(), Some(FocusTarget::MenuBar));
+
+        let (_, target) = touch
+            .apply(TouchGesture::Swipe(SwipeDirection::Right))
+            .expect("swipe resolves");
+        assert_eq!(target, Some(FocusTarget::Toolbar));
+
+        let (_, target) = touch
+            .apply(TouchGesture::Swipe(SwipeDirection::Left))
+            .expect("swipe resolves");
+        assert_eq!(target, Some(FocusTarget::MenuBar));
+
+        let (_, target) = touch
+            .apply(TouchGesture::Swipe(SwipeDirection::Left))
+            .expect("swipe resolves");
+        assert_eq!(target, Some(FocusTarget::StatusBar));
+    }
+
+    #[test]
+    fn touch_tap_and_double_tap_focus_canvas_and_find_bar() {
+        let mut touch = TouchNavigation::default_order();
+        let (action, target) = touch.apply(TouchGesture::Tap).expect("tap resolves");
+        assert_eq!(action, TouchAction::Navigate(NavCommand::FocusCanvas));
+        assert_eq!(target, Some(FocusTarget::PageCanvas));
+
+        let (action, target) = touch.apply(TouchGesture::DoubleTap).expect("tap resolves");
+        assert_eq!(action, TouchAction::Navigate(NavCommand::FocusFind));
+        assert_eq!(target, Some(FocusTarget::FindBar));
+    }
+
+    #[test]
+    fn touch_long_press_emits_host_command_without_moving_focus() {
+        let mut touch = TouchNavigation::default_order();
+        let before = touch.focus().focused();
+        let (action, target) = touch
+            .apply(TouchGesture::LongPress)
+            .expect("press resolves");
+        assert_eq!(action, TouchAction::Navigate(NavCommand::ReadAloud));
+        assert_eq!(target, None);
+        assert_eq!(touch.focus().focused(), before);
+    }
+
+    #[test]
+    fn touch_sequence_report_is_deterministic() {
+        let gestures = [
+            TouchGesture::Swipe(SwipeDirection::Right),
+            TouchGesture::Tap,
+            TouchGesture::LongPress,
+            TouchGesture::Swipe(SwipeDirection::Down),
+        ];
+        let mut first = TouchNavigation::default_order();
+        let mut second = TouchNavigation::default_order();
+        let left = first.apply_sequence(&gestures).expect("sequence resolves");
+        let right = second.apply_sequence(&gestures).expect("sequence resolves");
+        assert_eq!(left, right);
+        assert_eq!(left.to_text(), right.to_text());
+        assert_eq!(left.steps.len(), gestures.len());
+        assert_eq!(left.focused, Some(FocusTarget::FindBar));
+        assert!(left.to_text().starts_with("SwipeRight|Navigate:"));
+        assert!(left.to_text().ends_with("focused=Find bar\n"));
+    }
+
+    #[test]
+    fn touch_navigation_skips_disabled_focus_entries() {
+        let ring = FocusOrder::new(vec![
+            Focusable::enabled(FocusTarget::MenuBar),
+            Focusable::new(FocusTarget::Toolbar, false),
+            Focusable::new(FocusTarget::TabStrip, false),
+            Focusable::enabled(FocusTarget::PageCanvas),
+        ]);
+        let mut touch = TouchNavigation::new(ring);
+        let (_, target) = touch
+            .apply(TouchGesture::Swipe(SwipeDirection::Right))
+            .expect("swipe resolves");
+        assert_eq!(target, Some(FocusTarget::PageCanvas));
+    }
+
+    #[test]
+    fn touch_rejects_non_finite_and_non_positive_pinch_with_typed_errors() {
+        let nan = map_touch_gesture(TouchGesture::Pinch { scale: f32::NAN });
+        assert!(matches!(nan, Err(GestureError::NonFiniteScale(_))));
+        let infinite = map_touch_gesture(TouchGesture::Pinch {
+            scale: f32::INFINITY,
+        });
+        assert!(matches!(infinite, Err(GestureError::NonFiniteScale(_))));
+        let zero = map_touch_gesture(TouchGesture::Pinch { scale: 0.0 });
+        assert!(matches!(zero, Err(GestureError::NonPositiveScale(_))));
+        let negative = map_touch_gesture(TouchGesture::Pinch { scale: -2.0 });
+        assert!(matches!(negative, Err(GestureError::NonPositiveScale(_))));
+
+        let error = GestureError::NonFiniteDelta(f32::NAN);
+        assert!(error.to_string().contains("finite"));
+        let _: &dyn std::error::Error = &error;
+    }
+
+    #[test]
+    fn touch_rejects_non_finite_scroll_without_mutating_focus() {
+        let mut touch = TouchNavigation::default_order();
+        let before = touch.focus().clone();
+        let error = touch
+            .apply_sequence(&[
+                TouchGesture::Swipe(SwipeDirection::Right),
+                TouchGesture::Scroll { delta_y: f32::NAN },
+            ])
+            .expect_err("invalid gesture is rejected");
+        assert!(matches!(error, GestureError::NonFiniteDelta(_)));
+        assert_eq!(*touch.focus(), before, "sequence is atomic on error");
+    }
+
+    #[test]
+    fn touch_zoom_and_scroll_pass_through_valid_values_without_focus_change() {
+        let mut touch = TouchNavigation::default_order();
+        let before = touch.focus().focused();
+        let (zoom_action, target) = touch
+            .apply(TouchGesture::Pinch { scale: 1.5 })
+            .expect("pinch resolves");
+        assert_eq!(zoom_action, TouchAction::Zoom(1.5));
+        assert_eq!(target, None);
+
+        let (scroll_action, target) = touch
+            .apply(TouchGesture::Scroll { delta_y: -3.0 })
+            .expect("scroll resolves");
+        assert_eq!(scroll_action, TouchAction::Scroll(-3.0));
+        assert_eq!(target, None);
+        assert_eq!(touch.focus().focused(), before);
+    }
+
+    #[test]
+    fn touch_gesture_and_direction_labels_are_stable() {
+        let gestures = [
+            TouchGesture::Tap,
+            TouchGesture::DoubleTap,
+            TouchGesture::LongPress,
+            TouchGesture::Swipe(SwipeDirection::Left),
+            TouchGesture::Pinch { scale: 1.0 },
+            TouchGesture::Scroll { delta_y: 0.0 },
+        ];
+        let mut labels = std::collections::BTreeSet::new();
+        for gesture in gestures {
+            assert!(!gesture.label().is_empty());
+            assert!(labels.insert(gesture.label()));
+        }
+        assert_eq!(SwipeDirection::Right.label(), "SwipeRight");
+        assert_eq!(TouchGesture::Tap.label(), "Tap");
     }
 }

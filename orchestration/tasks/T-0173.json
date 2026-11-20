@@ -1,0 +1,15 @@
+{
+  "id": "T-0173",
+  "lane": "app",
+  "title": "Presentation portfolio and loupe closure",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0167"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0173.md",
+    "orchestration/feature-updates/T-0173.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}
