@@ -1,0 +1,18 @@
+{
+  "id": "T-0239",
+  "lane": "convert",
+  "title": "Office and image export writers",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": [
+    "T-0214"
+  ],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "docs/evidence/hardening/T-0239.md",
+    "orchestration/feature-updates/T-0239.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert",
+  "notes": "Library half of the export pair per ADR 0012 (docs/decisions/0012-feature-tasks-split-library-and-shell.md). Serves acceptance item A-27 (Export PDF to Word, Excel, PowerPoint, image, text, HTML and RTF, with Office opening the result) from docs/design/FEATURE_ACCEPTANCE.md. Reads the open document through the pdfxi-document session of ADR 0010 and writes the export formats behind a format-selection API with declared fidelity limits; proves each writer on fixtures/realworld/** read-only and reopens the result where an independent reader exists. A serialised app shell task follows once this lands and owns the Export card in crates/pdfxi-app/src/shell/**; matrix rows stay `library` until that shell task verifies them.",
+  "evidence": "docs/evidence/hardening/T-0239.md"
+}

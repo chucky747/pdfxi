@@ -1,0 +1,18 @@
+{
+  "id": "T-0241",
+  "lane": "security",
+  "title": "Produce real CMS signatures with vetted crypto",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0214"
+  ],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/hardening/T-0241.md",
+    "orchestration/feature-updates/T-0241.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security",
+  "notes": "Library half of the signing pair per ADR 0012 (docs/decisions/0012-feature-tasks-split-library-and-shell.md). Serves acceptance item A-20 (signature with an E-signed badge only when the cryptographic check passes on an unmodified document) from docs/design/FEATURE_ACCEPTANCE.md. Produces and validates real CMS/PKCS#7 signatures over the signed byte range using vetted crypto only, through the pdfxi-document session of ADR 0010, with tamper and wrong-certificate negative tests and a real fixture proof; T-0235 is the serialised shell task that shows the badge and owns crates/pdfxi-app/src/shell/**. Matrix rows stay `library` until that shell task verifies them.",
+  "evidence": "docs/evidence/hardening/T-0241.md"
+}

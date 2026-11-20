@@ -1,0 +1,18 @@
+{
+  "id": "T-0230",
+  "lane": "author",
+  "title": "Comments and markup library on real documents",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0214"
+  ],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/hardening/T-0230.md",
+    "orchestration/feature-updates/T-0230.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "notes": "Library half of the comments pair per ADR 0012 (docs/decisions/0012-feature-tasks-split-library-and-shell.md). Serves acceptance items A-11 (shared-folder review), A-15 (comment count), A-18 (highlight), A-19 (comment note with thread, author, time), A-24 (Comment tool) and A-32 (Comment & Review, XFDF import/export) from docs/design/FEATURE_ACCEPTANCE.md. Exposes annotations, highlights, reply threads, resolution state and XFDF through the pdfxi-document session of ADR 0010 and proves them on fixtures/realworld/** read-only, which this task does not own. A serialised app shell task follows once this lands and owns crates/pdfxi-app/src/shell/**; matrix rows stay `library` until that shell task verifies them.",
+  "evidence": "docs/evidence/hardening/T-0230.md"
+}

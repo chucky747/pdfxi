@@ -1,0 +1,18 @@
+{
+  "id": "T-0234",
+  "lane": "forms",
+  "title": "Form filling library on real documents",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0214"
+  ],
+  "owns": [
+    "crates/pdfxi-forms/**",
+    "docs/evidence/hardening/T-0234.md",
+    "orchestration/feature-updates/T-0234.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-forms",
+  "notes": "Library half of the forms pair per ADR 0012 (docs/decisions/0012-feature-tasks-split-library-and-shell.md). Serves acceptance items A-25 (Fill & Sign form fields) and O-05 (fill, tab order, save with appearances, FDF/XFDF, flatten) from docs/design/FEATURE_ACCEPTANCE.md. Loads AcroForm fields from real bytes, fills and flattens through the pdfxi-document session of ADR 0010, writes appearances so a saved file reopens filled, and proves it on fixtures/realworld/** read-only. A serialised app shell task follows once this lands and owns crates/pdfxi-app/src/shell/**; matrix rows stay `library` until that shell task verifies them.",
+  "evidence": "docs/evidence/hardening/T-0234.md"
+}
