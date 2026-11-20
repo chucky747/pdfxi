@@ -1,0 +1,15 @@
+{
+  "id": "T-0184",
+  "lane": "core",
+  "title": "Transparency and preservation closure",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0181"],
+  "owns": [
+    "crates/pdfxi-core/**",
+    "docs/evidence/core/T-0184.md",
+    "orchestration/feature-updates/T-0184.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core",
+  "evidence": ""
+}
