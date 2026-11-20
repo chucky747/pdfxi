@@ -52,7 +52,11 @@
 //! annotations and form widgets with permanent content-stream placements,
 //! removing them from `/Annots` (and the AcroForm only when every widget is
 //! gone) with a typed report that also exposes the appearance bytes emitted as
-//! `Do` references, plus a dry-run mode.
+//! `Do` references, plus a dry-run mode. [`content_edit`] reads a real page's
+//! content stream into geometry-aware text blocks and writes text replacement
+//! with reflow, inserted text boxes and image XObjects through the core object
+//! model; the replacement path embeds a bundled SIL Open Font License fallback
+//! font when the source font is subset or otherwise cannot encode the new text.
 //!
 //! Edits in this crate are copy-on-write by contract; no API here mutates
 //! source document bytes in place.
@@ -63,6 +67,7 @@
 pub mod annotation;
 pub mod bates;
 pub mod compare;
+pub mod content_edit;
 pub mod document_annotations;
 pub mod find_replace;
 pub mod flatten;
@@ -79,6 +84,8 @@ pub mod review;
 pub mod text_style;
 pub mod watermark;
 
+mod truetype;
+
 pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
 };
@@ -90,6 +97,11 @@ pub use bates::{
 pub use compare::{
     CompareError, CompareOptions, CompareResult, CompareSummary, Hunk, HunkKind, TextDocument,
     TextPage, compare_documents,
+};
+pub use content_edit::{
+    FALLBACK_BASE_FONT, FontChoice, ImageFormat, ImagePlacement, PageTextModel, ReplaceOutcome,
+    TextAlign, TextBlock, TextEditError, TextLine, TextPlacement, TextRun, add_image, add_text_box,
+    replace_run_text, text_blocks,
 };
 pub use document_annotations::{
     AnnotationEditError, AnnotationRef, AnnotationState, AnnotationSubtype, AnnotationView,

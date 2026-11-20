@@ -11,3 +11,10 @@ publish = false
 [dependencies]
 pdfxi-core.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Renderer-backed proof only: the integration test renders the edited page and
+# rejects a solid bar. The `pdfium` feature loads the native library at runtime
+# (PDFIUM_PATH in debug builds), so a machine without it fails that one test
+# with a clear backend error rather than changing library behaviour.
+pdfxi-render = { workspace = true, features = ["pdfium"] }

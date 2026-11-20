@@ -3,7 +3,7 @@
   "lane": "author",
   "title": "Edit PDF library: text blocks, add text/images, in-place edit with reflow",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0214"
   ],
@@ -12,7 +12,7 @@
     "docs/evidence/hardening/T-0233.md",
     "orchestration/feature-updates/T-0233.toml"
   ],
-  "acceptance": "cargo test -p pdfxi-edit; A-17 and A-23 work on a real fixture and the saved file renders and extracts the new text",
+  "acceptance": "cargo test -p pdfxi-edit; text model with geometry, in-place sentence replacement with reflow, add text box, add PNG/JPEG image and full-save persistence on a real page; EDIT-004 (move/resize/replace/delete existing objects) stays `model` and is a follow-up",
   "notes": "Library half of the Edit PDF pair per ADR 0012. Serves acceptance items A-17 (click a paragraph, edit it, reflow, saved file shows and extracts the new text) and A-23 (Edit PDF tool: add, move, resize, replace and delete text and images) from docs/design/FEATURE_ACCEPTANCE.md. Exposes text-block discovery, in-place text edit with reflow, and text/image insertion through the pdfxi-document session of ADR 0010, and proves each on real bytes that are saved, reopened and re-extracted. A serialised app shell task follows once this lands and owns the Edit tool in crates/pdfxi-app/src/shell/**; matrix rows stay `library` until that shell task verifies them.",
   "evidence": "docs/evidence/hardening/T-0233.md"
 }

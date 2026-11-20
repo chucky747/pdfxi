@@ -878,29 +878,41 @@ title = "Watched-folder conversion"
 [[feature]]
 docs = [
     "crates/pdfxi-edit/src/paragraph_edit.rs",
-    "docs/evidence/author/T-0137.md",
+    "crates/pdfxi-edit/src/content_edit.rs",
+    "crates/pdfxi-edit/src/truetype.rs",
+    "crates/pdfxi-edit/assets/CourierPrime-Regular.ttf",
+    "crates/pdfxi-edit/assets/CourierPrime-OFL.txt",
+    "docs/evidence/hardening/T-0233.md",
 ]
 domain = "Edit"
-evidence = "docs/evidence/author/T-0137.md"
+evidence = "docs/evidence/hardening/T-0233.md"
 id = "EDIT-001"
 notes = """
-T-0137 adds pdfxi_edit::paragraph_edit, a model-only paragraph text-edit
-contract. `ParagraphEdit` holds already-extracted source text plus scalar-index
-`Replacement`s; `build_plan` validates spans, rejects overlaps, empty/oversized
-input, non-finite/non-positive widths and non-finite or negative caller glyph
-advances with typed `EditError` variants, then produces a deterministic,
-ordered `EditPlan` (array of `EditStep`s, plain `result`, and `ReflowedLine`s).
-`reflow_paragraph` performs greedy word wrapping using only caller-supplied
-`GlyphMetrics` (no font introspection), with documented leading/trailing
-whitespace preservation flags and interior whitespace collapsing to one space;
-a word wider than the target is placed alone. `EditPlan::apply` is idempotent:
-applying to `source` yields `result`, applying again is a no-op, any other input
-is a typed `SourceMismatch`. `lines_text` gives the host writer deterministic
-text-with-breaks. This crate does NOT rewrite PDF content streams by design;
-serializing the plan into a content stream is a host adapter responsibility.
+T-0137 supplied the model-only paragraph reflow contract; T-0233 makes it real
+on pdfxi_core. `content_edit::text_blocks` reads a page content stream into
+geometry-aware TextBlock/TextLine/TextRun values (font resource, size, text
+matrix, baseline origin, decoded text, page-space rect), grouping marked-content
+/P paragraphs or baseline/proximity clusters. `replace_run_text` removes the
+block's text-showing operators, reflows the paragraph greedily at the block
+width and re-emits it at the original baseline while preserving other
+operators. The source font is reused only when it is a non-subset simple font
+that encodes every character; otherwise Courier Prime Regular (SIL OFL 1.1) is
+embedded in full as a Type0/CIDFontType2 with FontFile2, sequential CIDs, a
+CIDToGIDMap stream, spec-valid CID-keyed /W widths in thousandths of text space
+and a generated ToUnicode CMap. `add_text_box` and `add_image` (8-bit PNG decoded
+locally, JPEG as DCTDecode) append real content and resources. Proven by saving
+and reparsing the Excel 2019 fixture: the replacement sentence is extracted
+without the old text, page order is sane, and page 2 text plus an /Image XObject
+survive. A PDFium render test (dev-dependency) rasterizes the edited bytes and
+rejects a solid bar: the edited sentence crop has 221 distinct luminance values
+and 7.2% dark pixels versus 210/9.8% on the original, and the added text box has
+184/3.6%. Limits:
+one font per block, greedy non-justified wrap, horizontal text, per-operation
+font embedding, alpha ignored for PNG. The app shell task still owns the
+verified row.
 """
 priority = "P1"
-status = "model"
+status = "library"
 tests = [
     "paragraph_edit::tests::reflow_is_deterministic",
     "paragraph_edit::tests::width_boundaries_exact_and_over",
@@ -914,6 +926,17 @@ tests = [
     "paragraph_edit::tests::non_finite_metric_rejected",
     "paragraph_edit::tests::plan_apply_is_ordered_idempotent_and_typed",
     "paragraph_edit::tests::edit_plan_round_trip_stability",
+    "content_edit::tests::fixture_model_has_heading_and_sentence_blocks",
+    "content_edit::tests::replace_sentence_reflows_and_extracts",
+    "content_edit::tests::replace_heading_keeps_page_geometry",
+    "content_edit::tests::add_text_and_png_on_page_two",
+    "content_edit::tests::full_artifact_has_replacement_text_and_added_image",
+    "content_edit::tests::png_decoding_rejects_bad_input",
+    "content_edit::tests::cid_assignment_and_width_array_use_spec_forms",
+    "truetype::tests::bundled_font_parses_and_maps_ascii",
+    "truetype::tests::missing_glyph_is_typed",
+    "truetype::tests::truncated_program_is_rejected",
+    "text_render::edited_sentence_and_added_text_render_as_glyphs_not_bars",
 ]
 title = "Edit text with paragraph reflow"
 

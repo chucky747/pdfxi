@@ -91,3 +91,15 @@ deterministic validation suite (7 checks, no network, no GUI, no sleeps).
 
 PDFXI contains no Adobe source code, binaries, icons, help text, or proprietary
 assets. Adobe and Acrobat are trademarks of Adobe Inc. PDFXI is independent.
+
+## Bundled fonts
+
+- **Courier Prime Regular** - `crates/pdfxi-edit/assets/CourierPrime-Regular.ttf`,
+  Copyright 2015 The Courier Prime Project Authors
+  (https://github.com/quoteunquoteapps/CourierPrime).
+  - Licence: SIL Open Font License 1.1 (OFL-1.1), full text in
+    `crates/pdfxi-edit/assets/CourierPrime-OFL.txt`.
+  - Why it ships: the Edit PDF library embeds a real monospace face in text it
+    writes, instead of relying on a viewer's Base-14 substitute. The OFL permits
+    embedding and redistribution; the font is unmodified and is not sold on its
+    own.
