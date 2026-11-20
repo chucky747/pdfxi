@@ -17,7 +17,7 @@ Last updated: 2026-11-19 (M3 gate satisfied; 104 verified feature rows of 140; 1
 | AC-07 | Accessibility | partial | reading-order model (T-0013), validated accessibility tree + reading-order export (T-0055), tagged PDF structure writer/reader (T-0075), PDF/UA-style checker (T-0088) | Editor UI, accesskit integration, and independent veraPDF-style cross-validation pending |
 | AC-08 | Documentation | partial | rustdoc on all crates, mdBook skeleton, ADRs 0001-0008, `cargo xtask docs` green | CLI reference and full mdBook content pending |
 | AC-09 | Orchestration evidence | partial | board, claims, 163 verified tasks, per-task evidence files, memory inbox notes | Every verified row needs a completed task; audit at goal end |
-| AC-10 | Packaging and legal | partial | `docs/THIRD_PARTY.md`, `deny.toml`, PDFium license retained out-of-tree | Installer/portable archive not built |
+| AC-10 | Packaging and legal | partial | `docs/THIRD_PARTY.md`, `deny.toml`, PDFium license retained out-of-tree; `scripts/package.ps1 -Check` reports layout_and_notices=PASS, secret_free=True (`docs/evidence/package-check.md`) | Portable archive not built from a release binary yet |
 
 ## Rule
 
