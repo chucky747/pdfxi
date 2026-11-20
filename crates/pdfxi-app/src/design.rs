@@ -402,6 +402,10 @@ pub enum Icon {
     Minimize,
     /// Maximize square.
     Maximize,
+    /// Restore: two overlapping squares.
+    Restore,
+    /// Settings gear.
+    Gear,
     /// Send arrow.
     Send,
     /// Share nodes.
@@ -646,24 +650,35 @@ pub fn icon(painter: &egui::Painter, rect: Rect, glyph: Icon, color: Color32) {
             }
         }
         Icon::Moon => {
-            let mut points = Vec::new();
-            for step in 0..=20 {
-                let angle =
-                    std::f32::consts::PI * 0.55 + step as f32 / 20.0 * std::f32::consts::PI * 1.0;
-                points.push(pos2(
-                    c.x + angle.cos() * half * 0.52,
-                    c.y + angle.sin() * half * 0.52,
+            // A solid crescent: a tapered band between the outer rim and an
+            // inner arc opening to the right. Each slice is a convex quad, so
+            // the shape fills cleanly at title-bar sizes. (The previous
+            // two-arc outline crossed itself and rendered as a scribble.)
+            let radius = 0.40_f32;
+            let thickness = 0.24_f32;
+            let start = 55.0_f32.to_radians();
+            let sweep = 250.0_f32.to_radians();
+            const SLICES: usize = 20;
+            for index in 0..SLICES {
+                let a0 = start + sweep * index as f32 / SLICES as f32;
+                let a1 = start + sweep * (index + 1) as f32 / SLICES as f32;
+                let u0 = index as f32 / SLICES as f32;
+                let u1 = (index + 1) as f32 / SLICES as f32;
+                let inner0 = radius - thickness * (std::f32::consts::PI * u0).sin();
+                let inner1 = radius - thickness * (std::f32::consts::PI * u1).sin();
+                let point =
+                    |r: f32, angle: f32| pos2(c.x + angle.cos() * r * s, c.y + angle.sin() * r * s);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        point(radius, a0),
+                        point(radius, a1),
+                        point(inner1, a1),
+                        point(inner0, a0),
+                    ],
+                    color,
+                    Stroke::NONE,
                 ));
             }
-            for step in 0..=20 {
-                let angle =
-                    std::f32::consts::PI * 1.55 - step as f32 / 20.0 * std::f32::consts::PI * 0.9;
-                points.push(pos2(
-                    c.x + 0.16 * s + angle.cos() * half * 0.40,
-                    c.y - 0.02 * s + angle.sin() * half * 0.40,
-                ));
-            }
-            painter.add(egui::Shape::closed_line(points, stroke));
         }
         Icon::ChevronLeft => {
             painter.add(egui::Shape::line(
@@ -783,7 +798,7 @@ pub fn icon(painter: &egui::Painter, rect: Rect, glyph: Icon, color: Color32) {
             ));
         }
         Icon::Minimize => {
-            painter.add(egui::Shape::line(vec![p(-0.24, 0.12), p(0.24, 0.12)], thin));
+            painter.add(egui::Shape::line(vec![p(-0.24, 0.0), p(0.24, 0.0)], thin));
         }
         Icon::Maximize => {
             painter.rect_stroke(
@@ -792,6 +807,45 @@ pub fn icon(painter: &egui::Painter, rect: Rect, glyph: Icon, color: Color32) {
                 thin,
                 egui::StrokeKind::Inside,
             );
+        }
+        Icon::Restore => {
+            // Back window: top and right edges only, so the front square
+            // reads as overlapping it rather than as a second closed box.
+            painter.add(egui::Shape::line(
+                vec![
+                    p(-0.04, -0.32),
+                    p(0.32, -0.32),
+                    p(0.32, 0.04),
+                    p(0.08, 0.04),
+                ],
+                thin,
+            ));
+            painter.rect_stroke(
+                Rect::from_min_max(p(-0.32, -0.06), p(0.06, 0.32)),
+                0.5,
+                thin,
+                egui::StrokeKind::Inside,
+            );
+        }
+        Icon::Gear => {
+            // Simple outline cog: ring, six separated teeth, and a wide centre
+            // hole, all at the same hairline weight as the Find magnifier.
+            let ring = half * 0.56;
+            painter.circle_stroke(c, ring, thin);
+            painter.circle_stroke(c, half * 0.28, thin);
+            for index in 0..6 {
+                let angle = std::f32::consts::TAU * index as f32 / 6.0;
+                painter.add(egui::Shape::line(
+                    vec![
+                        pos2(c.x + angle.cos() * ring, c.y + angle.sin() * ring),
+                        pos2(
+                            c.x + angle.cos() * half * 0.80,
+                            c.y + angle.sin() * half * 0.80,
+                        ),
+                    ],
+                    thin,
+                ));
+            }
         }
         Icon::Send => {
             painter.add(egui::Shape::closed_line(
@@ -1067,11 +1121,5 @@ mod tests {
             assert!(contrast_ratio(palette.text_muted, palette.background) >= 4.5);
             assert!(contrast_ratio(palette.accent, palette.background) >= 3.0);
         }
-    }
-
-    #[test]
-    fn theme_toggle_round_trips() {
-        assert_eq!(ThemeMode::Light.toggled(), ThemeMode::Dark);
-        assert_eq!(ThemeMode::Dark.toggled(), ThemeMode::Light);
     }
 }

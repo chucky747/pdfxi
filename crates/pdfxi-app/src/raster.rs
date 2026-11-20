@@ -302,7 +302,35 @@ impl RasterCache {
         max_renders: usize,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<usize, RasterError> {
+        self.ensure_visible_capped_at(
+            renderer,
+            layout,
+            scroll,
+            1.0,
+            cancellation,
+            max_renders,
+            progress,
+        )
+    }
+
+    /// Render visible pages at `pixel_ratio` device pixels per UI point.
+    ///
+    /// The raster is generated at `page scale * pixel_ratio` and keyed by that
+    /// device scale, so a high-DPI display gets a crisp page and a DPI change
+    /// requests fresh rasters. `max_renders` still bounds the work per call.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_visible_capped_at(
+        &mut self,
+        renderer: &dyn Renderer,
+        layout: &CanvasLayout,
+        scroll: CanvasPoint,
+        pixel_ratio: f32,
+        cancellation: &CancellationToken,
+        max_renders: usize,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<usize, RasterError> {
         let viewport = layout.viewport();
+        let ratio = pixel_ratio.max(0.01);
         let mut rendered = 0usize;
 
         for geometry in layout.pages() {
@@ -312,7 +340,8 @@ impl RasterCache {
             if cancellation.is_cancelled() {
                 return Err(RasterError::Cancelled);
             }
-            let key = RasterKey::new(geometry.page, geometry.scale, geometry.rotation);
+            let scale = geometry.scale * ratio;
+            let key = RasterKey::new(geometry.page, scale, geometry.rotation);
             if self.entries.contains_key(&key) {
                 self.touch(key);
                 continue;
@@ -322,7 +351,7 @@ impl RasterCache {
             }
             let page = match renderer.render_page(
                 PageIndex::new(geometry.page),
-                geometry.scale,
+                scale,
                 cancellation,
                 progress,
             ) {
@@ -358,7 +387,7 @@ const FIXTURE_SEARCH_DEPTH: usize = 8;
 
 /// Build the ordered candidate paths for a bundled fixture.
 ///
-/// The GUI resolves the demo fixture at runtime so the binary never embeds an
+/// The GUI resolves the test fixture at runtime so the binary never embeds an
 /// absolute build path. Candidates walk up from the running executable first
 /// (portable layouts keep `fixtures/` beside or above the binary), then up from
 /// the working directory (development builds start in the workspace or a crate
@@ -390,7 +419,7 @@ pub fn fixture_candidates(name: &str) -> Vec<PathBuf> {
 
 /// Find the first existing fixture below the supplied roots.
 ///
-/// Pure helper used by tests and by `demo_fixture_path`.
+/// Pure helper used by tests and by `test_fixture_path`.
 #[must_use]
 pub fn find_fixture_in(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
     roots
@@ -399,13 +428,14 @@ pub fn find_fixture_in(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Resolve a bundled demo fixture at runtime.
+/// Resolve a bundled test fixture at runtime.
 ///
 /// Returns `None` when the current layout ships no `fixtures/` directory; the
-/// viewer then starts without a demo document and the user opens a real file.
+/// viewer then starts without a test document and the user opens a real file.
 #[cfg(feature = "pdfium")]
 #[must_use]
-pub fn demo_fixture_path(name: &str) -> Option<PathBuf> {
+#[cfg(test)]
+pub fn test_fixture_path(name: &str) -> Option<PathBuf> {
     fixture_candidates(name)
         .into_iter()
         .find(|path| path.is_file())
@@ -468,8 +498,8 @@ mod tests {
 
     #[cfg(feature = "pdfium")]
     #[test]
-    fn demo_fixture_path_resolves_the_repo_fixture_when_present() {
-        match demo_fixture_path("minimal.pdf") {
+    fn test_fixture_path_resolves_the_repo_fixture_when_present() {
+        match test_fixture_path("minimal.pdf") {
             Some(path) => {
                 assert!(path.ends_with(std::path::Path::new("fixtures").join("minimal.pdf")))
             }
@@ -832,7 +862,7 @@ mod tests {
     fn pdfium_raster_fills_cache_with_non_uniform_pixels() {
         use pdfxi_render::PdfiumRenderer;
 
-        let path = demo_fixture_path("minimal.pdf").expect("demo fixture in the layout");
+        let path = test_fixture_path("minimal.pdf").expect("test fixture in the layout");
         let renderer = PdfiumRenderer::from_file(&path).expect("open the minimal fixture");
 
         // Direct render of page 0 at scale 1.0 (72 DPI).

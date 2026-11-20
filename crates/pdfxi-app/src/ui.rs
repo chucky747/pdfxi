@@ -2,7 +2,7 @@
 //!
 //! This module is only compiled when the `ui` feature is enabled. It layers a
 //! desktop window on top of the UI-agnostic [`AppState`] model: a toolbar, a
-//! document tab strip, a status header, and a placeholder canvas area. All
+//! document tab strip, a command bar, and the document canvas. All
 //! document mutations go through [`AppState`] methods, so the state logic stays
 //! independent of the window and can be unit tested without one.
 //!
@@ -15,14 +15,14 @@
 //!
 //! # Raster integration
 //!
-//! With the `pdfium` feature enabled, the demo viewer opens
-//! `fixtures/minimal.pdf` (resolved from the workspace root via
-//! `demo_fixture_path`) through `PdfiumRenderer`. Visible pages are
+//! With the `pdfium` feature enabled, an explicitly opened PDF is bound to
+//! a document chosen through the native picker or a dropped file; no fixture is
+//! `PdfiumRenderer`. Visible pages are
 //! rasterized into [the
 //! bounded raster cache](crate::raster::RasterCache), and the active raster is
 //! uploaded into an `egui` texture that is painted inside the page rectangle.
 //! Without `pdfium`, no native library is loaded and the canvas keeps drawing
-//! the outlined placeholder pages. All layout, selection, and cache logic lives
+//! the outlined page rectangles. All layout, selection, and cache logic lives
 //! in window-free modules so it can be tested without this GUI layer.
 //!
 //! # Thumbnail navigation pane
@@ -44,7 +44,7 @@
 //! existing tab. Closing a dirty document is routed through a
 //! `UiClosePolicy` hook so unsaved work is not silently discarded. Each tab
 //! keeps its own page, zoom, layout, rotation, and scroll offset, which the
-//! shell saves on switch-away and restores on switch-back. A fixed placeholder
+//! shell saves on switch-away and restores on switch-back. An empty Home state
 //! is shown while no document is open. All of these paths are exposed as
 //! window-free `PdfxiApp` methods so they are unit tested without a GUI.
 //!
@@ -56,62 +56,23 @@
 //! together. Rotation is per-tab and independent of a PDF page's `/Rotate`; the
 //! layout composes them (rotation first, then zoom) so fit modes, hit testing,
 //! overlay placement, and scroll clamping all follow what is displayed. Every
-//! command goes through [`AppState`] and returns immediately — no UI action
+//! command goes through [`AppState`] and returns immediately - no UI action
 //! performs blocking I/O.
 //!
-//! # Optional content layers
-//!
-//! A right-side Layers panel lists the active tab's optional content groups in
-//! deterministic order, with checkboxes for ordinary layers, radio buttons for
-//! radio groups, disabled rows for locked groups, and show-all / hide-all
-//! controls. State is isolated per tab by [`crate::LayerRegistry`]. Panel actions
-//! call window-free `PdfxiApp` methods that only mutate in-memory state, so the
-//! UI never blocks. The visibility plan these methods expose is a boundary for a
-//! renderer backend; actual optional-content rasterization depends on backend
-//! support that `pdfxi-render` does not yet provide.
-//!
-//! # Bookmarks, attachments, and links panels
-//!
-//! Three right-side panels list the active tab's outline bookmarks, embedded-file
-//! attachments, and per-page links. They are driven by the window-free
-//! [`crate::BookmarkRegistry`], [`crate::AttachmentRegistry`], and
-//! [`crate::LinkRegistry`] models: expand/collapse, selection, and link hit
-//! testing are pure in-memory operations exposed as `PdfxiApp` helpers and
-//! unit tested without a GUI. Activating an attachment builds an
-//! [`crate::AttachmentOpenRequest`] that a host with a stream backend must
-//! fulfil; the shell itself never reads embedded file bytes.
-//!
-//! # Split and tile panes
-//!
-//! A toolbar row and keyboard shortcuts drive the window-free
-//! [`crate::split::PaneManager`]: horizontal/vertical splits, `1x1`..`2x2` tile
-//! grids, pane focus, and close-pane actions. Each pane keeps its own scroll,
-//! zoom, and page (or mirrors its tab under `MirrorTab` sharing), and panes are
-//! logical rectangles inside this single central canvas — the shell never
-//! creates native multi-window OS handles. Split/tile helpers on
-//! [`crate::ui::PdfxiApp`] only mutate in-memory state and return immediately, so they are exercised by
-//! window-free unit tests and never perform blocking I/O.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use crate::design::{self, Icon, Palette, PaperPalette, ThemeMode, TitlePalette, icon, metrics};
-use crate::{
-    OpenError, PaperSize, PrintContext, PrintDialogState, PrintModelError, PrintPageRange,
-    PrintPlan,
-};
+use crate::OpenError;
+use crate::design::{self, Icon, Palette, ThemeMode, TitlePalette, icon, metrics};
+use crate::settings::{self, LaunchOptions, ThemePreference, WindowControlStyle};
 use egui::Key;
-use pdfxi_render::{Duplex, Orientation, PageScaleMode};
 
 use crate::{
-    AppState, ArticleThread, AttachmentInfo, AttachmentOpenRequest, AttachmentRegistry,
-    AttachmentState, AttachmentSummary, BookmarkInfo, BookmarkRegistry, BookmarkSummary, CanvasHit,
-    CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision, DEFAULT_ZOOM, Destination,
-    DocumentTab, FindMatch, FindOptions, FindState, Fit, LayerRegistry, LinkId, LinkInfo,
-    LinkPoint, LinkRect, LinkRegistry, LinkSummary, LinkTarget, OcPropertiesSummary, OcgInfo,
-    OpenOutcome, OwnedSpan, OwnedTextPage, PageSize, PaneCommand, PaneKey, PaneManager, PaneRect,
-    RadioGroup, ResolvedLink, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
-    ThumbnailPaneState, Toolset, ViewCommand, ViewMode, ViewSharing, VisibilityPlan, Zoom,
-    app_name, map_pane_shortcut, map_shortcut,
+    AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
+    DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, OpenOutcome, OwnedSpan,
+    OwnedTextPage, PageSize, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
+    ThumbnailPaneState, Toolset, ViewCommand, ViewMode, Zoom, app_name, map_shortcut,
 };
 
 #[cfg(feature = "pdfium")]
@@ -121,7 +82,11 @@ use crate::raster::{RasterCache, RasterKey};
 #[cfg(feature = "pdfium")]
 use crate::uv_quad_for_rotation;
 #[cfg(feature = "pdfium")]
-use pdfxi_render::{CancellationToken, PdfiumRenderer, Renderer, thumbnail::ThumbnailSpec};
+use pdfxi_render::{
+    CancellationToken, PageIndex, PdfiumRenderer, Renderer, thumbnail::ThumbnailSpec,
+};
+#[cfg(feature = "pdfium")]
+use pdfxi_text::TextExtractor;
 
 /// An `egui` texture plus the raster key it currently holds.
 ///
@@ -136,6 +101,14 @@ struct LiveTexture {
 
 /// Amount by which each zoom-in / zoom-out step changes a custom zoom scale.
 const ZOOM_STEP: f32 = 0.25;
+
+/// Pages whose text is extracted synchronously when a document opens.
+///
+/// Larger documents are filled a couple of pages per frame so opening never
+/// blocks the window on text extraction. Find works over the pages extracted
+/// so far.
+#[cfg(feature = "pdfium")]
+const EAGER_TEXT_PAGES: usize = 8;
 
 /// Height of one row in the thumbnail side panel, in UI points.
 #[allow(dead_code)]
@@ -168,73 +141,6 @@ const THUMBS_PER_FRAME: usize = 4;
 #[cfg(feature = "pdfium")]
 const RASTERS_PER_FRAME: usize = 2;
 
-/// Left-rail sections in the product shell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RailTab {
-    /// Document overview.
-    Home,
-    /// Open tabs and recent files.
-    Files,
-    /// Recently opened documents.
-    Recent,
-    /// Favourites.
-    Starred,
-    /// Shared workspace descriptors.
-    Shared,
-    /// Page thumbnails.
-    #[default]
-    Pages,
-    /// Comment list.
-    Comments,
-    /// Local assistant card.
-    Assistant,
-}
-
-impl RailTab {
-    /// Every rail entry, in display order.
-    pub const ALL: [Self; 8] = [
-        Self::Home,
-        Self::Files,
-        Self::Recent,
-        Self::Starred,
-        Self::Shared,
-        Self::Pages,
-        Self::Comments,
-        Self::Assistant,
-    ];
-
-    /// Label under the icon.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Home => "Home",
-            Self::Files => "Files",
-            Self::Recent => "Recent",
-            Self::Starred => "Starred",
-            Self::Shared => "Shared",
-            Self::Pages => "Pages",
-            Self::Comments => "Comments",
-            Self::Assistant => "AI Assistant",
-        }
-    }
-
-    /// Icon glyph.
-    pub fn icon(self) -> Icon {
-        match self {
-            Self::Home => Icon::Home,
-            Self::Files => Icon::File,
-            Self::Recent => Icon::Recent,
-            Self::Starred => Icon::Star,
-            Self::Shared => Icon::Shared,
-            Self::Pages => Icon::Pages,
-            Self::Comments => Icon::Comment,
-            Self::Assistant => Icon::Sparkle,
-        }
-    }
-}
-
-/// Placeholder page count assigned to a demo tab (no real document is loaded).
-pub const DEMO_PAGE_COUNT: usize = 12;
-
 /// How the shell handles a close request for a tab with unsaved changes.
 ///
 /// This is the UI-side implementation of the workspace's unsaved-close policy
@@ -265,12 +171,6 @@ impl UiClosePolicy {
     }
 }
 
-/// Width of a demo page in PDF points (US Letter).
-const DEMO_PAGE_WIDTH_PT: f32 = 612.0;
-
-/// Height of a demo page in PDF points (US Letter).
-const DEMO_PAGE_HEIGHT_PT: f32 = 792.0;
-
 /// Format a one-line status string describing the active document.
 ///
 /// The result contains the active tab's display name, zoom, rotation in
@@ -297,7 +197,7 @@ pub fn active_tab_status(state: &AppState) -> String {
 pub fn canvas_placeholder(state: &AppState) -> String {
     match state.active_tab() {
         Some(tab) => format!(
-            "Page {} of {} — page rendering is not available in this shell yet",
+            "Page {} of {} - page rendering is not available in this shell yet",
             tab.current_page() + 1,
             tab.page_count(),
         ),
@@ -305,147 +205,28 @@ pub fn canvas_placeholder(state: &AppState) -> String {
     }
 }
 
-/// Build deterministic US-Letter page sizes for a demo document of `count` pages.
-pub fn demo_page_sizes(count: usize) -> Vec<PageSize> {
-    (0..count)
-        .map(|_| PageSize::new(DEMO_PAGE_WIDTH_PT, DEMO_PAGE_HEIGHT_PT))
-        .collect()
-}
-
-/// Build a deterministic demo `/OCProperties` summary for the shell.
+/// Lay out the active tab's real pages for a viewport, or `None` with no tab.
 ///
-/// The demo document has ordinary layers (Background, Annotations, Grid) plus a
-/// radio-button group (English / French labels). It lets the Layers panel and
-/// its radio/locked/visibility logic be exercised without loading a real PDF.
-/// A production loader would feed the caller's parsed summary through
-/// [`LayerRegistry::install`] instead.
-pub fn demo_oc_properties() -> OcPropertiesSummary {
-    OcPropertiesSummary::new()
-        .add_group(OcgInfo::new("oc-bg", "Background", true, false))
-        .add_group(OcgInfo::new("oc-anno", "Annotations", true, false))
-        .add_group(OcgInfo::new("oc-grid", "Grid", false, false))
-        .add_group(OcgInfo::new("oc-en", "English labels", true, false))
-        .add_group(OcgInfo::new("oc-fr", "French labels", false, false))
-        .with_radio_group(RadioGroup::new(["oc-en", "oc-fr"]))
-}
-
-/// Build a deterministic demo outline tree for the shell.
-///
-/// It contains a root, two nested chapters (one expanded by default), and a
-/// top-level appendix, plus one article thread. A production loader would feed
-/// the caller's parsed summary through [`BookmarkRegistry::install`] instead.
-pub fn demo_bookmarks(page_count: usize) -> BookmarkSummary {
-    let last = page_count.saturating_sub(1);
-    BookmarkSummary::new()
-        .add_bookmark(
-            BookmarkInfo::new("bm-root", "Contents", Destination::new(0, Fit::Fit)).with_open(true),
-        )
-        .add_bookmark(
-            BookmarkInfo::new(
-                "bm-intro",
-                "Introduction",
-                Destination::new(0, Fit::FitH(Some(720.0))),
-            )
-            .with_parent("bm-root")
-            .with_open(true),
-        )
-        .add_bookmark(
-            BookmarkInfo::new(
-                "bm-body",
-                "Body",
-                Destination::new(
-                    last,
-                    Fit::Xyz {
-                        left: Some(0.0),
-                        top: None,
-                        zoom: None,
-                    },
-                ),
-            )
-            .with_parent("bm-root"),
-        )
-        .add_bookmark(BookmarkInfo::new(
-            "bm-refs",
-            "References",
-            Destination::new(last, Fit::FitB),
-        ))
-        .add_article(ArticleThread::new(
-            "art-main",
-            "Demo article",
-            (0..=last).collect::<Vec<_>>(),
-        ))
-}
-
-/// Build a deterministic demo embedded-file list for the shell.
-pub fn demo_attachments(page_count: usize) -> AttachmentSummary {
-    let last = page_count.saturating_sub(1);
-    AttachmentSummary::new()
-        .add(AttachmentInfo::new(
-            "notes.txt",
-            "Editor notes",
-            256,
-            Some(last),
-        ))
-        .add(AttachmentInfo::new("data.csv", "", 4096, Some(0)))
-        .add(AttachmentInfo::new(
-            "supplement.pdf",
-            "Supplement",
-            8192,
-            None,
-        ))
-}
-
-/// Build a deterministic demo link set for the shell.
-///
-/// One URI link and one internal link live on page 0; a named link lives on the
-/// last page and resolves through the registered `section.intro` name.
-pub fn demo_links(page_count: usize) -> LinkSummary {
-    let last = page_count.saturating_sub(1);
-    LinkSummary::new()
-        .add_link(LinkInfo::new(
-            "lnk-web",
-            0,
-            LinkRect::new(72.0, 700.0, 120.0, 16.0),
-            LinkTarget::Uri("https://example.test".into()),
-        ))
-        .add_link(LinkInfo::new(
-            "lnk-jump",
-            0,
-            LinkRect::new(220.0, 700.0, 120.0, 16.0),
-            LinkTarget::Internal { page: last },
-        ))
-        .add_link(LinkInfo::new(
-            "lnk-named",
-            last,
-            LinkRect::new(72.0, 100.0, 160.0, 16.0),
-            LinkTarget::Named("section.intro".into()),
-        ))
-        .add_name("section.intro", 0)
-}
-
-/// Build placeholder text pages so selection can be demonstrated without a
-/// renderer. Each page carries one short line of text near the top-left.
-pub fn demo_text_pages(count: usize) -> Vec<OwnedTextPage> {
-    (0..count)
-        .map(|page| {
-            let text = format!("Page {} demo text", page + 1);
-            let width = 7.0 * text.chars().count() as f32;
-            OwnedTextPage::new(page, vec![OwnedSpan::new(text, 72.0, 72.0, width, 14.0)])
-        })
-        .collect()
-}
-
-/// Lay out the active tab's demo pages for a viewport, or `None` with no tab.
-///
-/// This is the only bridge between [`AppState`] and [`CanvasLayout`]; it is pure
-/// and window-free so the geometry can be asserted in unit tests.
-pub fn layout_for_state(state: &AppState, viewport: CanvasSize) -> Option<CanvasLayout> {
+/// `sizes` are the document's page sizes in points. When a size is missing
+/// (a page whose geometry has not been measured yet) a US-Letter rectangle is
+/// required for every page; the shell never invents page sizes or text.
+pub fn layout_for_state(
+    state: &AppState,
+    viewport: CanvasSize,
+    sizes: &[PageSize],
+) -> Option<CanvasLayout> {
     let tab = state.active_tab()?;
+    let page_count = tab.page_count();
+    // Every page must have a real measured size; when one is missing the
+    // caller surfaces an error instead of inventing a Letter page.
+    if sizes.len() < page_count {
+        return None;
+    }
     Some(CanvasLayout::standard_rotated(
         tab.view_mode(),
         tab.zoom(),
         viewport,
-        &demo_page_sizes(tab.page_count()),
+        &sizes[..page_count],
         tab.rotation(),
     ))
 }
@@ -480,57 +261,6 @@ fn native_shortcut_key(key: Key) -> Option<ShortcutKey> {
     }
 }
 
-/// Translate an `egui` key into the toolkit-independent [`PaneKey`].
-///
-/// Only keys used by [`map_pane_shortcut`] are mapped; other keys return `None`
-/// so the find field and other widgets keep their normal handling.
-fn native_pane_key(key: Key) -> Option<PaneKey> {
-    match key {
-        Key::H => Some(PaneKey::H),
-        Key::V => Some(PaneKey::V),
-        Key::Num1 => Some(PaneKey::One),
-        Key::Num2 => Some(PaneKey::Two),
-        Key::Num3 => Some(PaneKey::Three),
-        Key::Num4 => Some(PaneKey::Four),
-        Key::Period => Some(PaneKey::Period),
-        Key::Comma => Some(PaneKey::Comma),
-        Key::W => Some(PaneKey::W),
-        Key::P => Some(PaneKey::P),
-        _ => None,
-    }
-}
-
-/// A stable, human-readable label for a [`crate::PaneLayout`].
-///
-/// Pure and window-free so it can be asserted by UI helper tests.
-pub fn pane_layout_label(layout: crate::PaneLayout) -> String {
-    use crate::PaneLayout;
-    match layout {
-        PaneLayout::Single => "Single".to_string(),
-        PaneLayout::Split(split) => match split.direction {
-            crate::SplitDirection::Horizontal => {
-                format!("Split H {}", (split.ratio * 100.0).round() as i32)
-            }
-            crate::SplitDirection::Vertical => {
-                format!("Split V {}", (split.ratio * 100.0).round() as i32)
-            }
-        },
-        PaneLayout::Tile(grid) => format!("Tile {}x{}", grid.rows, grid.cols),
-    }
-}
-
-/// A short, human-readable label for a link target.
-///
-/// Pure and window-free so the Links panel and unit tests share one formatting
-/// path. Opening a URI is always the host's responsibility.
-pub fn link_target_label(target: &LinkTarget) -> String {
-    match target {
-        LinkTarget::Internal { page } => format!("Page {}", page + 1),
-        LinkTarget::Uri(uri) => format!("URI {uri}"),
-        LinkTarget::Named(name) => format!("Named {name}"),
-    }
-}
-
 /// Compose the one-line canvas info shown in the status area.
 ///
 /// Reports the page under the cursor and, when a selection exists, appends the
@@ -546,32 +276,6 @@ pub fn canvas_info_line(hit: CanvasHit, selection_text: &str) -> String {
     } else {
         format!("{page_part} | Selected: {selection_text}")
     }
-}
-
-/// Build find input pairs from the demo viewer's selectable text pages.
-///
-/// The canvas, selection copy, and find bar all read from the same
-/// [`OwnedTextPage`] snapshot, so a highlighted match corresponds exactly to
-/// text the user can select and copy. Each page's spans are concatenated in
-/// reading order to form the page's searchable text.
-///
-/// The viewer has no text-extraction backend of its own: `pdfxi-render` exposes
-/// only rasters (no `text_page` method), and adding a direct `pdfxi-core` or
-/// `pdfxi-text` dependency would break the deliberately dependency-light
-/// default build and touch the shared lockfile. The demo therefore searches the
-/// synthetic text it actually displays; a production loader can feed real
-/// extracted text through [`FindState::set_pages`] instead.
-pub fn demo_find_pages(pages: &[OwnedTextPage]) -> Vec<(usize, String)> {
-    pages
-        .iter()
-        .map(|page| {
-            let mut text = String::new();
-            for span in page.spans() {
-                text.push_str(&span.text);
-            }
-            (page.page_number(), text)
-        })
-        .collect()
 }
 
 /// Map a find match's character range to a highlight rectangle in page-local
@@ -716,11 +420,12 @@ fn app_icon() -> egui::IconData {
 /// Launch the native PDFXI viewer window.
 ///
 /// This is the entry point used by the `pdfxi-ui` binary. It builds a
-/// [`eframe::NativeOptions`] with a sensible default viewport, starts the
-/// eframe event loop with a default [`PdfxiApp`], and logs any startup or
-/// runtime error to standard error instead of panicking. The call returns once
-/// the window has been closed.
-pub fn run() {
+/// [`eframe::NativeOptions`] with a sensible default viewport and starts the
+/// eframe event loop with a default [`PdfxiApp`]. The call returns once the
+/// window has been closed; a startup or runtime failure is returned as a
+/// readable message so the host can log it and show it to the user instead of
+/// writing to a console the GUI subsystem does not have.
+pub fn run() -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(app_name())
@@ -731,25 +436,19 @@ pub fn run() {
         ..eframe::NativeOptions::default()
     };
 
-    if let Err(error) = eframe::run_native(
+    eframe::run_native(
         app_name(),
         options,
         Box::new(|_creation_context| {
-            let mut app = PdfxiApp::new_for_window();
             let arguments: Vec<String> = std::env::args().skip(1).collect();
-            for argument in &arguments {
-                match argument.as_str() {
-                    "--dark" => app.theme = ThemeMode::Dark,
-                    "--light" => app.theme = ThemeMode::Light,
-                    _ => {}
-                }
-            }
+            let launch = settings::parse_launch_arguments(&arguments);
+            let mut app = PdfxiApp::new_for_window();
+            app.apply_launch_options(&launch);
             app.open_startup_argument(arguments);
             Ok(Box::new(app))
         }),
-    ) {
-        eprintln!("PDFXI viewer exited with an error: {error}");
-    }
+    )
+    .map_err(|error| format!("PDFXI viewer exited with an error: {error}"))
 }
 
 /// Paint a cached page texture into `rect`, rotating the texture UVs so the
@@ -758,7 +457,7 @@ pub fn run() {
 /// The four UV corners come from [`uv_quad_for_rotation`]; they are assigned to
 /// the displayed rectangle's corners in `(top-left, top-right, bottom-right,
 /// bottom-left)` order and drawn as two triangles. This is a pure GPU-side
-/// transform — no re-render or blocking I/O is involved.
+/// transform - no re-render or blocking I/O is involved.
 #[cfg(feature = "pdfium")]
 fn paint_rotated_image(
     painter: &egui::Painter,
@@ -789,7 +488,7 @@ fn paint_rotated_image(
 /// The eframe application implementing the PDFXI viewer shell.
 ///
 /// It owns an [`AppState`] and renders it as a toolbar, a document tab strip, a
-/// status header, and a placeholder canvas. Every toolbar button and keyboard
+/// command bar, and the document canvas. Every control and keyboard
 /// shortcut maps to a method on this type that mutates only the underlying
 /// state, keeping behavior testable without a window.
 #[derive(Default)]
@@ -798,36 +497,37 @@ pub struct PdfxiApp {
     status: String,
     /// Unsaved-change policy consulted by every tab-close action.
     close_policy: UiClosePolicy,
-    /// Window-free print-dialog state; submitting never contacts a printer.
-    print_dialog: PrintDialogState,
     /// Typed errors surfaced by recent document-open attempts.
     open_errors: Vec<OpenError>,
     /// Whether the in-app "Open PDF" path dialog is visible.
     open_dialog_open: bool,
-    /// Path typed into the "Open PDF" dialog.
-    open_dialog_path: String,
+    /// Dismissible banner for the most recent open failure.
+    open_error_banner: Option<String>,
+    /// Real page sizes in points, indexed by page of the active document.
+    page_sizes: Vec<PageSize>,
+    /// Real selectable text for each page extracted so far.
+    text_pages: Vec<OwnedTextPage>,
+    /// Pages whose text is still pending, extracted a few per frame.
+    pending_text_pages: VecDeque<usize>,
     /// Active shell appearance.
     theme: ThemeMode,
-    /// Selected left-rail section.
-    rail: RailTab,
-    /// AI assistant question text.
-    assistant_query: String,
-    /// Latest local assistant answer.
-    assistant_answer: String,
-    /// Selected export format index in the export card.
-    export_format: usize,
+    /// Theme preference that resolves to [`Self::theme`] each frame.
+    theme_preference: ThemePreference,
+    /// Which window controls the custom title bar draws.
+    window_controls: WindowControlStyle,
+    /// Settings as persisted on disk (launch flags never modify this).
+    settings: settings::Settings,
+    /// Where settings are saved; `None` for viewers that never touch disk.
+    settings_path: Option<PathBuf>,
     /// Path currently bound to the PDFium renderer.
     #[cfg(feature = "pdfium")]
     renderer_path: Option<PathBuf>,
     /// Theme last installed on the egui context.
     applied_theme: Option<ThemeMode>,
-    /// Zero-based pages used by the Selection print range.
-    print_selection: Vec<usize>,
     scroll_x: f32,
     scroll_y: f32,
+    /// Active text selection over real page text; empty until text is wired.
     selection: SelectionModel,
-    demo_text: Vec<OwnedTextPage>,
-    /// In-document find model, fed from `demo_text` when a tab opens.
     find: FindState,
     /// Editable query mirrored into `find` on change.
     find_query: String,
@@ -845,22 +545,10 @@ pub struct PdfxiApp {
     thumbs: ThumbnailPaneState,
     /// When true, the next pane frame scrolls its active row into view.
     thumb_follow_active: bool,
-    /// Per-tab optional content layer models and viewing states.
-    layers: LayerRegistry,
-    /// Per-tab outline bookmark trees and their expand/selection state.
-    bookmarks: BookmarkRegistry,
-    /// Per-tab embedded-file lists and their selection state.
-    attachments: AttachmentRegistry,
-    /// Per-tab link annotations, index, and named destinations.
-    links: LinkRegistry,
-    /// Most recent host attachment-open request (a metadata boundary).
-    last_open_request: Option<AttachmentOpenRequest>,
-    /// Logical split/tile panes inside the single central canvas.
-    panes: PaneManager,
     /// GPU textures for generated thumbnails, keyed by page.
     #[cfg(feature = "pdfium")]
     thumb_textures: std::collections::HashMap<usize, egui::TextureHandle>,
-    /// Bounded cache of real page rasters, filled from the demo fixture.
+    /// Bounded cache of real page rasters from the open document.
     #[cfg(feature = "pdfium")]
     raster_cache: RasterCache,
     /// The native renderer; `None` when the fixture could not be opened.
@@ -883,22 +571,75 @@ impl PdfxiApp {
         Self::default()
     }
 
-    /// Create the viewer used by the native window, with a demo document open.
+    /// Create an empty viewer window with persisted preferences applied.
     ///
-    /// The demo tab shows the built-in business-proposal preview, so the shell
-    /// never starts on an empty gray canvas. Tests use [`Self::new`] and drive
-    /// tabs explicitly.
+    /// No document is opened automatically: with no PDF there is nothing
+    /// honest to show, so the shell starts on its Home state. Tests use
+    /// [`Self::new`] and drive tabs explicitly.
     pub fn new_for_window() -> Self {
         let mut app = Self::new();
-        // The reference opens with two named documents; use the same labels
-        // for the window demo while keeping the generic demo tab API intact.
-        let first = app.state.open_tab("Proposal_Final.pdf");
-        app.finish_new_tab(first);
-        let second = app.state.open_tab("Quarterly Report.pdf");
-        app.finish_new_tab(second);
-        app.activate_tab(first);
-        app.status = format!("Proposal_Final.pdf · {DEMO_PAGE_COUNT} pages · local preview");
+        app.load_persisted_settings();
         app
+    }
+
+    /// Load the per-user settings file, when the platform exposes one.
+    ///
+    /// A missing, unreadable, or corrupt file leaves the defaults in place, so
+    /// startup never blocks or fails on settings.
+    fn load_persisted_settings(&mut self) {
+        let Some(path) = settings::default_path() else {
+            return;
+        };
+        self.settings = settings::load(&path);
+        self.theme_preference = self.settings.theme;
+        self.window_controls = self.settings.window_controls;
+        self.settings_path = Some(path);
+    }
+
+    /// Apply one run's launch flags on top of the saved settings.
+    ///
+    /// Only the effective fields change; [`Self::settings`] keeps the on-disk
+    /// values so a flag is never written back by an unrelated save.
+    fn apply_launch_options(&mut self, options: &LaunchOptions) {
+        let effective = self.settings.with_overrides(options);
+        self.theme_preference = effective.theme;
+        self.window_controls = effective.window_controls;
+    }
+
+    /// The theme preference currently in effect.
+    #[must_use]
+    pub fn theme_preference(&self) -> ThemePreference {
+        self.theme_preference
+    }
+
+    /// The window control style currently in effect.
+    #[must_use]
+    pub fn window_controls(&self) -> WindowControlStyle {
+        self.window_controls
+    }
+
+    /// Select a theme preference and persist it when possible.
+    pub fn set_theme_preference(&mut self, preference: ThemePreference) {
+        self.theme_preference = preference;
+        self.settings.theme = preference;
+        self.persist_settings();
+    }
+
+    /// Select a window control style and persist it when possible.
+    pub fn set_window_controls(&mut self, style: WindowControlStyle) {
+        self.window_controls = style;
+        self.settings.window_controls = style;
+        self.persist_settings();
+    }
+
+    /// Save the persisted settings; a failure is reported in the status line.
+    fn persist_settings(&mut self) {
+        let Some(path) = self.settings_path.clone() else {
+            return;
+        };
+        if let Err(error) = settings::save(&path, &self.settings) {
+            self.status = format!("Could not save settings: {error}");
+        }
     }
 
     /// Borrow the underlying UI-agnostic application state.
@@ -911,70 +652,30 @@ impl PdfxiApp {
         &self.status
     }
 
-    /// Open a new demo tab, make it active, and return its id.
+    /// Initialize per-tab shell state for a newly opened document.
     ///
-    /// With `pdfium`, the tab's page count comes from the real fixture so the
-    /// canvas never asks the renderer for a page the document does not have.
-    pub fn open_demo_tab(&mut self) -> TabId {
-        // Preserve the outgoing tab's view before a new tab becomes active.
-        self.save_scroll_to_active();
-        let name = if self.state.tab_count() == 0 {
-            "Modern Business Proposal".to_owned()
-        } else {
-            format!("Modern Business Proposal {}", self.state.tab_count() + 1)
-        };
-        let id = self.state.open_tab(name);
-        self.finish_new_tab(id);
-        self.status = format!("Modern Business Proposal · {DEMO_PAGE_COUNT} pages · local preview");
-        id
-    }
-
-    /// Initialize the shared demo helpers for a newly opened tab.
-    ///
-    /// The shell has one find/selection/thumbnail helper set driven by the
-    /// active tab's page count; this resets it for the new document and starts
-    /// that document's view at the top. Per-tab view state (page, zoom, layout,
-    /// rotation, and scroll) lives on the [`DocumentTab`] itself.
+    /// The page count is filled in by the renderer once the document is open;
+    /// until then it stays zero so the shell never invents content. Find,
+    /// selection, and thumbnails start empty and are populated only from real
+    /// document data.
     fn finish_new_tab(&mut self, id: TabId) {
-        let page_count = self.demo_page_count();
         if let Some(tab) = self.state.tab_mut(id) {
-            tab.set_page_count(page_count);
+            tab.set_page_count(0);
         }
         // A newly focused document starts with one pane bound to it. Any prior
-        // split/tile arrangement is intentionally discarded on tab open so the
-        // pane set always starts from a deterministic, single-document state.
-        self.panes = PaneManager::single(id);
-        self.demo_text = demo_text_pages(page_count);
-        // Search, selection, and copy all read the same displayed text snapshot.
-        self.find.set_pages(demo_find_pages(&self.demo_text));
+        self.find.set_pages(Vec::new());
+        self.page_sizes.clear();
+        self.text_pages.clear();
+        self.pending_text_pages.clear();
         self.selection.clear();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.pending_scroll = false;
         self.pending_page_scroll = None;
-        self.thumbs.reset(page_count);
+        self.thumbs.reset(0);
         self.thumb_follow_active = true;
-        // Each tab gets its own optional content state, isolated by tab id.
-        // The demo summary is caller-controlled and always valid; a real loader
-        // would install its parsed summary through the same registry method.
-        let _ = self.layers.install(id, demo_oc_properties());
-        // The demo outline/attachments/links are caller-controlled and always
-        // valid; a real loader would install parsed data through the registries.
-        let _ = self
-            .bookmarks
-            .install(id, demo_bookmarks(page_count), page_count);
-        let _ = self
-            .attachments
-            .install(id, demo_attachments(page_count), page_count);
-        let _ = self.links.install(id, demo_links(page_count), page_count);
-        self.last_open_request = None;
         #[cfg(feature = "pdfium")]
         self.thumb_textures.clear();
-    }
-
-    /// The page count used for demo tabs.
-    fn demo_page_count(&self) -> usize {
-        DEMO_PAGE_COUNT
     }
 
     /// Close the active tab, if any, using the configured [`UiClosePolicy`].
@@ -1010,13 +711,6 @@ impl PdfxiApp {
         };
         match outcome {
             crate::CloseOutcome::Closed { .. } => {
-                self.layers.remove(id);
-                self.bookmarks.remove(id);
-                self.attachments.remove(id);
-                self.links.remove(id);
-                // Tab close deterministically removes every pane bound to it;
-                // pane-local view state is discarded, never written back.
-                let _ = self.panes.close_tab(id);
                 self.status = format!("Closed tab {id}");
                 self.restore_scroll_from_active();
                 true
@@ -1087,7 +781,7 @@ impl PdfxiApp {
     /// Open a document path, focusing an existing tab when the path is already
     /// open (the model's duplicate-path rule).
     ///
-    /// A newly opened document gets the same demo helpers as [`Self::open_demo_tab`];
+    /// A newly opened document starts with empty find, selection, and thumbnail state;
     /// a reused one simply restores its saved view and becomes active.
     pub fn open_document(&mut self, path: &Path) -> OpenOutcome {
         self.save_scroll_to_active();
@@ -1115,20 +809,20 @@ impl PdfxiApp {
     pub fn open_path_text(&mut self, raw: &str) -> bool {
         let trimmed = raw.trim().trim_matches('"');
         if trimmed.is_empty() {
-            self.status = "Enter a PDF path to open".to_owned();
+            self.open_error_banner = Some("Choose a PDF file to open.".to_owned());
             return false;
         }
         if trimmed.chars().any(char::is_control) {
-            self.status = "Path contains control characters".to_owned();
+            self.open_error_banner = Some("That path contains invalid characters.".to_owned());
             return false;
         }
         let path = Path::new(trimmed);
         if !Self::is_pdf_path(path) {
-            self.status = format!("Not a PDF file: {}", path.display());
+            self.open_error_banner = Some(format!("{} is not a PDF file.", path.display()));
             return false;
         }
         if !path.is_file() {
-            self.status = format!("File not found: {}", path.display());
+            self.open_error_banner = Some(format!("{} could not be found.", path.display()));
             return false;
         }
         self.open_document(path);
@@ -1187,43 +881,25 @@ impl PdfxiApp {
     ///
     /// The shell links no native file picker, so this is intentionally a typed
     /// path plus drag-and-drop support. It mutates only in-memory state.
-    fn open_dialog_ui(&mut self, ctx: &egui::Context) {
+    fn open_dialog_ui(&mut self, _ctx: &egui::Context) {
         if !self.open_dialog_open {
             return;
         }
-        let mut visible = self.open_dialog_open;
-        let mut submit = false;
-        let mut cancel = false;
-        egui::Window::new("Open PDF")
-            .collapsible(false)
-            .resizable(false)
-            .open(&mut visible)
-            .show(ctx, |ui| {
-                ui.label("PDF path:");
-                let response = ui.text_edit_singleline(&mut self.open_dialog_path);
-                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                    submit = true;
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Open").clicked() {
-                        submit = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
-                ui.label("Tip: drag a PDF from Explorer onto the window.");
-            });
-        if cancel {
-            visible = false;
-        }
-        if submit {
-            let typed = self.open_dialog_path.clone();
-            if self.open_path_text(&typed) {
-                visible = false;
+        // Consume the request first so a failed or cancelled picker cannot
+        // reopen the dialog on the next frame.
+        self.open_dialog_open = false;
+        // The native picker is modal; it runs between frames, never inside a
+        // paint callback, so the window cannot deadlock itself. Multi-select
+        // opens each chosen file in its own tab.
+        let chosen = rfd::FileDialog::new()
+            .set_title("Open PDF")
+            .add_filter("PDF documents", &["pdf"])
+            .pick_files();
+        if let Some(paths) = chosen {
+            for path in paths {
+                self.open_document(&path);
             }
         }
-        self.open_dialog_open = visible;
     }
 
     /// Close every tab except the active one, consulting the configured
@@ -1328,7 +1004,7 @@ impl PdfxiApp {
     /// Bind the PDFium renderer to the active tab's document.
     ///
     /// Rasters and GPU textures are keyed by page, scale and rotation only, so
-    /// they are invalidated whenever the document changes. Demo tabs have no
+    /// they are invalidated whenever the document changes. Documents without text have no
     /// path: they use the built-in design preview and release the renderer.
     #[cfg(feature = "pdfium")]
     fn refresh_renderer_for_active_tab(&mut self) {
@@ -1351,19 +1027,56 @@ impl PdfxiApp {
         };
         match PdfiumRenderer::from_file(&path) {
             Ok(renderer) => {
-                let count = renderer.page_count().unwrap_or(DEMO_PAGE_COUNT);
+                let count = Renderer::page_count(&renderer).unwrap_or(0);
+                self.page_sizes.clear();
+                for page in 0..count {
+                    match renderer.page_size(PageIndex::new(page)) {
+                        Ok(size) => self
+                            .page_sizes
+                            .push(PageSize::new(size.width_pt, size.height_pt)),
+                        Err(error) => {
+                            self.open_error_banner = Some(format!(
+                                "Could not read the size of page {}: {error}",
+                                page + 1
+                            ));
+                            break;
+                        }
+                    }
+                }
                 self.pdfium_renderer = Some(renderer);
                 if let Some(tab) = self.state.active_tab_mut() {
                     tab.set_page_count(count);
                 }
-                self.demo_text = demo_text_pages(count);
-                self.find.set_pages(demo_find_pages(&self.demo_text));
+                self.text_pages.clear();
+                self.pending_text_pages.clear();
+                // Bound the work done while the document opens: a small
+                // document is fully searchable immediately, a large one fills
+                // its text a couple of pages per frame.
+                let eager = count.min(EAGER_TEXT_PAGES);
+                for page in 0..eager {
+                    if let Some(text) = self.extract_text_page(page) {
+                        self.text_pages.push(text);
+                    }
+                }
+                for page in eager..count {
+                    self.pending_text_pages.push_back(page);
+                }
+                self.sync_find_pages();
                 self.thumbs.reset(count);
                 self.selection.clear();
                 self.thumb_textures.clear();
             }
             Err(error) => {
-                self.status = format!("Could not render {}: {error}", path.display());
+                // `pdfium-render` surfaces a password failure only as text, so
+                // this is a string heuristic rather than a typed error.
+                let message = if error.to_string().to_ascii_lowercase().contains("password") {
+                    "This PDF is password-protected. Password-protected PDFs are not supported yet."
+                        .to_owned()
+                } else {
+                    format!("Could not open this PDF: {error}")
+                };
+                self.open_error_banner = Some(message.clone());
+                self.status = message;
             }
         }
     }
@@ -1371,13 +1084,6 @@ impl PdfxiApp {
     /// No-op without the `pdfium` feature.
     #[cfg(not(feature = "pdfium"))]
     fn refresh_renderer_for_active_tab(&mut self) {}
-
-    /// Whether the active tab is the built-in design preview.
-    fn active_is_demo(&self) -> bool {
-        self.state
-            .active_tab()
-            .is_some_and(|tab| tab.path().is_none())
-    }
 
     /// Drop per-document raster state and cancel outstanding work.
     ///
@@ -1478,88 +1184,6 @@ impl PdfxiApp {
         }
     }
 
-    /// Borrow the window-free split/tile pane manager.
-    pub fn pane_manager(&self) -> &PaneManager {
-        &self.panes
-    }
-
-    /// Apply a typed [`PaneCommand`] and report the outcome through [`Self::status`].
-    ///
-    /// This is the single implementation used by both the toolbar buttons and
-    /// the keyboard path. It only mutates in-memory pane state, so it never
-    /// blocks and is fully testable without a window.
-    pub fn apply_pane_command(&mut self, command: PaneCommand) {
-        let label = command.shortcut_label();
-        match self.panes.apply_command(command) {
-            Ok(()) => {
-                self.status = format!(
-                    "Panes: {} | {} pane(s) | focus {}",
-                    pane_layout_label(self.panes.layout()),
-                    self.panes.pane_count(),
-                    self.panes.active_index(),
-                );
-            }
-            Err(error) => self.status = format!("Pane command failed ({label}): {error}"),
-        }
-    }
-
-    /// Focus a pane by index, reporting an invalid focus through the status.
-    pub fn focus_pane(&mut self, index: usize) {
-        match self.panes.focus_pane(index) {
-            Ok(()) => self.status = format!("Focused pane {index}"),
-            Err(error) => self.status = error.to_string(),
-        }
-    }
-
-    /// Set the focused pane's scroll offset through the sharing rule.
-    pub fn set_pane_scroll(&mut self, offset: CanvasPoint) {
-        match self.panes.set_scroll(offset) {
-            Ok(()) => self.status = "Pane scroll updated".to_string(),
-            Err(error) => self.status = error.to_string(),
-        }
-    }
-
-    /// Set the focused pane's zoom through the sharing rule.
-    pub fn set_pane_zoom(&mut self, zoom: Zoom) {
-        match self.panes.set_zoom(zoom) {
-            Ok(()) => self.status = format!("Pane zoom: {zoom}"),
-            Err(error) => self.status = error.to_string(),
-        }
-    }
-
-    /// Set the focused pane's page through the sharing rule.
-    pub fn set_pane_page(&mut self, page: usize) {
-        match self.panes.set_page(page) {
-            Ok(()) => self.status = format!("Pane page: {}", page + 1),
-            Err(error) => self.status = error.to_string(),
-        }
-    }
-
-    /// Set the pane view-sharing rule.
-    pub fn set_view_sharing(&mut self, sharing: ViewSharing) {
-        self.panes.set_sharing(sharing);
-        self.status = format!("Pane sharing: {sharing:?}");
-    }
-
-    /// Resolve the current pane layout against a viewport, or `None` when the
-    /// viewport is too small for the layout's dividers and minimum sizes.
-    ///
-    /// This is a pure helper: no OS window is created or measured.
-    pub fn pane_geometry(&self, width: u32, height: u32) -> Option<Vec<PaneRect>> {
-        self.panes.geometry(PaneRect::new(0, 0, width, height)).ok()
-    }
-
-    /// A short textual description of the active pane and layout.
-    pub fn pane_status(&self) -> String {
-        format!(
-            "{} | {} pane(s) | focus {} | sharing {:?}",
-            pane_layout_label(self.panes.layout()),
-            self.panes.pane_count(),
-            self.panes.active_index(),
-            self.panes.sharing(),
-        )
-    }
-
     /// Select the interaction tool used on the canvas.
     pub fn select_tool(&mut self, tool: Toolset) {
         self.state.select_tool(tool);
@@ -1572,9 +1196,12 @@ impl PdfxiApp {
         self.status = "Selection cleared".to_string();
     }
 
-    /// Copy text of the current selection, using the placeholder text pages.
+    /// Copy text of the current selection.
+    ///
+    /// Real page text is not wired into the shell yet, so the selection model
+    /// is empty and this returns an empty string instead of invented content.
     pub fn selected_text(&self) -> String {
-        self.selection.selected_text(&self.demo_text)
+        self.selection.selected_text(&self.text_pages)
     }
 
     /// Show the find bar (bound to Ctrl+F).
@@ -1762,40 +1389,48 @@ impl PdfxiApp {
         let output = egui::ScrollArea::vertical().show(ui, |ui| {
             for page in 0..page_count {
                 let is_active = page == active;
-                let (rect, response) = ui.allocate_exact_size(tile_size, egui::Sense::click());
-                let fill = if is_active {
-                    egui::Color32::from_rgb(214, 231, 252)
-                } else {
-                    ui.visuals().extreme_bg_color
-                };
-                let stroke = if is_active {
-                    egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(40, 110, 200))
-                } else {
-                    ui.visuals().widgets.inactive.fg_stroke
-                };
-                ui.painter().rect_filled(rect, 3.0, fill);
-                ui.painter()
-                    .rect_stroke(rect, 3.0, stroke, egui::StrokeKind::Outside);
+                let (_, _response) = ui
+                    .vertical_centered(|ui| {
+                        let (rect, response) =
+                            ui.allocate_exact_size(tile_size, egui::Sense::click());
+                        let fill = if is_active {
+                            egui::Color32::from_rgb(214, 231, 252)
+                        } else {
+                            ui.visuals().extreme_bg_color
+                        };
+                        let stroke = if is_active {
+                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(40, 110, 200))
+                        } else {
+                            ui.visuals().widgets.inactive.fg_stroke
+                        };
+                        ui.painter().rect_filled(rect, 3.0, fill);
+                        ui.painter()
+                            .rect_stroke(rect, 3.0, stroke, egui::StrokeKind::Outside);
 
-                #[cfg(feature = "pdfium")]
-                if let Some(texture) = self.thumbnail_texture(ui.ctx(), page, &spec) {
-                    let full_uv =
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                    ui.painter()
-                        .image(texture.id(), rect, full_uv, egui::Color32::WHITE);
-                }
+                        #[cfg(feature = "pdfium")]
+                        if let Some(texture) = self.thumbnail_texture(ui.ctx(), page, &spec) {
+                            let full_uv = egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            );
+                            ui.painter()
+                                .image(texture.id(), rect, full_uv, egui::Color32::WHITE);
+                        }
 
-                if response.clicked() {
-                    clicked = Some(page);
-                }
-                if follow && is_active {
-                    response.scroll_to_me(Some(egui::Align::Center));
-                }
-                if is_active {
-                    ui.label(egui::RichText::new(format!("Page {}", page + 1)).strong());
-                } else {
-                    ui.label(format!("Page {}", page + 1));
-                }
+                        if response.clicked() {
+                            clicked = Some(page);
+                        }
+                        if follow && is_active {
+                            response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if is_active {
+                            ui.label(egui::RichText::new(format!("Page {}", page + 1)).strong());
+                        } else {
+                            ui.label(format!("Page {}", page + 1));
+                        }
+                        (rect, response)
+                    })
+                    .inner;
                 ui.add_space(8.0);
             }
         });
@@ -1832,16 +1467,17 @@ impl PdfxiApp {
     /// Each raster is keyed by that page's effective rotation, matching the
     /// rotation used when painting the cached texture below.
     #[cfg(feature = "pdfium")]
-    fn ensure_rasters(&mut self, layout: &CanvasLayout) {
+    fn ensure_rasters(&mut self, layout: &CanvasLayout, pixel_ratio: f32) {
         let Some(renderer) = self.pdfium_renderer.as_ref() else {
             return;
         };
         let scroll = CanvasPoint::new(self.scroll_x, self.scroll_y);
         let token = self.raster_cancel.clone();
-        match self.raster_cache.ensure_visible_capped(
+        match self.raster_cache.ensure_visible_capped_at(
             renderer,
             layout,
             scroll,
+            pixel_ratio,
             &token,
             RASTERS_PER_FRAME,
             &mut |_| {},
@@ -1904,541 +1540,6 @@ impl PdfxiApp {
         self.textures.get(&page).map(|live| live.handle.clone())
     }
 
-    /// Install the demo layer set on the active tab.
-    ///
-    /// Returns `false` with a status message when no tab is active.
-    pub fn install_demo_layers(&mut self) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.layers.install(tab, demo_oc_properties()) {
-            Ok(()) => {
-                self.status = format!("Installed demo layers for tab {tab}");
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// Toggle an optional content layer on the active tab.
-    ///
-    /// All work is in-memory and returns immediately — the UI never blocks on
-    /// I/O for a layer change. Locked or unknown ids report a typed error
-    /// through [`Self::status`] and return `false`.
-    pub fn toggle_layer(&mut self, id: &str) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.layers.toggle(tab, id) {
-            Ok(visible) => {
-                self.status = format!("Layer {id} {}", if visible { "shown" } else { "hidden" });
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// Explicitly show or hide a layer on the active tab.
-    pub fn set_layer_visible(&mut self, id: &str, visible: bool) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.layers.set_visible(tab, id, visible) {
-            Ok(value) => {
-                self.status = format!("Layer {id} {}", if value { "shown" } else { "hidden" });
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// Show all unlocked layers on the active tab, preserving radio exclusivity.
-    pub fn show_all_layers(&mut self) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.layers.show_all(tab) {
-            Ok(()) => {
-                self.status = "All layers shown".to_string();
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// Hide all unlocked layers on the active tab.
-    pub fn hide_all_layers(&mut self) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.layers.hide_all(tab) {
-            Ok(()) => {
-                self.status = "All layers hidden".to_string();
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// The visibility plan for the active tab, if it has layers installed.
-    pub fn layer_visibility_plan(&self) -> Option<VisibilityPlan> {
-        self.state
-            .active_tab_id()
-            .and_then(|tab| self.layers.visibility_plan(tab))
-    }
-
-    /// Borrow the per-tab layer registry (for consumers and tests).
-    pub fn layers(&self) -> &LayerRegistry {
-        &self.layers
-    }
-
-    /// Render the optional content Layers side panel.
-    ///
-    /// The panel lists the active tab's layers in deterministic display order.
-    /// Ordinary layers use checkboxes; radio-group members use radio buttons so
-    /// the UI mirrors the model's exclusivity. Locked layers are rendered
-    /// disabled. Show all / hide all drive the same window-free model methods as
-    /// any other command. Row data is snapshotted before rendering so no
-    /// immutable model borrow is held while a click mutates state.
-    fn layers_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(tab) = self.state.active_tab_id() else {
-            ui.label("No document open");
-            return;
-        };
-
-        // Snapshot (id, name, locked, radio group, visible) rows up front.
-        let rows: Vec<(String, String, bool, Option<usize>, bool)> =
-            match (self.layers.model(tab), self.layers.state(tab)) {
-                (Some(model), Some(state)) => model
-                    .layers()
-                    .map(|layer| {
-                        let id = layer.id().to_string();
-                        let visible = state.is_visible(model, id.as_str()).unwrap_or(false);
-                        (
-                            id,
-                            layer.name().to_string(),
-                            layer.is_locked(),
-                            layer.radio_group(),
-                            visible,
-                        )
-                    })
-                    .collect(),
-                _ => {
-                    ui.label("No optional content layers");
-                    return;
-                }
-            };
-
-        ui.heading("Layers");
-        ui.horizontal(|ui| {
-            if ui.button("Show all").clicked() {
-                let _ = self.show_all_layers();
-            }
-            if ui.button("Hide all").clicked() {
-                let _ = self.hide_all_layers();
-            }
-        });
-        ui.separator();
-
-        // Derive the selected radio member per group from the current snapshot.
-        let mut selected_by_group: std::collections::HashMap<usize, String> =
-            std::collections::HashMap::new();
-        for (id, _, _, radio_group, visible) in &rows {
-            if let Some(group) = radio_group
-                && *visible
-            {
-                selected_by_group.insert(*group, id.clone());
-            }
-        }
-
-        for (id, name, locked, radio_group, visible) in rows {
-            ui.horizontal(|ui| match radio_group {
-                Some(group) => {
-                    if locked {
-                        ui.add_enabled(false, egui::RadioButton::new(visible, &name));
-                    } else {
-                        let selected = selected_by_group.entry(group).or_default();
-                        let response = ui.radio_value(selected, id.clone(), name);
-                        if response.clicked() {
-                            let _ = self.set_layer_visible(id.as_str(), true);
-                        }
-                    }
-                }
-                None => {
-                    let mut checked = visible;
-                    if locked {
-                        ui.add_enabled(false, egui::Checkbox::new(&mut checked, &name));
-                    } else if ui.checkbox(&mut checked, &name).changed() {
-                        let _ = self.set_layer_visible(id.as_str(), checked);
-                    }
-                }
-            });
-        }
-    }
-
-    /// Reinstall the demo outline/attachment/link data on the active tab.
-    ///
-    /// Returns `false` with a status message when no document is open. A test
-    /// helper and a recovery path for a tab whose navigation data was cleared.
-    pub fn install_demo_navigation_data(&mut self) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        let page_count = self.demo_page_count();
-        // Each error type is handled in its own arm because the three models
-        // deliberately expose distinct typed errors.
-        if let Err(error) = self
-            .bookmarks
-            .install(tab, demo_bookmarks(page_count), page_count)
-        {
-            self.status = error.to_string();
-            return false;
-        }
-        if let Err(error) = self
-            .attachments
-            .install(tab, demo_attachments(page_count), page_count)
-        {
-            self.status = error.to_string();
-            return false;
-        }
-        if let Err(error) = self.links.install(tab, demo_links(page_count), page_count) {
-            self.status = error.to_string();
-            return false;
-        }
-        self.status = format!("Installed demo navigation data for tab {tab}");
-        true
-    }
-
-    /// Borrow the per-tab bookmark registry.
-    pub fn bookmarks(&self) -> &BookmarkRegistry {
-        &self.bookmarks
-    }
-
-    /// Borrow the per-tab attachment registry.
-    pub fn attachments(&self) -> &AttachmentRegistry {
-        &self.attachments
-    }
-
-    /// Borrow the per-tab link registry.
-    pub fn links(&self) -> &LinkRegistry {
-        &self.links
-    }
-
-    /// Visible bookmark rows for the active tab, in deterministic order.
-    pub fn bookmark_rows(&self) -> Vec<crate::VisibleBookmark> {
-        self.state
-            .active_tab_id()
-            .map_or_else(Vec::new, |tab| self.bookmarks.visible_rows(tab))
-    }
-
-    /// Article-thread summary for the active tab: `(id, title, page count)` rows.
-    pub fn article_summary(&self) -> Vec<(String, String, usize)> {
-        self.state
-            .active_tab_id()
-            .and_then(|tab| self.bookmarks.model(tab))
-            .map(|model| {
-                model
-                    .articles()
-                    .map(|article| {
-                        (
-                            article.id().to_string(),
-                            article.title().to_string(),
-                            article.pages().len(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Toggle a bookmark's expanded flag on the active tab.
-    ///
-    /// Returns `true` when the action succeeded (use
-    /// [`Self::bookmark_rows`] or the registry state to observe the new
-    /// expansion value); reports unknown ids and missing tabs through
-    /// [`Self::status`].
-    pub fn toggle_bookmark_expansion(&mut self, id: &str) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.bookmarks.toggle_expanded(tab, id) {
-            Ok(expanded) => {
-                self.status = format!(
-                    "Bookmark {id} {}",
-                    if expanded { "expanded" } else { "collapsed" }
-                );
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// Select a bookmark on the active tab.
-    pub fn select_bookmark(&mut self, id: &str) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.bookmarks.select(tab, id) {
-            Ok(()) => {
-                self.status = format!("Selected bookmark {id}");
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// Attachment rows for the active tab: `(name, description, size, page)`.
-    pub fn attachment_rows(&self) -> Vec<(String, String, u64, Option<usize>)> {
-        self.state
-            .active_tab_id()
-            .and_then(|tab| self.attachments.model(tab))
-            .map(|model| {
-                model
-                    .attachments()
-                    .map(|attachment| {
-                        (
-                            attachment.name().to_string(),
-                            attachment.description().to_string(),
-                            attachment.size(),
-                            attachment.page(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Select an attachment on the active tab.
-    pub fn select_attachment(&mut self, name: &str) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.attachments.select(tab, name) {
-            Ok(()) => {
-                self.status = format!("Selected attachment {name}");
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// Request that the host open an attachment on the active tab.
-    ///
-    /// This is the host open boundary: the app records the request and its
-    /// status but never reads embedded file bytes or touches the filesystem. A
-    /// host with a stream backend consumes [`Self::last_open_request`] and
-    /// performs extraction/opening. Returns `false` when there is no active tab
-    /// or the attachment is unknown.
-    pub fn open_attachment(&mut self, name: &str) -> bool {
-        let Some(tab) = self.state.active_tab_id() else {
-            self.status = "No document open".to_string();
-            return false;
-        };
-        match self.attachments.open_request(tab, name) {
-            Ok(request) => {
-                self.status = format!("Open request for attachment {name} (host must fulfil)");
-                self.last_open_request = Some(request);
-                true
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                false
-            }
-        }
-    }
-
-    /// The most recent host open request produced by [`Self::open_attachment`].
-    pub fn last_open_request(&self) -> Option<&AttachmentOpenRequest> {
-        self.last_open_request.as_ref()
-    }
-
-    /// Link rows on `page` of the active tab: `(id, page, target label)`.
-    pub fn link_rows(&self, page: usize) -> Vec<(LinkId, usize, String)> {
-        self.state
-            .active_tab_id()
-            .and_then(|tab| self.links.model(tab))
-            .map(|model| {
-                model
-                    .links_for_page(page)
-                    .map(|link| {
-                        (
-                            link.id().to_string(),
-                            link.page(),
-                            link_target_label(link.target()),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Resolve a link on the active tab to its destination, if identifiable.
-    pub fn resolve_link(&self, id: &str) -> Option<ResolvedLink> {
-        self.state
-            .active_tab_id()
-            .and_then(|tab| self.links.model(tab))
-            .and_then(|model| model.resolve(id))
-    }
-
-    /// Hit-test a page-space point against the active tab's links.
-    ///
-    /// Returns the topmost link id at `(x, y)` on `page`, or `None`.
-    pub fn hit_test_link(&self, page: usize, x: f32, y: f32) -> Option<String> {
-        self.state
-            .active_tab_id()
-            .and_then(|tab| self.links.hit_test(tab, page, LinkPoint::new(x, y)))
-            .map(str::to_string)
-    }
-
-    /// Render the Bookmarks side panel for the active tab.
-    fn bookmarks_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(tab) = self.state.active_tab_id() else {
-            ui.label("No document open");
-            return;
-        };
-        let rows = self.bookmarks.visible_rows(tab);
-        if rows.is_empty() {
-            ui.heading("Bookmarks");
-            ui.label("No bookmarks in this document");
-            return;
-        }
-
-        ui.heading("Bookmarks");
-        for row in &rows {
-            let indent = (row.depth() * 12) as f32;
-            ui.horizontal(|ui| {
-                ui.add_space(indent);
-                let marker = if row.has_children() {
-                    if row.expanded() { "▾" } else { "▸" }
-                } else {
-                    "·"
-                };
-                let mut label = format!("{marker} {} (p. {})", row.title(), row.page() + 1);
-                if row.selected() {
-                    label.push_str(" ◀");
-                }
-                if ui.button(label).clicked() {
-                    let id = row.id().to_string();
-                    if row.has_children() {
-                        let _ = self.toggle_bookmark_expansion(&id);
-                    }
-                    let _ = self.select_bookmark(&id);
-                }
-            });
-        }
-
-        let articles = self.article_summary();
-        if !articles.is_empty() {
-            ui.separator();
-            ui.label("Articles");
-            for (id, title, pages) in articles {
-                ui.label(format!("{title} [{id}] — {pages} page(s)"));
-            }
-        }
-    }
-
-    /// Render the Attachments side panel for the active tab.
-    fn attachments_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(tab) = self.state.active_tab_id() else {
-            ui.label("No document open");
-            return;
-        };
-        let rows = self.attachment_rows();
-        ui.heading("Attachments");
-        if rows.is_empty() {
-            ui.label("No embedded attachments");
-            return;
-        }
-
-        let selected = self
-            .attachments
-            .state(tab)
-            .and_then(AttachmentState::selected)
-            .map(str::to_string);
-        for (name, description, size, page) in rows {
-            let label = if description.is_empty() {
-                format!("{name} ({size} B)")
-            } else {
-                format!("{name} — {description} ({size} B)")
-            };
-            let page_hint = page.map_or("page n/a".to_string(), |page| format!("p. {}", page + 1));
-            ui.horizontal(|ui| {
-                let mut text = label;
-                if selected.as_deref() == Some(name.as_str()) {
-                    text.push_str(" ◀");
-                }
-                if ui.button(text).clicked() {
-                    let _ = self.select_attachment(&name);
-                }
-                ui.label(page_hint);
-            });
-        }
-        ui.separator();
-        ui.label("Opening bytes is delegated to the host (metadata only here).");
-        if let Some(request) = self.last_open_request() {
-            ui.label(format!("Requested: {}", request.name()));
-        }
-    }
-
-    /// Render the Links side panel for the active tab's current page.
-    fn links_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(tab) = self.state.active_tab_id() else {
-            ui.label("No document open");
-            return;
-        };
-        let page = self
-            .state
-            .active_tab()
-            .map_or(0, |active| active.current_page());
-        let rows = self.link_rows(page);
-        ui.heading(format!("Links — page {}", page + 1));
-        if rows.is_empty() {
-            ui.label("No links on this page");
-            return;
-        }
-        for (id, link_page, target) in rows {
-            let resolved = self
-                .links
-                .model(tab)
-                .and_then(|model| model.resolve(&id))
-                .map_or(String::new(), |target| format!(" → {target:?}"));
-            ui.label(format!("{id} (p. {}) {target}{resolved}", link_page + 1));
-        }
-    }
-
     /// Render the in-document find bar.
     ///
     /// The query field mirrors into [`FindState`] on change; the two toggles
@@ -2470,150 +1571,6 @@ impl PdfxiApp {
         });
     }
 
-    /// Render the toolbar panel.
-    #[allow(dead_code)]
-    fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading(app_name());
-            ui.separator();
-            if ui.button("Open…").clicked() {
-                self.open_dialog_open = true;
-            }
-            if ui.button("Open Demo").clicked() {
-                self.open_demo_tab();
-            }
-            if ui.button("Close").clicked() {
-                self.close_active_tab();
-            }
-            if ui.button("Print...").clicked() {
-                self.open_print_dialog();
-            }
-            ui.separator();
-            if ui.button("Zoom -").clicked() {
-                self.zoom_out();
-            }
-            if ui.button("Zoom +").clicked() {
-                self.zoom_in();
-            }
-            if ui
-                .button("Rotate CCW")
-                .on_hover_text(ViewCommand::RotateCounterclockwise.shortcut_label())
-                .clicked()
-            {
-                self.rotate_counterclockwise();
-            }
-            if ui
-                .button("Rotate CW")
-                .on_hover_text(ViewCommand::RotateClockwise.shortcut_label())
-                .clicked()
-            {
-                self.rotate_clockwise();
-            }
-            if ui
-                .button("Reset rotation")
-                .on_hover_text(ViewCommand::ResetRotation.shortcut_label())
-                .clicked()
-            {
-                self.reset_rotation();
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Display:");
-            if ui
-                .button("Fit page")
-                .on_hover_text(ViewCommand::FitPage.shortcut_label())
-                .clicked()
-            {
-                self.fit_page();
-            }
-            if ui
-                .button("Fit width")
-                .on_hover_text(ViewCommand::FitWidth.shortcut_label())
-                .clicked()
-            {
-                self.fit_width();
-            }
-            if ui
-                .button("Actual size")
-                .on_hover_text(ViewCommand::ActualSize.shortcut_label())
-                .clicked()
-            {
-                self.actual_size();
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Tool:");
-            for tool in Toolset::ALL {
-                let selected = self.state.active_tool() == tool;
-                if ui
-                    .selectable_label(
-                        selected,
-                        format!("{} [{}]", tool.label(), tool.keyboard_hint()),
-                    )
-                    .clicked()
-                {
-                    self.select_tool(tool);
-                }
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("View:");
-            for mode in [
-                ViewMode::SinglePage,
-                ViewMode::Continuous,
-                ViewMode::TwoPage,
-                ViewMode::TwoPageContinuous,
-            ] {
-                let selected = self
-                    .state
-                    .active_tab()
-                    .is_some_and(|tab| tab.view_mode() == mode);
-                if ui.selectable_label(selected, mode.label()).clicked() {
-                    self.set_view_mode(mode);
-                }
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Panes:");
-            for (label, command) in [
-                ("Split H", PaneCommand::SplitHorizontal),
-                ("Split V", PaneCommand::SplitVertical),
-                ("1x1", PaneCommand::Tile1x1),
-                ("1x2", PaneCommand::Tile1x2),
-                ("2x1", PaneCommand::Tile2x1),
-                ("2x2", PaneCommand::Tile2x2),
-            ] {
-                if ui
-                    .button(label)
-                    .on_hover_text(command.shortcut_label())
-                    .clicked()
-                {
-                    self.apply_pane_command(command);
-                }
-            }
-            ui.separator();
-            if ui
-                .button("Next pane")
-                .on_hover_text(PaneCommand::FocusNextPane.shortcut_label())
-                .clicked()
-            {
-                self.apply_pane_command(PaneCommand::FocusNextPane);
-            }
-            if ui
-                .button("Close pane")
-                .on_hover_text(PaneCommand::ClosePane.shortcut_label())
-                .clicked()
-            {
-                self.apply_pane_command(PaneCommand::ClosePane);
-            }
-            ui.label(self.pane_status());
-        });
-    }
-
     /// Render the document tab strip.
     ///
     /// Labels, order, and the active highlight come from the window-free
@@ -2635,7 +1592,7 @@ impl PdfxiApp {
                 if ui.selectable_label(is_active, label).clicked() {
                     activate = Some(id);
                 }
-                if ui.small_button("×").clicked() {
+                if ui.small_button("-").clicked() {
                     close = Some(id);
                 }
             }
@@ -2648,7 +1605,7 @@ impl PdfxiApp {
         }
     }
 
-    /// Render the status header and the placeholder canvas area.
+    /// Render the document canvas, or the empty Home state with no document.
     fn canvas_ui(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::for_mode(self.theme);
         let canvas_rect = ui.max_rect();
@@ -2656,12 +1613,12 @@ impl PdfxiApp {
             .fill(palette.canvas)
             .inner_margin(egui::Margin::same(18))
             .show(ui, |ui| {
-                if self.active_is_demo() {
-                    self.demo_canvas_ui(ui, palette);
+                if self.state.active_tab().is_none() {
+                    self.empty_home_ui(ui, palette);
                     return;
                 }
                 let viewport = CanvasSize::new(ui.available_width(), ui.available_height());
-                let Some(layout) = layout_for_state(&self.state, viewport) else {
+                let Some(layout) = layout_for_state(&self.state, viewport, &self.page_sizes) else {
                     ui.vertical_centered(|ui| {
                         ui.add_space(48.0);
                         ui.label(egui::RichText::new(canvas_placeholder(&self.state)).weak());
@@ -2672,9 +1629,19 @@ impl PdfxiApp {
                 // Fill the LRU cache with real rasters before painting. This
                 // happens only with PDFium; otherwise the placeholder stands.
                 #[cfg(feature = "pdfium")]
-                self.ensure_rasters(&layout);
+                let pixels_per_point = ui.ctx().pixels_per_point();
+                #[cfg(feature = "pdfium")]
+                self.ensure_rasters(&layout, pixels_per_point);
 
                 let origin = ui.min_rect().left_top();
+                // Centre a page narrower than the viewport; wider pages keep
+                // normal left-aligned scrolling with no extra offset.
+                let content_right = layout
+                    .pages()
+                    .iter()
+                    .map(|page| page.rect.x + page.rect.width)
+                    .fold(0.0_f32, f32::max);
+                let pad_x = ((viewport.width - content_right) * 0.5).max(0.0);
                 let text_tool = self.state.active_tool() == Toolset::TextSelection;
                 let (scroll_delta, hover, pressed, dragging) = ui.input(|input| {
                     let pointer = &input.pointer;
@@ -2717,19 +1684,18 @@ impl PdfxiApp {
                 let _ = self.sync_active_page_from_canvas(&layout);
 
                 // Text drag: anchor on press, advance the head while dragging.
+                // Real page text is not wired yet, so the slice is empty.
+
                 if text_tool && let Some(pos) = hover {
-                    let point = screen_to_canvas(pos, origin, self.scroll_x, self.scroll_y);
+                    let point = screen_to_canvas(pos, origin, self.scroll_x - pad_x, self.scroll_y);
                     if pressed {
-                        self.selection.begin_at(point, &layout, &self.demo_text);
+                        self.selection.begin_at(point, &layout, &self.text_pages);
                     } else if dragging {
-                        self.selection.update_to(point, &layout, &self.demo_text);
+                        self.selection.update_to(point, &layout, &self.text_pages);
                     }
                 }
 
                 // Report the page under the cursor in canvas coordinates.
-                let hit = hover.map_or(CanvasHit::Outside, |pos| {
-                    layout.page_at(screen_to_canvas(pos, origin, self.scroll_x, self.scroll_y))
-                });
 
                 #[cfg(feature = "pdfium")]
                 let ctx = ui.ctx().clone();
@@ -2738,22 +1704,25 @@ impl PdfxiApp {
                 for page in layout.pages() {
                     let rect = egui::Rect::from_min_size(
                         egui::pos2(
-                            origin.x + page.rect.x - self.scroll_x,
+                            origin.x + page.rect.x - self.scroll_x + pad_x,
                             origin.y + page.rect.y - self.scroll_y,
                         ),
                         egui::vec2(page.rect.width, page.rect.height),
                     );
                     #[cfg(feature = "pdfium")]
-                    if let Some(texture) =
-                        self.raster_texture(&ctx, page.page, page.scale, page.rotation)
-                    {
+                    if let Some(texture) = self.raster_texture(
+                        &ctx,
+                        page.page,
+                        page.scale * pixels_per_point,
+                        page.rotation,
+                    ) {
                         // Paint the real page raster inside the rotated page
                         // rectangle, rotating its UVs to match the view.
                         paint_rotated_image(painter, texture.id(), rect, page.rotation);
                         continue;
                     }
                     // Without a cached raster (or without PDFium), draw the
-                    // outlined placeholder rectangle.
+                    // outlined page rectangle.
                     painter.rect(
                         rect,
                         0.0,
@@ -2769,7 +1738,7 @@ impl PdfxiApp {
                 let current_index = self.find.current_index();
                 let mut highlights: Vec<(egui::Rect, bool)> = Vec::new();
                 for (index, find_hit) in self.find.matches().iter().enumerate() {
-                    let Some(local) = match_rect(find_hit, &self.demo_text) else {
+                    let Some(local) = match_rect(find_hit, &self.text_pages) else {
                         continue;
                     };
                     // Map the page-local match rectangle forward through the
@@ -2780,7 +1749,7 @@ impl PdfxiApp {
                     };
                     let rect = egui::Rect::from_min_size(
                         egui::pos2(
-                            origin.x + mapped.x - self.scroll_x,
+                            origin.x + mapped.x - self.scroll_x + pad_x,
                             origin.y + mapped.y - self.scroll_y,
                         ),
                         egui::vec2(mapped.width, mapped.height),
@@ -2809,76 +1778,33 @@ impl PdfxiApp {
                 if let Some(tab) = self.state.active_tab_mut() {
                     tab.set_scroll_offset(CanvasPoint::new(self.scroll_x, self.scroll_y));
                 }
-
-                let copy_text = self.selection.selected_text(&self.demo_text);
-                ui.label(canvas_info_line(hit, &copy_text));
             });
-        self.floating_page_bar_ui(ui, canvas_rect, palette);
+        if self.state.active_tab().is_some() {
+            self.floating_page_bar_ui(ui, canvas_rect, palette);
+        }
     }
 
     /// Apply keyboard shortcuts for the main find, copy, and view commands.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let (
-            open,
-            next_tab,
-            prev_tab,
-            close,
-            view_command,
-            pane_command,
-            escape,
-            open_find,
-            next,
-            prev,
-            copy,
-        ) = ctx.input(|input| {
-            let ctrl = input.modifiers.ctrl;
-            let shift = input.modifiers.shift;
-            // Rotation, fit modes, and zoom are resolved through the shared
-            // shortcut map, so the toolbar and keyboard paths cannot drift.
-            let view_command = [
-                Key::R,
-                Key::Num0,
-                Key::Num1,
-                Key::Num2,
-                Key::Equals,
-                Key::Minus,
-            ]
-            .into_iter()
-            .find(|key| input.key_pressed(*key))
-            .and_then(native_shortcut_key)
-            .and_then(|key| {
-                map_shortcut(
-                    key,
-                    ShortcutModifiers {
-                        ctrl,
-                        shift,
-                        alt: input.modifiers.alt,
-                    },
-                )
-            });
-            // Pane commands use Ctrl+Shift and are resolved through the
-            // shared map so the toolbar and keyboard paths cannot drift.
-            let pane_command = (ctrl && shift)
-                .then(|| {
-                    [
-                        Key::H,
-                        Key::V,
-                        Key::Num1,
-                        Key::Num2,
-                        Key::Num3,
-                        Key::Num4,
-                        Key::Period,
-                        Key::Comma,
-                        Key::W,
-                        Key::P,
-                    ]
-                    .into_iter()
-                    .find(|key| input.key_pressed(*key))
-                    .and_then(native_pane_key)
-                })
-                .flatten()
+        let (open, next_tab, prev_tab, close, view_command, escape, open_find, next, prev, copy) =
+            ctx.input(|input| {
+                let ctrl = input.modifiers.ctrl;
+                let shift = input.modifiers.shift;
+                // Rotation, fit modes, and zoom are resolved through the shared
+                // shortcut map, so the toolbar and keyboard paths cannot drift.
+                let view_command = [
+                    Key::R,
+                    Key::Num0,
+                    Key::Num1,
+                    Key::Num2,
+                    Key::Equals,
+                    Key::Minus,
+                ]
+                .into_iter()
+                .find(|key| input.key_pressed(*key))
+                .and_then(native_shortcut_key)
                 .and_then(|key| {
-                    map_pane_shortcut(
+                    map_shortcut(
                         key,
                         ShortcutModifiers {
                             ctrl,
@@ -2887,23 +1813,24 @@ impl PdfxiApp {
                         },
                     )
                 });
-            (
-                ctrl && input.key_pressed(Key::N),
-                ctrl && !shift && input.key_pressed(Key::Tab),
-                ctrl && shift && input.key_pressed(Key::Tab),
-                ctrl && !shift && input.key_pressed(Key::W),
-                view_command,
-                pane_command,
-                input.key_pressed(Key::Escape),
-                ctrl && input.key_pressed(Key::F),
-                !shift && input.key_pressed(Key::F3),
-                shift && input.key_pressed(Key::F3),
-                ctrl && input.key_pressed(Key::C),
-            )
-        });
+                // Pane commands use Ctrl+Shift and are resolved through the
+                // shared map so the toolbar and keyboard paths cannot drift.
+                (
+                    ctrl && input.key_pressed(Key::N),
+                    ctrl && !shift && input.key_pressed(Key::Tab),
+                    ctrl && shift && input.key_pressed(Key::Tab),
+                    ctrl && !shift && input.key_pressed(Key::W),
+                    view_command,
+                    input.key_pressed(Key::Escape),
+                    ctrl && input.key_pressed(Key::F),
+                    !shift && input.key_pressed(Key::F3),
+                    shift && input.key_pressed(Key::F3),
+                    ctrl && input.key_pressed(Key::C),
+                )
+            });
 
         if open {
-            self.open_demo_tab();
+            self.open_dialog_open = true;
         }
         if next_tab {
             self.activate_next_tab();
@@ -2916,9 +1843,6 @@ impl PdfxiApp {
         }
         if let Some(command) = view_command {
             self.apply_view_command(command);
-        }
-        if let Some(command) = pane_command {
-            self.apply_pane_command(command);
         }
         if open_find {
             self.open_find();
@@ -2947,89 +1871,24 @@ impl PdfxiApp {
 }
 
 impl PdfxiApp {
-    /// Borrow the window-free print-dialog model.
-    pub fn print_dialog(&self) -> &PrintDialogState {
-        &self.print_dialog
-    }
-
-    /// Show the print dialog.
-    pub fn open_print_dialog(&mut self) {
-        self.print_dialog.show();
-    }
-
-    /// Hide the print dialog.
-    pub fn close_print_dialog(&mut self) {
-        self.print_dialog.hide();
-    }
-
-    /// Select which pages the print job includes.
-    pub fn set_print_range(&mut self, range: PrintPageRange) {
-        self.print_dialog.model_mut().range = range;
-    }
-
-    /// Set the number of copies.
-    pub fn set_print_copies(&mut self, copies: u32) {
-        self.print_dialog.model_mut().copies = copies;
-    }
-
-    /// Set the duplex mode recorded for the host adapter.
-    pub fn set_print_duplex(&mut self, duplex: Duplex) {
-        self.print_dialog.model_mut().duplex = duplex;
-    }
-
-    /// Set portrait or landscape orientation.
-    pub fn set_print_orientation(&mut self, orientation: Orientation) {
-        self.print_dialog.model_mut().orientation = orientation;
-    }
-
-    /// Set fit, actual-size, or custom-percent scaling.
-    pub fn set_print_scale(&mut self, scale: PageScaleMode) {
-        self.print_dialog.model_mut().scale = scale;
-    }
-
-    /// Set the paper size used for fitting and recorded in the plan.
-    pub fn set_print_paper(&mut self, paper: PaperSize) {
-        self.print_dialog.model_mut().paper = paper;
-    }
-
-    /// Replace the zero-based pages used by the `Selection` print range.
-    pub fn set_print_selected_pages(&mut self, pages: Vec<usize>) {
-        self.print_selection = pages;
-    }
-
-    /// Build a print context from the active tab's page count and current page.
-    pub fn print_context(&self) -> PrintContext {
-        let (page_count, current_page) = self
-            .state
-            .active_tab()
-            .map(|tab| (tab.page_count(), tab.current_page()))
-            .unwrap_or((0, 0));
-        PrintContext {
-            page_count,
-            current_page,
-            selected_pages: self.print_selection.clone(),
-        }
-    }
-
-    /// Submit the dialog's model without contacting a printer.
-    ///
-    /// This returns a data-only [`PrintPlan`]; a host adapter must spool it
-    /// through `pdfxi_render::print` and forward the rasters to a driver.
-    ///
-    /// # Errors
-    ///
-    /// Propagates every [`PrintModelError`] from dialog submission.
-    pub fn submit_print(&mut self) -> Result<PrintPlan, PrintModelError> {
-        let context = self.print_context();
-        self.print_dialog.submit(&context)
-    }
-
     /// Record a typed document-open error for display in the shell.
     pub fn record_open_error(&mut self, error: OpenError) {
         self.open_errors.push(error);
     }
 
     /// Borrow the typed open errors recorded so far.
+    /// Dismiss the open-error banner.
+    pub fn dismiss_open_error(&mut self) {
+        self.open_error_banner = None;
+    }
+
+    /// The message shown in the dismissible open-error banner, if any.
+    #[must_use]
+    pub fn open_error_banner(&self) -> Option<&str> {
+        self.open_error_banner.as_deref()
+    }
+
+    /// Recent document-open failures, with typed errors and paths.
     pub fn open_errors(&self) -> &[OpenError] {
         &self.open_errors
     }
@@ -3037,76 +1896,6 @@ impl PdfxiApp {
     /// Forget all recorded open errors.
     pub fn clear_open_errors(&mut self) {
         self.open_errors.clear();
-    }
-
-    fn print_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Submit builds a plan only; a host adapter performs printing.");
-        {
-            let model = self.print_dialog.model_mut();
-            ui.horizontal(|ui| {
-                ui.label("Pages:");
-                ui.radio_value(&mut model.range, PrintPageRange::All, "All");
-                ui.radio_value(&mut model.range, PrintPageRange::Current, "Current");
-                ui.radio_value(&mut model.range, PrintPageRange::Selection, "Selection");
-            });
-            let mut custom = match &model.range {
-                PrintPageRange::Custom(text) => text.clone(),
-                _ => String::new(),
-            };
-            ui.horizontal(|ui| {
-                ui.label("Custom:");
-                if ui.text_edit_singleline(&mut custom).changed() && !custom.is_empty() {
-                    model.range = PrintPageRange::Custom(custom.clone());
-                }
-            });
-            ui.add(
-                egui::DragValue::new(&mut model.copies)
-                    .range(1..=999)
-                    .prefix("Copies: "),
-            );
-            ui.horizontal(|ui| {
-                ui.label("Orientation:");
-                ui.radio_value(&mut model.orientation, Orientation::Portrait, "Portrait");
-                ui.radio_value(&mut model.orientation, Orientation::Landscape, "Landscape");
-            });
-            ui.horizontal(|ui| {
-                ui.label("Scale:");
-                ui.radio_value(&mut model.scale, PageScaleMode::Actual, "Actual");
-                ui.radio_value(&mut model.scale, PageScaleMode::Fit, "Fit");
-            });
-            let mut percent = match model.scale {
-                PageScaleMode::CustomPercent(value) => value,
-                _ => 100.0,
-            };
-            ui.horizontal(|ui| {
-                ui.label("Custom %:");
-                if ui
-                    .add(egui::DragValue::new(&mut percent).range(1.0..=1000.0))
-                    .changed()
-                {
-                    model.scale = PageScaleMode::CustomPercent(percent);
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Duplex:");
-                ui.radio_value(&mut model.duplex, Duplex::None, "None");
-                ui.radio_value(&mut model.duplex, Duplex::LongEdge, "Long edge");
-                ui.radio_value(&mut model.duplex, Duplex::ShortEdge, "Short edge");
-            });
-            ui.horizontal(|ui| {
-                ui.label("Paper:");
-                ui.radio_value(&mut model.paper, PaperSize::Letter, "Letter");
-                ui.radio_value(&mut model.paper, PaperSize::A4, "A4");
-                ui.radio_value(&mut model.paper, PaperSize::Legal, "Legal");
-            });
-        }
-        if ui.button("Submit (build plan)").clicked() {
-            let _ = self.submit_print();
-        }
-        let status = self.print_dialog.status().to_owned();
-        if !status.is_empty() {
-            ui.label(status);
-        }
     }
 
     fn open_errors_ui(&mut self, ui: &mut egui::Ui) {
@@ -3124,6 +1913,7 @@ impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.window_resize_handles(ctx);
         self.handle_keyboard(ctx);
+        self.pump_text_extraction();
 
         let dropped: Vec<PathBuf> = ctx.input(|input| {
             input
@@ -3138,15 +1928,6 @@ impl eframe::App for PdfxiApp {
         }
         self.open_dialog_ui(ctx);
         self.shell_ui(ctx);
-        if self.print_dialog.is_open() {
-            let mut open = true;
-            egui::Window::new("Print")
-                .open(&mut open)
-                .show(ctx, |ui| self.print_ui(ui));
-            if !open {
-                self.print_dialog.hide();
-            }
-        }
         if !self.open_errors.is_empty() {
             let mut open = true;
             egui::Window::new("Open errors")
@@ -3163,15 +1944,6 @@ impl eframe::App for PdfxiApp {
 // ---------------------------------------------------------------------------
 // Product shell: Acrobat-style chrome around the existing viewer surface.
 // ---------------------------------------------------------------------------
-
-/// Export formats offered by the export card.
-const EXPORT_FORMATS: [&str; 5] = [
-    "Microsoft Word (.docx)",
-    "Microsoft Excel (.xlsx)",
-    "PowerPoint (.pptx)",
-    "Plain text (.txt)",
-    "Images (.png)",
-];
 
 /// Panel background frame with horizontal padding.
 fn shell_panel_frame(palette: Palette, horizontal: i8) -> egui::Frame {
@@ -3232,6 +2004,125 @@ fn traffic_light(
         );
     }
     response.on_hover_text(hover_text)
+}
+
+/// Width of one Windows caption button in the title bar, in UI points.
+pub const CAPTION_BUTTON_WIDTH: f32 = 46.0;
+
+/// A window-control action drawn in the custom title bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CaptionAction {
+    /// Minimize the window.
+    Minimize,
+    /// Toggle between maximized and restored.
+    ToggleMaximize,
+    /// Close the window.
+    Close,
+}
+
+/// The edge of the title bar that holds the caption buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionSide {
+    /// Left edge (macOS traffic lights).
+    Left,
+    /// Right edge (Windows caption buttons).
+    Right,
+}
+
+/// Ordered caption buttons for a control style, and the side they occupy.
+///
+/// The array is ordered left to right exactly as it is drawn.
+#[must_use]
+pub fn caption_layout(style: WindowControlStyle) -> (CaptionSide, [CaptionAction; 3]) {
+    match style {
+        WindowControlStyle::Windows => (
+            CaptionSide::Right,
+            [
+                CaptionAction::Minimize,
+                CaptionAction::ToggleMaximize,
+                CaptionAction::Close,
+            ],
+        ),
+        WindowControlStyle::MacOs => (
+            CaptionSide::Left,
+            [
+                CaptionAction::Close,
+                CaptionAction::Minimize,
+                CaptionAction::ToggleMaximize,
+            ],
+        ),
+    }
+}
+
+/// The viewport command a caption button sends.
+#[must_use]
+pub fn caption_command(action: CaptionAction, maximized: bool) -> egui::ViewportCommand {
+    match action {
+        CaptionAction::Minimize => egui::ViewportCommand::Minimized(true),
+        CaptionAction::ToggleMaximize => egui::ViewportCommand::Maximized(!maximized),
+        CaptionAction::Close => egui::ViewportCommand::Close,
+    }
+}
+
+/// Draw a native-weight Windows caption glyph.
+///
+/// Glyphs are 10 pt wide with a one-physical-pixel stroke, snapped to half
+/// pixels so they stay crisp hairlines at any scale. The general icon set is
+/// deliberately not used here: its strokes are too heavy for caption buttons.
+fn caption_glyph(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    action: CaptionAction,
+    maximized: bool,
+    color: egui::Color32,
+) {
+    let pixels = painter.pixels_per_point();
+    let snap = |value: f32| ((value * pixels - 0.5).round() + 0.5) / pixels;
+    let stroke = egui::Stroke::new(1.0 / pixels, color);
+    let cx = snap(center.x);
+    let cy = snap(center.y);
+    let left = cx - 5.0;
+    let right = cx + 5.0;
+    let top = cy - 5.0;
+    let bottom = cy + 5.0;
+    match action {
+        CaptionAction::Minimize => {
+            painter.line_segment([egui::pos2(left, cy), egui::pos2(right, cy)], stroke);
+        }
+        CaptionAction::ToggleMaximize if maximized => {
+            // Restore: a back square offset up and right behind a front one.
+            painter.rect_stroke(
+                egui::Rect::from_min_max(
+                    egui::pos2(left + 2.0, top),
+                    egui::pos2(right, bottom - 2.0),
+                ),
+                0.0,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            painter.rect_stroke(
+                egui::Rect::from_min_max(
+                    egui::pos2(left, top + 2.0),
+                    egui::pos2(right - 2.0, bottom),
+                ),
+                0.0,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+        }
+        CaptionAction::ToggleMaximize => {
+            painter.rect_stroke(
+                egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom)),
+                0.0,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+        }
+        CaptionAction::Close => {
+            painter.line_segment([egui::pos2(left, top), egui::pos2(right, bottom)], stroke);
+            painter.line_segment([egui::pos2(right, top), egui::pos2(left, bottom)], stroke);
+        }
+    }
 }
 
 /// A borderless icon button on the dark title bar.
@@ -3296,65 +2187,6 @@ fn shell_tool_button(
     response
 }
 
-/// Per-tool icon tint.
-///
-/// The reference keeps the tool list monochrome so the active row is the only
-/// red element. Colour is reserved for selection, status and the AI accent.
-fn tool_icon_color(_glyph: Icon, palette: Palette) -> egui::Color32 {
-    palette.text
-}
-
-/// One tool row in the right panel.
-fn tool_row(
-    ui: &mut egui::Ui,
-    palette: Palette,
-    glyph: Icon,
-    label: &str,
-    highlighted: bool,
-) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 29.0), egui::Sense::click());
-    let background = if highlighted {
-        palette.accent_soft
-    } else if response.hovered() {
-        palette.surface
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, 8.0, background);
-    let color = if highlighted {
-        palette.accent
-    } else {
-        tool_icon_color(glyph, palette)
-    };
-    icon(
-        ui.painter(),
-        egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 18.0, rect.center().y),
-            egui::Vec2::splat(15.0),
-        ),
-        glyph,
-        color,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + 34.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(11.5),
-        palette.text,
-    );
-    icon(
-        ui.painter(),
-        egui::Rect::from_center_size(
-            egui::pos2(rect.right() - 14.0, rect.center().y),
-            egui::Vec2::splat(10.0),
-        ),
-        Icon::ChevronRight,
-        palette.text_muted,
-    );
-    response
-}
-
 /// Thin vertical separator.
 fn shell_divider(ui: &mut egui::Ui, palette: Palette) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 22.0), egui::Sense::hover());
@@ -3364,15 +2196,6 @@ fn shell_divider(ui: &mut egui::Ui, palette: Palette) {
             egui::pos2(rect.center().x, rect.bottom()),
         ],
         egui::Stroke::new(1.0_f32, palette.border),
-    );
-}
-
-/// Small muted section heading.
-fn shell_section_label(ui: &mut egui::Ui, palette: Palette, text: &str) {
-    ui.label(
-        egui::RichText::new(text)
-            .size(9.5)
-            .color(palette.text_muted),
     );
 }
 
@@ -3391,8 +2214,12 @@ impl PdfxiApp {
     ///
     /// The window has no native frame, so the shell owns the edge hit zones.
     /// The zones are deliberately thin (6 pt) and only react to the primary
-    /// button, matching the behaviour of a normal Windows frame.
+    /// button, matching the behaviour of a normal Windows frame. A maximized
+    /// window has no draggable frame edges, so no resize is started there.
     fn window_resize_handles(&self, ctx: &egui::Context) {
+        if ctx.input(|input| input.viewport().maximized.unwrap_or(false)) {
+            return;
+        }
         let Some(pointer) = ctx.input(|input| input.pointer.hover_pos()) else {
             return;
         };
@@ -3436,8 +2263,89 @@ impl PdfxiApp {
         }
     }
 
+    /// Measure real page sizes in points from the renderer.
+    ///
+    /// Each page is rasterized at a tiny scale and its pixel size converted
+    /// back to points. Measuring is capped so an enormous document cannot stall
+    /// the open path; pages beyond the cap keep the US-Letter layout fallback.
+    #[cfg(feature = "pdfium")]
+    /// Extract one page's real text, or `None` when the renderer cannot.
+    #[cfg(feature = "pdfium")]
+    fn extract_text_page(&self, page: usize) -> Option<OwnedTextPage> {
+        let renderer = self.pdfium_renderer.as_ref()?;
+        let cancellation = pdfxi_text::CancellationToken::new();
+        let extracted = renderer
+            .extract_page(page, &cancellation, &mut |_| {})
+            .ok()?;
+        let spans = extracted
+            .spans()
+            .iter()
+            .map(|span| {
+                OwnedSpan::new(
+                    span.text.clone(),
+                    span.x,
+                    span.y - span.height,
+                    span.width,
+                    span.height,
+                )
+            })
+            .collect();
+        Some(OwnedTextPage::new(page, spans))
+    }
+
+    /// Push the extracted pages into the find model.
+    fn sync_find_pages(&mut self) {
+        let pages: Vec<(usize, String)> = self
+            .text_pages
+            .iter()
+            .map(|page| {
+                let text: String = page.spans().iter().map(|span| span.text.as_str()).collect();
+                (page.page_number(), text)
+            })
+            .collect();
+        self.find.set_pages(pages);
+    }
+
+    /// Extract at most two pending pages for this frame.
+    #[cfg(feature = "pdfium")]
+    fn pump_text_extraction(&mut self) {
+        if self.pending_text_pages.is_empty() {
+            return;
+        }
+        for _ in 0..2 {
+            let Some(page) = self.pending_text_pages.pop_front() else {
+                break;
+            };
+            if let Some(text) = self.extract_text_page(page) {
+                self.text_pages.push(text);
+            }
+        }
+        self.sync_find_pages();
+    }
+
+    /// Text extraction is a no-op without a native renderer.
+    #[cfg(not(feature = "pdfium"))]
+    fn pump_text_extraction(&mut self) {}
+
+    /// Resolve the theme preference to the palette to draw now.
+    ///
+    /// `Follow system` reads the OS preference from the `egui` context; when
+    /// the platform reports nothing (or after the first frame has not arrived
+    /// yet) it falls back to the light theme instead of guessing dark.
+    fn resolve_theme(&self, ctx: &egui::Context) -> ThemeMode {
+        match self.theme_preference {
+            ThemePreference::Light => ThemeMode::Light,
+            ThemePreference::Dark => ThemeMode::Dark,
+            ThemePreference::System => match ctx.system_theme() {
+                Some(egui::Theme::Dark) => ThemeMode::Dark,
+                _ => ThemeMode::Light,
+            },
+        }
+    }
+
     /// Draw the complete product shell.
     fn shell_ui(&mut self, ctx: &egui::Context) {
+        self.theme = self.resolve_theme(ctx);
         if self.applied_theme != Some(self.theme) {
             design::apply(ctx, self.theme);
             self.applied_theme = Some(self.theme);
@@ -3447,22 +2355,30 @@ impl PdfxiApp {
 
         egui::TopBottomPanel::top("shell_title")
             .exact_height(metrics::TITLE_BAR)
-            .frame(
-                egui::Frame::new()
-                    .fill(title_palette.background)
-                    .inner_margin(egui::Margin {
-                        left: 12,
-                        right: 12,
-                        top: 0,
-                        bottom: 0,
-                    }),
-            )
+            // No side padding: the Windows caption buttons must reach the
+            // window edge. The title bar applies its own insets.
+            .frame(egui::Frame::new().fill(title_palette.background))
             .show(ctx, |ui| self.title_bar_ui(ui, title_palette));
+
+        if let Some(message) = self.open_error_banner.clone() {
+            egui::TopBottomPanel::top("shell_error")
+                .frame(shell_panel_frame(palette, 14))
+                .show(ctx, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.label(egui::RichText::new(message).color(palette.accent));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Dismiss").clicked() {
+                                self.open_error_banner = None;
+                            }
+                        });
+                    });
+                });
+        }
 
         egui::TopBottomPanel::top("shell_command")
             .exact_height(metrics::TOOL_BAR)
             .frame(shell_panel_frame(palette, 14))
-            .show(ctx, |ui| self.command_bar_ui(ui, palette));
+            .show(ctx, |ui| self.document_bar_ui(ui, palette));
 
         if self.find_open {
             egui::TopBottomPanel::top("shell_find")
@@ -3470,56 +2386,118 @@ impl PdfxiApp {
                 .show(ctx, |ui| self.find_ui(ui));
         }
 
-        egui::SidePanel::left("shell_rail")
-            .exact_width(metrics::RAIL)
-            .resizable(false)
-            .frame(shell_panel_frame(palette, 6))
-            .show(ctx, |ui| self.rail_ui(ui, palette));
-
-        egui::SidePanel::left("shell_side")
-            .exact_width(metrics::PAGES)
-            .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.panel)
-                    .inner_margin(egui::Margin {
-                        left: 14,
-                        right: 12,
-                        top: 12,
-                        bottom: 10,
-                    }),
-            )
-            .show(ctx, |ui| self.side_panel_ui(ui, palette));
-
-        egui::SidePanel::right("shell_tools")
-            .exact_width(metrics::TOOLS)
-            .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.panel)
-                    .inner_margin(egui::Margin {
-                        left: 14,
-                        right: 14,
-                        top: 12,
-                        bottom: 10,
-                    }),
-            )
-            .show(ctx, |ui| self.tools_panel_ui(ui, palette));
+        if self.state.active_tab().is_some() {
+            egui::SidePanel::left("shell_pages")
+                .exact_width(metrics::PAGES)
+                .resizable(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(palette.panel)
+                        .inner_margin(egui::Margin {
+                            left: 14,
+                            right: 12,
+                            top: 12,
+                            bottom: 10,
+                        }),
+                )
+                .show(ctx, |ui| self.side_panel_ui(ui, palette));
+        }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.canvas))
             .show(ctx, |ui| self.canvas_ui(ui));
     }
 
+    /// The document command bar: only controls wired to real document state.
+    fn document_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let has_document = self.state.active_tab().is_some();
+        ui.horizontal_centered(|ui| {
+            if shell_tool_button(ui, palette, Icon::File, "Open", false).clicked() {
+                self.open_dialog_open = true;
+            }
+            ui.add_space(8.0);
+            ui.add_enabled_ui(has_document, |ui| {
+                if shell_icon_button(ui, palette, Icon::ArrowLeft, 30.0)
+                    .on_hover_text("Rotate counter-clockwise")
+                    .clicked()
+                {
+                    self.rotate_counterclockwise();
+                }
+                if shell_icon_button(ui, palette, Icon::ArrowRight, 30.0)
+                    .on_hover_text("Rotate clockwise")
+                    .clicked()
+                {
+                    self.rotate_clockwise();
+                }
+                if shell_tool_button(ui, palette, Icon::FitPage, "Fit", false)
+                    .on_hover_text("Fit the page in the window")
+                    .clicked()
+                {
+                    self.fit_page();
+                }
+                if shell_tool_button(ui, palette, Icon::Fullscreen, "Actual", false)
+                    .on_hover_text("Actual size")
+                    .clicked()
+                {
+                    self.actual_size();
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if shell_tool_button(ui, palette, Icon::Search, "Find", self.find_open).clicked() {
+                    if self.find_open {
+                        self.close_find();
+                    } else {
+                        self.open_find();
+                    }
+                }
+            });
+        });
+    }
+
+    /// Empty-document Home state: app mark, open action, drop hint, shortcut.
+    fn empty_home_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(96.0);
+            let (mark, _) = ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
+            ui.painter().rect_filled(mark, 14.0, palette.accent);
+            icon(
+                ui.painter(),
+                mark.shrink(15.0),
+                Icon::File,
+                egui::Color32::WHITE,
+            );
+            ui.add_space(16.0);
+            ui.label(
+                egui::RichText::new("Open a PDF to begin")
+                    .size(20.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            ui.add_space(14.0);
+            let open =
+                egui::Button::new(egui::RichText::new("Open a PDF").color(egui::Color32::WHITE))
+                    .fill(palette.accent)
+                    .corner_radius(8.0)
+                    .min_size(egui::vec2(150.0, 36.0));
+            if ui.add(open).clicked() {
+                self.open_dialog_open = true;
+            }
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("or drop a file here").color(palette.text_muted));
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Ctrl+O")
+                    .monospace()
+                    .color(palette.text_muted),
+            );
+        });
+    }
+
     fn title_bar_ui(&mut self, ui: &mut egui::Ui, palette: TitlePalette) {
         let panel = ui.max_rect();
-        ui.painter().line_segment(
-            [
-                egui::pos2(panel.left(), panel.bottom()),
-                egui::pos2(panel.right(), panel.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, palette.border),
-        );
+        let maximized = ui
+            .ctx()
+            .input(|input| input.viewport().maximized.unwrap_or(false));
 
         // The title bar is the window drag handle. Tabs and buttons are added
         // afterwards, so they win the pointer over this background interaction.
@@ -3535,121 +2513,209 @@ impl PdfxiApp {
         if drag.drag_started() && pointer_y > panel.top() + 6.0 {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
+        if drag.double_clicked() {
+            ui.ctx()
+                .send_viewport_cmd(caption_command(CaptionAction::ToggleMaximize, maximized));
+        }
 
-        ui.horizontal_centered(|ui| {
-            // macOS-style window controls on the left, like the reference.
-            let close = traffic_light(
-                ui,
-                egui::Color32::from_rgb(0xff, 0x5f, 0x57),
-                Icon::Close,
-                "Close",
-            );
-            let minimize = traffic_light(
-                ui,
-                egui::Color32::from_rgb(0xfe, 0xbc, 0x2e),
-                Icon::Minimize,
-                "Minimize",
-            );
-            let maximize = traffic_light(
-                ui,
-                egui::Color32::from_rgb(0x28, 0xc8, 0x40),
-                Icon::Maximize,
-                "Maximize",
-            );
-            if close.clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            if minimize.clicked() {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-            }
-            if maximize.clicked() {
-                let maximized = ui
-                    .ctx()
-                    .input(|input| input.viewport().maximized.unwrap_or(false));
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-            }
-            ui.add_space(10.0);
-
-            let (logo, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-            ui.painter().rect_filled(logo, 6.0, palette.accent);
-            icon(
-                ui.painter(),
-                logo.shrink(5.5),
-                Icon::File,
-                egui::Color32::WHITE,
-            );
-            ui.add_space(7.0);
-            ui.label(
-                egui::RichText::new("PDFXI")
-                    .size(13.5)
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.add_space(14.0);
-
-            let tabs = self.tab_strip_snapshot();
-            let mut activate = None;
-            let mut close_tab = None;
-            for (index, (id, title, active)) in tabs.iter().enumerate() {
-                match self.title_tab(ui, palette, index, *id, title, *active) {
-                    TabAction::None => {}
-                    TabAction::Activate => activate = Some(*id),
-                    TabAction::Close => close_tab = Some(*id),
-                }
-            }
-            if title_icon_button(ui, palette, Icon::Plus, 26.0)
-                .on_hover_text("New demo document")
-                .clicked()
-            {
-                self.open_demo_tab();
-            }
-            if let Some(id) = activate {
-                self.activate_tab(id);
-            }
-            if let Some(id) = close_tab {
-                self.close_tab_by_id(id);
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (avatar, _) =
-                    ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
-                ui.painter()
-                    .circle_filled(avatar.center(), 13.0, palette.accent_soft);
-                ui.painter().text(
-                    avatar.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "A",
-                    egui::FontId::proportional(11.0),
-                    palette.accent,
+        let (side, actions) = caption_layout(self.window_controls);
+        let mut caption_width = 0.0;
+        if side == CaptionSide::Right {
+            caption_width = actions.len() as f32 * CAPTION_BUTTON_WIDTH;
+            for (index, action) in actions.iter().enumerate() {
+                let left = panel.right() - (actions.len() - index) as f32 * CAPTION_BUTTON_WIDTH;
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(left, panel.top()),
+                    egui::pos2(left + CAPTION_BUTTON_WIDTH, panel.bottom()),
                 );
-                if title_icon_button(ui, palette, Icon::Help, 26.0)
-                    .on_hover_text("Help")
+                let response = ui.interact(
+                    rect,
+                    egui::Id::new(("caption-button", action)),
+                    egui::Sense::click(),
+                );
+                let close = *action == CaptionAction::Close;
+                let hovered = response.hovered();
+                if hovered {
+                    ui.painter().rect_filled(
+                        rect,
+                        0.0,
+                        if close {
+                            egui::Color32::from_rgb(0xe8, 0x11, 0x23)
+                        } else {
+                            palette.hover
+                        },
+                    );
+                }
+                caption_glyph(
+                    ui.painter(),
+                    rect.center(),
+                    *action,
+                    maximized,
+                    if close && hovered {
+                        egui::Color32::WHITE
+                    } else {
+                        palette.text
+                    },
+                );
+                if response.clicked() {
+                    ui.ctx()
+                        .send_viewport_cmd(caption_command(*action, maximized));
+                }
+            }
+        }
+
+        // Keep the ordinary title content clear of the caption strip so the
+        // right-side buttons sit to the left of the window controls.
+        let right_inset = if caption_width > 0.0 {
+            caption_width + 6.0
+        } else {
+            12.0
+        };
+        let content = egui::Rect::from_min_max(
+            egui::pos2(panel.left() + 12.0, panel.top()),
+            egui::pos2(
+                (panel.right() - right_inset).max(panel.left() + 12.0),
+                panel.bottom(),
+            ),
+        );
+
+        ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+            ui.horizontal_centered(|ui| {
+                if side == CaptionSide::Left {
+                    // macOS traffic lights, driven through the same ordered
+                    // caption model as the Windows caption buttons.
+                    for action in actions {
+                        let (fill, glyph, hover_text) = match action {
+                            CaptionAction::Close => (
+                                egui::Color32::from_rgb(0xff, 0x5f, 0x57),
+                                Icon::Close,
+                                "Close",
+                            ),
+                            CaptionAction::Minimize => (
+                                egui::Color32::from_rgb(0xfe, 0xbc, 0x2e),
+                                Icon::Minimize,
+                                "Minimize",
+                            ),
+                            CaptionAction::ToggleMaximize => (
+                                egui::Color32::from_rgb(0x28, 0xc8, 0x40),
+                                Icon::Maximize,
+                                "Maximize",
+                            ),
+                        };
+                        if traffic_light(ui, fill, glyph, hover_text).clicked() {
+                            ui.ctx()
+                                .send_viewport_cmd(caption_command(action, maximized));
+                        }
+                    }
+                    ui.add_space(10.0);
+                }
+
+                let (logo, _) =
+                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                ui.painter().rect_filled(logo, 6.0, palette.accent);
+                icon(
+                    ui.painter(),
+                    logo.shrink(5.5),
+                    Icon::File,
+                    egui::Color32::WHITE,
+                );
+                ui.add_space(7.0);
+                ui.label(
+                    egui::RichText::new("PDFXI")
+                        .size(13.5)
+                        .strong()
+                        .color(palette.text),
+                );
+                ui.add_space(14.0);
+
+                let tabs = self.tab_strip_snapshot();
+                let mut activate = None;
+                let mut close_tab = None;
+                for (index, (id, title, active)) in tabs.iter().enumerate() {
+                    match self.title_tab(ui, palette, index, *id, title, *active) {
+                        TabAction::None => {}
+                        TabAction::Activate => activate = Some(*id),
+                        TabAction::Close => close_tab = Some(*id),
+                    }
+                }
+                if title_icon_button(ui, palette, Icon::Plus, 26.0)
+                    .on_hover_text("Open a PDF")
                     .clicked()
                 {
-                    self.status =
-                        "Open a PDF, press Ctrl+F to find, and use the rail for pages and tools."
-                            .to_owned();
+                    self.open_dialog_open = true;
                 }
-                if title_icon_button(ui, palette, Icon::Bell, 26.0)
-                    .on_hover_text("Notifications")
-                    .clicked()
-                {
-                    self.status = "No new notifications".to_owned();
+                if let Some(id) = activate {
+                    self.activate_tab(id);
                 }
-                let theme_glyph = match self.theme {
-                    ThemeMode::Light => Icon::Moon,
-                    ThemeMode::Dark => Icon::Sun,
-                };
-                if title_icon_button(ui, palette, theme_glyph, 26.0)
-                    .on_hover_text("Switch light/dark")
-                    .clicked()
-                {
-                    self.theme = self.theme.toggled();
+                if let Some(id) = close_tab {
+                    self.close_tab_by_id(id);
                 }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let theme_glyph = match self.theme {
+                        ThemeMode::Light => Icon::Moon,
+                        ThemeMode::Dark => Icon::Sun,
+                    };
+                    if title_icon_button(ui, palette, theme_glyph, 26.0)
+                        .on_hover_text("Switch light/dark")
+                        .clicked()
+                    {
+                        let preference = match self.theme {
+                            ThemeMode::Light => ThemePreference::Dark,
+                            ThemeMode::Dark => ThemePreference::Light,
+                        };
+                        self.set_theme_preference(preference);
+                    }
+                    let gear =
+                        title_icon_button(ui, palette, Icon::Gear, 26.0).on_hover_text("Settings");
+                    let mut theme_choice = None;
+                    let mut controls_choice = None;
+                    egui::Popup::from_toggle_button_response(&gear)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            ui.set_min_width(200.0);
+                            ui.label(egui::RichText::new("Theme").strong());
+                            for preference in [
+                                ThemePreference::Light,
+                                ThemePreference::Dark,
+                                ThemePreference::System,
+                            ] {
+                                if ui
+                                    .radio(self.theme_preference == preference, preference.label())
+                                    .clicked()
+                                {
+                                    theme_choice = Some(preference);
+                                }
+                            }
+                            ui.separator();
+                            ui.label(egui::RichText::new("Window controls").strong());
+                            for style in [WindowControlStyle::Windows, WindowControlStyle::MacOs] {
+                                if ui
+                                    .radio(self.window_controls == style, style.label())
+                                    .clicked()
+                                {
+                                    controls_choice = Some(style);
+                                }
+                            }
+                        });
+                    if let Some(preference) = theme_choice {
+                        self.set_theme_preference(preference);
+                    }
+                    if let Some(style) = controls_choice {
+                        self.set_window_controls(style);
+                    }
+                });
             });
         });
+
+        // Draw the hairline last so caption hover fills cannot cover it.
+        ui.painter().line_segment(
+            [
+                egui::pos2(panel.left(), panel.bottom()),
+                egui::pos2(panel.right(), panel.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, palette.border),
+        );
     }
 
     fn title_tab(
@@ -3663,7 +2729,7 @@ impl PdfxiApp {
     ) -> TabAction {
         let mut label: String = title.chars().take(28).collect();
         if title.chars().count() > 28 {
-            label.push('…');
+            label.push('\u{2026}');
         }
         let font = egui::FontId::proportional(11.5);
         let galley = ui
@@ -3737,226 +2803,6 @@ impl PdfxiApp {
         TabAction::None
     }
 
-    fn command_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let panel = ui.max_rect();
-        ui.painter().line_segment(
-            [
-                egui::pos2(panel.left(), panel.bottom()),
-                egui::pos2(panel.right(), panel.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, palette.border),
-        );
-
-        ui.horizontal_centered(|ui| {
-            // Undo/redo sit outside the command pill, as in the reference.
-            if shell_icon_button(ui, palette, Icon::ArrowLeft, 28.0)
-                .on_hover_text("Undo")
-                .clicked()
-            {
-                self.status = "Undo history is not available in this preview".to_owned();
-            }
-            if shell_icon_button(ui, palette, Icon::ArrowRight, 28.0)
-                .on_hover_text("Redo")
-                .clicked()
-            {
-                self.status = "Redo history is not available in this preview".to_owned();
-            }
-            ui.add_space(8.0);
-
-            let pill_width = (ui.available_width() - 4.0).max(320.0);
-            egui::Frame::new()
-                .fill(palette.panel)
-                .stroke(egui::Stroke::new(1.0_f32, palette.border))
-                .corner_radius(22.0)
-                .inner_margin(egui::Margin {
-                    left: 6,
-                    right: 6,
-                    top: 3,
-                    bottom: 3,
-                })
-                .show(ui, |ui| {
-                    ui.set_width(pill_width);
-                    ui.horizontal_centered(|ui| {
-                        let tool = self.state.active_tool();
-                        if shell_tool_button(
-                            ui,
-                            palette,
-                            Icon::Edit,
-                            "Edit",
-                            tool == Toolset::TextSelection,
-                        )
-                        .clicked()
-                        {
-                            self.select_tool(Toolset::TextSelection);
-                        }
-                        if shell_tool_button(
-                            ui,
-                            palette,
-                            Icon::Comment,
-                            "Comment",
-                            self.rail == RailTab::Comments,
-                        )
-                        .clicked()
-                        {
-                            self.rail = RailTab::Comments;
-                        }
-                        if shell_tool_button(
-                            ui,
-                            palette,
-                            Icon::Highlight,
-                            "Highlight",
-                            tool == Toolset::Highlight,
-                        )
-                        .clicked()
-                        {
-                            self.select_tool(Toolset::Highlight);
-                        }
-                        if shell_tool_button(
-                            ui,
-                            palette,
-                            Icon::Sign,
-                            "Sign",
-                            tool == Toolset::FormFill,
-                        )
-                        .clicked()
-                        {
-                            self.select_tool(Toolset::FormFill);
-                        }
-                        if shell_tool_button(ui, palette, Icon::Organize, "Organize", false)
-                            .clicked()
-                        {
-                            self.rail = RailTab::Pages;
-                        }
-                        let (export_icon, _) =
-                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                        icon(ui.painter(), export_icon, Icon::Export, palette.text);
-                        ui.menu_button(
-                            egui::RichText::new("Export").size(12.0).color(palette.text),
-                            |ui| {
-                                for (index, format) in EXPORT_FORMATS.iter().enumerate() {
-                                    if ui
-                                        .selectable_label(self.export_format == index, *format)
-                                        .clicked()
-                                    {
-                                        self.export_format = index;
-                                        self.status = format!("Export format set to {format}");
-                                        ui.close();
-                                    }
-                                }
-                            },
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let (pill, pill_response) = ui
-                                .allocate_exact_size(egui::vec2(122.0, 30.0), egui::Sense::click());
-                            let fill = if pill_response.hovered() {
-                                palette.accent_border
-                            } else {
-                                palette.accent_soft
-                            };
-                            ui.painter().rect_filled(pill, 15.0, fill);
-                            icon(
-                                ui.painter(),
-                                egui::Rect::from_center_size(
-                                    egui::pos2(pill.left() + 17.0, pill.center().y),
-                                    egui::Vec2::splat(14.0),
-                                ),
-                                Icon::Sparkle,
-                                palette.accent,
-                            );
-                            ui.painter().text(
-                                egui::pos2(pill.left() + 29.0, pill.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                "AI Assistant",
-                                egui::FontId::proportional(11.0),
-                                palette.accent,
-                            );
-                            if pill_response.clicked() {
-                                self.rail = RailTab::Assistant;
-                            }
-                        });
-                    });
-                });
-        });
-    }
-
-    fn rail_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let panel = ui.max_rect();
-        ui.painter().line_segment(
-            [
-                egui::pos2(panel.right(), panel.top()),
-                egui::pos2(panel.right(), panel.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, palette.border),
-        );
-        ui.vertical_centered(|ui| {
-            ui.add_space(8.0);
-            let (logo, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
-            ui.painter().rect_filled(logo, 8.0, palette.accent);
-            icon(
-                ui.painter(),
-                logo.shrink(7.0),
-                Icon::File,
-                egui::Color32::WHITE,
-            );
-            ui.add_space(12.0);
-            for tab in RailTab::ALL {
-                let selected = self.rail == tab;
-                let (item, response) =
-                    ui.allocate_exact_size(egui::vec2(64.0, 54.0), egui::Sense::click());
-                if selected {
-                    ui.painter().rect_filled(item, 10.0, palette.accent_soft);
-                } else if response.hovered() {
-                    ui.painter().rect_filled(item, 10.0, palette.surface);
-                }
-                let color = if selected {
-                    palette.accent
-                } else {
-                    palette.text_muted
-                };
-                icon(
-                    ui.painter(),
-                    egui::Rect::from_center_size(
-                        egui::pos2(item.center().x, item.top() + 17.0),
-                        egui::Vec2::splat(20.0),
-                    ),
-                    tab.icon(),
-                    color,
-                );
-                let label = if tab == RailTab::Assistant {
-                    "AI"
-                } else {
-                    tab.label()
-                };
-                ui.painter().text(
-                    egui::pos2(item.center().x, item.top() + 39.0),
-                    egui::Align2::CENTER_CENTER,
-                    label,
-                    egui::FontId::proportional(9.0),
-                    color,
-                );
-                if tab == RailTab::Comments {
-                    let badge = egui::Rect::from_center_size(
-                        egui::pos2(item.right() - 9.0, item.top() + 9.0),
-                        egui::vec2(14.0, 14.0),
-                    );
-                    ui.painter()
-                        .circle_filled(badge.center(), 7.0, palette.accent);
-                    ui.painter().text(
-                        badge.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "1",
-                        egui::FontId::proportional(7.5),
-                        egui::Color32::WHITE,
-                    );
-                }
-                if response.clicked() {
-                    self.rail = tab;
-                }
-                ui.add_space(4.0);
-            }
-        });
-    }
-
     fn side_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         let panel = ui.max_rect();
         ui.painter().line_segment(
@@ -3966,594 +2812,10 @@ impl PdfxiApp {
             ],
             egui::Stroke::new(1.0_f32, palette.border),
         );
-        match self.rail {
-            RailTab::Pages => self.pages_panel_ui(ui, palette),
-            RailTab::Home => self.home_panel_ui(ui, palette),
-            RailTab::Comments => self.comments_panel_ui(ui, palette),
-            RailTab::Assistant => self.assistant_panel_ui(ui, palette),
-            RailTab::Files => self.files_panel_ui(ui, palette),
-            RailTab::Recent | RailTab::Starred | RailTab::Shared => {
-                self.empty_panel_ui(ui, palette, self.rail)
-            }
+        // Only real thumbnails are shown, and only for a real open document.
+        if self.state.active_tab().is_some() {
+            self.thumbnails_ui(ui);
         }
-    }
-
-    fn pages_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let (count, current) = self
-            .state
-            .active_tab()
-            .map(|tab| (tab.page_count(), tab.current_page()))
-            .unwrap_or((0, 0));
-
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Pages")
-                    .size(14.0)
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.label(
-                egui::RichText::new(format!("({count})"))
-                    .size(10.0)
-                    .color(palette.text_muted),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if shell_icon_button(ui, palette, Icon::Plus, 20.0)
-                    .on_hover_text("Add page")
-                    .clicked()
-                {
-                    self.status =
-                        "Page insertion is available through the pdfxi page plan".to_owned();
-                }
-                let _ = shell_icon_button(ui, palette, Icon::List, 20.0);
-                let _ = shell_icon_button(ui, palette, Icon::Grid, 20.0);
-            });
-        });
-        ui.add_space(6.0);
-
-        let footer_height = 66.0;
-        let scroll_height = (ui.available_height() - footer_height).max(150.0);
-        egui::ScrollArea::vertical()
-            .max_height(scroll_height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for page in 0..count {
-                    let width = ui.available_width();
-                    let (slot, response) =
-                        ui.allocate_exact_size(egui::vec2(width, 158.0), egui::Sense::click());
-                    if response.hovered() {
-                        ui.painter().rect_filled(slot, 8.0, palette.surface);
-                    }
-                    let paper = egui::Rect::from_center_size(
-                        egui::pos2(slot.center().x, slot.top() + 68.0),
-                        egui::vec2(104.0, 136.0),
-                    );
-                    ui.painter().rect_filled(
-                        paper.translate(egui::vec2(0.0, 3.0)).expand(1.5),
-                        3.0,
-                        palette.shadow,
-                    );
-                    ui.painter()
-                        .rect_filled(paper, 3.0, PaperPalette::for_mode(self.theme).paper);
-                    if page == current {
-                        ui.painter().rect_stroke(
-                            paper,
-                            3.0,
-                            egui::Stroke::new(2.0_f32, palette.accent),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
-                    if self.active_is_demo() {
-                        self.paint_demo_thumb(ui.painter(), paper.shrink(6.0), palette, page);
-                    } else {
-                        self.paint_generic_thumb(ui.painter(), paper.shrink(6.0), palette);
-                    }
-                    ui.painter().text(
-                        egui::pos2(slot.center().x, slot.bottom() - 8.0),
-                        egui::Align2::CENTER_CENTER,
-                        format!("{}", page + 1),
-                        egui::FontId::proportional(9.0),
-                        if page == current {
-                            palette.accent
-                        } else {
-                            palette.text_muted
-                        },
-                    );
-                    if response.clicked() {
-                        self.select_thumbnail_page(page);
-                    }
-                }
-                if count == 0 {
-                    ui.add_space(24.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("No pages")
-                                .size(11.0)
-                                .color(palette.text_muted),
-                        );
-                    });
-                }
-            });
-
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new("Cloud storage")
-                .size(10.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.label(
-            egui::RichText::new("12.4 GB of 100 GB")
-                .size(9.0)
-                .color(palette.text_muted),
-        );
-        ui.add_space(4.0);
-        let (bar, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.0), egui::Sense::hover());
-        ui.painter().rect_filled(bar, 2.0, palette.surface_hover);
-        ui.painter().rect_filled(
-            egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * 0.124, 4.0)),
-            2.0,
-            palette.accent,
-        );
-    }
-
-    fn home_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.label(
-            egui::RichText::new("Home")
-                .size(14.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.label(
-            egui::RichText::new("Your PDF workspace")
-                .size(10.0)
-                .color(palette.text_muted),
-        );
-        ui.add_space(8.0);
-        egui::Frame::new()
-            .fill(palette.accent_soft)
-            .corner_radius(12.0)
-            .inner_margin(egui::Margin::same(12))
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("Welcome back")
-                        .size(16.0)
-                        .strong()
-                        .color(palette.text),
-                );
-                ui.label(
-                    egui::RichText::new(
-                        "Open, review, sign and export documents locally. Nothing leaves this machine.",
-                    )
-                    .size(10.0)
-                    .color(palette.text_muted),
-                );
-                ui.add_space(8.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Open PDF…")
-                                .size(11.5)
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(palette.accent)
-                        .corner_radius(8.0)
-                        .min_size(egui::vec2(ui.available_width(), 32.0)),
-                    )
-                    .clicked()
-                {
-                    self.open_dialog_open = true;
-                }
-                ui.add_space(4.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Open demo proposal")
-                                .size(11.5)
-                                .color(palette.text),
-                        )
-                        .fill(palette.panel)
-                        .corner_radius(8.0)
-                        .min_size(egui::vec2(ui.available_width(), 32.0)),
-                    )
-                    .clicked()
-                {
-                    self.open_demo_tab();
-                }
-            });
-        ui.add_space(12.0);
-        ui.label(
-            egui::RichText::new("Recent")
-                .size(11.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.add_space(2.0);
-        let (recent, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
-        if response.hovered() {
-            ui.painter().rect_filled(recent, 8.0, palette.surface);
-        }
-        icon(
-            ui.painter(),
-            egui::Rect::from_center_size(
-                egui::pos2(recent.left() + 16.0, recent.center().y),
-                egui::Vec2::splat(16.0),
-            ),
-            Icon::File,
-            palette.accent,
-        );
-        ui.painter().text(
-            egui::pos2(recent.left() + 32.0, recent.center().y - 7.0),
-            egui::Align2::LEFT_CENTER,
-            "Modern Business Proposal",
-            egui::FontId::proportional(11.0),
-            palette.text,
-        );
-        ui.painter().text(
-            egui::pos2(recent.left() + 32.0, recent.center().y + 8.0),
-            egui::Align2::LEFT_CENTER,
-            format!("{DEMO_PAGE_COUNT} pages · local preview"),
-            egui::FontId::proportional(9.0),
-            palette.text_muted,
-        );
-        if response.clicked() {
-            self.open_demo_tab();
-        }
-        ui.add_space(12.0);
-        ui.label(
-            egui::RichText::new("Quick actions")
-                .size(11.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.add_space(2.0);
-        for (glyph, label) in [
-            (Icon::Combine, "Combine files"),
-            (Icon::Export, "Export PDF"),
-            (Icon::Protect, "Protect PDF"),
-            (Icon::Organize, "Organize pages"),
-        ] {
-            if tool_row(ui, palette, glyph, label, false).clicked() {
-                self.status = format!("{label}: available from the Tools panel and CLI");
-            }
-        }
-    }
-
-    fn files_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.label(
-            egui::RichText::new("Files")
-                .size(14.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.label(
-            egui::RichText::new("Open documents")
-                .size(10.0)
-                .color(palette.text_muted),
-        );
-        ui.add_space(8.0);
-        if ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new("Open PDF…")
-                        .size(11.5)
-                        .color(egui::Color32::WHITE),
-                )
-                .fill(palette.accent)
-                .corner_radius(8.0)
-                .min_size(egui::vec2(ui.available_width(), 32.0)),
-            )
-            .clicked()
-        {
-            self.open_dialog_open = true;
-        }
-        ui.add_space(8.0);
-        let tabs: Vec<(TabId, String, Option<PathBuf>)> = self
-            .tab_strip_snapshot()
-            .into_iter()
-            .map(|(id, title, _)| {
-                (
-                    id,
-                    title,
-                    self.state
-                        .tab(id)
-                        .and_then(|tab| tab.path().map(Path::to_path_buf)),
-                )
-            })
-            .collect();
-        if tabs.is_empty() {
-            ui.label(
-                egui::RichText::new("No documents open.")
-                    .size(10.5)
-                    .color(palette.text_muted),
-            );
-            return;
-        }
-        for (id, title, path) in tabs {
-            let (rect, response) = ui
-                .allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
-            if response.hovered() || self.state.active_tab_id() == Some(id) {
-                ui.painter().rect_filled(rect, 8.0, palette.surface);
-            }
-            icon(
-                ui.painter(),
-                egui::Rect::from_center_size(
-                    egui::pos2(rect.left() + 16.0, rect.center().y),
-                    egui::Vec2::splat(15.0),
-                ),
-                Icon::File,
-                palette.accent,
-            );
-            ui.painter().text(
-                egui::pos2(rect.left() + 31.0, rect.center().y - 7.0),
-                egui::Align2::LEFT_CENTER,
-                title.chars().take(24).collect::<String>(),
-                egui::FontId::proportional(11.0),
-                palette.text,
-            );
-            ui.painter().text(
-                egui::pos2(rect.left() + 31.0, rect.center().y + 8.0),
-                egui::Align2::LEFT_CENTER,
-                path.map_or("demo preview".to_owned(), |path| {
-                    path.file_name().map_or_else(
-                        || path.display().to_string(),
-                        |name| name.to_string_lossy().into_owned(),
-                    )
-                }),
-                egui::FontId::proportional(9.0),
-                palette.text_muted,
-            );
-            if response.clicked() {
-                self.activate_tab(id);
-            }
-        }
-    }
-
-    fn comments_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.label(
-            egui::RichText::new("Comments")
-                .size(14.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.label(
-            egui::RichText::new("Review activity")
-                .size(10.0)
-                .color(palette.text_muted),
-        );
-        ui.add_space(8.0);
-        if self.active_is_demo() {
-            egui::Frame::new()
-                .fill(palette.surface)
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin::same(10))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let (avatar, _) =
-                            ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                        ui.painter()
-                            .circle_filled(avatar.center(), 12.0, palette.accent_soft);
-                        ui.painter().text(
-                            avatar.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "JK",
-                            egui::FontId::proportional(8.5),
-                            palette.accent,
-                        );
-                        ui.vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new("Jordan K.")
-                                    .size(10.5)
-                                    .strong()
-                                    .color(palette.text),
-                            );
-                            ui.label(
-                                egui::RichText::new("2m ago · Page 1")
-                                    .size(9.0)
-                                    .color(palette.text_muted),
-                            );
-                        });
-                    });
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new("@Alex Can we add a specific ROI number here?")
-                            .size(10.0)
-                            .color(palette.text),
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Reply").size(9.5).color(palette.accent));
-                        ui.label(
-                            egui::RichText::new("Resolve")
-                                .size(9.5)
-                                .color(palette.text_muted),
-                        );
-                    });
-                });
-        } else {
-            ui.label(
-                egui::RichText::new("No comments in this document.")
-                    .size(10.5)
-                    .color(palette.text_muted),
-            );
-        }
-        ui.add_space(10.0);
-        if ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new("Add comment")
-                        .size(10.5)
-                        .color(palette.text),
-                )
-                .fill(palette.surface)
-                .corner_radius(8.0)
-                .min_size(egui::vec2(ui.available_width(), 30.0)),
-            )
-            .clicked()
-        {
-            self.select_tool(Toolset::Highlight);
-            self.status = "Comment tool active: drag over text to add a note".to_owned();
-        }
-    }
-
-    fn assistant_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.label(
-            egui::RichText::new("AI Assistant")
-                .size(14.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.label(
-            egui::RichText::new("Answers stay on this device")
-                .size(10.0)
-                .color(palette.text_muted),
-        );
-        ui.add_space(8.0);
-        self.assistant_card_ui(ui, palette);
-        ui.add_space(12.0);
-        shell_section_label(ui, palette, "SUGGESTED PROMPTS");
-        for prompt in [
-            "Summarize this document",
-            "Find the ROI number",
-            "List the key benefits",
-        ] {
-            if ui
-                .add(
-                    egui::Button::new(egui::RichText::new(prompt).size(10.0).color(palette.text))
-                        .fill(palette.surface)
-                        .corner_radius(8.0)
-                        .min_size(egui::vec2(ui.available_width(), 28.0)),
-                )
-                .clicked()
-            {
-                self.assistant_query = prompt.to_owned();
-                self.ask_assistant();
-            }
-            ui.add_space(3.0);
-        }
-    }
-
-    fn empty_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette, tab: RailTab) {
-        ui.label(
-            egui::RichText::new(tab.label())
-                .size(14.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.add_space(20.0);
-        ui.vertical_centered(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
-            ui.painter()
-                .circle_filled(rect.center(), 26.0, palette.surface);
-            icon(
-                ui.painter(),
-                rect.shrink(15.0),
-                tab.icon(),
-                palette.text_muted,
-            );
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Nothing here yet")
-                    .size(12.0)
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.label(
-                egui::RichText::new(match tab {
-                    RailTab::Recent => "Recently opened documents will appear here.",
-                    RailTab::Starred => "Star a document to keep it close.",
-                    RailTab::Shared => {
-                        "Local shared folders are configured in deployment preferences."
-                    }
-                    _ => "This section is part of the shell layout.",
-                })
-                .size(10.0)
-                .color(palette.text_muted),
-            );
-        });
-    }
-
-    fn tools_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let panel = ui.max_rect();
-        ui.painter().line_segment(
-            [
-                egui::pos2(panel.left(), panel.top()),
-                egui::pos2(panel.left(), panel.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, palette.border),
-        );
-
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Tools")
-                    .size(15.0)
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if shell_icon_button(ui, palette, Icon::Search, 22.0)
-                    .on_hover_text("Search tools")
-                    .clicked()
-                {
-                    self.open_find();
-                }
-            });
-        });
-        ui.add_space(6.0);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                if tool_row(ui, palette, Icon::Edit, "Edit PDF", true).clicked() {
-                    self.select_tool(Toolset::TextSelection);
-                }
-                if tool_row(ui, palette, Icon::Comment, "Comment", false).clicked() {
-                    self.select_tool(Toolset::Highlight);
-                }
-                if tool_row(ui, palette, Icon::Sign, "Fill & Sign", false).clicked() {
-                    self.select_tool(Toolset::FormFill);
-                }
-                if tool_row(ui, palette, Icon::Organize, "Organize Pages", false).clicked() {
-                    self.rail = RailTab::Pages;
-                    self.select_tool(Toolset::Measure);
-                }
-                if tool_row(ui, palette, Icon::Export, "Export PDF", false).clicked() {
-                    self.status = "Choose an export format in the Export card below".to_owned();
-                }
-                if tool_row(ui, palette, Icon::Convert, "Convert to PDF", false).clicked() {
-                    self.status =
-                        "Create a PDF from images, text or HTML with the pdfxi CLI".to_owned();
-                }
-                if tool_row(ui, palette, Icon::Combine, "Combine Files", false).clicked() {
-                    self.status =
-                        "Combine Files: merge pages with the pdfxi page plan in a follow-on"
-                            .to_owned();
-                }
-                if tool_row(ui, palette, Icon::Protect, "Protect PDF", false).clicked() {
-                    self.status =
-                        "Protect PDF: encryption and permissions live in pdfxi-security".to_owned();
-                }
-                ui.add_space(10.0);
-                self.assistant_card_ui(ui, palette);
-                ui.add_space(10.0);
-                self.export_card_ui(ui, palette);
-                ui.add_space(8.0);
-                egui::CollapsingHeader::new(
-                    egui::RichText::new("Document panels")
-                        .size(10.5)
-                        .color(palette.text_muted),
-                )
-                .default_open(false)
-                .show(ui, |ui| {
-                    egui::CollapsingHeader::new("Layers").show(ui, |ui| self.layers_ui(ui));
-                    egui::CollapsingHeader::new("Bookmarks").show(ui, |ui| self.bookmarks_ui(ui));
-                    egui::CollapsingHeader::new("Attachments")
-                        .show(ui, |ui| self.attachments_ui(ui));
-                    egui::CollapsingHeader::new("Links").show(ui, |ui| self.links_ui(ui));
-                });
-                ui.add_space(8.0);
-            });
     }
 
     fn step_page(&mut self, delta: isize) {
@@ -4580,7 +2842,7 @@ impl PdfxiApp {
         canvas_rect: egui::Rect,
         palette: Palette,
     ) {
-        let width = 386.0_f32;
+        let width = 260.0_f32;
         let pos = egui::pos2(
             canvas_rect.center().x - width / 2.0,
             canvas_rect.bottom() - 54.0,
@@ -4600,7 +2862,6 @@ impl PdfxiApp {
                         bottom: 4,
                     })
                     .show(ui, |ui| {
-                        ui.set_width(width - 16.0);
                         ui.horizontal_centered(|ui| {
                             if shell_icon_button(ui, palette, Icon::ChevronLeft, 24.0)
                                 .on_hover_text("Previous page")
@@ -4632,7 +2893,7 @@ impl PdfxiApp {
                                     Some(scale) => format!("{:.0}%", scale * 100.0),
                                     None => "Fit".to_owned(),
                                 })
-                                .unwrap_or_else(|| "—".to_owned());
+                                .unwrap_or_else(|| "Untitled".to_owned());
                             ui.menu_button(
                                 egui::RichText::new(zoom_label)
                                     .size(10.5)
@@ -4695,2274 +2956,279 @@ impl PdfxiApp {
             (0, 256 * 1024 * 1024)
         }
     }
-
-    fn ask_assistant(&mut self) {
-        let question = self.assistant_query.trim().to_lowercase();
-        if question.is_empty() {
-            self.assistant_answer = "Type a question about this document.".to_owned();
-            return;
-        }
-        if question.contains("summar") {
-            self.assistant_answer =
-                "Summary (local): A modern business proposal for a faster, more secure document workflow. It highlights executive goals, key benefits, a three-phase delivery timeline, and a fixed project fee.".to_owned();
-            return;
-        }
-        if question.contains("benefit") {
-            self.assistant_answer =
-                "Key benefits: faster and more secure document workflows, seamless collaboration across teams, and higher productivity with cost savings.".to_owned();
-            return;
-        }
-        if question.contains("roi") || question.contains("cost") || question.contains("price") {
-            self.assistant_answer =
-                "The proposal cites a 38% faster document turnaround and a fixed project fee of $24,500.".to_owned();
-            return;
-        }
-        let pages = demo_find_pages(&self.demo_text);
-        let hits: Vec<String> = pages
-            .iter()
-            .filter(|(_, text)| text.to_lowercase().contains(&question))
-            .map(|(page, text)| {
-                let snippet: String = text.chars().take(140).collect();
-                format!("Page {}: {snippet}", page + 1)
-            })
-            .take(3)
-            .collect();
-        self.assistant_answer = if hits.is_empty() {
-            format!(
-                "No text matching \"{}\". Press Ctrl+F for exact search.",
-                self.assistant_query.trim()
-            )
-        } else {
-            hits.join("\n\n")
-        };
-    }
-
-    fn assistant_card_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let mut submit = false;
-        egui::Frame::new()
-            .fill(palette.accent_soft)
-            .corner_radius(10.0)
-            .inner_margin(egui::Margin::same(10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let (spark, _) =
-                        ui.allocate_exact_size(egui::vec2(17.0, 17.0), egui::Sense::hover());
-                    icon(ui.painter(), spark, Icon::Sparkle, palette.accent);
-                    ui.label(
-                        egui::RichText::new("AI Assistant")
-                            .size(12.0)
-                            .strong()
-                            .color(palette.text),
-                    );
-                });
-                ui.label(
-                    egui::RichText::new("Ask about this document, summarize, or get key insights.")
-                        .size(9.5)
-                        .color(palette.text_muted),
-                );
-                ui.add_space(5.0);
-                egui::Frame::new()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(1.0_f32, palette.border))
-                    .corner_radius(8.0)
-                    .inner_margin(egui::Margin {
-                        left: 8,
-                        right: 4,
-                        top: 3,
-                        bottom: 3,
-                    })
-                    .show(ui, |ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), 24.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                let response = ui.add(
-                                    egui::TextEdit::singleline(&mut self.assistant_query)
-                                        .frame(false)
-                                        .hint_text("Ask a question…")
-                                        .desired_width((ui.available_width() - 30.0).max(80.0)),
-                                );
-                                let (send, send_response) = ui.allocate_exact_size(
-                                    egui::vec2(22.0, 22.0),
-                                    egui::Sense::click(),
-                                );
-                                ui.painter()
-                                    .circle_filled(send.center(), 11.0, palette.accent);
-                                icon(
-                                    ui.painter(),
-                                    send.shrink(6.0),
-                                    Icon::Send,
-                                    egui::Color32::WHITE,
-                                );
-                                if send_response.clicked()
-                                    || (response.lost_focus()
-                                        && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                                {
-                                    submit = true;
-                                }
-                            },
-                        );
-                    });
-                if !self.assistant_answer.is_empty() {
-                    ui.add_space(5.0);
-                    egui::Frame::new()
-                        .fill(palette.panel)
-                        .corner_radius(7.0)
-                        .inner_margin(egui::Margin::same(7))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(&self.assistant_answer)
-                                    .size(8.5)
-                                    .color(palette.text),
-                            );
-                        });
-                }
-            });
-        if submit {
-            self.ask_assistant();
-        }
-    }
-
-    fn export_card_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        egui::Frame::new()
-            .fill(palette.surface)
-            .stroke(egui::Stroke::new(1.0_f32, palette.border))
-            .corner_radius(12.0)
-            .inner_margin(egui::Margin::same(10))
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("Export")
-                        .size(12.0)
-                        .strong()
-                        .color(palette.text),
-                );
-                ui.label(
-                    egui::RichText::new("Convert this PDF to")
-                        .size(9.5)
-                        .color(palette.text_muted),
-                );
-                ui.add_space(2.0);
-                egui::ComboBox::from_id_salt("export_format")
-                    .width(ui.available_width())
-                    .selected_text(EXPORT_FORMATS[self.export_format])
-                    .show_ui(ui, |ui| {
-                        for (index, format) in EXPORT_FORMATS.iter().enumerate() {
-                            ui.selectable_value(&mut self.export_format, index, *format);
-                        }
-                    });
-                ui.add_space(6.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Export")
-                                .size(11.5)
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(palette.accent)
-                        .corner_radius(8.0)
-                        .min_size(egui::vec2(ui.available_width(), 30.0)),
-                    )
-                    .clicked()
-                {
-                    self.status = format!(
-                        "Export to {}: runs from the pdfxi CLI in this build",
-                        EXPORT_FORMATS[self.export_format]
-                    );
-                }
-            });
-    }
-
-    fn demo_canvas_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let available = ui.available_rect_before_wrap();
-        let painter = ui.painter().clone();
-        let paper = PaperPalette::for_mode(self.theme);
-
-        let mut mesh = egui::Mesh::default();
-        let base = mesh.vertices.len() as u32;
-        mesh.colored_vertex(available.left_top(), palette.canvas);
-        mesh.colored_vertex(available.right_top(), palette.canvas);
-        mesh.colored_vertex(available.right_bottom(), palette.app_bg);
-        mesh.colored_vertex(available.left_bottom(), palette.app_bg);
-        mesh.add_triangle(base, base + 1, base + 2);
-        mesh.add_triangle(base, base + 2, base + 3);
-        painter.add(egui::Shape::mesh(mesh));
-
-        let margin = 18.0_f32;
-        let ratio = 0.67_f32;
-        let max_w = (available.width() - margin * 2.0).max(160.0);
-        // Keep the floating page controls clear of the page.
-        let max_h = (available.height() - margin * 2.0 - 32.0).max(220.0);
-        let mut width = max_w;
-        let mut height = width / ratio;
-        if height > max_h {
-            height = max_h;
-            width = height * ratio;
-        }
-        let page = egui::Rect::from_center_size(
-            egui::pos2(available.center().x, available.center().y - 14.0),
-            egui::vec2(width, height),
-        );
-        let shadow_scale: u8 = if self.theme == ThemeMode::Dark { 2 } else { 1 };
-        for (expand, alpha) in [(18.0_f32, 8_u8), (10.0, 14), (4.0, 22)] {
-            painter.rect_filled(
-                page.expand(expand).translate(egui::vec2(0.0, 7.0)),
-                12.0,
-                egui::Color32::from_black_alpha(alpha * shadow_scale),
-            );
-        }
-        painter.rect_filled(page, 8.0, paper.paper);
-        painter.rect_stroke(
-            page,
-            8.0,
-            egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(20)),
-            egui::StrokeKind::Inside,
-        );
-        let clipped = painter.with_clip_rect(page);
-        self.paint_demo_page(&clipped, page, palette);
-    }
-
-    fn paint_demo_thumb(
-        &self,
-        painter: &egui::Painter,
-        rect: egui::Rect,
-        _palette: Palette,
-        page: usize,
-    ) {
-        let paper = PaperPalette::for_mode(self.theme);
-        let w = rect.width();
-        let h = rect.height();
-        let x = |t: f32| rect.min.x + t * w;
-        let y = |t: f32| rect.min.y + t * h;
-        let ink = paper.ink;
-        let muted = paper.muted;
-
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.05)), egui::pos2(x(0.20), y(0.10))),
-            1.5,
-            paper.accent,
-        );
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.13)), egui::pos2(x(0.50), y(0.155))),
-            1.0,
-            ink,
-        );
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.17)), egui::pos2(x(0.40), y(0.19))),
-            1.0,
-            ink,
-        );
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.22)), egui::pos2(x(0.46), y(0.232))),
-            0.8,
-            muted,
-        );
-        if page == 0 {
-            let cover = egui::Rect::from_min_max(
-                egui::pos2(x(0.56), y(0.08)),
-                egui::pos2(x(0.92), y(0.33)),
-            );
-            let mut mesh = egui::Mesh::default();
-            let base = mesh.vertices.len() as u32;
-            mesh.colored_vertex(cover.left_top(), paper.cover_top);
-            mesh.colored_vertex(cover.right_top(), paper.cover_top);
-            mesh.colored_vertex(cover.right_bottom(), paper.cover_bottom);
-            mesh.colored_vertex(cover.left_bottom(), paper.cover_bottom);
-            mesh.add_triangle(base, base + 1, base + 2);
-            mesh.add_triangle(base, base + 2, base + 3);
-            painter.add(egui::Shape::mesh(mesh));
-            painter.text(
-                egui::pos2(cover.left() + 4.0, cover.top() + 6.0),
-                egui::Align2::LEFT_TOP,
-                "MODERN\nBUSINESS",
-                egui::FontId::proportional(3.8),
-                egui::Color32::from_white_alpha(220),
-            );
-        } else if page == 1 {
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(x(0.56), y(0.08)),
-                    egui::pos2(x(0.92), y(0.14)),
-                ),
-                2.0,
-                paper.highlight,
-            );
-            for index in 0..3 {
-                let top = 0.20 + index as f32 * 0.06;
-                painter.circle_filled(egui::pos2(x(0.62), y(top)), 1.5, paper.accent);
-                painter.rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(x(0.66), y(top - 0.01)),
-                        egui::pos2(x(0.90), y(top + 0.01)),
-                    ),
-                    0.8,
-                    muted,
-                );
-            }
-        } else {
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(x(0.56), y(0.08)),
-                    egui::pos2(x(0.92), y(0.14)),
-                ),
-                2.0,
-                paper.success_bg,
-            );
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(x(0.56), y(0.20)),
-                    egui::pos2(x(0.92), y(0.34)),
-                ),
-                2.0,
-                paper.highlight,
-            );
-        }
-        for index in 0..4 {
-            let top = 0.38 + index as f32 * 0.05;
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(x(0.08), y(top)),
-                    egui::pos2(x(0.88), y(top + 0.018)),
-                ),
-                0.8,
-                paper.rule,
-            );
-        }
-        for index in 0..3 {
-            let top = 0.58 + index as f32 * 0.05;
-            painter.circle_filled(egui::pos2(x(0.10), y(top + 0.01)), 1.6, paper.success);
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(x(0.14), y(top)),
-                    egui::pos2(x(0.52), y(top + 0.018)),
-                ),
-                0.8,
-                paper.rule,
-            );
-        }
-        painter.rect_stroke(
-            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.78)), egui::pos2(x(0.50), y(0.92))),
-            1.5,
-            egui::Stroke::new(0.6_f32, paper.card_border),
-            egui::StrokeKind::Inside,
-        );
-        let mut points = Vec::new();
-        for step in 0..=16 {
-            let t = step as f32 / 16.0;
-            points.push(egui::pos2(
-                x(0.12 + t * 0.28),
-                y(0.86 - (t * 6.0).sin() * 0.018),
-            ));
-        }
-        painter.add(egui::Shape::line(
-            points,
-            egui::Stroke::new(0.9_f32, paper.ink),
-        ));
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.945)), egui::pos2(x(0.92), y(0.947))),
-            0.5,
-            paper.rule,
-        );
-    }
-
-    fn paint_generic_thumb(&self, painter: &egui::Painter, rect: egui::Rect, _palette: Palette) {
-        let paper = PaperPalette::for_mode(self.theme);
-        let w = rect.width();
-        let h = rect.height();
-        for index in 0..8 {
-            let top = 0.10 + index as f32 * 0.10;
-            let right = if index % 3 == 0 { 0.70 } else { 0.90 };
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(rect.min.x + 0.10 * w, rect.min.y + top * h),
-                    egui::pos2(rect.min.x + right * w, rect.min.y + (top + 0.04) * h),
-                ),
-                1.0,
-                paper.rule,
-            );
-        }
-    }
-
-    /// Paint the built-in business-proposal preview.
-    fn paint_demo_page(&self, painter: &egui::Painter, page: egui::Rect, _palette: Palette) {
-        use egui::{Align2, Color32, FontId, pos2};
-
-        let paper = PaperPalette::for_mode(self.theme);
-        let w = page.width();
-        let h = page.height();
-        let k = (h / 900.0).clamp(0.45, 1.8);
-        let x = |t: f32| page.min.x + t * w;
-        let y = |t: f32| page.min.y + t * h;
-        let ink = paper.ink;
-        let muted = paper.muted;
-        let rule = paper.rule;
-        let body_font = FontId::proportional(10.0 * k);
-        let small = FontId::proportional(7.5 * k);
-        let heading = FontId::proportional(15.0 * k);
-        let title_font = FontId::proportional(30.0 * k);
-        // egui's default font has no bold face; a half-pixel second pass gives
-        // the printed page the weight of the reference without a font asset.
-        let bold = |pos: egui::Pos2, align: Align2, text: &str, font: FontId, color: Color32| {
-            painter.text(pos, align, text, font.clone(), color);
-            painter.text(pos + egui::vec2(0.7 * k, 0.0), align, text, font, color);
-        };
-
-        // Brand row.
-        painter.rect_filled(
-            egui::Rect::from_min_size(pos2(x(0.07), y(0.045)), egui::vec2(16.0 * k, 16.0 * k)),
-            4.0 * k,
-            paper.accent,
-        );
-        icon(
-            painter,
-            egui::Rect::from_min_size(
-                pos2(x(0.07) + 3.5 * k, y(0.045) + 3.5 * k),
-                egui::vec2(9.0 * k, 9.0 * k),
-            ),
-            Icon::File,
-            Color32::WHITE,
-        );
-        painter.text(
-            pos2(x(0.07) + 21.0 * k, y(0.045) + 8.0 * k),
-            Align2::LEFT_CENTER,
-            "PDFXI",
-            FontId::proportional(8.5 * k),
-            ink,
-        );
-        painter.text(
-            pos2(x(0.93), y(0.052)),
-            Align2::RIGHT_CENTER,
-            "BUSINESS PROPOSAL · 2025",
-            FontId::proportional(6.5 * k),
-            muted,
-        );
-        painter.line_segment(
-            [pos2(x(0.07), y(0.075)), pos2(x(0.93), y(0.075))],
-            egui::Stroke::new(0.6_f32, rule),
-        );
-
-        // Title block.
-        bold(
-            pos2(x(0.07), y(0.105)),
-            Align2::LEFT_TOP,
-            "Modern Business",
-            title_font.clone(),
-            ink,
-        );
-        bold(
-            pos2(x(0.07), y(0.155)),
-            Align2::LEFT_TOP,
-            "Proposal",
-            title_font,
-            ink,
-        );
-        let tag =
-            egui::Rect::from_min_size(pos2(x(0.07), y(0.205)), egui::vec2(64.0 * k, 14.0 * k));
-        painter.rect_filled(tag, 7.0 * k, paper.highlight);
-        painter.text(
-            tag.center(),
-            Align2::CENTER_CENTER,
-            "CONFIDENTIAL",
-            FontId::proportional(6.2 * k),
-            paper.accent,
-        );
-        let subtitle = painter.layout(
-            "A strategic proposal for a more efficient, collaborative, and digital workflow."
-                .to_owned(),
-            body_font.clone(),
-            muted,
-            w * 0.40,
-        );
-        painter.galley(pos2(x(0.07), y(0.235)), subtitle, muted);
-        painter.text(
-            pos2(x(0.07), y(0.305)),
-            Align2::LEFT_CENTER,
-            "Prepared for Northwind Labs · January 2025",
-            FontId::proportional(7.0 * k),
-            muted,
-        );
-
-        // Cover art.
-        let cover = egui::Rect::from_min_max(pos2(x(0.55), y(0.09)), pos2(x(0.93), y(0.33)));
-        let mut mesh = egui::Mesh::default();
-        let base = mesh.vertices.len() as u32;
-        mesh.colored_vertex(cover.left_top(), paper.cover_top);
-        mesh.colored_vertex(cover.right_top(), paper.cover_top);
-        mesh.colored_vertex(cover.right_bottom(), paper.cover_bottom);
-        mesh.colored_vertex(cover.left_bottom(), paper.cover_bottom);
-        mesh.add_triangle(base, base + 1, base + 2);
-        mesh.add_triangle(base, base + 2, base + 3);
-        painter.add(egui::Shape::mesh(mesh));
-        // A diagonal architectural crop: a dark wedge, a pale blade and a
-        // hairline highlight, rather than a flat gradient swatch.
-        let cw = cover.width();
-        painter.add(egui::Shape::convex_polygon(
-            vec![
-                pos2(cover.left() + cw * 0.46, cover.top()),
-                pos2(cover.right(), cover.top()),
-                pos2(cover.right(), cover.bottom()),
-                pos2(cover.left() + cw * 0.08, cover.bottom()),
-            ],
-            Color32::from_black_alpha(52),
-            egui::Stroke::NONE,
-        ));
-        painter.add(egui::Shape::convex_polygon(
-            vec![
-                pos2(cover.left() + cw * 0.62, cover.top()),
-                pos2(cover.left() + cw * 0.72, cover.top()),
-                pos2(cover.left() + cw * 0.34, cover.bottom()),
-                pos2(cover.left() + cw * 0.24, cover.bottom()),
-            ],
-            Color32::from_white_alpha(22),
-            egui::Stroke::NONE,
-        ));
-        painter.line_segment(
-            [
-                pos2(cover.left() + cw * 0.72, cover.top()),
-                pos2(cover.left() + cw * 0.34, cover.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, Color32::from_white_alpha(90)),
-        );
-        painter.add(egui::Shape::convex_polygon(
-            vec![
-                pos2(cover.left() + cw * 0.86, cover.top()),
-                pos2(cover.right(), cover.top()),
-                pos2(cover.right(), cover.bottom()),
-                pos2(cover.left() + cw * 0.66, cover.bottom()),
-            ],
-            Color32::from_black_alpha(28),
-            egui::Stroke::NONE,
-        ));
-
-        // Executive summary.
-        painter.text(
-            pos2(x(0.07), y(0.355)),
-            Align2::LEFT_TOP,
-            "Executive Summary",
-            heading.clone(),
-            ink,
-        );
-        let mut job = egui::text::LayoutJob::default();
-        job.wrap.max_width = w * 0.40;
-        let base = egui::TextFormat {
-            font_id: body_font.clone(),
-            color: ink,
-            ..Default::default()
-        };
-        let highlighted = egui::TextFormat {
-            font_id: body_font.clone(),
-            color: ink,
-            background: paper.highlight,
-            ..Default::default()
-        };
-        job.append(
-            "This proposal outlines a modern solution to streamline document workflows, improve team collaboration, and ",
-            0.0,
-            base.clone(),
-        );
-        job.append("drive measurable productivity.", 0.0, highlighted);
-        let summary = painter.layout_job(job);
-        painter.galley(pos2(x(0.07), y(0.385)), summary, ink);
-
-        // Selected-text frame and its comment marker, matching the review
-        // state shown in the reference page.
-        let selection =
-            egui::Rect::from_min_max(pos2(x(0.062), y(0.379)), pos2(x(0.508), y(0.421)));
-        let selection_blue = Color32::from_rgb(0x2f, 0x7c, 0xf6);
-        painter.rect_stroke(
-            selection,
-            1.0,
-            egui::Stroke::new(1.0_f32, selection_blue),
-            egui::StrokeKind::Inside,
-        );
-        for corner in [
-            selection.left_top(),
-            selection.right_top(),
-            selection.left_bottom(),
-            selection.right_bottom(),
-        ] {
-            painter.rect_filled(
-                egui::Rect::from_center_size(corner, egui::Vec2::splat(4.0 * k)),
-                0.0,
-                selection_blue,
-            );
-        }
-        let marker = egui::Rect::from_center_size(
-            pos2(selection.right() + 10.0 * k, selection.center().y),
-            egui::Vec2::splat(18.0 * k),
-        );
-        painter.circle_filled(
-            marker.center(),
-            9.0 * k,
-            Color32::from_rgb(0xf6, 0xc8, 0x45),
-        );
-        icon(
-            painter,
-            marker.shrink(5.5 * k),
-            Icon::Comment,
-            Color32::from_rgb(0x5c, 0x43, 0x00),
-        );
-
-        // Comment card.
-        let card = egui::Rect::from_min_max(pos2(x(0.53), y(0.355)), pos2(x(0.93), y(0.48)));
-        painter.rect_filled(
-            card.translate(egui::vec2(2.0 * k, 4.0 * k)),
-            9.0 * k,
-            paper.shadow,
-        );
-        painter.rect_filled(card, 9.0 * k, paper.card);
-        painter.rect_stroke(
-            card,
-            9.0 * k,
-            egui::Stroke::new(1.0_f32, paper.card_border),
-            egui::StrokeKind::Inside,
-        );
-        painter.circle_filled(
-            pos2(card.left() + 18.0 * k, card.top() + 18.0 * k),
-            9.0 * k,
-            paper.highlight,
-        );
-        painter.text(
-            pos2(card.left() + 18.0 * k, card.top() + 18.0 * k),
-            Align2::CENTER_CENTER,
-            "JK",
-            FontId::proportional(7.0 * k),
-            paper.accent,
-        );
-        painter.text(
-            pos2(card.left() + 32.0 * k, card.top() + 14.0 * k),
-            Align2::LEFT_CENTER,
-            "Jordan K.",
-            FontId::proportional(8.5 * k),
-            ink,
-        );
-        painter.text(
-            pos2(card.right() - 12.0 * k, card.top() + 14.0 * k),
-            Align2::RIGHT_CENTER,
-            "2m ago",
-            FontId::proportional(7.0 * k),
-            muted,
-        );
-        let comment = painter.layout(
-            "@Alex Can we add a specific ROI number here?".to_owned(),
-            FontId::proportional(8.5 * k),
-            ink,
-            card.width() - 44.0 * k,
-        );
-        painter.galley(
-            pos2(card.left() + 32.0 * k, card.top() + 26.0 * k),
-            comment,
-            ink,
-        );
-        painter.text(
-            pos2(card.left() + 32.0 * k, card.bottom() - 12.0 * k),
-            Align2::LEFT_CENTER,
-            "Reply",
-            FontId::proportional(7.5 * k),
-            paper.accent,
-        );
-        painter.text(
-            pos2(card.left() + 64.0 * k, card.bottom() - 12.0 * k),
-            Align2::LEFT_CENTER,
-            "Resolve",
-            FontId::proportional(7.5 * k),
-            muted,
-        );
-        painter.text(
-            pos2(card.right() - 12.0 * k, card.bottom() - 12.0 * k),
-            Align2::RIGHT_CENTER,
-            "1 reply",
-            FontId::proportional(7.0 * k),
-            muted,
-        );
-
-        // Key benefits.
-        painter.text(
-            pos2(x(0.07), y(0.525)),
-            Align2::LEFT_TOP,
-            "Key Benefits",
-            heading.clone(),
-            ink,
-        );
-        for (index, benefit) in [
-            "Faster, more secure document workflows",
-            "Seamless collaboration across teams",
-            "Higher productivity and cost savings",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let top = y(0.565 + index as f32 * 0.038);
-            painter.circle_filled(pos2(x(0.085), top + 4.0 * k), 5.0 * k, paper.highlight);
-            icon(
-                painter,
-                egui::Rect::from_center_size(
-                    pos2(x(0.085), top + 4.0 * k),
-                    egui::vec2(6.5 * k, 6.5 * k),
-                ),
-                Icon::Check,
-                paper.accent,
-            );
-            painter.text(
-                pos2(x(0.103), top + 4.0 * k),
-                Align2::LEFT_CENTER,
-                *benefit,
-                FontId::proportional(8.5 * k),
-                ink,
-            );
-        }
-
-        // Stat card.
-        let stat = egui::Rect::from_min_max(pos2(x(0.60), y(0.525)), pos2(x(0.93), y(0.65)));
-        painter.rect_filled(stat, 8.0 * k, paper.card);
-        painter.rect_stroke(
-            stat,
-            8.0 * k,
-            egui::Stroke::new(0.8_f32, paper.card_border),
-            egui::StrokeKind::Inside,
-        );
-        painter.text(
-            pos2(stat.left() + 12.0 * k, stat.top() + 10.0 * k),
-            Align2::LEFT_TOP,
-            "38%",
-            FontId::proportional(21.0 * k),
-            paper.accent,
-        );
-        painter.text(
-            pos2(stat.left() + 12.0 * k, stat.top() + 36.0 * k),
-            Align2::LEFT_TOP,
-            "faster document turnaround",
-            FontId::proportional(7.5 * k),
-            muted,
-        );
-        painter.text(
-            pos2(stat.left() + 12.0 * k, stat.bottom() - 12.0 * k),
-            Align2::LEFT_CENTER,
-            "Based on pilot teams",
-            FontId::proportional(6.2 * k),
-            muted,
-        );
-
-        // Timeline.
-        painter.text(
-            pos2(x(0.07), y(0.69)),
-            Align2::LEFT_TOP,
-            "Proposed Timeline",
-            heading,
-            ink,
-        );
-        painter.line_segment(
-            [pos2(x(0.08), y(0.745)), pos2(x(0.92), y(0.745))],
-            egui::Stroke::new(0.8_f32, rule),
-        );
-        for (index, (phase, date, description)) in [
-            (
-                "Discover",
-                "Week 1–2",
-                "Audit workflows and align on success metrics",
-            ),
-            (
-                "Design",
-                "Week 3–5",
-                "Prototype the new review and signature flow",
-            ),
-            (
-                "Deliver",
-                "Week 6–8",
-                "Roll out to pilot teams with training",
-            ),
-        ]
-        .iter()
-        .enumerate()
-        {
-            let cx = x(0.12 + index as f32 * 0.28);
-            painter.circle_filled(pos2(cx, y(0.745)), 3.5 * k, paper.accent);
-            painter.text(
-                pos2(cx, y(0.715)),
-                Align2::CENTER_CENTER,
-                *phase,
-                FontId::proportional(8.0 * k),
-                ink,
-            );
-            painter.text(
-                pos2(cx, y(0.765)),
-                Align2::CENTER_CENTER,
-                *date,
-                FontId::proportional(6.5 * k),
-                paper.accent,
-            );
-            let galley = painter.layout(
-                (*description).to_owned(),
-                FontId::proportional(6.5 * k),
-                muted,
-                w * 0.22,
-            );
-            painter.galley(pos2(cx - w * 0.11, y(0.782)), galley, muted);
-        }
-
-        // Signature card.
-        let sign = egui::Rect::from_min_max(pos2(x(0.07), y(0.825)), pos2(x(0.51), y(0.925)));
-        painter.rect_filled(sign, 7.0 * k, paper.card);
-        painter.rect_stroke(
-            sign,
-            7.0 * k,
-            egui::Stroke::new(0.8_f32, paper.card_border),
-            egui::StrokeKind::Inside,
-        );
-        let badge = egui::Rect::from_min_size(
-            pos2(sign.left() + 10.0 * k, sign.top() + 8.0 * k),
-            egui::vec2(58.0 * k, 15.0 * k),
-        );
-        painter.rect_filled(badge, 7.0 * k, paper.success_bg);
-        icon(
-            painter,
-            egui::Rect::from_center_size(
-                pos2(badge.left() + 8.0 * k, badge.center().y),
-                egui::vec2(6.5 * k, 6.5 * k),
-            ),
-            Icon::Check,
-            paper.success,
-        );
-        painter.text(
-            pos2(badge.left() + 15.0 * k, badge.center().y),
-            Align2::LEFT_CENTER,
-            "E-signed",
-            FontId::proportional(6.5 * k),
-            paper.success,
-        );
-        let mut points = Vec::new();
-        for step in 0..=40 {
-            let t = step as f32 / 40.0;
-            let px = x(0.10) + t * w * 0.26;
-            let py = y(0.865) - (t * 7.0).sin() * h * 0.020 + t * h * 0.010;
-            points.push(pos2(px, py));
-        }
-        painter.add(egui::Shape::line(
-            points,
-            egui::Stroke::new(1.6 * k, Color32::from_rgb(0x16, 0x2b, 0x4a)),
-        ));
-        painter.text(
-            pos2(x(0.10), y(0.888)),
-            Align2::LEFT_CENTER,
-            "Amelia Park",
-            FontId::proportional(7.5 * k),
-            ink,
-        );
-        painter.text(
-            pos2(x(0.10), y(0.905)),
-            Align2::LEFT_CENTER,
-            "Head of Operations",
-            FontId::proportional(6.5 * k),
-            muted,
-        );
-        painter.text(
-            pos2(x(0.49), y(0.905)),
-            Align2::RIGHT_CENTER,
-            "Jan 28, 2025",
-            FontId::proportional(6.5 * k),
-            muted,
-        );
-
-        // Investment card.
-        let invest = egui::Rect::from_min_max(pos2(x(0.56), y(0.835)), pos2(x(0.93), y(0.915)));
-        painter.rect_filled(invest, 7.0 * k, paper.card);
-        painter.rect_stroke(
-            invest,
-            7.0 * k,
-            egui::Stroke::new(0.8_f32, paper.card_border),
-            egui::StrokeKind::Inside,
-        );
-        painter.text(
-            pos2(invest.left() + 12.0 * k, invest.top() + 10.0 * k),
-            Align2::LEFT_TOP,
-            "Investment",
-            FontId::proportional(7.0 * k),
-            muted,
-        );
-        painter.text(
-            pos2(invest.left() + 12.0 * k, invest.top() + 22.0 * k),
-            Align2::LEFT_TOP,
-            "$24,500",
-            FontId::proportional(15.0 * k),
-            paper.accent,
-        );
-        painter.text(
-            pos2(invest.right() - 12.0 * k, invest.top() + 36.0 * k),
-            Align2::RIGHT_CENTER,
-            "fixed project fee",
-            FontId::proportional(6.2 * k),
-            muted,
-        );
-
-        // Footer.
-        painter.line_segment(
-            [pos2(x(0.07), y(0.95)), pos2(x(0.93), y(0.95))],
-            egui::Stroke::new(0.6_f32, rule),
-        );
-        painter.text(
-            pos2(x(0.07), y(0.965)),
-            Align2::LEFT_CENTER,
-            "PDFXI · confidential draft",
-            small,
-            muted,
-        );
-        let page_number = self
-            .state
-            .active_tab()
-            .map(|tab| tab.current_page() + 1)
-            .unwrap_or(1);
-        painter.text(
-            pos2(x(0.93), y(0.965)),
-            Align2::RIGHT_CENTER,
-            format!("{page_number}"),
-            FontId::proportional(6.5 * k),
-            muted,
-        );
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn default_rail_is_pages() {
-        assert_eq!(RailTab::default(), RailTab::Pages);
-    }
-    use crate::{Rotation, TextAnchor};
-
-    #[test]
-    fn active_tab_status_without_document_has_fixed_message() {
-        let state = AppState::new();
-        assert_eq!(active_tab_status(&state), "No document open");
-    }
-
-    #[test]
-    fn active_tab_status_includes_title_zoom_rotation_and_view() {
-        let mut state = AppState::new();
-        state.open_tab("report.pdf");
-        state
-            .set_zoom(Zoom::custom(1.5))
-            .expect("an active tab exists");
-        state
-            .set_rotation(Rotation::Deg90)
-            .expect("an active tab exists");
-        state
-            .set_view_mode(ViewMode::TwoPageContinuous)
-            .expect("an active tab exists");
-
-        let status = active_tab_status(&state);
-        assert!(status.contains("report.pdf"), "{status}");
-        assert!(status.contains("150%"), "{status}");
-        assert!(status.contains("90 deg"), "{status}");
-        assert!(status.contains("Two Page Continuous"), "{status}");
-    }
-
-    #[test]
-    fn canvas_placeholder_reports_page_count_and_prompts_when_empty() {
-        let empty = AppState::new();
-        assert_eq!(canvas_placeholder(&empty), "Open a document to begin");
-
-        let mut state = AppState::new();
-        state.open_tab("doc");
-        assert!(
-            canvas_placeholder(&state).contains("Page 1 of 0"),
-            "{}",
-            canvas_placeholder(&state)
-        );
-        if let Some(tab) = state.active_tab_mut() {
-            tab.set_page_count(DEMO_PAGE_COUNT);
-        }
-        assert!(
-            canvas_placeholder(&state).contains(&format!("Page 1 of {DEMO_PAGE_COUNT}")),
-            "{}",
-            canvas_placeholder(&state)
-        );
-    }
-
-    #[test]
-    fn open_demo_tab_registers_tab_with_placeholder_page_count() {
+    fn app_with_pages(pages: usize) -> PdfxiApp {
         let mut app = PdfxiApp::new();
-        let first = app.open_demo_tab();
-        let second = app.open_demo_tab();
-        assert_ne!(first, second);
-        assert_eq!(app.state().tab_count(), 2);
-        assert_eq!(app.state().active_tab_id(), Some(second));
-        // With PDFium the count comes from the real fixture (one page);
-        // without it the fixed placeholder count is used.
-        let expected = app.demo_page_count();
-        assert_eq!(
-            app.state().tab(second).map(|tab| tab.page_count()),
-            Some(expected)
-        );
-        assert!(!app.status().is_empty());
-    }
-
-    #[test]
-    fn zoom_in_and_out_change_active_tab_zoom() {
-        let mut app = PdfxiApp::new();
-        let id = app.open_demo_tab();
-        app.zoom_in();
-        assert_eq!(
-            app.state().tab(id).and_then(|tab| tab.zoom().scale()),
-            Some(1.25)
-        );
-        app.zoom_out();
-        app.zoom_out();
-        assert_eq!(
-            app.state().tab(id).and_then(|tab| tab.zoom().scale()),
-            Some(0.75)
-        );
-    }
-
-    #[test]
-    fn zoom_without_active_tab_reports_status_without_panicking() {
-        let mut app = PdfxiApp::new();
-        app.zoom_in();
-        assert_eq!(app.status(), "No active tab to zoom");
-    }
-
-    #[test]
-    fn open_path_text_rejects_empty_control_and_non_pdf() {
-        let mut app = PdfxiApp::new();
-        assert!(!app.open_path_text("   "));
-        assert_eq!(app.status(), "Enter a PDF path to open");
-
-        assert!(!app.open_path_text("bad\u{0}path.pdf"));
-        assert_eq!(app.status(), "Path contains control characters");
-
-        assert!(!app.open_path_text("C:\\docs\\notes.txt"));
-        assert!(app.status().starts_with("Not a PDF file"));
-
-        assert!(!app.open_path_text("C:\\definitely\\missing\\file.pdf"));
-        assert!(app.status().starts_with("File not found"));
-        assert_eq!(app.state().tab_count(), 0);
-    }
-
-    #[test]
-    fn open_path_text_opens_an_existing_pdf_and_focuses_duplicates() {
-        let base = std::env::temp_dir().join("pdfxi-open-path-test");
-        std::fs::create_dir_all(&base).expect("create temp dir");
-        let pdf = base.join("sample.pdf");
-        std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").expect("write pdf");
-        let pdf_with_quotes = format!("\"{}\"", pdf.display());
-
-        let mut app = PdfxiApp::new();
-        assert!(app.open_path_text(&pdf_with_quotes));
-        assert_eq!(app.state().tab_count(), 1);
-        // A second open of the same path focuses rather than duplicates.
-        assert!(app.open_path_text(&pdf.display().to_string()));
-        assert_eq!(app.state().tab_count(), 1);
-
-        std::fs::remove_dir_all(&base).expect("clean temp dir");
-    }
-
-    #[test]
-    fn open_dropped_opens_only_pdfs_and_reports_the_batch() {
-        let base = std::env::temp_dir().join("pdfxi-open-dropped-test");
-        std::fs::create_dir_all(&base).expect("create temp dir");
-        let pdf = base.join("drop.PDF");
-        std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").expect("write pdf");
-        let txt = base.join("drop.txt");
-        std::fs::write(&txt, b"not a pdf").expect("write txt");
-
-        let mut app = PdfxiApp::new();
-        let opened = app.open_dropped(&[pdf.clone(), txt]);
-        assert_eq!(opened, 1);
-        assert_eq!(app.state().tab_count(), 1);
-        assert!(app.status().contains("Opened 1 dropped file"));
-
-        let mut empty = PdfxiApp::new();
-        assert_eq!(empty.open_dropped(&[]), 0);
-        assert_eq!(empty.open_dropped(&[base.join("missing.pdf")]), 0);
-        assert!(empty.status().starts_with("File not found"));
-
-        std::fs::remove_dir_all(&base).expect("clean temp dir");
-    }
-
-    #[test]
-    fn startup_argument_opens_a_pdf_and_skips_flags() {
-        let base = std::env::temp_dir().join("pdfxi-startup-arg-test");
-        std::fs::create_dir_all(&base).expect("create temp dir");
-        let pdf = base.join("launch.pdf");
-        std::fs::write(&pdf, b"%PDF-1.4\n%%EOF\n").expect("write pdf");
-
-        let mut app = PdfxiApp::new();
-        assert!(
-            app.open_startup_argument(vec!["--ignored".to_owned(), pdf.display().to_string(),])
-        );
-        assert_eq!(app.state().tab_count(), 1);
-
-        let mut empty = PdfxiApp::new();
-        assert!(!empty.open_startup_argument(Vec::<String>::new()));
-        assert_eq!(empty.state().tab_count(), 0);
-
-        std::fs::remove_dir_all(&base).expect("clean temp dir");
-    }
-
-    #[test]
-    fn is_pdf_path_is_case_insensitive_and_extension_based() {
-        assert!(PdfxiApp::is_pdf_path(Path::new("a.pdf")));
-        assert!(PdfxiApp::is_pdf_path(Path::new("A.PDF")));
-        assert!(PdfxiApp::is_pdf_path(Path::new("dir/with space/doc.Pdf")));
-        assert!(!PdfxiApp::is_pdf_path(Path::new("a.txt")));
-        assert!(!PdfxiApp::is_pdf_path(Path::new("pdf")));
-        assert!(!PdfxiApp::is_pdf_path(Path::new("a.pdf.txt")));
-    }
-
-    #[test]
-    fn rotate_and_view_mode_commands_update_active_tab() {
-        let mut app = PdfxiApp::new();
-        let id = app.open_demo_tab();
-        app.rotate_clockwise();
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.rotation()),
-            Some(Rotation::Deg90)
-        );
-        app.rotate_counterclockwise();
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.rotation()),
-            Some(Rotation::Deg0)
-        );
-        app.set_view_mode(ViewMode::SinglePage);
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.view_mode()),
-            Some(ViewMode::SinglePage)
-        );
-    }
-
-    #[test]
-    fn reset_rotation_and_page_display_controls_update_active_tab() {
-        let mut app = PdfxiApp::new();
-        let id = app.open_demo_tab();
-        app.rotate_clockwise();
-        app.rotate_clockwise();
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.rotation()),
-            Some(Rotation::Deg180)
-        );
-        app.reset_rotation();
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.rotation()),
-            Some(Rotation::Deg0)
-        );
-        assert!(app.status().contains("reset"), "{}", app.status());
-
-        app.fit_page();
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.zoom()),
-            Some(Zoom::FitPage)
-        );
-        app.fit_width();
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.zoom()),
-            Some(Zoom::FitWidth)
-        );
-        app.actual_size();
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.zoom()),
-            Some(Zoom::custom(1.0))
-        );
-        assert!(app.status().contains("100%"), "{}", app.status());
-
-        // With no active tab the commands report through status, never panic.
-        app.close_active_tab();
-        app.reset_rotation();
-        app.fit_page();
-        assert_eq!(app.status(), "no tab is currently active");
-    }
-
-    #[test]
-    fn apply_view_command_dispatches_rotation_zoom_and_fit() {
-        let mut app = PdfxiApp::new();
-        let id = app.open_demo_tab();
-        app.apply_view_command(ViewCommand::RotateClockwise);
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.rotation()),
-            Some(Rotation::Deg90)
-        );
-        app.apply_view_command(ViewCommand::RotateCounterclockwise);
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.rotation()),
-            Some(Rotation::Deg0)
-        );
-        app.apply_view_command(ViewCommand::ResetRotation);
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.rotation()),
-            Some(Rotation::Deg0)
-        );
-        app.apply_view_command(ViewCommand::FitWidth);
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.zoom()),
-            Some(Zoom::FitWidth)
-        );
-        app.apply_view_command(ViewCommand::ZoomIn);
-        // A fit mode has no explicit scale; zoom-in resolves to 100% + step.
-        assert_eq!(
-            app.state().tab(id).and_then(|tab| tab.zoom().scale()),
-            Some(1.25)
-        );
-    }
-
-    #[test]
-    fn layout_for_state_applies_per_tab_view_rotation() {
-        let mut state = AppState::new();
-        let id = state.open_tab("rotated");
-        if let Some(tab) = state.tab_mut(id) {
-            tab.set_page_count(1);
-            tab.set_zoom(Zoom::custom(1.0));
-        }
-        let flat = layout_for_state(&state, CanvasSize::new(1000.0, 1000.0))
-            .expect("a layout is produced");
-        assert_eq!(flat.rotation(), Rotation::Deg0);
-        let flat_width = flat.page(0).map(|page| page.rect.width).unwrap_or(0.0);
-
-        state.set_rotation(Rotation::Deg90).expect("active tab");
-        let turned = layout_for_state(&state, CanvasSize::new(1000.0, 1000.0))
-            .expect("a layout is produced");
-        assert_eq!(turned.rotation(), Rotation::Deg90);
-        let turned_width = turned.page(0).map(|page| page.rect.width).unwrap_or(0.0);
-        // The demo page is portrait; a quarter turn makes it landscape.
-        assert!(turned_width > flat_width);
-    }
-
-    #[test]
-    fn demo_page_effective_rotation_matches_view_rotation() {
-        // The demo shell has no intrinsic page /Rotate, so a page's effective
-        // rotation equals the per-tab view rotation used for the raster key.
-        // This documents why producer and consumer keys stay in sync.
-        let mut state = AppState::new();
-        let id = state.open_tab("demo");
-        if let Some(tab) = state.tab_mut(id) {
-            tab.set_page_count(1);
-        }
-        for view in [
-            Rotation::Deg0,
-            Rotation::Deg90,
-            Rotation::Deg180,
-            Rotation::Deg270,
-        ] {
-            state.set_rotation(view).expect("active tab");
-            let layout = layout_for_state(&state, CanvasSize::new(800.0, 600.0))
-                .expect("a layout is produced");
-            assert_eq!(layout.rotation(), view);
-            for page in layout.pages() {
-                assert_eq!(page.page_rotation, Rotation::Deg0);
-                assert_eq!(page.rotation, view);
-            }
-        }
-    }
-
-    #[test]
-    fn status_indicator_reports_rotation_and_zoom_together() {
-        let mut state = AppState::new();
-        state.open_tab("report.pdf");
-        state.set_rotation(Rotation::Deg270).expect("active tab");
-        state.set_zoom(Zoom::FitWidth).expect("active tab");
-        let status = active_tab_status(&state);
-        assert!(status.contains("270 deg"), "{status}");
-        assert!(status.contains("Fit Width"), "{status}");
-    }
-
-    #[test]
-    fn activate_and_close_tab_switch_and_remove_documents() {
-        let mut app = PdfxiApp::new();
-        let a = app.open_demo_tab();
-        let b = app.open_demo_tab();
-        app.activate_tab(a);
-        assert_eq!(app.state().active_tab_id(), Some(a));
-        app.close_active_tab();
-        assert_eq!(app.state().active_tab_id(), Some(b));
-        assert_eq!(app.state().tab_count(), 1);
-        app.close_active_tab();
-        assert!(app.state().is_empty());
-        app.close_active_tab();
-        assert_eq!(app.status(), "No tab to close");
-    }
-
-    #[test]
-    fn tool_selection_updates_shared_state() {
-        let mut app = PdfxiApp::new();
-        app.select_tool(Toolset::Highlight);
-        assert_eq!(app.state().active_tool(), Toolset::Highlight);
-        assert!(app.status().contains("Highlight"));
-    }
-
-    #[test]
-    fn demo_geometry_helpers_are_deterministic() {
-        let sizes = demo_page_sizes(3);
-        assert_eq!(sizes.len(), 3);
-        assert!(sizes.iter().all(
-            |size| size.width_pt == DEMO_PAGE_WIDTH_PT && size.height_pt == DEMO_PAGE_HEIGHT_PT
-        ));
-
-        let pages = demo_text_pages(3);
-        assert_eq!(pages.len(), 3);
-        assert_eq!(pages[0].page_number(), 0);
-        assert_eq!(pages[2].page_number(), 2);
-        assert!(!pages[0].spans().is_empty());
-        assert_eq!(pages[0], demo_text_pages(3)[0], "no time or randomness");
-    }
-
-    #[test]
-    fn layout_for_state_tracks_active_tab() {
-        let mut state = AppState::new();
-        assert!(layout_for_state(&state, CanvasSize::new(800.0, 600.0)).is_none());
-
-        let id = state.open_tab("demo");
-        if let Some(tab) = state.tab_mut(id) {
-            tab.set_page_count(4);
-            tab.set_view_mode(ViewMode::TwoPageContinuous);
-            tab.set_zoom(Zoom::custom(2.0));
-        }
-        let layout = layout_for_state(&state, CanvasSize::new(800.0, 600.0))
-            .expect("active tab produces a layout");
-        assert_eq!(layout.page_count(), 4);
-        assert_eq!(layout.mode(), ViewMode::TwoPageContinuous);
-        assert!((layout.scale() - 2.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn screen_to_canvas_accounts_for_origin_and_scroll() {
-        let origin = egui::pos2(100.0, 50.0);
-        let point = screen_to_canvas(egui::pos2(150.0, 70.0), origin, 20.0, 10.0);
-        assert_eq!(point, CanvasPoint::new(70.0, 30.0));
-    }
-
-    #[test]
-    fn canvas_info_line_reports_page_and_selection() {
-        assert_eq!(canvas_info_line(CanvasHit::Page(0), ""), "Page 1");
-        assert_eq!(canvas_info_line(CanvasHit::Gap, ""), "Between pages");
-        assert_eq!(canvas_info_line(CanvasHit::Outside, ""), "Outside pages");
-        assert_eq!(
-            canvas_info_line(CanvasHit::Page(2), "Hello"),
-            "Page 3 | Selected: Hello"
-        );
-    }
-
-    #[test]
-    fn clearing_selection_via_keyboard_path_updates_state() {
-        let mut app = PdfxiApp::new();
-        app.open_demo_tab();
-        // With no drag, copy text is empty; the clear command is still safe.
-        assert_eq!(app.selected_text(), "");
-        app.clear_selection();
-        assert_eq!(app.status(), "Selection cleared");
-        assert_eq!(app.selected_text(), "");
-    }
-
-    #[test]
-    fn demo_find_pages_builds_searchable_text_from_spans() {
-        let pages = demo_text_pages(3);
-        let pairs = demo_find_pages(&pages);
-        assert_eq!(
-            pairs,
-            vec![
-                (0, "Page 1 demo text".to_string()),
-                (1, "Page 2 demo text".to_string()),
-                (2, "Page 3 demo text".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn match_rect_maps_character_range_to_span_geometry() {
-        let pages = [OwnedTextPage::new(
-            0,
-            vec![
-                OwnedSpan::new("Hello", 0.0, 10.0, 50.0, 10.0),
-                OwnedSpan::new("world", 60.0, 10.0, 50.0, 10.0),
-            ],
-        )];
-        // Concatenated "Helloworld": 3..7 is "lowo", crossing both spans.
-        let hit = FindMatch::new(0, 3, 7, "lowo");
-        let rect = match_rect(&hit, &pages).expect("a matching page with spans");
-        assert!((rect.x - 30.0).abs() < 0.001, "{}", rect.x);
-        assert!((rect.y - 10.0).abs() < 0.001, "{}", rect.y);
-        assert!((rect.width - 50.0).abs() < 0.001, "{}", rect.width);
-        assert!((rect.height - 10.0).abs() < 0.001, "{}", rect.height);
-        assert_eq!(match_rect(&FindMatch::new(0, 2, 2, ""), &pages), None);
-        assert_eq!(match_rect(&FindMatch::new(9, 0, 1, "x"), &pages), None);
-    }
-
-    #[test]
-    fn scroll_offset_for_page_centers_and_clamps() {
-        let sizes = vec![PageSize::new(612.0, 792.0); 3];
-        let layout = CanvasLayout::standard(
-            ViewMode::Continuous,
-            Zoom::custom(1.0),
-            CanvasSize::new(800.0, 600.0),
-            &sizes,
-        );
-        let geometry = layout.page(1).expect("page 1 exists");
-        let expected = geometry.rect.y - (600.0 - geometry.rect.height) * 0.5;
-        let offset = scroll_offset_for_page(&layout, 1);
-        assert!((offset - expected).abs() < 0.001, "{offset}");
-        assert!(offset >= 0.0);
-        assert_eq!(scroll_offset_for_page(&layout, 999), 0.0);
-    }
-
-    #[test]
-    fn find_bar_query_and_navigation_update_the_model() {
-        let mut app = PdfxiApp::new();
-        app.open_demo_tab();
-        assert!(!app.is_find_open());
-        app.open_find();
-        assert!(app.is_find_open());
-
-        app.set_find_query("demo");
-        assert_eq!(app.find_state().match_count(), app.demo_text.len());
-        assert_eq!(
-            app.find_state().match_summary(),
-            format!("1 of {}", app.demo_text.len())
-        );
-
-        app.find_next();
-        assert!(app.pending_scroll, "navigation requests a scroll");
-        app.find_previous();
-        app.set_find_options(true, false);
-        assert!(app.find_state().options().case_sensitive);
-        app.close_find();
-        assert!(!app.is_find_open());
-    }
-
-    #[test]
-    fn find_and_selection_share_the_same_demo_text() {
-        let pages = demo_text_pages(2);
-        let mut finder = FindState::new();
-        finder.set_pages(demo_find_pages(&pages));
-        finder.set_query("demo");
-        assert_eq!(finder.match_count(), 2);
-        let matched = finder.current().expect("a first match").text();
-
-        let mut selection = SelectionModel::new();
-        selection.drag(TextAnchor::new(0, 7), TextAnchor::new(0, 11));
-        assert_eq!(selection.selected_text(&pages), "demo");
-        assert_eq!(selection.selected_text(&pages), matched);
-    }
-
-    #[test]
-    fn thumbnail_click_marks_active_and_requests_canvas_scroll() {
-        let mut app = PdfxiApp::new();
-        let id = app.open_demo_tab();
-        let count = app.thumbnail_state().page_count();
-        assert!(count > 0, "a demo tab has at least one page");
-        let target = count.saturating_sub(1);
-        assert!(app.select_thumbnail_page(target));
-        assert_eq!(app.thumbnail_state().active_page(), target);
-        assert_eq!(app.thumbnail_state().selected_page(), Some(target));
-        assert_eq!(app.pending_page_scroll, Some(target));
-        assert_eq!(
-            app.state().tab(id).map(|tab| tab.current_page()),
-            Some(target)
-        );
-        assert!(
-            !app.select_thumbnail_page(count),
-            "an out-of-range click is ignored"
-        );
-    }
-
-    #[test]
-    fn thumbnail_active_page_follows_canvas_scroll() {
-        // Use a five-page pane independent of the demo fixture's page count
-        // (the PDFium fixture has only one page).
-        let mut app = PdfxiApp::default();
-        app.thumbs.reset(5);
-        let sizes = vec![PageSize::new(DEMO_PAGE_WIDTH_PT, DEMO_PAGE_HEIGHT_PT); 5];
-        let layout = CanvasLayout::standard(
-            ViewMode::Continuous,
-            Zoom::custom(1.0),
-            CanvasSize::new(800.0, 600.0),
-            &sizes,
-        );
-        let second_top = layout.page(1).map(|page| page.rect.y).unwrap_or(0.0);
-        app.scroll_y = second_top;
-        assert!(app.sync_active_page_from_canvas(&layout));
-        assert_eq!(app.thumbnail_state().active_page(), 1);
-        assert!(
-            !app.sync_active_page_from_canvas(&layout),
-            "an unchanged frame is a no-op"
-        );
-        app.scroll_y = 0.0;
-        assert!(app.sync_active_page_from_canvas(&layout));
-        assert_eq!(app.thumbnail_state().active_page(), 0);
-    }
-
-    #[test]
-    fn thumbnail_pane_model_exposes_visible_range_without_a_window() {
-        let mut app = PdfxiApp::new();
-        app.open_demo_tab();
-        let count = app.thumbnail_state().page_count();
-        assert_eq!(count, DEMO_PAGE_COUNT);
-        let mut state = crate::ThumbnailPaneState::new(count);
-        state.set_row_height(THUMB_ROW_HEIGHT);
-        state.set_viewport_height(600.0);
-        let expected_visible = (600.0_f32 / THUMB_ROW_HEIGHT).ceil() as usize;
-        assert_eq!(state.visible_range().len(), expected_visible);
-        assert_eq!(state.active_page(), 0);
-        assert_eq!(state.metadata().len(), count);
-    }
-
-    #[test]
-    fn active_page_from_canvas_scroll_helper_is_deterministic() {
-        let sizes = vec![PageSize::new(612.0, 792.0); 4];
-        let layout = CanvasLayout::standard(
-            ViewMode::Continuous,
-            Zoom::custom(1.0),
-            CanvasSize::new(800.0, 600.0),
-            &sizes,
-        );
-        assert_eq!(active_page_from_canvas_scroll(&layout, 0.0), 0);
-        let third_top = layout.page(2).map(|page| page.rect.y).unwrap_or(0.0);
-        assert_eq!(active_page_from_canvas_scroll(&layout, third_top), 2);
-        let empty = CanvasLayout::standard(
-            ViewMode::Continuous,
-            Zoom::custom(1.0),
-            CanvasSize::new(800.0, 600.0),
-            &[],
-        );
-        assert_eq!(active_page_from_canvas_scroll(&empty, 10.0), 0);
-    }
-
-    #[test]
-    fn active_page_from_canvas_scroll_picks_the_page_at_the_centre() {
-        let sizes = vec![PageSize::new(612.0, 792.0); 3];
-        let layout = CanvasLayout::standard(
-            ViewMode::Continuous,
-            Zoom::custom(1.0),
-            CanvasSize::new(800.0, 600.0),
-            &sizes,
-        );
-        assert_eq!(active_page_from_canvas_scroll(&layout, 0.0), 0);
-        assert_eq!(active_page_from_canvas_scroll(&layout, 900.0), 1);
-        assert_eq!(active_page_from_canvas_scroll(&layout, 1800.0), 2);
-        // Beyond the last page the closest preceding page wins.
-        assert_eq!(active_page_from_canvas_scroll(&layout, 99_999.0), 2);
-    }
-
-    #[test]
-    fn thumbnail_click_marks_page_active_and_requests_canvas_scroll() {
-        let mut app = PdfxiApp::new();
-        let id = app.open_demo_tab();
-        if let Some(tab) = app.state.tab_mut(id) {
-            tab.set_page_count(5);
-        }
-        app.thumbs.reset(5);
-
-        assert!(app.select_thumbnail_page(3));
-        assert_eq!(app.thumbnail_state().active_page(), 3);
-        assert_eq!(app.thumbnail_state().selected_page(), Some(3));
-        assert_eq!(app.pending_page_scroll, Some(3));
-        assert_eq!(app.state.tab(id).map(|tab| tab.current_page()), Some(3));
-        assert!(app.status().contains("Page 4"));
-
-        // A click outside the document is ignored and leaves state intact.
-        assert!(!app.select_thumbnail_page(9));
-        assert_eq!(app.thumbnail_state().active_page(), 3);
-        assert_eq!(app.pending_page_scroll, Some(3));
-    }
-
-    #[test]
-    fn active_page_follows_canvas_scrolling() {
-        let mut app = PdfxiApp::new();
-        let id = app.open_demo_tab();
-        if let Some(tab) = app.state.tab_mut(id) {
-            tab.set_page_count(6);
-        }
-        app.thumbs.reset(6);
-
-        let sizes = vec![PageSize::new(612.0, 792.0); 6];
-        let layout = CanvasLayout::standard(
-            ViewMode::Continuous,
-            Zoom::custom(1.0),
-            CanvasSize::new(800.0, 600.0),
-            &sizes,
-        );
-
-        app.scroll_y = 0.0;
-        let _ = app.sync_active_page_from_canvas(&layout);
-        assert_eq!(app.thumbnail_state().active_page(), 0);
-
-        app.scroll_y = 900.0;
-        assert!(app.sync_active_page_from_canvas(&layout));
-        assert_eq!(app.thumbnail_state().active_page(), 1);
-        assert!(app.thumb_follow_active, "a change asks the pane to follow");
-
-        // An unchanged frame leaves the active page and follow flag settled.
-        assert!(!app.sync_active_page_from_canvas(&layout));
-    }
-
-    #[cfg(feature = "pdfium")]
-    #[test]
-    fn opening_the_fixture_binds_the_renderer_and_fills_the_cache() {
-        let fixture = crate::raster::demo_fixture_path("minimal.pdf").expect("pdfium fixture");
-        let mut app = PdfxiApp::new();
-        assert!(app.open_path_text(&fixture.display().to_string()));
-        assert!(app.pdfium_renderer.is_some(), "{}", app.status());
-        let id = app.state().active_tab_id().expect("active tab");
-        // Minimal.pdf has exactly one page.
-        assert_eq!(app.state().tab(id).map(|tab| tab.page_count()), Some(1));
-
-        let layout = layout_for_state(app.state(), CanvasSize::new(800.0, 600.0))
-            .expect("the demo tab produces a layout");
-        let effective = layout
-            .page(0)
-            .map(|page| page.rotation)
-            .expect("the page has geometry");
-        app.ensure_rasters(&layout);
-        assert_eq!(app.raster_cache.len(), 1, "the visible page was rasterized");
-        assert!(
-            app.raster_cache
-                .contains(RasterKey::new(0, layout.scale(), effective)),
-            "the producer keys by the same effective rotation used for painting"
-        );
-    }
-
-    // ---- T-0069 tabbed-interface UI helpers -----------------------------
-
-    #[test]
-    fn tab_strip_snapshot_reflects_labels_order_and_active_highlight() {
-        let mut app = PdfxiApp::new();
-        assert!(app.tab_strip_snapshot().is_empty());
-
-        let a = app.open_demo_tab();
-        let b = app.open_demo_tab();
-        let snapshot = app.tab_strip_snapshot();
-        assert_eq!(snapshot.len(), 2);
-        assert_eq!(snapshot[0].0, a);
-        assert!(snapshot[0].1.contains("Modern Business Proposal"));
-        assert!(!snapshot[0].2);
-        assert_eq!(snapshot[1].0, b);
-        assert!(snapshot[1].1.contains("Modern Business Proposal 2"));
-        assert!(snapshot[1].2, "the newest tab is active");
-
-        app.activate_tab(a);
-        let snapshot = app.tab_strip_snapshot();
-        assert!(snapshot[0].2);
-        assert!(!snapshot[1].2);
-    }
-
-    #[test]
-    fn keyboard_tab_helpers_wrap_and_close() {
-        let mut app = PdfxiApp::new();
-        let a = app.open_demo_tab();
-        let b = app.open_demo_tab();
-        let c = app.open_demo_tab();
-        assert_eq!(app.state().active_tab_id(), Some(c));
-
-        assert!(app.activate_next_tab(), "Ctrl+Tab wraps to the first tab");
-        assert_eq!(app.state().active_tab_id(), Some(a));
-        assert!(
-            app.activate_previous_tab(),
-            "Ctrl+Shift+Tab wraps to the last tab"
-        );
-        assert_eq!(app.state().active_tab_id(), Some(c));
-
-        app.close_active_tab();
-        assert_eq!(app.state().active_tab_id(), Some(b));
-        app.close_active_tab();
-        app.close_active_tab();
-        assert!(app.tab_strip_snapshot().is_empty());
-
-        assert!(!app.activate_next_tab(), "no active tab to walk from");
-        assert_eq!(app.status(), "no tab is currently active");
-    }
-
-    #[test]
-    fn ui_close_policy_rejects_closing_dirty_tabs_until_allowed() {
-        let mut app = PdfxiApp::new();
-        assert_eq!(app.close_policy(), UiClosePolicy::RequireClean);
-        let id = app.open_demo_tab();
-        app.state.tab_mut(id).expect("demo tab").set_dirty(true);
-        assert_eq!(app.tab_strip_snapshot()[0].1, "Modern Business Proposal *");
-
-        assert!(!app.close_tab_by_id(id), "dirty close is vetoed by default");
-        assert!(app.state().tab(id).is_some());
-        assert!(app.status().contains("Unsaved changes"), "{}", app.status());
-
-        app.set_close_policy(UiClosePolicy::DiscardDirty);
-        assert!(app.close_tab_by_id(id));
-        assert!(app.state().is_empty());
-    }
-
-    #[test]
-    fn per_tab_scroll_offset_is_saved_and_restored_on_switch() {
-        let mut app = PdfxiApp::new();
-        let a = app.open_demo_tab();
-        app.scroll_x = 12.0;
-        app.scroll_y = 345.0;
-
-        let b = app.open_demo_tab();
-        // Opening b saved a's scroll and started b at the top.
-        assert_eq!(
-            app.state().tab(a).map(|tab| tab.scroll_offset()),
-            Some(CanvasPoint::new(12.0, 345.0))
-        );
-        assert_eq!(app.scroll_offset(), CanvasPoint::new(0.0, 0.0));
-
-        app.scroll_x = 4.0;
-        app.scroll_y = 50.0;
-        app.activate_tab(a);
-        assert_eq!(app.scroll_offset(), CanvasPoint::new(12.0, 345.0));
-        assert_eq!(
-            app.state().tab(b).map(|tab| tab.scroll_offset()),
-            Some(CanvasPoint::new(4.0, 50.0))
-        );
-
-        app.scroll_y = 700.0;
-        app.activate_tab(b);
-        assert_eq!(app.scroll_offset(), CanvasPoint::new(4.0, 50.0));
-        assert_eq!(
-            app.state().tab(a).map(|tab| tab.scroll_offset()),
-            Some(CanvasPoint::new(12.0, 700.0))
-        );
-    }
-
-    #[test]
-    fn open_document_dedups_and_restores_view_via_ui() {
-        let mut app = PdfxiApp::new();
-        let first = app.open_document(Path::new(r"C:\docs\a.pdf"));
-        let id = match first {
-            OpenOutcome::Opened { id } => id,
-            other => panic!("unexpected outcome: {other:?}"),
-        };
-        app.scroll_y = 222.0;
-        let again = app.open_document(Path::new("c:/docs/A.PDF"));
-        assert_eq!(again, OpenOutcome::Focused { id });
-        assert_eq!(app.state().tab_count(), 1);
-        assert_eq!(app.scroll_offset(), CanvasPoint::new(0.0, 222.0));
-        assert!(app.status().contains("Focused existing tab"));
-    }
-
-    #[test]
-    fn reorder_and_close_others_via_ui_helpers() {
-        let mut app = PdfxiApp::new();
-        let a = app.open_demo_tab();
-        let b = app.open_demo_tab();
-        let c = app.open_demo_tab();
-        assert!(app.reorder_tab(c, 0));
-        let order: Vec<TabId> = app
-            .tab_strip_snapshot()
-            .into_iter()
-            .map(|(id, _, _)| id)
-            .collect();
-        assert_eq!(order, vec![c, a, b]);
-        assert!(!app.reorder_tab(c, 9), "out-of-range reorder is rejected");
-
-        app.activate_tab(b);
-        let outcome = app.close_other_tabs();
-        assert_eq!(outcome.closed, vec![c, a]);
-        assert!(outcome.kept.is_empty());
-        let order: Vec<TabId> = app
-            .tab_strip_snapshot()
-            .into_iter()
-            .map(|(id, _, _)| id)
-            .collect();
-        assert_eq!(order, vec![b]);
-        assert!(app.status().contains("Closed 2 other tab(s)"));
-    }
-
-    #[test]
-    fn close_others_policy_keeps_dirty_tabs() {
-        let mut app = PdfxiApp::new();
-        let dirty = app.open_demo_tab();
-        let clean = app.open_demo_tab();
-        let active = app.open_demo_tab();
-        app.state.tab_mut(dirty).expect("dirty tab").set_dirty(true);
-
-        // RequireClean (default) vetoes the dirty tab exactly like Ctrl+W does.
-        let outcome = app.close_other_tabs();
-        assert_eq!(outcome.closed, vec![clean]);
-        assert_eq!(outcome.kept, vec![dirty]);
-        assert_eq!(app.state().active_tab_id(), Some(active));
-        assert_eq!(app.state().tab_count(), 2);
-        assert!(app.state().tab(dirty).is_some(), "dirty tab retained");
-        assert!(
-            app.status().contains("kept 1 with unsaved changes"),
-            "{}",
-            app.status()
-        );
-
-        // Opting in to discard closes the retained tab on a later request.
-        app.set_close_policy(UiClosePolicy::DiscardDirty);
-        let outcome = app.close_other_tabs();
-        assert_eq!(outcome.closed, vec![dirty]);
-        assert!(outcome.kept.is_empty());
-        assert_eq!(app.state().tab_count(), 1);
-        assert_eq!(app.state().active_tab_id(), Some(active));
-    }
-
-    #[test]
-    fn close_button_targets_a_specific_tab_without_activating_it() {
-        let mut app = PdfxiApp::new();
-        let a = app.open_demo_tab();
-        let b = app.open_demo_tab();
-        assert_eq!(app.state().active_tab_id(), Some(b));
-
-        assert!(app.close_tab_by_id(a));
-        assert_eq!(app.state().active_tab_id(), Some(b));
-        assert_eq!(app.state().tab_count(), 1);
-        assert_eq!(app.status(), format!("Closed tab {a}"));
-    }
-
-    // ---- T-0089 optional content layers ---------------------------------
-
-    #[test]
-    fn demo_tab_installs_layers_and_exposes_a_visibility_plan() {
-        let mut app = PdfxiApp::new();
-        assert!(app.layer_visibility_plan().is_none(), "no tab yet");
-        let id = app.open_demo_tab();
-        assert!(app.layers().contains(id));
-        let plan = app.layer_visibility_plan().expect("layers installed");
-        assert_eq!(plan.visible_ids(), &["oc-bg", "oc-anno", "oc-en"]);
-        assert!(plan.is_visible("oc-bg"));
-        assert!(!plan.is_visible("oc-grid"));
-    }
-
-    #[test]
-    fn layer_toggle_and_bulk_actions_via_ui_helpers() {
-        let mut app = PdfxiApp::new();
-        app.open_demo_tab();
-        assert!(app.toggle_layer("oc-grid"));
-        assert!(
-            app.layer_visibility_plan()
-                .expect("plan")
-                .is_visible("oc-grid")
-        );
-        assert!(app.status().contains("oc-grid shown"), "{}", app.status());
-
-        assert!(app.show_all_layers());
-        let plan = app.layer_visibility_plan().expect("plan");
-        // Radio group keeps only its first member visible.
-        assert_eq!(
-            plan.visible_ids(),
-            &["oc-bg", "oc-anno", "oc-grid", "oc-en"]
-        );
-
-        assert!(app.hide_all_layers());
-        assert!(app.layer_visibility_plan().expect("plan").is_empty());
-    }
-
-    #[test]
-    fn radio_group_is_exclusive_through_ui_helpers() {
-        let mut app = PdfxiApp::new();
-        app.open_demo_tab();
-        let plan = app.layer_visibility_plan().expect("plan");
-        assert!(plan.is_visible("oc-en"));
-        assert!(!plan.is_visible("oc-fr"));
-
-        assert!(app.set_layer_visible("oc-fr", true));
-        let plan = app.layer_visibility_plan().expect("plan");
-        assert!(!plan.is_visible("oc-en"));
-        assert!(plan.is_visible("oc-fr"));
-    }
-
-    #[test]
-    fn per_tab_layer_state_is_isolated_and_removed_with_the_tab() {
-        let mut app = PdfxiApp::new();
-        let a = app.open_demo_tab();
-        assert!(app.toggle_layer("oc-grid"));
-        let b = app.open_demo_tab();
-        // The new tab starts from the demo defaults, not tab A's toggled state.
-        assert!(
-            !app.layer_visibility_plan()
-                .expect("plan b")
-                .is_visible("oc-grid")
-        );
-
-        app.activate_tab(a);
-        assert!(
-            app.layer_visibility_plan()
-                .expect("plan a")
-                .is_visible("oc-grid")
-        );
-        app.activate_tab(b);
-        assert!(
-            !app.layer_visibility_plan()
-                .expect("plan b")
-                .is_visible("oc-grid")
-        );
-
-        assert!(app.close_tab_by_id(b));
-        assert!(!app.layers().contains(b));
-        assert!(app.layers().contains(a));
-    }
-
-    #[test]
-    fn locked_unknown_and_no_tab_layer_actions_report_errors() {
-        let mut app = PdfxiApp::new();
-        assert!(!app.toggle_layer("oc-bg"), "no active tab");
-        assert!(app.status().contains("No document open"));
-
-        let tab = app.open_demo_tab();
-        assert!(!app.toggle_layer("ghost"));
-        assert!(
-            app.status().contains("no optional content group"),
-            "{}",
-            app.status()
-        );
-
-        let locked =
-            OcPropertiesSummary::new().add_group(OcgInfo::new("locked", "Locked", true, true));
-        assert!(app.layers.install(tab, locked).is_ok());
-        assert!(!app.toggle_layer("locked"));
-        assert!(app.status().contains("locked"), "{}", app.status());
-        assert!(
-            app.layer_visibility_plan()
-                .expect("plan")
-                .is_visible("locked")
-        );
-
-        assert!(app.install_demo_layers(), "reinstall resets state");
-        assert!(
-            app.layer_visibility_plan()
-                .expect("plan")
-                .is_visible("oc-bg")
-        );
-    }
-}
-
-#[cfg(test)]
-mod open_print_tests {
-    use super::*;
-
-    fn app_with_pages(pages: usize, current: usize) -> PdfxiApp {
-        let mut app = PdfxiApp::new();
-        let id = app.state.open_tab(format!("doc-{pages}.pdf"));
+        let id = app.state.open_tab("test.pdf");
+        app.finish_new_tab(id);
         if let Some(tab) = app.state.tab_mut(id) {
             tab.set_page_count(pages);
-            tab.set_current_page(current);
         }
+        app.thumbs.reset(pages);
         app
     }
 
     #[test]
-    fn print_context_is_derived_from_the_active_tab() {
-        let app = app_with_pages(6, 4);
-        let ctx = app.print_context();
-        assert_eq!(ctx.page_count, 6);
-        assert_eq!(ctx.current_page, 4);
-        assert!(ctx.selected_pages.is_empty());
-
-        let empty = PdfxiApp::new();
-        let ctx = empty.print_context();
-        assert_eq!(ctx.page_count, 0);
+    fn startup_state_has_no_tabs() {
+        let app = PdfxiApp::new();
+        assert_eq!(app.state().tab_count(), 0);
+        assert!(app.state().active_tab().is_none());
+        assert!(app.selected_text().is_empty());
     }
 
     #[test]
-    fn print_dialog_open_close_and_submit_never_contact_a_printer() {
-        let mut app = app_with_pages(4, 2);
-        assert!(!app.print_dialog().is_open());
-        app.open_print_dialog();
-        assert!(app.print_dialog().is_open());
-
-        app.set_print_range(PrintPageRange::Current);
-        let plan = app.submit_print().expect("plan built without a printer");
-        assert_eq!(plan.pages, vec![2]);
-        assert_eq!(plan.summary, app.print_dialog().status());
-        assert_eq!(
-            app.print_dialog().last_plan().map(|p| p.raster_count()),
-            Some(1)
-        );
-
-        app.close_print_dialog();
-        assert!(!app.print_dialog().is_open());
+    fn opening_a_document_starts_without_invented_content() {
+        let app = app_with_pages(3);
+        let tab = app.state().active_tab().expect("active tab");
+        assert_eq!(tab.page_count(), 3);
+        assert!(app.find_state().matches().is_empty());
+        assert!(app.selected_text().is_empty());
     }
 
     #[test]
-    fn print_dialog_setters_update_the_model() {
-        let mut app = app_with_pages(4, 0);
-        app.set_print_copies(2);
-        app.set_print_duplex(Duplex::ShortEdge);
-        app.set_print_orientation(Orientation::Landscape);
-        app.set_print_scale(PageScaleMode::Fit);
-        app.set_print_paper(PaperSize::A4);
-        app.set_print_selected_pages(vec![3, 1]);
-        app.set_print_range(PrintPageRange::Selection);
+    fn view_commands_work_with_and_without_a_document() {
+        let mut empty = PdfxiApp::new();
+        empty.zoom_in();
+        empty.rotate_clockwise();
+        empty.fit_page();
+        empty.actual_size();
+        assert!(empty.state().active_tab().is_none());
 
-        let model = app.print_dialog().model();
-        assert_eq!(model.copies, 2);
-        assert_eq!(model.duplex, Duplex::ShortEdge);
-        assert_eq!(model.orientation, Orientation::Landscape);
-        assert_eq!(model.scale, PageScaleMode::Fit);
-        assert_eq!(model.paper, PaperSize::A4);
-        assert_eq!(model.range, PrintPageRange::Selection);
-        assert_eq!(app.print_context().selected_pages, vec![3, 1]);
-
-        let plan = app.submit_print().expect("selection plan");
-        assert_eq!(plan.pages, vec![1, 1, 3, 3]);
+        let mut app = app_with_pages(2);
+        app.zoom_in();
+        app.rotate_clockwise();
+        app.fit_page();
+        app.actual_size();
+        assert!(app.state().active_tab().is_some());
     }
 
     #[test]
-    fn open_errors_are_recorded_and_cleared() {
+    fn tabs_open_close_and_reorder() {
         let mut app = PdfxiApp::new();
-        assert!(app.open_errors().is_empty());
-        app.record_open_error(OpenError::UnsupportedFormat);
-        app.record_open_error(OpenError::Encrypted);
-        assert_eq!(app.open_errors().len(), 2);
-        assert_eq!(app.open_errors()[0], OpenError::UnsupportedFormat);
-        app.clear_open_errors();
-        assert!(app.open_errors().is_empty());
+        let first = app.state.open_tab("one.pdf");
+        app.finish_new_tab(first);
+        let second = app.state.open_tab("two.pdf");
+        app.finish_new_tab(second);
+        assert_eq!(app.state().tab_count(), 2);
+        assert!(app.activate_next_tab());
+        assert!(app.reorder_tab(second, 0));
+        app.close_active_tab();
+        assert_eq!(app.state().tab_count(), 1);
     }
 
     #[test]
-    fn invalid_print_range_is_reported_through_the_shell() {
-        let mut app = app_with_pages(4, 0);
-        app.set_print_range(PrintPageRange::Custom("nope".to_owned()));
-        assert!(app.submit_print().is_err());
-        assert!(app.print_dialog().last_error().is_some());
-        assert!(app.print_dialog().last_plan().is_none());
+    fn open_path_text_rejects_invalid_input() {
+        let mut app = PdfxiApp::new();
+        assert!(!app.open_path_text(""));
+        assert!(!app.open_path_text("notes.txt"));
+        assert_eq!(app.state().tab_count(), 0);
     }
 
-    // ---- T-0126 split / tile UI helper behavior --------------------------
-
     #[test]
-    fn pane_layout_label_is_stable() {
-        use crate::{PaneLayout, SplitDirection, TileGrid};
-        assert_eq!(pane_layout_label(PaneLayout::Single), "Single");
-        let split = crate::SplitLayout::new(SplitDirection::Horizontal, 0.5, 4, 32)
-            .expect("valid split layout");
-        assert_eq!(pane_layout_label(PaneLayout::Split(split)), "Split H 50");
+    fn caption_layout_matches_the_window_control_style() {
         assert_eq!(
-            pane_layout_label(PaneLayout::Tile(TileGrid::new(2, 2).expect("valid grid"))),
-            "Tile 2x2"
+            caption_layout(WindowControlStyle::Windows),
+            (
+                CaptionSide::Right,
+                [
+                    CaptionAction::Minimize,
+                    CaptionAction::ToggleMaximize,
+                    CaptionAction::Close,
+                ],
+            )
+        );
+        assert_eq!(
+            caption_layout(WindowControlStyle::MacOs),
+            (
+                CaptionSide::Left,
+                [
+                    CaptionAction::Close,
+                    CaptionAction::Minimize,
+                    CaptionAction::ToggleMaximize,
+                ],
+            )
         );
     }
 
     #[test]
-    fn pane_commands_update_the_manager_and_status() {
-        let mut app = PdfxiApp::default();
-        let tab = app.open_demo_tab();
-        assert_eq!(app.pane_manager().pane_count(), 1);
-        assert_eq!(app.pane_manager().bound_tabs(), vec![tab]);
+    fn caption_commands_follow_the_maximized_state() {
+        assert_eq!(
+            caption_command(CaptionAction::Minimize, false),
+            egui::ViewportCommand::Minimized(true)
+        );
+        assert_eq!(
+            caption_command(CaptionAction::ToggleMaximize, false),
+            egui::ViewportCommand::Maximized(true)
+        );
+        assert_eq!(
+            caption_command(CaptionAction::ToggleMaximize, true),
+            egui::ViewportCommand::Maximized(false)
+        );
+        assert_eq!(
+            caption_command(CaptionAction::Close, false),
+            egui::ViewportCommand::Close
+        );
+    }
 
-        app.apply_pane_command(PaneCommand::SplitVertical);
-        assert_eq!(app.pane_manager().pane_count(), 2);
-        assert!(app.status().contains("Split V"), "{}", app.status());
-
-        app.set_pane_zoom(Zoom::custom(1.5));
-        app.apply_pane_command(PaneCommand::FocusNextPane);
-        assert_eq!(app.pane_manager().active_index(), 1);
-        assert!(app.status().contains("focus 1"), "{}", app.status());
-        // The direct focus helper reports its own confirmation status.
-        app.focus_pane(0);
-        assert!(app.status().contains("Focused pane 0"), "{}", app.status());
-
-        app.apply_pane_command(PaneCommand::Tile2x2);
-        assert_eq!(app.pane_manager().pane_count(), 4);
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn real_document_uses_real_page_geometry_and_text() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/realworld/microsoft-excel-2019-sample.pdf");
+        let mut app = PdfxiApp::new();
         assert!(
-            app.pane_status().contains("4 pane(s)"),
-            "{}",
-            app.pane_status()
+            app.open_path_text(path.to_str().expect("utf-8 fixture path")),
+            "the real fixture must open"
         );
-
-        // An invalid focus is reported through the status without panicking.
-        app.focus_pane(99);
+        let tab = app.state().active_tab().expect("an open tab");
+        assert_eq!(tab.page_count(), 2);
         assert!(
-            app.status().contains("no pane at index 99"),
-            "{}",
-            app.status()
+            app.page_sizes.len() >= 2,
+            "page sizes are measured from the document"
         );
-    }
 
-    #[test]
-    fn pane_geometry_helper_is_window_free_and_reports_small_viewports() {
-        let mut app = PdfxiApp::default();
-        assert_eq!(
-            app.open_demo_tab(),
-            app.state().active_tab_id().expect("tab")
-        );
-        let geometry = app.pane_geometry(400, 300).expect("roomy viewport");
-        assert_eq!(geometry, vec![crate::PaneRect::new(0, 0, 400, 300)]);
+        let renderer = PdfiumRenderer::from_file(&path).expect("fixture opens in PDFium");
+        for (page, size) in app.page_sizes.iter().take(2).enumerate() {
+            let expected_width = renderer
+                .page_size(PageIndex::new(page))
+                .expect("page size")
+                .width_pt;
+            assert!(
+                (size.width_pt - expected_width).abs() < 1.0,
+                "page {page} width {} vs renderer {expected_width}",
+                size.width_pt
+            );
+        }
 
-        app.apply_pane_command(PaneCommand::SplitHorizontal);
-        let geometry = app.pane_geometry(400, 300).expect("roomy viewport");
-        assert_eq!(geometry.len(), 2);
+        app.set_find_query("lighthouse");
         assert!(
-            geometry[0].bottom() < geometry[1].y,
-            "top pane above bottom pane"
+            app.find_state().matches().iter().any(|hit| hit.page() == 0),
+            "lighthouse is found on page 1 from real text"
         );
-
-        // A viewport too small for the divider/minimum has no geometry.
-        assert_eq!(app.pane_geometry(10, 10), None);
-    }
-
-    #[test]
-    fn closing_a_tab_removes_its_panes_through_the_shell() {
-        let mut app = PdfxiApp::default();
-        let first = app.open_demo_tab();
-        app.apply_pane_command(PaneCommand::SplitHorizontal);
-        assert_eq!(app.pane_manager().pane_count(), 2);
-
-        let second = app.open_demo_tab();
-        assert_eq!(
-            app.pane_manager().pane_count(),
-            1,
-            "new tab resets to one pane"
-        );
-        assert_eq!(app.pane_manager().bound_tabs(), vec![second]);
-
-        // Closing the active tab empties the pane manager.
-        assert!(app.close_tab_by_id(second));
-        assert_eq!(app.pane_manager().pane_count(), 0);
-        assert_eq!(app.pane_manager().active_pane(), None);
-        // The earlier tab still exists but its panes were discarded on switch.
-        assert!(app.state().tab(first).is_some());
-    }
-
-    #[test]
-    fn pane_sharing_toggle_is_reflected_in_status() {
-        let mut app = PdfxiApp::default();
-        app.open_demo_tab();
-        app.apply_pane_command(PaneCommand::ToggleSharing);
-        assert_eq!(app.pane_manager().sharing(), ViewSharing::MirrorTab);
+        app.set_find_query("meadow");
         assert!(
-            app.pane_status().contains("MirrorTab"),
-            "{}",
-            app.pane_status()
+            app.find_state().matches().iter().any(|hit| hit.page() == 1),
+            "meadow is found on page 2 from real text"
         );
     }
-}
-
-/// Window-free tests for the bookmarks, attachments, and links viewer panels.
-#[cfg(test)]
-mod navigation_viewer_tests {
-    use super::*;
 
     #[test]
-    fn demo_tab_installs_navigation_models_and_article_summary() {
-        let mut app = PdfxiApp::default();
-        assert!(app.bookmark_rows().is_empty());
-        assert!(app.attachment_rows().is_empty());
-        assert!(app.link_rows(0).is_empty());
+    fn opening_a_non_pdf_shows_an_error_and_no_tab() {
+        let mut app = PdfxiApp::new();
+        assert!(!app.open_path_text("notes.txt"));
+        assert_eq!(app.state().tab_count(), 0);
+        assert!(app.open_error_banner().is_some());
+        app.dismiss_open_error();
+        assert!(app.open_error_banner().is_none());
+    }
 
-        let id = app.open_demo_tab();
-        assert!(app.bookmarks().contains(id));
-        assert!(app.attachments().contains(id));
-        assert!(app.links().contains(id));
-        assert_eq!(app.bookmark_rows().len(), 4);
-        let articles = app.article_summary();
-        assert_eq!(articles.len(), 1);
-        assert_eq!(articles[0].0, "art-main");
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn two_real_documents_switch_and_close_independently() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let first = root.join("minimal.pdf");
+        let second = root.join("text.pdf");
+        let mut app = PdfxiApp::new();
+        assert!(app.open_path_text(first.to_str().expect("utf-8 path")));
+        assert!(app.open_path_text(second.to_str().expect("utf-8 path")));
+        assert_eq!(app.state().tab_count(), 2);
+
+        let second_id = app.state().active_tab_id().expect("second tab active");
+        let ids = app.tab_strip_snapshot();
+        assert_eq!(ids.len(), 2);
+        let first_id = ids
+            .iter()
+            .map(|entry| entry.0)
+            .find(|id| *id != second_id)
+            .expect("first tab");
+        app.activate_tab(first_id);
+        assert_eq!(app.state().active_tab_id(), Some(first_id));
+        assert!(app.close_tab_by_id(first_id));
+        assert_eq!(app.state().tab_count(), 1);
+        assert_eq!(app.state().active_tab_id(), Some(second_id));
     }
 
     #[test]
-    fn bookmark_collapse_and_selection_via_ui_helpers() {
-        let mut app = PdfxiApp::default();
-        app.open_demo_tab();
-        // bm-root and bm-intro are open by default: all four nodes visible.
-        assert_eq!(app.bookmark_rows().len(), 4);
-        // bm-root has children; collapsing it hides bm-intro and bm-body.
-        // The helper returns whether the action succeeded; inspect the rows for
-        // the resulting expansion state.
-        assert!(app.toggle_bookmark_expansion("bm-root"));
-        assert_eq!(app.bookmark_rows().len(), 2, "children collapsed");
+    fn zoom_clamps_and_fit_width_uses_the_page_width() {
+        let mut app = app_with_pages(1);
+        app.fit_width();
+        assert_eq!(
+            app.state().active_tab().map(|tab| tab.zoom()),
+            Some(Zoom::FitWidth)
+        );
+        let wide = layout_for_state(
+            app.state(),
+            CanvasSize::new(800.0, 600.0),
+            &[PageSize::new(612.0, 792.0)],
+        )
+        .expect("fit-width layout")
+        .pages()[0]
+            .scale;
+        let narrow = layout_for_state(
+            app.state(),
+            CanvasSize::new(800.0, 600.0),
+            &[PageSize::new(306.0, 792.0)],
+        )
+        .expect("fit-width layout")
+        .pages()[0]
+            .scale;
         assert!(
-            !app.bookmarks()
-                .state(app.state().active_tab_id().expect("tab"))
-                .expect("state")
-                .is_expanded("bm-root")
+            (narrow / wide - 2.0).abs() < 0.01,
+            "half the page width doubles the fit scale ({narrow} vs {wide})"
         );
-        assert!(app.toggle_bookmark_expansion("bm-root"));
-        assert_eq!(app.bookmark_rows().len(), 4, "children re-expanded");
-        assert!(app.select_bookmark("bm-refs"));
-        assert!(
-            app.bookmark_rows()
-                .iter()
-                .any(|row| row.id() == "bm-refs" && row.selected())
-        );
-        assert!(!app.select_bookmark("ghost"));
-        assert!(app.status().contains("no bookmark"), "{}", app.status());
+
+        for _ in 0..200 {
+            app.zoom_in();
+        }
+        let maximum = app
+            .state()
+            .active_tab()
+            .expect("tab")
+            .zoom()
+            .scale()
+            .expect("custom zoom");
+        assert!(maximum <= crate::MAX_ZOOM + 1e-4, "zoom {maximum}");
+        for _ in 0..400 {
+            app.zoom_out();
+        }
+        let minimum = app
+            .state()
+            .active_tab()
+            .expect("tab")
+            .zoom()
+            .scale()
+            .expect("custom zoom");
+        assert!(minimum >= crate::MIN_ZOOM - 1e-4, "zoom {minimum}");
     }
 
     #[test]
-    fn attachment_rows_order_open_boundary_and_empty_state() {
-        let mut app = PdfxiApp::default();
-        app.open_demo_tab();
-        let rows = app.attachment_rows();
-        let names: Vec<&str> = rows.iter().map(|row| row.0.as_str()).collect();
-        assert_eq!(names, vec!["data.csv", "notes.txt", "supplement.pdf"]);
-        assert!(app.select_attachment("notes.txt"));
-        let tab = app.state().active_tab_id().expect("active tab");
+    fn page_navigation_clamps_at_the_first_and_last_page() {
+        let mut app = app_with_pages(3);
+        app.step_page(-1);
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 0);
+        app.step_page(1);
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 1);
+        app.step_page(1);
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 2);
+        app.step_page(1);
         assert_eq!(
-            app.attachments()
-                .model(tab)
-                .and_then(|model| model.get("notes.txt"))
-                .map(|attachment| attachment.size()),
-            Some(256)
+            app.state().active_tab().expect("tab").current_page(),
+            2,
+            "the last page is a hard stop"
         );
-        // Host open boundary: request recorded, no bytes read here.
-        assert!(app.open_attachment("notes.txt"));
+        app.step_page(-1);
+        assert_eq!(app.state().active_tab().expect("tab").current_page(), 1);
+        app.step_page(-1);
+        app.step_page(-1);
         assert_eq!(
-            app.last_open_request().map(AttachmentOpenRequest::name),
-            Some("notes.txt")
+            app.state().active_tab().expect("tab").current_page(),
+            0,
+            "the first page is a hard stop"
         );
-        assert!(!app.open_attachment("missing"));
-        assert_eq!(app.attachment_rows().len(), 3);
-    }
-
-    #[test]
-    fn link_rows_resolution_and_hit_test_via_ui_helpers() {
-        let mut app = PdfxiApp::default();
-        app.open_demo_tab();
-        let rows = app.link_rows(0);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, "lnk-web");
-        assert!(rows[0].2.starts_with("URI"));
-        assert_eq!(rows[1].0, "lnk-jump");
-        assert_eq!(
-            app.resolve_link("lnk-web"),
-            Some(ResolvedLink::Uri("https://example.test".into()))
-        );
-        assert!(matches!(
-            app.resolve_link("lnk-named"),
-            Some(ResolvedLink::NamedPage { page: Some(0), .. })
-        ));
-        assert_eq!(app.resolve_link("ghost"), None);
-        assert_eq!(app.hit_test_link(0, 80.0, 705.0), Some("lnk-web".into()));
-        assert_eq!(app.hit_test_link(0, 230.0, 705.0), Some("lnk-jump".into()));
-        assert_eq!(app.hit_test_link(0, 0.0, 0.0), None);
-        assert_eq!(
-            link_target_label(&LinkTarget::Internal { page: 2 }),
-            "Page 3"
-        );
-    }
-
-    #[test]
-    fn navigation_data_is_isolated_per_tab_and_removed_with_tab() {
-        let mut app = PdfxiApp::default();
-        let a = app.open_demo_tab();
-        let b = app.open_demo_tab();
-        // The active tab is `b`; selecting there must not touch `a`.
-        assert!(app.select_bookmark("bm-refs"));
-        assert!(
-            app.bookmarks()
-                .state(b)
-                .expect("tab b")
-                .is_expanded("bm-intro")
-        );
-        assert_eq!(
-            app.bookmarks().state(b).expect("tab b").selected(),
-            Some("bm-refs")
-        );
-        assert_eq!(app.bookmarks().state(a).expect("tab a").selected(), None);
-        assert!(app.close_tab_by_id(b));
-        assert!(!app.bookmarks().contains(b));
-        assert!(!app.attachments().contains(b));
-        assert!(!app.links().contains(b));
-        assert!(app.bookmarks().contains(a));
-    }
-
-    #[test]
-    fn reinstall_restores_navigation_data_after_clear() {
-        let mut app = PdfxiApp::default();
-        let id = app.open_demo_tab();
-        assert!(app.bookmarks.remove(id));
-        assert!(app.bookmark_rows().is_empty());
-        assert!(app.install_demo_navigation_data());
-        assert!(app.bookmarks().contains(id));
-        assert_eq!(app.bookmark_rows().len(), 4);
-        let mut empty = PdfxiApp::default();
-        assert!(!empty.install_demo_navigation_data());
-        assert!(empty.status().contains("No document open"));
     }
 }

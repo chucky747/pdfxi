@@ -27,13 +27,34 @@
 //!
 //! # Library discovery
 //!
-//! The native library is located once, on first use, from the following sources
-//! in priority order:
+//! The native library is loaded once, on first use, from locations the running
+//! user cannot influence:
 //!
-//! 1. the `PDFIUM_PATH` environment variable (a full path to the DLL/SO);
-//! 2. `%LOCALAPPDATA%\pdfxi\pdfium\bin\pdfium.dll` (the standard install);
-//! 3. `pdfium.dll` in the current directory;
-//! 4. the platform's system library search path.
+//! - **Release builds** load only `pdfium.dll` from the directory of the
+//!   running executable. That directory comes from [`std::env::current_exe`]
+//!   and must be absolute; when it cannot be determined, loading fails with
+//!   [`LibraryError::ExecutableDirectory`]. The working directory, `PATH`, and
+//!   the system library search are deliberately never consulted, so a planted
+//!   DLL in an unrelated directory cannot be loaded.
+//! - **Debug builds and tests** (`cfg(debug_assertions)`) try the executable
+//!   directory first, then `PDFIUM_PATH` (a full path to the DLL/SO), then the
+//!   per-user developer cache `%LOCALAPPDATA%\pdfxi\pdfium\bin`. The working
+//!   directory and the system search path are still never used.
+//!
+//! # Input limit
+//!
+//! [`PdfiumRenderer::from_file`] stats the file before reading it and rejects
+//! documents larger than [`MAX_INPUT_BYTES`] (2 GiB) with the typed
+//! [`InputTooLarge`] error, so a hostile or accidental huge file cannot cause
+//! an unbounded whole-file allocation.
+//!
+//! # Typed errors for new failure modes
+//!
+//! [`RenderError`] has no variant for library discovery or input size, and
+//! this module cannot add one without editing `crates/pdfxi-render/src/lib.rs`.
+//! The typed [`LibraryError`] and [`InputTooLarge`] values are therefore
+//! converted to `RenderError::Backend` through their `Display` text, which is
+//! the exact diagnostic a caller sees.
 //!
 //! # Errors
 //!
@@ -42,6 +63,7 @@
 //! panic; they produce a structured error that callers can map to a message.
 
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard, OnceLock},
 };
@@ -55,6 +77,7 @@ use pdfxi_text::{
     TextPage,
 };
 
+use crate::PageDimensions;
 use crate::text_extract::{RawChar, chars_to_text_page};
 use crate::{
     CancellationToken, MAX_RASTER_PIXELS, PageIndex, Progress, RenderError, RenderedPage, Renderer,
@@ -67,37 +90,154 @@ static PDFIUM: OnceLock<Mutex<Pdfium>> = OnceLock::new();
 /// Guards the one-time initialization of [`PDFIUM`].
 static INIT_LOCK: Mutex<()> = Mutex::new(());
 
-/// Build the ordered list of candidate locations for the PDFium library.
-fn library_candidates() -> Vec<PathBuf> {
+/// Largest input document [`PdfiumRenderer::from_file`] will read, in bytes.
+///
+/// 2 GiB keeps a whole-file read bounded while accepting every ordinary PDF.
+/// Larger documents need the incremental, streamed backend that is not part of
+/// this release.
+pub const MAX_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// A document rejected before it is read into memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("input file is {size} bytes; the maximum accepted size is {limit} bytes")]
+pub struct InputTooLarge {
+    /// Reported size of the rejected file.
+    pub size: u64,
+    /// The limit that `size` exceeded.
+    pub limit: u64,
+}
+
+impl From<InputTooLarge> for RenderError {
+    fn from(error: InputTooLarge) -> Self {
+        // `RenderError` has no size variant; see the module documentation.
+        RenderError::Backend(error.to_string())
+    }
+}
+
+/// A PDFium library location that could not be used.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum LibraryError {
+    /// The running executable's directory could not be resolved.
+    #[error("cannot determine the directory of the running executable: {0}")]
+    ExecutableDirectory(String),
+    /// No candidate location held a loadable PDFium library.
+    #[error("could not load the PDFium library (tried: {tried})")]
+    NotFound {
+        /// Every attempted location together with its loader error.
+        tried: String,
+    },
+}
+
+impl From<LibraryError> for RenderError {
+    fn from(error: LibraryError) -> Self {
+        // `RenderError` has no library variant; see the module documentation.
+        RenderError::Backend(error.to_string())
+    }
+}
+
+/// Reject a file whose stat length exceeds [`MAX_INPUT_BYTES`].
+///
+/// Pure so the cap decision can be tested without a large file on disk.
+pub fn check_input_size(size: u64) -> Result<(), InputTooLarge> {
+    if size > MAX_INPUT_BYTES {
+        return Err(InputTooLarge {
+            size,
+            limit: MAX_INPUT_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// Ordered PDFium library candidates for one build mode.
+///
+/// Pure so the search policy is testable without loading a native library:
+/// `exe_dir` is the running executable's directory and the only source in a
+/// release build; `debug_build` appends `env_override` (`PDFIUM_PATH`) and
+/// `dev_cache_dir` (the per-user developer cache). No candidate is ever a bare
+/// file name, so the working directory and the system search path can never be
+/// used.
+fn library_candidates(
+    library_name: &OsStr,
+    exe_dir: Option<&Path>,
+    debug_build: bool,
+    env_override: Option<&Path>,
+    dev_cache_dir: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-
-    if let Some(path) = std::env::var_os("PDFIUM_PATH")
-        && !path.is_empty()
-    {
-        candidates.push(PathBuf::from(path));
+    if let Some(directory) = exe_dir {
+        candidates.push(directory.join(library_name));
     }
-
-    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        candidates.push(
-            Path::new(&local_app_data)
-                .join("pdfxi")
-                .join("pdfium")
-                .join("bin")
-                .join("pdfium.dll"),
-        );
+    if debug_build {
+        if let Some(path) = env_override {
+            candidates.push(path.to_path_buf());
+        }
+        if let Some(directory) = dev_cache_dir {
+            candidates.push(directory.join(library_name));
+        }
     }
-
-    candidates.push(PathBuf::from(Pdfium::pdfium_platform_library_name()));
     candidates
+}
+
+/// Directory of the running executable, which must be absolute.
+fn executable_directory() -> Result<PathBuf, LibraryError> {
+    let executable = std::env::current_exe()
+        .map_err(|error| LibraryError::ExecutableDirectory(error.to_string()))?;
+    if !executable.is_absolute() {
+        return Err(LibraryError::ExecutableDirectory(format!(
+            "{} is not an absolute path",
+            executable.display()
+        )));
+    }
+    executable.parent().map(Path::to_path_buf).ok_or_else(|| {
+        LibraryError::ExecutableDirectory(format!(
+            "{} has no parent directory",
+            executable.display()
+        ))
+    })
+}
+
+/// Candidate library locations for this process and build mode.
+fn candidate_libraries() -> Result<Vec<PathBuf>, LibraryError> {
+    let exe_dir = executable_directory()?;
+    let debug_build = cfg!(debug_assertions);
+    let env_override = if debug_build {
+        std::env::var_os("PDFIUM_PATH")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+    } else {
+        None
+    };
+    let dev_cache_dir = if debug_build {
+        std::env::var_os("LOCALAPPDATA")
+            .filter(|base| !base.is_empty())
+            .map(|base| Path::new(&base).join("pdfxi").join("pdfium").join("bin"))
+    } else {
+        None
+    };
+    let library_name = Pdfium::pdfium_platform_library_name();
+    Ok(library_candidates(
+        &library_name,
+        Some(exe_dir.as_path()),
+        debug_build,
+        env_override.as_deref(),
+        dev_cache_dir.as_deref(),
+    ))
 }
 
 /// Bind the PDFium shared library and create the process-wide instance.
 ///
 /// This is called at most once, while `INIT_LOCK` is held.
 fn bind_pdfium() -> Result<Mutex<Pdfium>, RenderError> {
-    let mut attempts = Vec::new();
+    let candidates = candidate_libraries()?;
+    if candidates.is_empty() {
+        return Err(LibraryError::NotFound {
+            tried: "no candidate locations".to_owned(),
+        }
+        .into());
+    }
 
-    for candidate in library_candidates() {
+    let mut attempts = Vec::new();
+    for candidate in candidates {
         match Pdfium::bind_to_library(&candidate) {
             Ok(bindings) => return Ok(Mutex::new(configure_pdfium(Pdfium::new(bindings)))),
             Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
@@ -111,19 +251,10 @@ fn bind_pdfium() -> Result<Mutex<Pdfium>, RenderError> {
         }
     }
 
-    match Pdfium::bind_to_system_library() {
-        Ok(bindings) => Ok(Mutex::new(configure_pdfium(Pdfium::new(bindings)))),
-        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
-            Ok(Mutex::new(configure_pdfium(Pdfium::default())))
-        }
-        Err(error) => {
-            attempts.push(format!("system library: {error}"));
-            Err(RenderError::Backend(format!(
-                "could not load the PDFium library (tried: {})",
-                attempts.join("; ")
-            )))
-        }
+    Err(LibraryError::NotFound {
+        tried: attempts.join("; "),
     }
+    .into())
 }
 
 /// Apply optional configuration that improves rendering fidelity.
@@ -212,10 +343,18 @@ impl std::fmt::Debug for PdfiumRenderer {
 impl PdfiumRenderer {
     /// Open a PDF from `path`, validating that PDFium can parse it.
     ///
-    /// Returns [`RenderError::Backend`] if the file cannot be read or the
-    /// document is not a valid PDF.
+    /// The file is stat'ed before it is read: a length above
+    /// [`MAX_INPUT_BYTES`] is rejected through [`check_input_size`] with an
+    /// [`InputTooLarge`] diagnostic instead of an unbounded allocation.
+    ///
+    /// Returns [`RenderError::Backend`] if the file cannot be read, is too
+    /// large, or is not a valid PDF.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, RenderError> {
         let path = path.as_ref();
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            RenderError::Backend(format!("cannot read {}: {error}", path.display()))
+        })?;
+        check_input_size(metadata.len()).map_err(RenderError::from)?;
         let bytes = std::fs::read(path).map_err(|error| {
             RenderError::Backend(format!("cannot read {}: {error}", path.display()))
         })?;
@@ -247,6 +386,32 @@ impl PdfiumRenderer {
     pub fn source(&self) -> Option<&Path> {
         self.source.as_deref()
     }
+    /// Return a page's size in points without rasterizing the page.
+    ///
+    /// The page box is read directly from PDFium under the same process-wide
+    /// lock used for rendering.
+    ///
+    /// # Errors
+    /// [`RenderError::PageOutOfRange`] when the page does not exist and
+    /// [`RenderError::Backend`] when PDFium cannot load the page.
+    pub fn page_size(&self, page: PageIndex) -> Result<PageDimensions, RenderError> {
+        let pdfium = lock_pdfium()?;
+        let document = pdfium
+            .load_pdf_from_byte_slice(&self.bytes, None)
+            .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
+        let pages = document.pages();
+        if page.get() >= pages.len() as usize {
+            return Err(RenderError::PageOutOfRange(page.get()));
+        }
+        let pdf_page = pages
+            .get(page.get() as i32)
+            .map_err(|error| RenderError::Backend(format!("cannot load page {page}: {error}")))?;
+        Ok(PageDimensions {
+            width_pt: pdf_page.width().value,
+            height_pt: pdf_page.height().value,
+        })
+    }
+
     /// Read page count, information-dictionary title, and encryption state from
     /// the loaded document.
     ///
@@ -465,5 +630,84 @@ impl TextExtractor for PdfiumRenderer {
     fn page_count(&self) -> Result<usize, TextError> {
         // Reuse the renderer's validated path so both traits agree on the count.
         Renderer::page_count(self).map_err(|error| TextError::Backend(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_INPUT_BYTES, check_input_size, library_candidates};
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    /// The size cap must accept the limit itself and reject one byte more.
+    #[test]
+    fn input_size_cap_decision() {
+        assert_eq!(check_input_size(0), Ok(()));
+        assert_eq!(check_input_size(1024), Ok(()));
+        assert_eq!(check_input_size(MAX_INPUT_BYTES), Ok(()));
+
+        let rejected = check_input_size(MAX_INPUT_BYTES + 1).expect_err("one byte over the cap");
+        assert_eq!(rejected.size, MAX_INPUT_BYTES + 1);
+        assert_eq!(rejected.limit, MAX_INPUT_BYTES);
+        assert!(check_input_size(u64::MAX).is_err());
+    }
+
+    /// Release builds must only ever try the executable directory, while debug
+    /// builds add the developer override and cache but never the working
+    /// directory or the system search path.
+    #[test]
+    fn library_search_path_order() {
+        let name = OsStr::new("pdfium.dll");
+        let exe_dir = Path::new("C:/Program Files/PDFXI");
+        let override_path = Path::new("D:/dev/pdfium/pdfium.dll");
+        let cache_dir = Path::new("C:/Users/example/AppData/Local/pdfxi/pdfium/bin");
+
+        assert_eq!(
+            library_candidates(
+                name,
+                Some(exe_dir),
+                false,
+                Some(override_path),
+                Some(cache_dir)
+            ),
+            vec![exe_dir.join(name)]
+        );
+        // Without an executable directory a release build has no candidates at
+        // all: there is no fallback to the environment or the system path.
+        assert!(
+            library_candidates(name, None, false, Some(override_path), Some(cache_dir)).is_empty()
+        );
+
+        assert_eq!(
+            library_candidates(
+                name,
+                Some(exe_dir),
+                true,
+                Some(override_path),
+                Some(cache_dir)
+            ),
+            vec![
+                exe_dir.join(name),
+                override_path.to_path_buf(),
+                cache_dir.join(name)
+            ]
+        );
+        assert_eq!(
+            library_candidates(name, None, true, None, Some(cache_dir)),
+            vec![cache_dir.join(name)]
+        );
+        for candidate in library_candidates(
+            name,
+            Some(exe_dir),
+            true,
+            Some(override_path),
+            Some(cache_dir),
+        ) {
+            assert!(
+                candidate.is_absolute(),
+                "{} must be absolute",
+                candidate.display()
+            );
+        }
     }
 }

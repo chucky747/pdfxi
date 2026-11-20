@@ -104,6 +104,11 @@
 //! the `ui` feature; it wires [`find`], [`selection`], and [`thumbs`] into a find
 //! bar, copy command, and thumbnail side panel, and renders a tab strip with
 //! close buttons, an active highlight, and tab keyboard shortcuts.
+//!
+//! The [`settings`] module persists the shell's theme preference and
+//! window-control style as TOML in the per-user configuration directory. It has
+//! no GUI dependency, tolerates missing or corrupt files, writes atomically, and
+//! exposes a pure launch-flag parser used by the native shell.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -134,6 +139,7 @@ pub mod raster;
 pub mod read_aloud;
 pub mod reflow;
 pub mod selection;
+pub mod settings;
 pub mod shared_folder;
 pub mod split;
 mod state;
@@ -250,6 +256,7 @@ pub use reflow::{
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
 };
+pub use settings::{LaunchOptions, Settings, SettingsError, ThemePreference, WindowControlStyle};
 pub use shared_folder::{
     ConflictKind, ConflictReport, DEFAULT_SHARED_FOLDER_MAX_ENTRIES, MAX_REVISION_LEN,
     MAX_SHARED_FOLDER_EXTENSIONS, MAX_SHARED_FOLDER_ROOT_LEN, MAX_SYNC_ITEMS, SharedFolderError,

@@ -5,7 +5,7 @@ User-scope installer for the PDFXI portable package.
 .DESCRIPTION
 Copies the portable payload to a caller-supplied directory and registers a
 Start Menu shortcut in the CURRENT USER's Programs folder. It never elevates,
-never touches the network, and never copies an Adobe asset or a PDFium DLL.
+never touches the network, and copies the bundled PDFium DLL only from the payload.
 Run it from the extracted portable archive.
 
 .EXAMPLE
@@ -32,7 +32,7 @@ New-Item -ItemType Directory -Force -Path $target | Out-Null
 
 # Explicit allowlist: install only what the portable archive ships.
 $payload = @(
-    'pdfxi.exe', 'pdfxi-ui.exe', 'LICENSE', 'NOTICE', 'README.md',
+    'pdfxi.exe', 'pdfxi-ui.exe', 'pdfium.dll', 'LICENSE', 'NOTICE', 'README.md',
     'THIRD_PARTY.md', 'deny.toml', 'manifest.json'
 )
 foreach ($name in $payload) {
@@ -41,12 +41,22 @@ foreach ($name in $payload) {
         Copy-Item -LiteralPath $src -Destination (Join-Path $target $name) -Force
     }
 }
+# PDFium's own notices ship in pdfium-licenses\ next to the binaries.
+$licenceSource = Join-Path $source 'pdfium-licenses'
+if (Test-Path -LiteralPath $licenceSource -PathType Container) {
+    $licenceTarget = Join-Path $target 'pdfium-licenses'
+    New-Item -ItemType Directory -Force -Path $licenceTarget | Out-Null
+    foreach ($file in @(Get-ChildItem -LiteralPath $licenceSource -File)) {
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $licenceTarget $file.Name) -Force
+    }
+}
 
 function New-ShellLink {
     param(
         [Parameter(Mandatory = $true)][string]$Directory,
         [Parameter(Mandatory = $true)][string]$FileName,
         [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [Parameter(Mandatory = $true)][string]$Description
     )
     if (-not (Test-Path -LiteralPath $Directory)) {
@@ -56,7 +66,7 @@ function New-ShellLink {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($link)
     $shortcut.TargetPath = (Resolve-Path -LiteralPath $Executable).Path
-    $shortcut.WorkingDirectory = (Resolve-Path -LiteralPath $target).Path
+    $shortcut.WorkingDirectory = (Resolve-Path -LiteralPath $WorkingDirectory).Path
     $shortcut.Description = $Description
     $shortcut.Save()
     Write-Output "SHORTCUT $link"
@@ -69,19 +79,19 @@ if (-not $NoShortcut) {
     $installedUi = Join-Path $target 'pdfxi-ui.exe'
     if (Test-Path -LiteralPath $installedUi -PathType Leaf) {
         New-ShellLink -Directory $programs -FileName 'PDFXI.lnk' `
-            -Executable $installedUi -Description 'PDFXI viewer'
+            -Executable $installedUi -WorkingDirectory $target -Description 'PDFXI viewer'
     } else {
         New-ShellLink -Directory $programs -FileName 'PDFXI.lnk' `
-            -Executable (Join-Path $target 'pdfxi.exe') -Description 'PDFXI portable CLI'
+            -Executable (Join-Path $target 'pdfxi.exe') -WorkingDirectory $target -Description 'PDFXI portable CLI'
     }
     New-ShellLink -Directory $programs -FileName 'PDFXI CLI.lnk' `
-        -Executable (Join-Path $target 'pdfxi.exe') -Description 'PDFXI portable CLI'
+        -Executable (Join-Path $target 'pdfxi.exe') -WorkingDirectory $target -Description 'PDFXI portable CLI'
 
     if ($DesktopShortcut) {
         $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
         if (Test-Path -LiteralPath $installedUi -PathType Leaf) {
             New-ShellLink -Directory $desktop -FileName 'PDFXI.lnk' `
-                -Executable $installedUi -Description 'PDFXI viewer'
+                -Executable $installedUi -WorkingDirectory $target -Description 'PDFXI viewer'
         }
     }
 }

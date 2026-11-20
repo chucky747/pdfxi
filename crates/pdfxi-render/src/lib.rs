@@ -517,6 +517,18 @@ pub trait Renderer {
 
     /// Return the number of pages available to this renderer.
     fn page_count(&self) -> Result<usize, RenderError>;
+
+    /// Return a page's size in points without rasterizing it.
+    ///
+    /// Backends that cannot report geometry return [`RenderError::Backend`];
+    /// the PDFium backend reports the document's real page box. The default
+    /// keeps existing renderers source-compatible.
+    fn page_size(&self, page: PageIndex) -> Result<PageDimensions, RenderError> {
+        Err(RenderError::Backend(format!(
+            "page size is not available for page {}",
+            page.get()
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -721,4 +733,13 @@ mod tests {
         assert_eq!(done.fraction(), 1.0);
         assert!(done.is_complete());
     }
+}
+
+/// A page's physical size in PDF points (1/72 inch).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageDimensions {
+    /// Page width in points.
+    pub width_pt: f32,
+    /// Page height in points.
+    pub height_pt: f32,
 }

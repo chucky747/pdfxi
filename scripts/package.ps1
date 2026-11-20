@@ -14,6 +14,8 @@ The package is written under target/package/ and contains:
 
   staging/pdfxi.exe        CLI binary (workspace crate pdfxi-cli -> bin "pdfxi")
   staging/pdfxi-ui.exe     desktop viewer (pdfxi-app bin "pdfxi-ui", ui+pdfium)
+  staging/pdfium.dll       pinned PDFium (chromium/8165); loaded from the exe directory
+  staging/pdfium-licenses\ PDFium BSD-3-Clause licence and third-party notices
   staging/LICENSE          MIT license text
   staging/NOTICE           clean-room / trademark notice
   staging/README.md        project readme
@@ -25,7 +27,8 @@ The package is written under target/package/ and contains:
   manifest.json            copy of the staged manifest for inspection
   <zipname>.sha256         sidecar hash of the archive
 
-No PDFium DLL is bundled (only the notice in THIRD_PARTY.md). No Adobe asset
+The pinned PDFium DLL is bundled with its licence and third-party notices,
+and its SHA-256 is verified before staging. No Adobe asset
 is copied. Only an explicit allowlist is staged, and every staged file is
 checked against secret/private-file patterns before an archive is produced.
 
@@ -42,7 +45,13 @@ param(
     [Parameter(ParameterSetName = 'SkipBuild')][switch]$SkipBuild,
     [Parameter(ParameterSetName = 'SelfTest')][switch]$SelfTest,
     [string]$TargetDir = '',
-    [string]$OutputDir = ''
+    [string]$OutputDir = '',
+    [string]$PdfiumDir = '',
+    [string]$PdfiumSha256 = '',
+    # Self-test only: the deterministic stub binaries are not real PE images.
+    [switch]$SkipViewerCheck,
+    # Build the Inno Setup installer (also done automatically when ISCC exists).
+    [switch]$Installer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,9 +73,14 @@ $script:PackageRoot = if ($OutputDir) {
 # Only these files may ever enter the archive. manifest.json is generated and
 # is therefore in the allowlist but not in the source map.
 $script:AllowList = @(
-    'pdfxi.exe', 'pdfxi-ui.exe', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY.md',
-    'deny.toml', 'install.ps1', 'manifest.json'
+    'pdfxi.exe', 'pdfxi-ui.exe', 'pdfium.dll', 'LICENSE', 'NOTICE', 'README.md',
+    'THIRD_PARTY.md', 'deny.toml', 'install.ps1', 'manifest.json'
 )
+# PDFium's own licence texts ship in a subdirectory so the notice is complete.
+$script:AllowListPrefixes = @('pdfium-licenses\')
+# Pinned PDFium release; scripts/fetch-pdfium.ps1 downloads exactly this build.
+$script:PdfiumTag = 'chromium/8165'
+$script:PdfiumDllSha256 = '31d249b8535dd5f351ae7f4b714dc4bb1d76b6069b321a309bc99271dd65f566'
 $script:NoticeFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY.md', 'deny.toml')
 $script:SecretPatterns = @(
     '(?i)(^|[\\/])id_(rsa|dsa|ecdsa|ed25519)(\.|$)',
@@ -78,11 +92,144 @@ $script:SecretPatterns = @(
     '(?i)(customer|confidential|payroll|invoice)'
 )
 
+# Locate Inno Setup's command-line compiler without hard-coding a drive letter.
+function Resolve-Iscc {
+    if ($env:ISCC_PATH -and (Test-Path -LiteralPath $env:ISCC_PATH -PathType Leaf)) { return $env:ISCC_PATH }
+    $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    $bases = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) | Where-Object { $_ }
+    foreach ($base in $bases) {
+        foreach ($relative in @('Inno Setup 6\ISCC.exe', 'Programs\Inno Setup 6\ISCC.exe', 'Inno Setup 5\ISCC.exe')) {
+            $candidate = Join-Path $base $relative
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+    }
+    return ''
+}
+
+# True when the file carries at least one RT_GROUP_ICON (icon group) resource.
+function Test-IconGroupResource {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not ('PdfxiPeResources' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class PdfxiPeResources
+{
+    private delegate bool EnumResNameProc(IntPtr m, IntPtr t, IntPtr n, IntPtr p);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr LoadLibraryExW(string file, IntPtr reserved, uint flags);
+    [DllImport("kernel32.dll")]
+    private static extern bool FreeLibrary(IntPtr module);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumResourceNamesW(IntPtr module, IntPtr type, EnumResNameProc proc, IntPtr param);
+    public static string[] Names(string path, int type)
+    {
+        List<string> names = new List<string>();
+        IntPtr module = LoadLibraryExW(path, IntPtr.Zero, 2);
+        if (module == IntPtr.Zero) { return names.ToArray(); }
+        try
+        {
+            EnumResourceNamesW(module, (IntPtr)type,
+                delegate(IntPtr m, IntPtr t, IntPtr n, IntPtr p) { names.Add(((long)n).ToString()); return true; },
+                IntPtr.Zero);
+        }
+        finally { FreeLibrary(module); }
+        return names.ToArray();
+    }
+}
+"@
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $groups = @([PdfxiPeResources]::Names($Path, 14))
+    return ($groups.Count -ge 1)
+}
+
+# Build the per-user installer next to the portable zip.
+function New-Installer {
+    param([Parameter(Mandatory = $true)][string]$Iscc,
+          [Parameter(Mandatory = $true)][string]$Version,
+          [Parameter(Mandatory = $true)][string]$StagingDir,
+          [Parameter(Mandatory = $true)][string]$PackageRoot,
+          [switch]$Smoke)
+    $iss = Join-Path $root 'installer\pdfxi.iss'
+    if (-not (Test-Path -LiteralPath $iss -PathType Leaf)) { throw "installer script missing: $iss" }
+    $icon = Join-Path $root 'crates\pdfxi-app\assets\pdfxi.ico'
+    $isccArgs = @(
+        "/DAppVersion=$Version",
+        "/DStageDir=$StagingDir",
+        "/DOutputDir=$PackageRoot",
+        "/DSourceIcon=$icon"
+    )
+    if ($Smoke) { $isccArgs += '/DSmoke=1' }
+    # The script path is the only positional argument; defines come first.
+    $isccArgs += $iss
+    Write-Host "INSTALLER iscc=$Iscc smoke=$([bool]$Smoke)"
+    # Keep ISCC's chatter off the function's return pipeline.
+    $isccOutput = & $Iscc @isccArgs 2>&1
+    foreach ($line in @($isccOutput)) { if ("$line".Trim()) { Write-Host "ISCC $line" } }
+    $exit = $LASTEXITCODE
+    $setup = Join-Path $PackageRoot "pdfxi-setup-$Version-windows-x86_64.exe"
+    if ($exit -ne 0) { throw "ISCC exited $exit; no installer produced" }
+    if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "ISCC reported success but $setup is missing" }
+    Write-Utf8NoBom "$setup.sha256" ("$((Get-Sha256 $setup))  $(Split-Path -Leaf $setup)`n")
+    return $setup
+}
+
+# Default PDFium source: the per-user developer cache written by
+# scripts/fetch-pdfium.ps1. Never a machine-specific path.
+function Resolve-PdfiumDir {
+    param([string]$Override)
+    if ($Override) { return [System.IO.Path]::GetFullPath($Override) }
+    if ($env:PDFIUM_DIR) { return [System.IO.Path]::GetFullPath($env:PDFIUM_DIR) }
+    $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
+    return (Join-Path $base 'pdfxi\pdfium')
+}
+
+# Verify the bundled PDFium payload: DLL hash, LICENSE, and licenses\ directory.
+function Assert-PdfiumPayload {
+    param([Parameter(Mandatory = $true)][string]$Directory,
+          [Parameter(Mandatory = $true)][string]$ExpectedSha256)
+    $dll = Join-Path $Directory 'bin\pdfium.dll'
+    if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+        throw "PDFium DLL missing: $dll (run scripts/fetch-pdfium.ps1)"
+    }
+    $actual = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
+        throw "refusing to package PDFium: $dll has SHA-256 $actual, expected $ExpectedSha256"
+    }
+    foreach ($required in @('LICENSE', 'licenses')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Directory $required))) {
+            throw "PDFium payload is incomplete: $required missing under $Directory"
+        }
+    }
+}
+
+function Get-PdfiumSha256 {
+    param([string]$Override)
+    if ($Override) { return $Override }
+    return $script:PdfiumDllSha256
+}
+
+function Copy-PdfiumLicences {
+    param([Parameter(Mandatory = $true)][string]$SourceDir,
+          [Parameter(Mandatory = $true)][string]$StagingDir)
+    $licenceDir = Join-Path $StagingDir 'pdfium-licenses'
+    New-Item -ItemType Directory -Force -Path $licenceDir | Out-Null
+    Copy-Item -LiteralPath (Join-Path $SourceDir 'LICENSE') -Destination (Join-Path $licenceDir 'LICENSE.txt') -Force
+    foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $SourceDir 'licenses') -File)) {
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $licenceDir $file.Name) -Force
+    }
+}
+
 function Get-PayloadMap {
-    param([Parameter(Mandatory = $true)][string]$ReleaseDir)
+    param([Parameter(Mandatory = $true)][string]$ReleaseDir,
+          [string]$PdfiumDir = '')
     $map = [ordered]@{}
     $map['pdfxi.exe']      = Join-Path $ReleaseDir 'pdfxi.exe'
     $map['pdfxi-ui.exe']   = Join-Path $ReleaseDir 'pdfxi-ui.exe'
+    $map['pdfium.dll']     = Join-Path (Resolve-PdfiumDir $PdfiumDir) 'bin\pdfium.dll'
     $map['LICENSE']        = Join-Path $root 'LICENSE'
     $map['NOTICE']         = Join-Path $root 'NOTICE'
     $map['README.md']      = Join-Path $root 'README.md'
@@ -92,13 +239,14 @@ function Get-PayloadMap {
     return $map
 }
 
+# Resolve the Cargo target directory for packaging. A lane directory is never a
+# default: packaging stale lane binaries was a real defect. An explicit
+# -TargetDir or CARGO_TARGET_DIR always wins; otherwise target\integration.
 function Resolve-TargetDir {
     param([string]$Override)
     if ($Override) { return [System.IO.Path]::GetFullPath($Override) }
-    if ($env:CARGO_TARGET_DIR) { return $env:CARGO_TARGET_DIR }
-    $lane = Join-Path $root 'target\lanes\qa'
-    if (Test-Path -LiteralPath $lane -PathType Container) { return $lane }
-    return (Join-Path $root 'target')
+    if ($env:CARGO_TARGET_DIR) { return [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) }
+    return (Join-Path $root 'target\integration')
 }
 
 # --- small helpers ---------------------------------------------------------
@@ -155,7 +303,11 @@ function Test-PayloadSafety {
     foreach ($f in @(Get-ChildItem -LiteralPath $sd -Recurse -File)) {
         $rel = $f.FullName.Substring($sd.Length).TrimStart([char[]]@('\', '/'))
         $present += $rel
-        if ($script:AllowList -notcontains $rel) {
+        $allowed = ($script:AllowList -contains $rel)
+        foreach ($prefix in $script:AllowListPrefixes) {
+            if ($rel.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $allowed = $true }
+        }
+        if (-not $allowed) {
             Add-ValidationError $result 'layout' "unexpected payload file: $rel"
         }
         foreach ($pat in $script:SecretPatterns) {
@@ -181,10 +333,45 @@ function Test-PayloadSafety {
     return $result
 }
 
-function Test-SourceLayout {
-    param([Parameter(Mandatory = $true)][string]$ReleaseDir)
+function Test-UiBinary {
+    param([Parameter(Mandatory = $true)][string]$Path)
     $result = New-ValidationResult
-    $map = Get-PayloadMap -ReleaseDir $ReleaseDir
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Add-ValidationError $result 'layout' "missing viewer binary: $Path"
+        return $result
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 0x100) {
+        Add-ValidationError $result 'layout' "viewer binary is too small to be a PE image: $Path"
+        return $result
+    }
+    $pe = [System.BitConverter]::ToInt32($bytes, 0x3c)
+    if ($pe -le 0 -or ($pe + 0x60) -ge $bytes.Length) {
+        Add-ValidationError $result 'layout' "viewer binary has no valid PE header: $Path"
+        return $result
+    }
+    $subsystem = [System.BitConverter]::ToUInt16($bytes, $pe + 24 + 0x44)
+    if ($subsystem -ne 2) {
+        Add-ValidationError $result 'layout' "pdfxi-ui.exe subsystem is $subsystem, expected 2 (Windows GUI); the viewer would open a console window"
+    }
+    $info = (Get-Item -LiteralPath $Path).VersionInfo
+    if ($info.ProductName -ne 'PDFXI') {
+        Add-ValidationError $result 'layout' "pdfxi-ui.exe has no PDFXI version resource (ProductName='$($info.ProductName)')"
+    }
+    if (-not $info.FileVersion) {
+        Add-ValidationError $result 'layout' "pdfxi-ui.exe has no FileVersion resource"
+    }
+    if (-not (Test-IconGroupResource -Path $Path)) {
+        Add-ValidationError $result 'layout' "pdfxi-ui.exe has no icon group resource (RT_GROUP_ICON); it would show the default application icon"
+    }
+    return $result
+}
+
+function Test-SourceLayout {
+    param([Parameter(Mandatory = $true)][string]$ReleaseDir,
+          [string]$PdfiumDir = '')
+    $result = New-ValidationResult
+    $map = Get-PayloadMap -ReleaseDir $ReleaseDir -PdfiumDir $PdfiumDir
     foreach ($name in $map.Keys) {
         foreach ($pat in $script:SecretPatterns) {
             if ($name -match $pat) {
@@ -192,7 +379,7 @@ function Test-SourceLayout {
                 break
             }
         }
-        if ($name -eq 'pdfxi.exe' -or $name -eq 'pdfxi-ui.exe') {
+        if ($name -eq 'pdfxi.exe' -or $name -eq 'pdfxi-ui.exe' -or $name -eq 'pdfium.dll') {
             # Build artifacts; -Check intentionally does not require a build.
             continue
         }
@@ -297,10 +484,12 @@ function Get-CrateList {
 function New-ManifestFile {
     param([Parameter(Mandatory = $true)][string]$StagingDir)
     $files = [System.Collections.ArrayList]::new()
-    foreach ($f in @(Get-ChildItem -LiteralPath $StagingDir -File | Sort-Object -Property Name)) {
-        if ($f.Name -eq 'manifest.json') { continue }
+    $stagingRoot = (Resolve-Path -LiteralPath $StagingDir).Path.TrimEnd([char[]]@('\', '/'))
+    foreach ($f in @(Get-ChildItem -LiteralPath $StagingDir -Recurse -File | Sort-Object -Property FullName)) {
+        $relative = $f.FullName.Substring($stagingRoot.Length).TrimStart([char[]]@('\', '/'))
+        if ($relative -eq 'manifest.json') { continue }
         [void]$files.Add([ordered]@{
-            path   = $f.Name
+            path   = $relative
             sha256 = (Get-Sha256 $f.FullName)
             bytes  = [long]$f.Length
         })
@@ -321,11 +510,17 @@ function New-ManifestFile {
         }
         cargo_lock_sha256 = $lockHash
         crates            = @(Get-CrateList)
-        binaries          = @('pdfxi.exe')
+        binaries          = @('pdfxi.exe', 'pdfxi-ui.exe', 'pdfium.dll')
         # Intentionally no wall-clock timestamp: identical inputs produce a
         # byte-identical manifest, which is what `-SelfTest` asserts.
         files             = $files.ToArray()
-        legal             = 'No PDFium DLL, Adobe asset, secret, or private document is bundled. PDFium is notice-only; see THIRD_PARTY.md.'
+        pdfium            = [ordered]@{
+            tag      = $script:PdfiumTag
+            dll      = 'pdfium.dll'
+            sha256   = (Get-PdfiumSha256 $PdfiumSha256).ToLowerInvariant()
+            licences = 'pdfium-licenses\'
+        }
+        legal             = 'Bundles the pinned PDFium binary with its BSD-3-Clause licence and third-party notices under pdfium-licenses\; no Adobe asset, secret, or private document is included.'
     }
     $json = $manifest | ConvertTo-Json -Depth 8
     Write-Utf8NoBom (Join-Path $StagingDir 'manifest.json') ($json + "`n")
@@ -335,10 +530,11 @@ function New-ManifestFile {
 # --- packaging -------------------------------------------------------------
 function New-Staging {
     param([Parameter(Mandatory = $true)][string]$StagingDir,
-          [Parameter(Mandatory = $true)][string]$ReleaseDir)
+          [Parameter(Mandatory = $true)][string]$ReleaseDir,
+          [string]$PdfiumDir = '')
     if (Test-Path -LiteralPath $StagingDir) { Remove-Item -LiteralPath $StagingDir -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
-    $map = Get-PayloadMap -ReleaseDir $ReleaseDir
+    $map = Get-PayloadMap -ReleaseDir $ReleaseDir -PdfiumDir $PdfiumDir
     foreach ($name in $map.Keys) {
         $src = $map[$name]
         if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
@@ -346,6 +542,7 @@ function New-Staging {
         }
         Copy-Item -LiteralPath $src -Destination (Join-Path $StagingDir $name) -Force
     }
+    Copy-PdfiumLicences -SourceDir (Resolve-PdfiumDir $PdfiumDir) -StagingDir $StagingDir
 }
 
 function New-Archive {
@@ -371,10 +568,21 @@ function New-Archive {
 function New-PackageArtifacts {
     param([Parameter(Mandatory = $true)][string]$ReleaseDir,
           [Parameter(Mandatory = $true)][string]$PackageRoot,
+          [string]$PdfiumDir = '',
+          [string]$PdfiumSha256 = '',
+          [switch]$SkipViewerCheck,
           [switch]$WithArchive)
+    Assert-PdfiumPayload -Directory (Resolve-PdfiumDir $PdfiumDir) -ExpectedSha256 (Get-PdfiumSha256 $PdfiumSha256)
+    if (-not $SkipViewerCheck) {
+        $uiCheck = Test-UiBinary -Path (Join-Path $ReleaseDir 'pdfxi-ui.exe')
+        if (-not $uiCheck.Ok) {
+            Format-Result -Result $uiCheck -Label 'VIEWER'
+            throw 'pdfxi-ui.exe failed the GUI-subsystem/version-resource check; package not produced'
+        }
+    }
     New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
     $staging = Join-Path $PackageRoot 'staging'
-    New-Staging -StagingDir $staging -ReleaseDir $ReleaseDir
+    New-Staging -StagingDir $staging -ReleaseDir $ReleaseDir -PdfiumDir $PdfiumDir
     $json = New-ManifestFile -StagingDir $staging
     $safety = Test-PayloadSafety -StagingDir $staging
     if (-not $safety.Ok) {
@@ -393,10 +601,14 @@ function New-PackageArtifacts {
 
 function Invoke-Package {
     param([bool]$DoBuild)
+    $resolvedTarget = Resolve-TargetDir $TargetDir
+    Write-Output "TARGET $resolvedTarget"
     if ($DoBuild) {
         Write-Output 'BUILD cargo build --workspace --release'
         Push-Location $root
         try {
+            # Build into the directory that is about to be packaged.
+            $env:CARGO_TARGET_DIR = $resolvedTarget
             & cargo build --workspace --release
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit $LASTEXITCODE" }
             Write-Output 'BUILD cargo build --release -p pdfxi-app --bin pdfxi-ui --features ui,pdfium'
@@ -406,25 +618,39 @@ function Invoke-Package {
     } else {
         Write-Output 'SKIPBUILD using existing release binaries'
     }
-    $releaseDir = Join-Path (Resolve-TargetDir $TargetDir) 'release'
+    $releaseDir = Join-Path $resolvedTarget 'release'
     foreach ($binary in @('pdfxi.exe', 'pdfxi-ui.exe')) {
         if (-not (Test-Path -LiteralPath (Join-Path $releaseDir $binary) -PathType Leaf)) {
             throw "release binary missing: $(Join-Path $releaseDir $binary) (omit -SkipBuild to build it)"
         }
     }
-    $artifacts = New-PackageArtifacts -ReleaseDir $releaseDir -PackageRoot $script:PackageRoot -WithArchive
+    Write-Output "PDFIUM $(Resolve-PdfiumDir $PdfiumDir) sha256=$(Get-PdfiumSha256 $PdfiumSha256)"
+    $artifacts = New-PackageArtifacts -ReleaseDir $releaseDir -PackageRoot $script:PackageRoot `
+        -PdfiumDir $PdfiumDir -PdfiumSha256 $PdfiumSha256 -SkipViewerCheck:$SkipViewerCheck -WithArchive
     Format-Result -Result (Test-PayloadSafety -StagingDir $artifacts.Staging) -Label 'SAFETY'
     Format-Result -Result (Test-Manifest -ManifestPath (Join-Path $script:PackageRoot 'manifest.json') -StagingDir $artifacts.Staging) -Label 'MANIFEST'
     Write-Output ("PACKAGE OK zip={0}" -f $artifacts.Zip)
     Write-Output ("PACKAGE SHA256 {0}" -f (Get-Sha256 $artifacts.Zip))
     Write-Output ("PACKAGE ROOT {0}" -f $script:PackageRoot)
+    $iscc = Resolve-Iscc
+    if (-not $iscc) {
+        if ($Installer) {
+            throw 'ISCC.exe not found: install Inno Setup 6 (`winget install --id JRSoftware.InnoSetup -e`) or set ISCC_PATH, then re-run with -Installer'
+        }
+        Write-Output 'INSTALLER skipped: ISCC.exe not found (set ISCC_PATH or install JRSoftware.InnoSetup to build it)'
+    } else {
+        $setupVersion = (Get-Content -LiteralPath (Join-Path $artifacts.Staging 'manifest.json') -Raw | ConvertFrom-Json).version
+        $setup = New-Installer -Iscc $iscc -Version $setupVersion -StagingDir $artifacts.Staging -PackageRoot $script:PackageRoot
+        Write-Output ("INSTALLER {0}" -f $setup)
+        Write-Output ("INSTALLER SHA256 {0}" -f (Get-Sha256 $setup))
+    }
     $script:ExitCode = 0
 }
 
 # --- -Check ----------------------------------------------------------------
 function Invoke-Check {
     $releaseDir = Join-Path (Resolve-TargetDir $TargetDir) 'release'
-    $sourceResult = Test-SourceLayout -ReleaseDir $releaseDir
+    $sourceResult = Test-SourceLayout -ReleaseDir $releaseDir -PdfiumDir $PdfiumDir
     Format-Result -Result $sourceResult -Label 'SOURCE'
     $bin = Join-Path $releaseDir 'pdfxi.exe'
     if (Test-Path -LiteralPath $bin -PathType Leaf) {
@@ -435,10 +661,23 @@ function Invoke-Check {
     $uiBin = Join-Path $releaseDir 'pdfxi-ui.exe'
     if (Test-Path -LiteralPath $uiBin -PathType Leaf) {
         Write-Output "CHECK ui_binary=present $uiBin"
+        $uiResult = Test-UiBinary -Path $uiBin
+        Format-Result -Result $uiResult -Label 'VIEWER'
+        $allOkViewer = $uiResult.Ok
     } else {
         Write-Output "CHECK ui_binary=absent (expected: -Check never builds) $uiBin"
+        $allOkViewer = $true
     }
-    $allOk = $sourceResult.Ok
+    $pdfiumResolved = Resolve-PdfiumDir $PdfiumDir
+    try {
+        Assert-PdfiumPayload -Directory $pdfiumResolved -ExpectedSha256 (Get-PdfiumSha256 $PdfiumSha256)
+        Write-Output "CHECK pdfium=ok $pdfiumResolved"
+        $pdfiumOk = $true
+    } catch {
+        Write-Output "CHECK pdfium=failed $($_.Exception.Message)"
+        $pdfiumOk = $false
+    }
+    $allOk = $sourceResult.Ok -and $allOkViewer -and $pdfiumOk
     $staging = Join-Path $script:PackageRoot 'staging'
     if (Test-Path -LiteralPath $staging -PathType Container) {
         $stagedResult = Test-PayloadSafety -StagingDir $staging
@@ -470,6 +709,18 @@ function New-FakeReleaseDir {
     return $rel
 }
 
+function New-FakePdfiumDir {
+    param([string]$Sandbox)
+    $dir = Join-Path $Sandbox 'fake-pdfium'
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir 'bin') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir 'licenses') | Out-Null
+    Write-Utf8NoBom (Join-Path $dir 'bin\pdfium.dll') "MZ pdfium stub for package self-test`n"
+    Write-Utf8NoBom (Join-Path $dir 'LICENSE') "PDFium BSD-3-Clause stub licence`n"
+    Write-Utf8NoBom (Join-Path $dir 'licenses\pdfium.txt') "PDFium third-party notice stub`n"
+    $sha = (Get-Sha256 (Join-Path $dir 'bin\pdfium.dll'))
+    return [pscustomobject]@{ Directory = $dir; Sha256 = $sha }
+}
+
 function Invoke-SelfTest {
     $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ('pdfxi-package-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
@@ -477,8 +728,10 @@ function Invoke-SelfTest {
     $failed = 0
     try {
         $rel = New-FakeReleaseDir -Sandbox $sandbox
+        $pdf = New-FakePdfiumDir -Sandbox $sandbox
         $out1 = Join-Path $sandbox 'out1'
-        $art1 = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out1
+        $art1 = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out1 `
+            -PdfiumDir $pdf.Directory -PdfiumSha256 $pdf.Sha256 -SkipViewerCheck
 
         # 1. layout validation: a complete staging tree must pass.
         $r1 = Test-PayloadSafety -StagingDir $art1.Staging
@@ -488,7 +741,8 @@ function Invoke-SelfTest {
 
         # 2. missing-notice failure: removing NOTICE must be rejected.
         $out2 = Join-Path $sandbox 'out2'
-        $null = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out2
+        $null = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out2 `
+            -PdfiumDir $pdf.Directory -PdfiumSha256 $pdf.Sha256 -SkipViewerCheck
         Remove-Item -LiteralPath (Join-Path $out2 'staging\NOTICE') -Force
         $r2 = Test-PayloadSafety -StagingDir (Join-Path $out2 'staging')
         if ((-not $r2.Ok) -and (-not $r2.NoticesOk)) {
@@ -497,7 +751,8 @@ function Invoke-SelfTest {
 
         # 3. hash manifest determinism: two runs, same inputs, same bytes.
         $out3 = Join-Path $sandbox 'out3'
-        $art3 = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out3
+        $art3 = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out3 `
+            -PdfiumDir $pdf.Directory -PdfiumSha256 $pdf.Sha256 -SkipViewerCheck
         $a = [System.IO.File]::ReadAllText((Join-Path $out1 'staging\manifest.json'))
         $b = [System.IO.File]::ReadAllText((Join-Path $out3 'staging\manifest.json'))
         $ha = (Get-Sha256 (Join-Path $out1 'staging\manifest.json'))
@@ -509,7 +764,8 @@ function Invoke-SelfTest {
         # 4. -SkipBuild path: real child process, fake release target present.
         $skipOut = Join-Path $sandbox 'skipbuild'
         & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath `
-            -SkipBuild -TargetDir (Split-Path $rel -Parent) -OutputDir $skipOut | Out-Null
+            -SkipBuild -TargetDir (Split-Path $rel -Parent) -OutputDir $skipOut `
+            -PdfiumDir $pdf.Directory -PdfiumSha256 $pdf.Sha256 -SkipViewerCheck | Out-Null
         $skipCode = $LASTEXITCODE
         $zip = Get-ChildItem -LiteralPath $skipOut -Filter '*.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($skipCode -eq 0 -and $zip) {
@@ -521,7 +777,8 @@ function Invoke-SelfTest {
         New-Item -ItemType Directory -Force -Path $emptyTarget | Out-Null
         $negOut = Join-Path $sandbox 'neg-out'
         & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath `
-            -SkipBuild -TargetDir $emptyTarget -OutputDir $negOut 2>&1 | Out-Null
+            -SkipBuild -TargetDir $emptyTarget -OutputDir $negOut `
+            -PdfiumDir $pdf.Directory -PdfiumSha256 $pdf.Sha256 2>&1 | Out-Null
         $negCode = $LASTEXITCODE
         if ($negCode -ne 0) {
             Write-Output "TEST 4b skipbuild_missing_binary_rejected PASS exit=$negCode"; $passed++
@@ -529,7 +786,8 @@ function Invoke-SelfTest {
 
         # 5. secret/private-file rejection: planted secret.pem must be refused.
         $out5 = Join-Path $sandbox 'out5'
-        $null = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out5
+        $null = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out5 `
+            -PdfiumDir $pdf.Directory -PdfiumSha256 $pdf.Sha256 -SkipViewerCheck
         Write-Utf8NoBom (Join-Path $out5 'staging\secret.pem') 'not a real key'
         $r5 = Test-PayloadSafety -StagingDir (Join-Path $out5 'staging')
         if ((-not $r5.Ok) -and (-not $r5.SecretFree)) {
@@ -537,7 +795,7 @@ function Invoke-SelfTest {
         } else { Format-Result $r5 'TEST 5'; Write-Output 'TEST 5 secret_private_file_rejection FAIL'; $failed++ }
 
         # 6. source inputs validate cleanly on the real repository.
-        $r6 = Test-SourceLayout -ReleaseDir (Join-Path (Resolve-TargetDir $TargetDir) 'release')
+        $r6 = Test-SourceLayout -ReleaseDir (Join-Path (Resolve-TargetDir $TargetDir) 'release') -PdfiumDir $pdf.Directory
         if ($r6.Ok) {
             Write-Output 'TEST 6 source_layout_and_notices PASS'; $passed++
         } else { Format-Result $r6 'TEST 6'; Write-Output 'TEST 6 source_layout_and_notices FAIL'; $failed++ }
@@ -552,11 +810,48 @@ function Invoke-SelfTest {
             (Test-Path -LiteralPath (Join-Path $installed 'NOTICE') -PathType Leaf)) {
             Write-Output "TEST 7 installer_copy PASS exit=$installCode"; $passed++
         } else { Write-Output "TEST 7 installer_copy FAIL exit=$installCode"; $failed++ }
+
+        # 8. the archive ships the viewer, the pinned PDFium DLL, and its licences.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $out8 = Join-Path $sandbox 'out8'
+        $art8 = New-PackageArtifacts -ReleaseDir $rel -PackageRoot $out8 -WithArchive `
+            -PdfiumDir $pdf.Directory -PdfiumSha256 $pdf.Sha256 -SkipViewerCheck
+        $entries = @()
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($art8.Zip)
+        try { $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('/', '\') }) }
+        finally { $archive.Dispose() }
+        $hasUi = $entries -contains 'pdfxi-ui.exe'
+        $hasDll = $entries -contains 'pdfium.dll'
+        $hasLicence = @($entries | Where-Object { $_ -like 'pdfium-licenses\*' }).Count -ge 2
+        if ($hasUi -and $hasDll -and $hasLicence) {
+            Write-Output "TEST 8 payload_bundle PASS ui=$hasUi pdfium=$hasDll licences=$hasLicence entries=$($entries.Count)"; $passed++
+        } else {
+            Write-Output "TEST 8 payload_bundle FAIL ui=$hasUi pdfium=$hasDll licences=$hasLicence"; $failed++
+        }
+
+        # 9. the viewer check rejects a stub and accepts the real release binary.
+        $stubCheck = Test-UiBinary -Path (Join-Path $rel 'pdfxi-ui.exe')
+        $realUi = Join-Path (Resolve-TargetDir $TargetDir) 'release\pdfxi-ui.exe'
+        if ((Test-Path -LiteralPath $realUi -PathType Leaf)) {
+            $realCheck = Test-UiBinary -Path $realUi
+            if ((-not $stubCheck.Ok) -and $realCheck.Ok) {
+                Write-Output "TEST 9 viewer_binary_check PASS stub_rejected=1 real_accepted=1"; $passed++
+            } else {
+                Format-Result $realCheck 'TEST 9'
+                Write-Output "TEST 9 viewer_binary_check FAIL stub_ok=$($stubCheck.Ok) real_ok=$($realCheck.Ok)"; $failed++
+            }
+        } else {
+            if ($stubCheck.Ok) {
+                Write-Output 'TEST 9 viewer_binary_check FAIL stub accepted'; $failed++
+            } else {
+                Write-Output "TEST 9 viewer_binary_check PARTIAL stub_rejected=1 real_binary=absent ($realUi)"; $passed++
+            }
+        }
     } finally {
         Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
     }
     Write-Output ("SELFTEST passed={0} failed={1}" -f $passed, $failed)
-    $script:ExitCode = $(if ($failed -eq 0 -and $passed -ge 5) { 0 } else { 1 })
+    $script:ExitCode = $(if ($failed -eq 0 -and $passed -ge 8) { 0 } else { 1 })
 }
 
 # --- dispatch --------------------------------------------------------------

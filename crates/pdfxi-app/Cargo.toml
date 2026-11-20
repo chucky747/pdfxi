@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish = false
+build = "build.rs"
 
 [features]
 default = []
@@ -23,7 +24,14 @@ pdfium = ["pdfxi-render/pdfium"]
 # cache uses only the backend-agnostic `pdfxi-render` contracts. Native PDFium
 # is pulled in only through the `pdfium` feature above.
 pdfxi-render = { path = "../pdfxi-render" }
+pdfxi-text = { path = "../pdfxi-text" }
 thiserror.workspace = true
+# Native file picker for Open (MIT).
+rfd = "0.15"
+# Persisted settings and the launch-flag parser; both are already in the
+# workspace lockfile (MIT OR Apache-2.0).
+serde.workspace = true
+toml.workspace = true
 eframe = { version = "0.33", optional = true }
 egui = { version = "0.33", optional = true }
 
