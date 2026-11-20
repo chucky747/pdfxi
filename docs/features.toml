@@ -3694,17 +3694,16 @@ tests = [
 title = "Interactive actions and triggers"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/launch.rs, docs/evidence/core/T-0181.md"
+docs = "scripts/package.ps1, scripts/install.ps1, docs/evidence/release/T-0192.md"
 domain = "Platform"
-evidence = "docs/evidence/core/T-0181.md"
+evidence = "docs/evidence/release/T-0192.md"
 id = "PLAT-001"
-notes = "Validated launch grammar, startup action resolution (open/print/reopen/single-instance handoff), window and DPI preference model with lossless session round-trip and typed errors. Host boundary: no eframe/wgpu window, event loop, native DPI call or installer."
+notes = "The Windows desktop application ships as a portable zip containing both pdfxi.exe and pdfxi-ui.exe and installs per-user with Start-Menu and optional Desktop shortcuts; the installed GUI opens, renders PDFium pages and opens real files (T-0190/T-0191). Host boundary: no MSI/elevated installer and no code signing."
 priority = "P0"
 status = "verified"
 tests = [
-    "launch::tests::startup_actions_resolve_for_open_print_reopen_and_handoff",
-    "launch::tests::session_window_state_round_trips_exactly",
-    "launch::tests::session_state_decode_rejects_malformed_tokens",
+    "scripts/package.ps1 -SkipBuild (package + manifest + secret scan)",
+    "scripts/install.ps1 -DesktopShortcut (installed GUI + CLI smoke)",
 ]
 title = "Windows desktop application"
 

@@ -13,6 +13,7 @@ Three modes, all offline and elevation-free:
 The package is written under target/package/ and contains:
 
   staging/pdfxi.exe        CLI binary (workspace crate pdfxi-cli -> bin "pdfxi")
+  staging/pdfxi-ui.exe     desktop viewer (pdfxi-app bin "pdfxi-ui", ui+pdfium)
   staging/LICENSE          MIT license text
   staging/NOTICE           clean-room / trademark notice
   staging/README.md        project readme
@@ -63,7 +64,7 @@ $script:PackageRoot = if ($OutputDir) {
 # Only these files may ever enter the archive. manifest.json is generated and
 # is therefore in the allowlist but not in the source map.
 $script:AllowList = @(
-    'pdfxi.exe', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY.md',
+    'pdfxi.exe', 'pdfxi-ui.exe', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY.md',
     'deny.toml', 'install.ps1', 'manifest.json'
 )
 $script:NoticeFiles = @('LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY.md', 'deny.toml')
@@ -81,6 +82,7 @@ function Get-PayloadMap {
     param([Parameter(Mandatory = $true)][string]$ReleaseDir)
     $map = [ordered]@{}
     $map['pdfxi.exe']      = Join-Path $ReleaseDir 'pdfxi.exe'
+    $map['pdfxi-ui.exe']   = Join-Path $ReleaseDir 'pdfxi-ui.exe'
     $map['LICENSE']        = Join-Path $root 'LICENSE'
     $map['NOTICE']         = Join-Path $root 'NOTICE'
     $map['README.md']      = Join-Path $root 'README.md'
@@ -190,8 +192,8 @@ function Test-SourceLayout {
                 break
             }
         }
-        if ($name -eq 'pdfxi.exe') {
-            # A build artifact; -Check intentionally does not require a build.
+        if ($name -eq 'pdfxi.exe' -or $name -eq 'pdfxi-ui.exe') {
+            # Build artifacts; -Check intentionally does not require a build.
             continue
         }
         $src = $map[$name]
@@ -397,13 +399,18 @@ function Invoke-Package {
         try {
             & cargo build --workspace --release
             if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit $LASTEXITCODE" }
+            Write-Output 'BUILD cargo build --release -p pdfxi-app --bin pdfxi-ui --features ui,pdfium'
+            & cargo build --release -p pdfxi-app --bin pdfxi-ui --features ui,pdfium
+            if ($LASTEXITCODE -ne 0) { throw "UI build failed with exit $LASTEXITCODE" }
         } finally { Pop-Location }
     } else {
         Write-Output 'SKIPBUILD using existing release binaries'
     }
     $releaseDir = Join-Path (Resolve-TargetDir $TargetDir) 'release'
-    if (-not (Test-Path -LiteralPath (Join-Path $releaseDir 'pdfxi.exe') -PathType Leaf)) {
-        throw "release binary missing: $(Join-Path $releaseDir 'pdfxi.exe') (omit -SkipBuild to build it)"
+    foreach ($binary in @('pdfxi.exe', 'pdfxi-ui.exe')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $releaseDir $binary) -PathType Leaf)) {
+            throw "release binary missing: $(Join-Path $releaseDir $binary) (omit -SkipBuild to build it)"
+        }
     }
     $artifacts = New-PackageArtifacts -ReleaseDir $releaseDir -PackageRoot $script:PackageRoot -WithArchive
     Format-Result -Result (Test-PayloadSafety -StagingDir $artifacts.Staging) -Label 'SAFETY'
@@ -424,6 +431,12 @@ function Invoke-Check {
         Write-Output "CHECK binary=present $bin"
     } else {
         Write-Output "CHECK binary=absent (expected: -Check never builds) $bin"
+    }
+    $uiBin = Join-Path $releaseDir 'pdfxi-ui.exe'
+    if (Test-Path -LiteralPath $uiBin -PathType Leaf) {
+        Write-Output "CHECK ui_binary=present $uiBin"
+    } else {
+        Write-Output "CHECK ui_binary=absent (expected: -Check never builds) $uiBin"
     }
     $allOk = $sourceResult.Ok
     $staging = Join-Path $script:PackageRoot 'staging'
@@ -451,8 +464,9 @@ function New-FakeReleaseDir {
     param([string]$Sandbox)
     $rel = Join-Path $Sandbox 'fake-target\release'
     New-Item -ItemType Directory -Force -Path $rel | Out-Null
-    # Tiny deterministic stub standing in for the compiled CLI.
+    # Tiny deterministic stubs standing in for the compiled binaries.
     Write-Utf8NoBom (Join-Path $rel 'pdfxi.exe') "MZ stub for package self-test`n"
+    Write-Utf8NoBom (Join-Path $rel 'pdfxi-ui.exe') "MZ ui stub for package self-test`n"
     return $rel
 }
 

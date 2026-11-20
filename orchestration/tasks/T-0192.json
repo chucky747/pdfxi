@@ -1,0 +1,15 @@
+{
+  "id": "T-0192",
+  "lane": "integrator",
+  "title": "R3 portable package and user-scope install with GUI shortcuts",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0191"],
+  "owns": [
+    "scripts/**",
+    "docs/evidence/release/T-0192.md",
+    "orchestration/feature-updates/T-0192.toml"
+  ],
+  "acceptance": "powershell -NoProfile -File scripts/package.ps1 -SkipBuild -TargetDir target/integration",
+  "evidence": "docs/evidence/release/T-0192.md"
+}
