@@ -411,9 +411,9 @@ fn goal_verify(milestone: Option<&str>, all: bool, allow_dirty: bool) -> Result<
             .iter()
             .copied()
             .filter(|id| {
-                !rows
-                    .iter()
-                    .any(|row| row.id == *id && row.status == "verified")
+                !rows.iter().any(|row| {
+                    row.id == *id && (row.status == "verified" || row.status == "replaced")
+                })
             })
             .collect();
         if !missing.is_empty() {

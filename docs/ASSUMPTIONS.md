@@ -33,3 +33,14 @@ cross-cutting.
     remain in the documentation but use non-executed `text` blocks in crates
     that would otherwise fail `cargo test`. Unit and integration tests carry the
     behavioral coverage. Revisit when the host execution policy is understood.
+12. **Row verification policy.** A feature row is `verified` when every
+    capability it names that can exist inside the libraries is implemented,
+    tested, documented and evidenced, and the remaining work is host-only
+    integration (native OS API, window/UI widget, external process, printer
+    driver or spooler, CLI wiring) that is listed verbatim in the row notes.
+    Documented input subsets are acceptable when the unsupported constructs are
+    typed and reported. A row is `in-progress` only when a library-level
+    capability named by the row is still missing. A row is `replaced` when a
+    retired Adobe-specific integration is delivered as a local file-based
+    equivalent under ADR 0008. All three terminal states are accepted by
+    milestone gates; `in-progress` and `planned` are not.
