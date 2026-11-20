@@ -19,13 +19,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::annotation::AnnotationId;
-use crate::pdf::Dict;
+use crate::pdf::{Dict, Value};
 
 use super::error::ReviewError;
 use super::registry::ReviewRegistry;
 use super::serialize::{dict_to_registry, registry_to_dict};
-use super::thread::{Reply, ThreadId};
+use super::thread::{CommentThread, Reply, ThreadId};
 use super::workflow::ReviewStatus;
+
+/// Dictionary version accepted by [`import_registry_checked`].
+pub const REVIEW_REGISTRY_VERSION: i64 = 1;
 
 /// One participant in a review session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +63,27 @@ pub fn export_registry(registry: &ReviewRegistry) -> Dict {
 /// validates ids/statuses and reindexes the monotonic counters.
 pub fn import_registry(dict: &Dict) -> Result<ReviewRegistry, ReviewError> {
     dict_to_registry(dict)
+}
+
+/// Imports a registry after validating its declared dictionary version.
+///
+/// [`import_registry`] treats `XI_ThreadVersion` as informational; this checked
+/// entry point rejects a missing, non-integer, or unsupported version before
+/// parsing the thread items so callers can surface a precise
+/// [`ReviewError::UnsupportedVersion`] instead of a downstream parse error.
+pub fn import_registry_checked(dict: &Dict) -> Result<ReviewRegistry, ReviewError> {
+    match dict.get("XI_ThreadVersion") {
+        Some(Value::Int(version)) if *version == REVIEW_REGISTRY_VERSION => {}
+        Some(Value::Int(version)) => return Err(ReviewError::UnsupportedVersion(*version)),
+        Some(_) => {
+            return Err(ReviewError::WrongType {
+                key: "XI_ThreadVersion".to_string(),
+                expected: "an integer version",
+            });
+        }
+        None => return Err(ReviewError::MissingKey("XI_ThreadVersion")),
+    }
+    import_registry(dict)
 }
 
 /// Builds a sorted roster of everyone who replied to, was assigned to, or
@@ -199,6 +223,183 @@ pub fn registry_to_text(registry: &ReviewRegistry) -> String {
     text
 }
 
+/// One typed line of a registry print listing (REVIEW-005).
+///
+/// The variants carry structured values instead of pre-formatted strings, so a
+/// caller can render a registry for a text pane, a table, or a printer without
+/// parsing the human-readable output. Every variant renders to exactly the
+/// same string produced by [`registry_to_print_lines`] for the same input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrintLine {
+    /// Header line carrying the total number of threads.
+    Header {
+        /// Number of threads in the registry.
+        thread_count: usize,
+    },
+    /// Summary row for one thread.
+    Thread {
+        /// Thread identifier.
+        id: u64,
+        /// Root annotation identifier.
+        root: u64,
+        /// Page number, absent when the root has no registered page.
+        page: Option<usize>,
+        /// Current workflow status.
+        status: ReviewStatus,
+        /// Current assignee, if one is set.
+        assignee: Option<String>,
+    },
+    /// Creation/update metadata for one thread.
+    ThreadMeta {
+        /// Creation timestamp.
+        created: String,
+        /// Last update timestamp.
+        updated: String,
+        /// Number of replies in the thread.
+        replies: usize,
+    },
+    /// One reply row.
+    Reply {
+        /// Reply identifier.
+        id: u64,
+        /// Author of the reply.
+        author: String,
+        /// Reply timestamp.
+        timestamp: String,
+        /// Status attached to the reply.
+        status: ReviewStatus,
+        /// Reply body text.
+        body: String,
+    },
+    /// One transition-history row.
+    History {
+        /// Timestamp of the change.
+        timestamp: String,
+        /// Status moved from, absent for the initial entry.
+        from: Option<ReviewStatus>,
+        /// Status moved to.
+        to: ReviewStatus,
+        /// Actor that performed the change.
+        actor: String,
+        /// Free-form note recorded with the change.
+        note: String,
+    },
+}
+
+impl PrintLine {
+    /// Renders this line in the stable, self-describing print format.
+    pub fn render(&self) -> String {
+        match self {
+            Self::Header { thread_count } => {
+                format!("Review registry: {thread_count} thread(s)")
+            }
+            Self::Thread {
+                id,
+                root,
+                page,
+                status,
+                assignee,
+            } => {
+                let page = page
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                format!(
+                    "Thread {id} root={root} page={page} status={} assignee={}",
+                    status.as_str(),
+                    assignee.as_deref().unwrap_or("-")
+                )
+            }
+            Self::ThreadMeta {
+                created,
+                updated,
+                replies,
+            } => {
+                format!("  created={created} updated={updated} replies={replies}")
+            }
+            Self::Reply {
+                id,
+                author,
+                timestamp,
+                status,
+                body,
+            } => {
+                format!(
+                    "    reply {id} by {author} at {timestamp} [{}]: {body}",
+                    status.as_str()
+                )
+            }
+            Self::History {
+                timestamp,
+                from,
+                to,
+                actor,
+                note,
+            } => {
+                let from = from.map(ReviewStatus::as_str).unwrap_or("initial");
+                format!(
+                    "    history {timestamp} {from}->{} by {actor}: {note}",
+                    to.as_str()
+                )
+            }
+        }
+    }
+}
+
+/// Builds a registry print listing as typed [`PrintLine`] values (REVIEW-005).
+///
+/// Threads follow root-annotation order, replies follow canonical
+/// `(timestamp, id)` order, and history is chronological, so the result is
+/// deterministic and byte-stable when rendered.
+pub fn registry_to_typed_print_lines(registry: &ReviewRegistry) -> Vec<PrintLine> {
+    let mut lines = vec![PrintLine::Header {
+        thread_count: registry.len(),
+    }];
+    for thread in registry.threads() {
+        lines.push(PrintLine::Thread {
+            id: thread.id().get(),
+            root: thread.root().get(),
+            page: registry.page_of(thread.root()).map(|index| index.get()),
+            status: thread.status(),
+            assignee: thread.assignee().map(str::to_string),
+        });
+        lines.push(PrintLine::ThreadMeta {
+            created: thread.created().to_string(),
+            updated: thread.updated().to_string(),
+            replies: thread.reply_count(),
+        });
+        for reply in thread.replies() {
+            lines.push(PrintLine::Reply {
+                id: reply.id().get(),
+                author: reply.author().to_string(),
+                timestamp: reply.timestamp().to_string(),
+                status: reply.status(),
+                body: reply.body().to_string(),
+            });
+        }
+        for entry in thread.history() {
+            lines.push(PrintLine::History {
+                timestamp: entry.timestamp().to_string(),
+                from: entry.from(),
+                to: entry.to(),
+                actor: entry.actor().to_string(),
+                note: entry.note().to_string(),
+            });
+        }
+    }
+    lines
+}
+
+/// Renders typed print lines into the trailing-newline text view.
+pub fn typed_print_lines_to_text(lines: &[PrintLine]) -> String {
+    let mut text = lines
+        .iter()
+        .map(PrintLine::render)
+        .collect::<Vec<String>>()
+        .join("\n");
+    text.push('\n');
+    text
+}
+
 fn format_reply(reply: &Reply) -> String {
     format!(
         "    reply {} by {} at {} [{}]: {}",
@@ -222,6 +423,92 @@ pub fn root_annotation_ids(registry: &ReviewRegistry) -> Vec<AnnotationId> {
         .threads()
         .map(super::thread::CommentThread::root)
         .collect()
+}
+
+/// A deterministic review tracker view over a registry (REVIEW-007).
+///
+/// The tracker combines the registry status summary, a status board of thread
+/// ids, and the participant roster into a single stable view. It stores only a
+/// borrow of the registry, so constructing a tracker never copies or mutates
+/// source data.
+#[derive(Clone, Debug)]
+pub struct ReviewTracker<'a> {
+    registry: &'a ReviewRegistry,
+}
+
+impl<'a> ReviewTracker<'a> {
+    /// Wraps `registry` in a tracker view.
+    pub fn new(registry: &'a ReviewRegistry) -> Self {
+        Self { registry }
+    }
+
+    /// The registry this tracker reads.
+    pub fn registry(&self) -> &'a ReviewRegistry {
+        self.registry
+    }
+
+    /// Thread ids grouped by status in [`ReviewStatus::ALL`] order (REVIEW-007).
+    ///
+    /// Every status has an entry, including those with no threads, and the ids
+    /// within each bucket follow the registry's deterministic root order.
+    pub fn status_board(&self) -> Vec<(ReviewStatus, Vec<ThreadId>)> {
+        ReviewStatus::ALL
+            .iter()
+            .map(|status| {
+                (
+                    *status,
+                    self.registry
+                        .threads()
+                        .filter(|thread| thread.status() == *status)
+                        .map(CommentThread::id)
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// The sorted participant roster derived from the registry.
+    pub fn roster(&self) -> Vec<ParticipantSummary> {
+        participants(self.registry)
+    }
+
+    /// A stable textual digest of the whole tracker view (REVIEW-007).
+    ///
+    /// The digest concatenates per-status thread counts, per-participant
+    /// reply/assignment counts, and the status board. Repeated calls, and
+    /// registries that differ only in reply insertion order or that were
+    /// exported and re-imported, produce the same digest.
+    pub fn digest(&self) -> String {
+        let summary = self.registry.summary();
+        let counts: Vec<String> = ReviewStatus::ALL
+            .iter()
+            .map(|status| format!("{}:{}", status.as_str(), summary.count(*status)))
+            .collect();
+        let roster: Vec<String> = self
+            .roster()
+            .into_iter()
+            .map(|participant| {
+                format!(
+                    "{}:{}:{}",
+                    participant.author, participant.reply_count, participant.assigned_count
+                )
+            })
+            .collect();
+        let board: Vec<String> = self
+            .status_board()
+            .into_iter()
+            .map(|(status, ids)| {
+                let ids: Vec<String> = ids.iter().map(|id| id.get().to_string()).collect();
+                format!("{}:[{}]", status.as_str(), ids.join(","))
+            })
+            .collect();
+        format!(
+            "{}|{}|{}",
+            counts.join(","),
+            roster.join(","),
+            board.join(",")
+        )
+    }
 }
 
 #[cfg(test)]
@@ -388,5 +675,133 @@ mod tests {
             root_annotation_ids(&registry),
             vec![AnnotationId::new(1), AnnotationId::new(2)]
         );
+    }
+
+    #[test]
+    fn typed_print_lines_match_the_stable_text_view() {
+        let registry = populated();
+        let typed = registry_to_typed_print_lines(&registry);
+        assert_eq!(typed, registry_to_typed_print_lines(&registry));
+        assert!(matches!(
+            typed.first(),
+            Some(PrintLine::Header { thread_count: 2 })
+        ));
+        let rendered: Vec<String> = typed.iter().map(PrintLine::render).collect();
+        assert_eq!(rendered, registry_to_print_lines(&registry));
+        assert_eq!(
+            typed_print_lines_to_text(&typed),
+            registry_to_text(&registry)
+        );
+    }
+
+    #[test]
+    fn typed_print_lines_cover_threads_replies_and_history() {
+        let registry = populated();
+        let typed = registry_to_typed_print_lines(&registry);
+        let text = typed_print_lines_to_text(&typed);
+        assert!(text.ends_with('\n'));
+        assert_eq!(text.lines().count(), typed.len());
+        assert!(typed.iter().any(|line| matches!(
+            line,
+            PrintLine::Thread {
+                status: ReviewStatus::Resolved,
+                ..
+            }
+        )));
+        assert!(typed.iter().any(|line| matches!(
+            line,
+            PrintLine::Reply { author, .. } if author == "alice"
+        )));
+        assert!(text.contains("history t4 open->resolved by alice: done"));
+    }
+
+    #[test]
+    fn checked_import_validates_dictionary_version() {
+        let registry = populated();
+        let dict = export_registry(&registry);
+        assert_eq!(
+            import_registry_checked(&dict).expect("valid import"),
+            registry
+        );
+
+        let mut wrong = dict.clone();
+        wrong.insert("XI_ThreadVersion".to_string(), Value::Int(2));
+        assert_eq!(
+            import_registry_checked(&wrong),
+            Err(ReviewError::UnsupportedVersion(2))
+        );
+
+        let mut bad_type = dict.clone();
+        bad_type.insert("XI_ThreadVersion".to_string(), Value::Text("1".to_string()));
+        assert_eq!(
+            import_registry_checked(&bad_type),
+            Err(ReviewError::WrongType {
+                key: "XI_ThreadVersion".to_string(),
+                expected: "an integer version",
+            })
+        );
+
+        let mut missing = dict;
+        missing.remove("XI_ThreadVersion");
+        assert_eq!(
+            import_registry_checked(&missing),
+            Err(ReviewError::MissingKey("XI_ThreadVersion"))
+        );
+    }
+
+    #[test]
+    fn tracker_status_board_and_roster_are_ordered_and_complete() {
+        let registry = populated();
+        let tracker = ReviewTracker::new(&registry);
+        assert_eq!(tracker.registry(), &registry);
+
+        let board = tracker.status_board();
+        let statuses: Vec<ReviewStatus> = board.iter().map(|(status, _)| *status).collect();
+        assert_eq!(statuses, ReviewStatus::ALL);
+        let occupancy: Vec<usize> = board.iter().map(|(_, ids)| ids.len()).collect();
+        assert_eq!(occupancy, vec![0, 1, 1, 0, 0]);
+        assert_eq!(
+            board[1].1,
+            vec![registry.threads().next().map(|t| t.id()).expect("thread")]
+        );
+
+        let roster = tracker.roster();
+        let authors: Vec<&str> = roster.iter().map(|p| p.author.as_str()).collect();
+        assert_eq!(authors, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn tracker_digest_is_deterministic_across_insertion_order_and_round_trip() {
+        let build = |first_bob: bool| {
+            let annotations = [annotation(1, 0), annotation(2, 1)];
+            let mut registry =
+                ReviewRegistry::from_annotations(annotations.iter(), "t0").expect("registry");
+            let order: &[(u64, &str, &str)] = if first_bob {
+                &[(2, "bob", "t2"), (1, "alice", "t1")]
+            } else {
+                &[(1, "alice", "t1"), (2, "bob", "t2")]
+            };
+            for (root, author, timestamp) in order {
+                registry
+                    .add_reply(
+                        AnnotationId::new(*root),
+                        *author,
+                        *timestamp,
+                        "note",
+                        ReviewStatus::Open,
+                    )
+                    .expect("reply");
+            }
+            registry
+        };
+        let left = build(false);
+        let right = build(true);
+        let left_digest = ReviewTracker::new(&left).digest();
+        assert_eq!(left_digest, ReviewTracker::new(&left).digest());
+        assert_eq!(left_digest, ReviewTracker::new(&right).digest());
+
+        let restored = import_registry(&export_registry(&left)).expect("round-trip");
+        assert_eq!(left_digest, ReviewTracker::new(&restored).digest());
+        assert!(!left_digest.is_empty());
     }
 }

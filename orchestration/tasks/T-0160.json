@@ -3,7 +3,7 @@
   "lane": "automation",
   "title": "Action Wizard editor and scriptable CLI models",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0145"],
   "owns": [
     "crates/pdfxi-automation/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0160.toml"
   ],
   "acceptance": "cargo test -p pdfxi-automation",
-  "evidence": ""
+  "evidence": "docs/evidence/automation/T-0160.md"
 }

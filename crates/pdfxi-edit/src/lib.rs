@@ -99,9 +99,9 @@ pub use image_edit::{
 pub use markup::{
     ArrowHead, ArrowOptions, AttachmentIcon, CalloutOptions, CloudOptions, DrawingKind,
     DrawingOptions, FileAttachmentOptions, FreeTextOptions, InkOptions, LineOptions,
-    MAX_ATTACHMENT_NAME_BYTES, MarkupAppearance, MarkupError, ShapeKind, ShapeOptions,
-    StampCatalogEntry, StampName, StampOptions, StampPreset, TextAlignment, stamp_catalog,
-    validate_attachment_reference,
+    MAX_ATTACHMENT_NAME_BYTES, MAX_CLOUD_BUMPS, MarkupAppearance, MarkupError, ShapeKind,
+    ShapeOptions, StampCatalogEntry, StampName, StampOptions, StampPreset, TextAlignment,
+    stamp_catalog, validate_attachment_reference,
 };
 pub use measurement::{
     MeasureScale, MeasureUnit, Measurement, MeasurementAppearance, MeasurementError,
@@ -124,11 +124,12 @@ pub use redaction::{
     TextPattern, apply, redact, scan_text, verify_extracted_text,
 };
 pub use review::{
-    CommentThread, HistoryEntry, ParticipantStatusSummary, ParticipantSummary, Reply, ReplyId,
-    ReviewError, ReviewFilter, ReviewRegistry, ReviewState, ReviewStatus, ReviewSummary, ThreadId,
-    dict_to_registry, export_registry, import_registry, participant_status_summary, participants,
-    print_registry, registry_to_dict, registry_to_print_lines, registry_to_text,
-    root_annotation_ids,
+    CommentThread, HistoryEntry, ParticipantStatusSummary, ParticipantSummary, PrintLine,
+    REVIEW_REGISTRY_VERSION, Reply, ReplyId, ReviewError, ReviewFilter, ReviewRegistry,
+    ReviewState, ReviewStatus, ReviewSummary, ReviewTracker, ThreadId, dict_to_registry,
+    export_registry, import_registry, import_registry_checked, participant_status_summary,
+    participants, print_registry, registry_to_dict, registry_to_print_lines, registry_to_text,
+    registry_to_typed_print_lines, root_annotation_ids, typed_print_lines_to_text,
 };
 pub use text_style::{
     ColorComponent, FillColor, ParagraphStylePlan, Run, RunStyle, SpacingField, StyleError,

@@ -15,8 +15,9 @@
 //! - The `serialize` module round-trips a whole registry through a dictionary
 //!   using the private `XI_Thread...` key namespace while preserving unknown
 //!   keys.
-//! - The `report` module adds documented import/export and print views plus a
-//!   sorted participant/status summary derived from the registry.
+//! - The `report` module adds documented import/export and print views (with a
+//!   typed `PrintLine` format and a version-checked import) plus a sorted
+//!   participant/status summary and a deterministic `ReviewTracker` view.
 //! - The `share` module adds a local, network-free shared-review file format,
 //!   a deterministic merge of two files with conflict reporting, and
 //!   participant collaboration states (REVIEW-006).
@@ -35,9 +36,11 @@ mod workflow;
 pub use error::ReviewError;
 pub use registry::{ReviewFilter, ReviewRegistry, ReviewSummary};
 pub use report::{
-    ParticipantStatusSummary, ParticipantSummary, export_registry, import_registry,
+    ParticipantStatusSummary, ParticipantSummary, PrintLine, REVIEW_REGISTRY_VERSION,
+    ReviewTracker, export_registry, import_registry, import_registry_checked,
     participant_status_summary, participants, print_registry, registry_to_print_lines,
-    registry_to_text, root_annotation_ids,
+    registry_to_text, registry_to_typed_print_lines, root_annotation_ids,
+    typed_print_lines_to_text,
 };
 pub use serialize::{dict_to_registry, registry_to_dict};
 pub use share::{

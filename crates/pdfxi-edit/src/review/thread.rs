@@ -229,12 +229,72 @@ impl CommentThread {
         self.replies.iter().any(|reply| reply.author == author)
     }
 
-    /// Validates that the thread carries at least one reply.
+    /// Validates the structural invariants of the thread.
+    ///
+    /// A valid thread has at least one reply, no duplicate reply ids, and a
+    /// history whose last entry (when present) ends in the current status. The
+    /// last check catches a state that was assembled from mismatched parts;
+    /// normal [`Self::transition`] calls always keep it true.
     pub fn validate(&self) -> Result<(), ReviewError> {
         if self.is_empty() {
             return Err(ReviewError::EmptyThread(self.id));
         }
+        let mut seen = Vec::with_capacity(self.replies.len());
+        for reply in &self.replies {
+            if seen.contains(&reply.id) {
+                return Err(ReviewError::DuplicateReplyId(reply.id));
+            }
+            seen.push(reply.id);
+        }
+        if let Some(last) = self.state.history().last()
+            && last.to() != self.status()
+        {
+            return Err(ReviewError::InconsistentHistory(self.id));
+        }
         Ok(())
+    }
+
+    /// Merges this thread with `incoming` into one deterministic thread.
+    ///
+    /// Both sides must share a root annotation. Replies are unioned by reply
+    /// id; two replies with the same id but different content are rejected as
+    /// [`ReviewError::ConflictingReply`]. The workflow state with the greatest
+    /// `(updated, created, status, assignee)` tuple wins, so the result does not
+    /// depend on argument order. The lower thread id and the union of both
+    /// `extra` key lists (sorted by key) are retained for the same reason.
+    pub fn merge(&self, incoming: &Self) -> Result<Self, ReviewError> {
+        if self.root != incoming.root {
+            return Err(ReviewError::MergeRootMismatch(self.root, incoming.root));
+        }
+
+        let mut replies = self.replies.clone();
+        for reply in &incoming.replies {
+            let existing = replies.iter().find(|candidate| candidate.id == reply.id);
+            match existing {
+                Some(existing) if existing != reply => {
+                    return Err(ReviewError::ConflictingReply(reply.id));
+                }
+                Some(_) => {}
+                None => replies.push(reply.clone()),
+            }
+        }
+        replies.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.id.cmp(&b.id)));
+
+        let winner = if state_rank(self.state()) >= state_rank(incoming.state()) {
+            self.state()
+        } else {
+            incoming.state()
+        };
+        let mut merged =
+            Self::from_parts(self.id.min(incoming.id), self.root, replies, winner.clone());
+        merged.extra = self.extra.clone();
+        for (key, value) in &incoming.extra {
+            if !merged.extra.iter().any(|(existing, _)| existing == key) {
+                merged.extra.push((key.clone(), value.clone()));
+            }
+        }
+        merged.extra.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(merged)
     }
 
     /// Inserts a reply, rejecting a duplicate reply id.
@@ -302,6 +362,16 @@ impl CommentThread {
         self.replies
             .sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.id.cmp(&b.id)));
     }
+}
+
+/// Deterministic ranking key used when merging two workflow states.
+fn state_rank(state: &ReviewState) -> (&str, &str, &str, &str) {
+    (
+        state.updated(),
+        state.created(),
+        state.status().as_str(),
+        state.assignee().unwrap_or(""),
+    )
 }
 
 #[cfg(test)]
@@ -435,5 +505,112 @@ mod tests {
         assert_eq!(t.assignee(), Some("alice"));
         let order: Vec<u64> = t.replies().iter().map(|r| r.id().get()).collect();
         assert_eq!(order, vec![1, 2]);
+    }
+
+    #[test]
+    fn thread_merge_unions_replies_and_is_symmetric() {
+        let mut left = CommentThread::new(ThreadId::new(2), AnnotationId::new(10), "t0");
+        left.add_reply(reply(2, "bob", "t2", "second"))
+            .expect("second reply");
+        left.add_reply(reply(1, "alice", "t1", "first"))
+            .expect("first reply");
+        let right = CommentThread::new(ThreadId::new(5), AnnotationId::new(10), "t0");
+
+        let merged = left.merge(&right).expect("merge");
+        assert_eq!(merged.id(), ThreadId::new(2));
+        assert_eq!(merged.root(), AnnotationId::new(10));
+        let order: Vec<u64> = merged.replies().iter().map(|r| r.id().get()).collect();
+        assert_eq!(order, vec![1, 2]);
+        assert_eq!(merged, right.merge(&left).expect("mirrored merge"));
+        assert_eq!(merged, merged.merge(&merged).expect("idempotent merge"));
+
+        let mut newer = right.clone();
+        newer
+            .transition(ReviewStatus::Resolved, "bob", "t9", "done")
+            .expect("resolved");
+        let resolved = left.merge(&newer).expect("merge with newer state");
+        assert_eq!(resolved.status(), ReviewStatus::Resolved);
+        assert_eq!(
+            left.merge(&newer).expect("merge again"),
+            newer.merge(&left).expect("mirrored newer merge")
+        );
+    }
+
+    #[test]
+    fn thread_merge_rejects_foreign_roots_and_conflicting_reply_ids() {
+        let mut left = CommentThread::new(ThreadId::new(1), AnnotationId::new(10), "t0");
+        left.add_reply(reply(1, "alice", "t1", "first"))
+            .expect("reply");
+        let foreign = CommentThread::new(ThreadId::new(2), AnnotationId::new(11), "t0");
+        assert_eq!(
+            left.merge(&foreign),
+            Err(ReviewError::MergeRootMismatch(
+                AnnotationId::new(10),
+                AnnotationId::new(11)
+            ))
+        );
+
+        let mut conflicting = CommentThread::new(ThreadId::new(3), AnnotationId::new(10), "t0");
+        conflicting
+            .add_reply(reply(1, "mallory", "t2", "different"))
+            .expect("conflicting reply");
+        assert_eq!(
+            left.merge(&conflicting),
+            Err(ReviewError::ConflictingReply(ReplyId::new(1)))
+        );
+        // An identical reply id and content collapses instead of conflicting.
+        let mut identical = CommentThread::new(ThreadId::new(4), AnnotationId::new(10), "t0");
+        identical
+            .add_reply(reply(1, "alice", "t1", "first"))
+            .expect("identical reply");
+        assert_eq!(left.merge(&identical).expect("collapse").reply_count(), 1);
+    }
+
+    #[test]
+    fn thread_validate_detects_duplicate_reply_ids_and_inconsistent_history() {
+        let mut valid = thread();
+        valid
+            .add_reply(reply(1, "alice", "t1", "first"))
+            .expect("reply");
+        assert_eq!(valid.validate(), Ok(()));
+        valid
+            .transition(ReviewStatus::Resolved, "alice", "t2", "done")
+            .expect("resolved");
+        assert_eq!(valid.validate(), Ok(()));
+
+        let duplicates = CommentThread::from_parts(
+            ThreadId::new(1),
+            AnnotationId::new(10),
+            vec![reply(1, "alice", "t1", "a"), reply(1, "bob", "t2", "b")],
+            ReviewState::new("t0"),
+        );
+        assert_eq!(
+            duplicates.validate(),
+            Err(ReviewError::DuplicateReplyId(ReplyId::new(1)))
+        );
+
+        let state = ReviewState::from_parts(
+            ReviewStatus::Open,
+            None,
+            "t0",
+            "t2",
+            vec![HistoryEntry::new(
+                None,
+                ReviewStatus::Resolved,
+                "t2",
+                "alice",
+                "mismatched",
+            )],
+        );
+        let inconsistent = CommentThread::from_parts(
+            ThreadId::new(2),
+            AnnotationId::new(10),
+            vec![reply(1, "alice", "t1", "a")],
+            state,
+        );
+        assert_eq!(
+            inconsistent.validate(),
+            Err(ReviewError::InconsistentHistory(ThreadId::new(2)))
+        );
     }
 }

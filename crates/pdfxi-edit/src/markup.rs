@@ -56,6 +56,8 @@ pub enum MarkupError {
     EmptyInkPaths,
     /// A polygon had fewer than three vertices.
     TooFewVertices,
+    /// A cloud bump count exceeded the supported bound (REVIEW-002).
+    TooManyBumps(u32),
     /// A border style failed validation.
     InvalidBorder(String),
     /// An attachment reference was not a safe, deterministic name (REVIEW-003).
@@ -76,6 +78,10 @@ impl fmt::Display for MarkupError {
             Self::UnknownKind(name) => write!(f, "unknown drawing kind `{name}`"),
             Self::EmptyInkPaths => f.write_str("an ink annotation needs at least one stroke"),
             Self::TooFewVertices => f.write_str("a polygon needs at least three vertices"),
+            Self::TooManyBumps(count) => write!(
+                f,
+                "cloud bump count {count} exceeds the maximum of {MAX_CLOUD_BUMPS}"
+            ),
             Self::InvalidBorder(reason) => write!(f, "invalid border style: {reason}"),
             Self::InvalidAttachmentReference(name) => {
                 write!(f, "unsafe file-attachment reference `{name}`")
@@ -588,6 +594,12 @@ impl ShapeOptions {
     }
 }
 
+/// Maximum number of scallops accepted for a cloud outline (REVIEW-002).
+///
+/// Bounds the generated path so a hostile or accidental value cannot make
+/// [`DrawingOptions::appearance`] allocate an unbounded number of commands.
+pub const MAX_CLOUD_BUMPS: u32 = 256;
+
 /// Typed options for a scalloped cloud outline (REVIEW-002).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CloudOptions {
@@ -604,6 +616,9 @@ impl CloudOptions {
     pub fn new(bumps: u32, amplitude: f32, border: BorderStyle) -> Result<Self, MarkupError> {
         if bumps == 0 || !amplitude.is_finite() || amplitude < 0.0 {
             return Err(MarkupError::InvalidNumber { key: "bumps" });
+        }
+        if bumps > MAX_CLOUD_BUMPS {
+            return Err(MarkupError::TooManyBumps(bumps));
         }
         Ok(Self {
             bumps,
@@ -1025,6 +1040,29 @@ pub struct MarkupAppearance {
     pub commands: Vec<PathCommand>,
     /// Text lines to render, empty for purely graphical tools.
     pub text_lines: Vec<String>,
+}
+
+impl MarkupAppearance {
+    /// Returns a deterministic, comparable signature of this appearance.
+    ///
+    /// The signature joins the tool name, the debug form of every
+    /// [`PathCommand`] in emission order, and the text lines (separated by an
+    /// ASCII unit separator). Equal appearances always produce the same
+    /// signature, which makes it suitable for determinism assertions and for
+    /// detecting a drift between two independently derived appearances.
+    pub fn signature(&self) -> String {
+        let commands: Vec<String> = self
+            .commands
+            .iter()
+            .map(|command| format!("{command:?}"))
+            .collect();
+        format!(
+            "{}|{}|{}",
+            self.kind.as_str(),
+            commands.join(";"),
+            self.text_lines.join("\u{1f}")
+        )
+    }
 }
 
 fn point_value(point: Point) -> Value {
@@ -1507,6 +1545,106 @@ mod tests {
             CloudOptions::new(0, 1.0, border()),
             Err(MarkupError::InvalidNumber { .. })
         ));
+    }
+
+    #[test]
+    fn cloud_bumps_are_bounded_to_prevent_unbounded_geometry() {
+        assert!(CloudOptions::new(MAX_CLOUD_BUMPS, 1.0, border()).is_ok());
+        assert_eq!(
+            CloudOptions::new(MAX_CLOUD_BUMPS + 1, 1.0, border()),
+            Err(MarkupError::TooManyBumps(MAX_CLOUD_BUMPS + 1))
+        );
+        assert_eq!(
+            CloudOptions::new(u32::MAX, 1.0, border()),
+            Err(MarkupError::TooManyBumps(u32::MAX))
+        );
+        assert!(
+            MarkupError::TooManyBumps(MAX_CLOUD_BUMPS + 1)
+                .to_string()
+                .contains("exceeds")
+        );
+    }
+
+    #[test]
+    fn appearance_signature_is_stable_and_distinguishes_tools() {
+        let free_text = DrawingOptions::FreeText(
+            FreeTextOptions::new("a b", 12.0, TextAlignment::Left, border()).expect("free text"),
+        )
+        .appearance(&rect());
+        let line = DrawingOptions::Line(
+            LineOptions::new(point(0.0, 0.0), point(10.0, 10.0), border()).expect("line"),
+        )
+        .appearance(&rect());
+        assert_eq!(free_text.signature(), free_text.signature());
+        assert_eq!(line.signature(), line.signature());
+        assert_ne!(free_text.signature(), line.signature());
+        assert!(free_text.signature().starts_with("free_text|"));
+        assert!(line.signature().starts_with("line|"));
+        // The signature distinguishes geometry, not just the tool name.
+        let shifted = DrawingOptions::Line(
+            LineOptions::new(point(0.0, 0.0), point(11.0, 10.0), border()).expect("line"),
+        )
+        .appearance(&rect());
+        assert_ne!(line.signature(), shifted.signature());
+    }
+
+    #[test]
+    fn non_finite_and_zero_length_markup_inputs_are_rejected() {
+        let nan = f32::NAN;
+        assert!(matches!(
+            CalloutOptions::new("x", point(nan, 1.0), border()),
+            Err(MarkupError::InvalidNumber { .. })
+        ));
+        assert!(matches!(
+            LineOptions::new(point(1.0, 1.0), point(1.0, 1.0), border()),
+            Err(MarkupError::InvalidNumber { .. })
+        ));
+        assert!(matches!(
+            ArrowOptions::new(point(0.0, 0.0), point(1.0, 1.0), ArrowHead::Open, 0.0),
+            Err(MarkupError::InvalidNumber { .. })
+        ));
+        assert!(matches!(
+            ArrowOptions::new(
+                point(0.0, 0.0),
+                point(1.0, 1.0),
+                ArrowHead::Open,
+                f32::INFINITY
+            ),
+            Err(MarkupError::InvalidNumber { .. })
+        ));
+        assert!(matches!(
+            ShapeOptions::new(
+                ShapeKind::Polygon,
+                vec![point(0.0, 0.0), point(nan, 1.0), point(1.0, 1.0)],
+                border(),
+            ),
+            Err(MarkupError::InvalidNumber { .. })
+        ));
+        assert!(matches!(
+            CloudOptions::new(2, -1.0, border()),
+            Err(MarkupError::InvalidNumber { .. })
+        ));
+    }
+
+    #[test]
+    fn arrow_head_none_emits_only_the_line_and_round_trips() {
+        let arrow = DrawingOptions::Arrow(
+            ArrowOptions::new(point(0.0, 0.0), point(10.0, 0.0), ArrowHead::None, 3.0)
+                .expect("valid arrow"),
+        );
+        let appearance = arrow.appearance(&rect());
+        assert_eq!(appearance.commands.len(), 2);
+        assert_eq!(
+            appearance.commands,
+            vec![
+                PathCommand::MoveTo(point(0.0, 0.0)),
+                PathCommand::LineTo(point(10.0, 0.0))
+            ]
+        );
+        assert_eq!(
+            DrawingOptions::from_dict(&arrow.to_dict()).expect("parse"),
+            arrow
+        );
     }
 
     // REVIEW-003 ---------------------------------------------------------

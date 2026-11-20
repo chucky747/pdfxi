@@ -62,11 +62,24 @@
 //!   directly into the existing parser/interpreter with the same budgets and
 //!   cancellation token. All execution is deterministic and I/O-free; no real
 //!   PDF document is mutated.
+//! - [`ActionDocument`] — a versioned, deterministic text serialization of an
+//!   [`ActionSequence`]. [`ActionDocument::to_text`] /
+//!   [`ActionDocument::from_text`] round-trip losslessly, validate the wrapped
+//!   sequence, and reject unsupported format versions with typed errors.
+//! - [`SequenceBatchQueue`] — a FIFO batch model over [`ActionSequence`] with
+//!   enqueue/dequeue, a validated per-item state machine, cooperative
+//!   cancellation, and a byte-stable [`SequenceBatchReport`]. Step effects stay
+//!   behind the [`SequenceStepRunner`] trait; no I/O is performed.
+//! - [`OperationRegistry`] — a deterministic registry of scriptable operations
+//!   with typed parameter descriptors. [`OperationRegistry::resolve`] validates
+//!   `name=value` arguments and produces a typed, stable [`CallPlan`] without
+//!   executing the operation.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 mod action;
+mod action_document;
 mod action_wizard;
 mod api;
 mod batch;
@@ -75,11 +88,14 @@ mod error;
 mod js;
 mod json;
 mod library;
+mod operation_registry;
 mod plugin;
+mod sequence_batch;
 mod toolset;
 mod watched;
 
 pub use action::{Action, ActionStep, StepKind};
+pub use action_document::{ACTION_DOCUMENT_VERSION, ActionDocument, ActionDocumentError};
 pub use action_wizard::{
     ActionSequence, CommandExecError, CommandHandler, DEFAULT_SCRIPT_FUEL, MAX_SCRIPT_BYTES,
     MAX_SEQUENCE_STEPS, PlanDecision, PlanDenyReason, RecordingCommandHandler, RunnerPlan,
@@ -106,6 +122,10 @@ pub use js::{
 };
 pub use json::{JsonError, JsonValue, MAX_DEPTH, MAX_NODES};
 pub use library::ActionLibrary;
+pub use operation_registry::{
+    CallPlan, DEFAULT_OPERATIONS, OperationDescriptor, OperationRegistry, ParamDescriptor,
+    ParamType, ResolveError, TypedValue,
+};
 pub use plugin::{
     BudgetField, Capability, CapabilityGrants, CapabilityParseError, DenyReason, InvocationBudget,
     InvocationDecision, InvocationReport, LocalPluginHost, MAX_BUDGET_MEMORY_BYTES,
@@ -113,6 +133,10 @@ pub use plugin::{
     MAX_MANIFEST_JSON_BYTES, MAX_NAME_BYTES, MAX_OPERATION_BYTES, MAX_PLUGINS, MAX_VERSION_BYTES,
     PLUGIN_API_VERSION, PluginError, PluginHost, PluginInvocation, PluginManifest, PluginRegistry,
     plan_invocation, validate_manifest_json_size,
+};
+pub use sequence_batch::{
+    BatchReportEntry, RecordingRunner, SequenceBatchError, SequenceBatchItem, SequenceBatchQueue,
+    SequenceBatchReport, SequenceBatchState, SequenceStepRunner,
 };
 pub use toolset::{TOOLSET_VERSION, Tool, Toolset, ToolsetError};
 pub use watched::{

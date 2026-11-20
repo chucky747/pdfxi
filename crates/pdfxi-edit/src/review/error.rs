@@ -44,6 +44,14 @@ pub enum ReviewError {
     UnknownReplyId(ReplyId),
     /// A thread contained no replies where at least one was required.
     EmptyThread(ThreadId),
+    /// A thread's history ended in a status other than its current status.
+    InconsistentHistory(ThreadId),
+    /// Two threads being merged were anchored to different root annotations.
+    MergeRootMismatch(AnnotationId, AnnotationId),
+    /// Two different replies carried the same id during a thread merge.
+    ConflictingReply(ReplyId),
+    /// An import declared a dictionary version this library does not read.
+    UnsupportedVersion(i64),
     /// An operation that needs at least one annotation received none.
     EmptyInput,
     /// An id could not be represented as a non-negative integer.
@@ -74,6 +82,25 @@ impl fmt::Display for ReviewError {
             Self::UnknownReplyId(id) => write!(f, "reply id {} is not in the thread", id.get()),
             Self::EmptyThread(id) => {
                 write!(f, "thread {} has no replies", id.get())
+            }
+            Self::InconsistentHistory(id) => {
+                write!(
+                    f,
+                    "thread {} history ends in a status other than its current status",
+                    id.get()
+                )
+            }
+            Self::MergeRootMismatch(left, right) => write!(
+                f,
+                "cannot merge threads rooted at {} and {}",
+                left.get(),
+                right.get()
+            ),
+            Self::ConflictingReply(id) => {
+                write!(f, "conflicting replies share reply id {}", id.get())
+            }
+            Self::UnsupportedVersion(version) => {
+                write!(f, "unsupported review dictionary version {version}")
             }
             Self::EmptyInput => write!(f, "at least one annotation is required"),
             Self::NegativeId(value) => {
@@ -110,6 +137,10 @@ mod tests {
             ReviewError::UnknownThread(AnnotationId::new(4)),
             ReviewError::UnknownReplyId(ReplyId::new(5)),
             ReviewError::EmptyThread(ThreadId::new(6)),
+            ReviewError::InconsistentHistory(ThreadId::new(7)),
+            ReviewError::MergeRootMismatch(AnnotationId::new(8), AnnotationId::new(9)),
+            ReviewError::ConflictingReply(ReplyId::new(10)),
+            ReviewError::UnsupportedVersion(2),
             ReviewError::EmptyInput,
             ReviewError::NegativeId(-1),
             ReviewError::IdTooLarge(u64::MAX),

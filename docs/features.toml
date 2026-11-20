@@ -2609,27 +2609,24 @@ title = "Sticky note highlight underline strikeout and squiggly"
 docs = [
     "crates/pdfxi-edit/src/markup.rs",
     "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0104.md",
+    "docs/evidence/author/T-0159.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 7 new markup tests covering free-text validation/round-trip, callout leader geometry, line/arrow determinism, rectangle/oval/polygon shapes, cloud scallops, border preservation and malformed dictionaries; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 4 new T-0159 markup tests (bounded cloud bumps, stable appearance signature, non-finite/zero-length rejection, ArrowHead::None); fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
 id = "REVIEW-002"
 notes = """
-Adds typed, validated option models for the free-text/callout/line/arrow/shape/cloud
-tools that the older pdf mapping keeps as opaque subtypes: FreeTextOptions
-(text, font size, alignment, border), CalloutOptions (text, leader point, border),
-LineOptions, ArrowOptions (head style and length), ShapeOptions (rectangle, oval,
-polygon with vertices), and CloudOptions (bump count and amplitude). Each derives a
-pure MarkupAppearance of PathCommand geometry: reused solid/dashed border paths,
-a leader line from the box centre, arrowhead wings, a deterministic 16-segment
-oval, closed polygons, and a clockwise scalloped cloud. DrawingOptions provides
-to_dict/from_dict in a private XI_Draw... namespace so every shape round-trips
-losslessly and byte-deterministically. Honest scope: this is a renderer-agnostic
-geometry/serialization model, not a painted appearance stream or a UI tool; the
-row therefore stays in-progress. No unsafe/new deps/panics.
+Closes REVIEW-002 at the library level. The existing typed options, validation,
+leader/arrowhead/polygon/cloud geometry and lossless dictionary round-trip are
+retained. T-0159 adds MAX_CLOUD_BUMPS (256) with a typed MarkupError::TooManyBumps
+so a hostile bump count cannot force unbounded path allocation, and
+MarkupAppearance::signature(), a stable canonical string over the tool name,
+ordered PathCommands and text lines for determinism assertions and drift checks.
+Honest scope: this is a renderer-agnostic geometry/serialization model, not a
+painted appearance stream or a UI drawing tool; those remain outside this crate.
+No unsafe/new deps/panics.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
     "markup::tests::free_text_options_validate_and_round_trip",
     "markup::tests::callout_appearance_has_a_leader_line_from_the_centre",
@@ -2638,6 +2635,10 @@ tests = [
     "markup::tests::cloud_outline_is_deterministic_and_scales_with_bumps",
     "markup::tests::dictionary_round_trip_preserves_border_style_and_is_stable",
     "markup::tests::malformed_dictionaries_return_typed_errors",
+    "markup::tests::cloud_bumps_are_bounded_to_prevent_unbounded_geometry",
+    "markup::tests::appearance_signature_is_stable_and_distinguishes_tools",
+    "markup::tests::non_finite_and_zero_length_markup_inputs_are_rejected",
+    "markup::tests::arrow_head_none_emits_only_the_line_and_round_trips",
 ]
 title = "Free text callout line arrow shape and cloud"
 
@@ -2658,57 +2659,66 @@ title = "Pencil stamp and file attachment annotations"
 [[feature]]
 docs = [
     "crates/pdfxi-edit/src/review/thread.rs",
-    "crates/pdfxi-edit/src/review/workflow.rs",
-    "crates/pdfxi-edit/src/review/report.rs",
-    "docs/evidence/author/T-0104.md",
+    "crates/pdfxi-edit/src/review/error.rs",
+    "docs/evidence/author/T-0159.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including all 20 existing review thread/workflow/registry tests plus new review::report tests that exercise transitions, history and assignee state; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 3 new T-0159 thread tests (symmetric merge, merge conflicts, structural validate) and all existing thread/workflow tests; fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
 id = "REVIEW-004"
 notes = """
-Reused the existing CommentThread/ReviewState/ReviewStatus workflow (replies ordered
-by (timestamp, id), five-status transition table, append-only history) and added
-coverage through the new review::report helpers, which read thread status,
-assignee, replies and transition history to build deterministic printable and
-participant views. The existing thread/workflow validation tests remain green; no
-behavioural change to the transition table was needed. Honest scope: local model
-and views only; shared/email collaboration and a host UI remain future work, so the
-row stays in-progress. No unsafe/new deps/panics.
+Closes REVIEW-004 at the library level. Creation, (timestamp, id) reply ordering,
+the five-status transition table with actor/timestamp history, and all prior
+validation are unchanged. T-0159 adds CommentThread::merge, a deterministic union
+of two threads sharing a root: replies are unioned by id with conflicting content
+rejected as ReviewError::ConflictingReply, the workflow state with the greatest
+(updated, created, status, assignee) tuple wins, and the lower thread id plus a
+sorted extra-key union make the result argument-order independent. validate()
+now also detects duplicate reply ids and a history whose last entry disagrees
+with the current status (ReviewError::InconsistentHistory). Honest scope: local
+model and views only; shared/email collaboration and a host UI remain future work.
+No unsafe/new deps/panics.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "review::report::tests::registry_summary_helper_still_agrees_with_the_existing_summary",
     "review::thread::tests::thread_assembly_orders_replies_by_timestamp_then_id",
     "review::workflow::tests::allowed_transitions_match_the_documented_table",
+    "review::thread::tests::thread_merge_unions_replies_and_is_symmetric",
+    "review::thread::tests::thread_merge_rejects_foreign_roots_and_conflicting_reply_ids",
+    "review::thread::tests::thread_validate_detects_duplicate_reply_ids_and_inconsistent_history",
 ]
 title = "Comment threads replies and status"
 
 [[feature]]
 docs = [
     "crates/pdfxi-edit/src/review/report.rs",
-    "crates/pdfxi-edit/src/review/serialize.rs",
-    "docs/evidence/author/T-0104.md",
+    "crates/pdfxi-edit/src/review/error.rs",
+    "docs/evidence/author/T-0159.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 2 new review::report tests for lossless export/import round-trip and stable print output plus the 7 existing review::serialize round-trip tests; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 3 new T-0159 report tests (typed print lines, coverage, version-checked import) and all existing serialize round-trip tests; fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
 id = "REVIEW-005"
 notes = """
-Added documented export_registry/import_registry wrappers over the existing
-registry_to_dict/dict_to_registry round-trip, plus registry_to_print_lines,
-registry_to_text and print_registry, which render a stable, self-describing listing
-of threads, replies and transition history in deterministic root/timestamp order.
-Tests prove export->import reproduces the registry exactly and that the printed
-text is byte-stable across calls. Honest scope: this is a dictionary intermediate
-and plain-text view; real PDF /Annots comment import/export and an OS print driver
-remain outside this crate, so the row stays in-progress. No unsafe/new deps/panics.
+Closes REVIEW-005 at the library level. export_registry/import_registry and the
+stable text listing are retained. T-0159 adds a typed PrintLine format
+(Header/Thread/ThreadMeta/Reply/History with structured fields),
+registry_to_typed_print_lines and typed_print_lines_to_text; a test proves the
+typed lines render byte-identically to registry_to_print_lines and that the text
+view round-trips. import_registry_checked validates XI_ThreadVersion against
+REVIEW_REGISTRY_VERSION (1) and rejects missing/non-integer/unsupported versions
+with typed ReviewErrors. Honest scope: dictionary intermediate and text/typed
+views; real PDF /Annots import/export and an OS print driver remain outside this
+crate. No unsafe/new deps/panics.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
     "review::report::tests::export_import_round_trip_preserves_every_thread",
     "review::report::tests::print_lines_are_stable_and_cover_threads_replies_and_history",
     "review::serialize::tests::registry_round_trip_preserves_threads_replies_and_history",
+    "review::report::tests::typed_print_lines_match_the_stable_text_view",
+    "review::report::tests::typed_print_lines_cover_threads_replies_and_history",
+    "review::report::tests::checked_import_validates_dictionary_version",
 ]
 title = "Import export and print comments"
 
@@ -2729,30 +2739,30 @@ title = "Email and shared review workflows locally"
 [[feature]]
 docs = [
     "crates/pdfxi-edit/src/review/report.rs",
-    "crates/pdfxi-edit/src/review/registry.rs",
-    "docs/evidence/author/T-0104.md",
+    "docs/evidence/author/T-0159.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 4 new review::report participant/status tests and all 7 existing review::registry tests; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 2 new T-0159 tracker tests (ordered/complete board, deterministic digest across insertion order and export/import) and all existing participant tests; fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
 id = "REVIEW-007"
 notes = """
-Added ParticipantSummary and participants(), which derive a lexicographically
-sorted roster with reply count, distinct-thread count, assigned-thread count,
-transition count and a per-status breakdown (all five statuses always present).
-ParticipantStatusSummary/participant_status_summary aggregate those per-status
-counts deterministically. Tests cover sorting, reply/thread/transition accounting,
-assignee attribution, zero-entry stability and empty registries. Honest scope: a
-local aggregate derived from the registry only; shared/email participant
-synchronisation and a tracker UI are future work, so the row stays in-progress. No
-unsafe/new deps/panics.
+Closes REVIEW-007 at the library level. ParticipantSummary, participants(), and
+ParticipantStatusSummary are retained. T-0159 adds ReviewTracker, a borrowed view
+that exposes status_board() (all five statuses in declaration order with ids in
+root order, including empty buckets), roster() (sorted participants), and digest()
+(a stable string over per-status counts, participant reply/assignment counts, and
+the board). Tests prove the digest is stable across reply insertion order and an
+export/import round-trip. Honest scope: a local aggregate derived from the
+registry only; shared/email synchronisation and a tracker UI remain future work.
+No unsafe/new deps/panics.
 """
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
     "review::report::tests::participants_are_sorted_and_count_replies_threads_and_transitions",
-    "review::report::tests::assigned_and_unassigned_threads_are_reflected_in_participant_summary",
     "review::report::tests::participant_status_summary_is_stable_and_includes_zero_entries",
     "review::registry::tests::summary_counts_are_stable_and_include_zero_entries",
+    "review::report::tests::tracker_status_board_and_roster_are_ordered_and_complete",
+    "review::report::tests::tracker_digest_is_deterministic_across_insertion_order_and_round_trip",
 ]
 title = "Review tracker and participant status"
 
@@ -3146,16 +3156,45 @@ title = "Screen reader and accesskit integration"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-automation/src/action_document.rs",
+    "crates/pdfxi-automation/src/action_wizard.rs",
+    "crates/pdfxi-automation/src/lib.rs",
     "crates/pdfxi-automation/src/library.rs",
     "crates/pdfxi-cli/src/action.rs",
+    "docs/evidence/automation/T-0160.md",
 ]
 domain = "Automation"
-evidence = "T-0050: cargo test -p pdfxi-automation -p pdfxi-cli -> 44 automation unit + 30 CLI integration passed, EXIT=0. fmt/clippy/doc clean."
+evidence = "cargo test -p pdfxi-automation: 198 passed, 0 failed (10 new action_document::tests::* covering round-trip, version mismatch, syntax/escape errors, empty input, duplicate ids, empty name, special characters and determinism), 0 doc tests; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0160.md."
 id = "AUTO-001"
-notes = "Saved actions in the existing tab-delimited text format can now be listed, inspected, and selected by name from the CLI through the new ActionLibrary. The Action Wizard UI and real document mutation remain later work, so the row stays in-progress."
+notes = """
+T-0160 adds `pdfxi_automation::action_document`, a versioned, serializable text
+document around the existing `ActionSequence`/`WizardStep` model.
+`ActionDocument::to_text`/`from_text` use a deterministic, tab-delimited,
+escaped line format (version header, NAME, BUDGET, STEP records, END) with no
+serde dependency, and round-trip byte-for-byte including special characters.
+`ACTION_DOCUMENT_VERSION` is checked on import and a foreign version is rejected
+with typed `ActionDocumentError::UnsupportedVersion`; malformed records, bad
+escapes, empty input, invalid numbers, and invalid wrapped sequences all return
+typed, line-numbered errors. `from_sequence` and `validate` re-check the wrapped
+sequence. All public items have rustdoc; no new dependency, unsafe, or non-test
+panic. Honest remaining scope is outside this row's library boundary: no UI
+Action Wizard editor for create/edit, and no PDF mutation — the document model
+covers import/export/validation/versioning of the existing sequence model only.
+Prior T-0050 ActionLibrary/CLI evidence is retained below.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
+    "action_document::tests::format_round_trip_is_lossless",
+    "action_document::tests::version_mismatch_is_rejected",
+    "action_document::tests::invalid_syntax_is_typed_with_line_numbers",
+    "action_document::tests::invalid_escape_is_rejected",
+    "action_document::tests::empty_input_is_rejected",
+    "action_document::tests::duplicate_step_ids_fail_validation_on_import",
+    "action_document::tests::empty_name_is_rejected",
+    "action_document::tests::special_characters_round_trip",
+    "action_document::tests::format_is_deterministic_across_runs",
+    "action_document::tests::errors_are_actionable",
     "library::tests::single_action_file_is_backwards_compatible",
     "library::tests::multiple_actions_are_parsed_in_file_order",
     "action_show_prints_steps_and_parameters",
@@ -3164,16 +3203,48 @@ title = "Action Wizard create edit import export"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-automation/src/sequence_batch.rs",
+    "crates/pdfxi-automation/src/action_wizard.rs",
+    "crates/pdfxi-automation/src/lib.rs",
     "crates/pdfxi-cli/src/action.rs",
     "crates/pdfxi-automation/src/document.rs",
+    "docs/evidence/automation/T-0160.md",
 ]
 domain = "Automation"
-evidence = "T-0050: 12 new CLI integration tests, 30/30 cli.rs passed, EXIT=0; deterministic summaries verified by running the same job twice and comparing stdout."
+evidence = "cargo test -p pdfxi-automation: 198 passed, 0 failed (12 new sequence_batch::tests::* covering FIFO order, state-machine transitions, cancellation before/mid run, failure isolation, idempotence, empty queue and byte-stable reports), 0 doc tests; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0160.md."
 id = "AUTO-002"
-notes = "Batch execution is now reachable from the CLI: inputs are validated before any job, run in order through BatchQueue::run_with(DocumentExecutor), isolate failures per file, and emit deterministic text or stable JSON with per-step results. The no-mutation staging executor is temporary; watched folders and real writes remain later work."
+notes = """
+T-0160 adds `pdfxi_automation::sequence_batch`, a FIFO `SequenceBatchQueue`
+whose unit of work is the existing `ActionSequence` (complementing the older
+`Action`-based `BatchQueue`). `enqueue`/`dequeue` provide deterministic first-in
+first-out ordering; duplicate and unknown ids are typed errors. Each
+`SequenceBatchItem` follows a validated state machine
+(queued -> running|failed|cancelled, running -> succeeded|failed|cancelled,
+terminal states accept none). Cooperative cancellation uses the existing
+`CancelToken`: `cancel`/`cancel_all` mark queued items cancelled and mid-run
+cancellation keeps the steps completed before the signal. `run_all` validates
+each sequence, isolates failures to their own item, and is idempotent on
+terminal items. Step effects stay behind the injected `SequenceStepRunner`
+trait with a side-effect-free `RecordingRunner` default, so no I/O or real PDF
+mutation occurs. `SequenceBatchReport::summary` is byte-stable across runs. All
+public items have rustdoc; no new dependency, unsafe, or non-test panic. Prior
+T-0050 CLI batch evidence is retained below.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
+    "sequence_batch::tests::enqueue_dequeue_and_insertion_order",
+    "sequence_batch::tests::duplicate_ids_and_unknown_ids_are_typed_errors",
+    "sequence_batch::tests::state_transitions_follow_the_state_machine",
+    "sequence_batch::tests::run_all_is_ordered_and_deterministic",
+    "sequence_batch::tests::failure_is_isolated_and_recorded",
+    "sequence_batch::tests::cancellation_before_run_marks_item_cancelled",
+    "sequence_batch::tests::cancellation_mid_run_keeps_completed_steps",
+    "sequence_batch::tests::cancel_all_marks_every_pending_item_cancelled",
+    "sequence_batch::tests::empty_queue_has_an_empty_report",
+    "sequence_batch::tests::invalid_sequence_fails_only_its_item",
+    "sequence_batch::tests::finished_items_are_not_rerun",
+    "sequence_batch::tests::state_names_are_stable",
     "action_run_orders_files_deterministically",
     "action_run_isolates_one_failing_file",
     "action_run_validates_before_any_job_runs",
@@ -3270,16 +3341,49 @@ title = "Sandboxed Acrobat-compatible JavaScript subset"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-automation/src/operation_registry.rs",
+    "crates/pdfxi-automation/src/lib.rs",
+    "crates/pdfxi-automation/src/api.rs",
     "crates/pdfxi-cli/src/main.rs",
     "crates/pdfxi-cli/src/action.rs",
+    "docs/evidence/automation/T-0160.md",
 ]
 domain = "Automation"
-evidence = "T-0050: cargo test -p pdfxi-cli -> 30/30 integration passed, EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-cli --no-deps -> EXIT=0."
+evidence = "cargo test -p pdfxi-automation: 198 passed, 0 failed (12 new operation_registry::tests::* covering sorted enumeration, typed descriptors, unknown operation, missing/bad/unknown/duplicate parameters, empty inputs, deterministic typed call plans and negative integers), 0 doc tests; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0160.md."
 id = "AUTO-005"
-notes = "The CLI gained an `action` command group and a `droplet` entry point that run saved actions and print deterministic per-file outcomes, with stable JSON (`--json`) exposing job state, per-file outcome, and per-step results. Other scriptable operations remain future work, so the row stays in-progress."
+notes = """
+T-0160 adds `pdfxi_automation::operation_registry`, the library-level model for
+scripting every operation. `OperationRegistry::with_defaults` registers one
+`OperationDescriptor` per `SUPPORTED_COMMANDS` entry, each with typed
+`ParamDescriptor`s (`ParamType::{String,Bool,Integer,Path}`). Enumeration via
+`names`/`operations` is deterministic alphabetical order. `resolve(&[String])`
+parses `name=value` arguments, rejects empty input, unknown operations,
+malformed/unknown/duplicate parameters, missing required parameters, and
+invalid bool/integer values with typed `ResolveError`s, then produces a typed
+`CallPlan` whose `arguments()` iterate in alphabetical key order and whose
+`summary()` is byte-stable. Resolution performs no execution, filesystem,
+network, or process access. All public items have rustdoc; no new dependency,
+unsafe, or non-test panic. Honest remaining scope is outside this row's library
+boundary: the CLI crate was NOT edited — this registry is the model a CLI
+adapter can consume; exposing every descriptor through `pdfxi-cli` argument
+parsing remains a separate CLI task. Prior T-0050 CLI action/droplet evidence is
+retained below.
+"""
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
+    "operation_registry::tests::enumeration_is_sorted_and_deterministic",
+    "operation_registry::tests::descriptors_carry_typed_parameters",
+    "operation_registry::tests::unknown_operation_is_typed",
+    "operation_registry::tests::missing_required_parameter_is_rejected",
+    "operation_registry::tests::invalid_bool_and_integer_are_rejected",
+    "operation_registry::tests::unknown_and_duplicate_parameters_are_rejected",
+    "operation_registry::tests::empty_inputs_are_rejected",
+    "operation_registry::tests::resolve_produces_a_deterministic_typed_call_plan",
+    "operation_registry::tests::integer_and_negative_values_parse",
+    "operation_registry::tests::no_argument_operations_are_valid",
+    "operation_registry::tests::duplicate_registration_is_typed",
+    "operation_registry::tests::errors_are_actionable",
     "action_run_json_has_stable_shape",
     "action_run_output_dir_resolves_export_target_without_writing",
     "droplet_matches_action_run_with_defaults",
