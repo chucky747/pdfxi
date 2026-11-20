@@ -232,6 +232,77 @@ impl PageBoxes {
         Ok(())
     }
 
+    /// Return a canonicalized copy of these boxes.
+    ///
+    /// The result is ordered (every rectangle has positive width and height) and
+    /// satisfies the containment hierarchy checked by [`PageBoxes::validate`]:
+    /// an inner box that escapes its container is clipped to that container, and
+    /// a missing or disjoint container falls back to the nearest outer box.
+    /// Explicitness flags are preserved so a later [`Document::set_page_boxes`]
+    /// does not invent dictionary keys that the source did not carry.
+    ///
+    /// This is a *repair* used by callers that must persist a consistent set of
+    /// boxes; it never silently accepts a non-finite coordinate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NonFiniteBoxCoordinate`] for a non-finite coordinate and
+    /// [`Error::DegenerateBox`] when a box cannot be normalized to positive area
+    /// (for example a zero-area MediaBox).
+    pub fn normalized(&self) -> Result<Self> {
+        for kind in BoxKind::ALL {
+            let rectangle = self.rectangle(kind);
+            if ![
+                rectangle.left,
+                rectangle.bottom,
+                rectangle.right,
+                rectangle.top,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
+            {
+                return Err(Error::NonFiniteBoxCoordinate { name: kind.key() });
+            }
+        }
+
+        let media = normalize_rectangle(self.media)?;
+        let crop = match rectangle_intersection(self.crop, media) {
+            Some(overlap) => normalize_rectangle(overlap)?,
+            None => media,
+        };
+        let mut bleed = match rectangle_intersection(self.bleed, media) {
+            Some(overlap) => normalize_rectangle(overlap)?,
+            None => crop,
+        };
+        // The TrimBox must lie inside both the CropBox and the BleedBox. When
+        // those two do not overlap there is no such region, so align the
+        // BleedBox with the CropBox (its ISO fallback) to keep the set canonical.
+        let mut trim_base = rectangle_intersection(crop, bleed);
+        if trim_base.is_none() {
+            bleed = crop;
+            trim_base = Some(crop);
+        }
+        let trim = match trim_base.and_then(|base| rectangle_intersection(self.trim, base)) {
+            Some(overlap) => normalize_rectangle(overlap)?,
+            None => trim_base.unwrap_or(crop),
+        };
+        let art = match rectangle_intersection(self.art, crop) {
+            Some(overlap) => normalize_rectangle(overlap)?,
+            None => crop,
+        };
+
+        Ok(Self::from_parts(
+            [
+                (BoxKind::Media, media),
+                (BoxKind::Crop, crop),
+                (BoxKind::Bleed, bleed),
+                (BoxKind::Trim, trim),
+                (BoxKind::Art, art),
+            ],
+            self.explicit.clone(),
+        ))
+    }
+
     /// Assemble a fully explicit set from parsed rectangles.
     fn from_parts(parts: [(BoxKind, Rectangle); 5], explicit: BTreeSet<BoxKind>) -> Self {
         let get = |kind: BoxKind| -> Rectangle {
@@ -282,6 +353,66 @@ fn contains(outer: Rectangle, inner: Rectangle) -> bool {
         && outer.bottom <= inner.bottom
         && inner.right <= outer.right
         && inner.top <= outer.top
+}
+
+/// Return the intersection of two rectangles.
+///
+/// The result uses the larger left/bottom edge and the smaller right/top edge,
+/// so it has positive area only when the inputs overlap. Rectangles that merely
+/// touch along an edge have zero overlap and yield `None`, as do disjoint or
+/// non-finite inputs. Inputs are expected to be ordered (see
+/// [`normalize_rectangle`]); unordered edges still produce a bounded range but
+/// its interpretation is left to the caller.
+#[must_use]
+pub fn rectangle_intersection(a: Rectangle, b: Rectangle) -> Option<Rectangle> {
+    let values = [
+        a.left, a.bottom, a.right, a.top, b.left, b.bottom, b.right, b.top,
+    ];
+    if !values.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let left = a.left.max(b.left);
+    let bottom = a.bottom.max(b.bottom);
+    let right = a.right.min(b.right);
+    let top = a.top.min(b.top);
+    if right <= left || top <= bottom {
+        None
+    } else {
+        Some(Rectangle::new(left, bottom, right, top))
+    }
+}
+
+/// Order a rectangle's edges into a finite, positive-area rectangle.
+///
+/// This is the normalization primitive used by [`PageBoxes::normalized`]: a
+/// rectangle whose `left`/`right` or `bottom`/`top` were supplied in reverse
+/// order is swapped into the canonical order. It never expands the box.
+///
+/// # Errors
+///
+/// Returns [`Error::NonFiniteBoxCoordinate`] when any edge is not finite, and
+/// [`Error::DegenerateBox`] when the two edges on either axis coincide (zero
+/// area).
+pub fn normalize_rectangle(rectangle: Rectangle) -> Result<Rectangle> {
+    if ![
+        rectangle.left,
+        rectangle.bottom,
+        rectangle.right,
+        rectangle.top,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
+    {
+        return Err(Error::NonFiniteBoxCoordinate { name: "Rectangle" });
+    }
+    let left = rectangle.left.min(rectangle.right);
+    let right = rectangle.left.max(rectangle.right);
+    let bottom = rectangle.bottom.min(rectangle.top);
+    let top = rectangle.bottom.max(rectangle.top);
+    if right <= left || top <= bottom {
+        return Err(Error::DegenerateBox { name: "Rectangle" });
+    }
+    Ok(Rectangle::new(left, bottom, right, top))
 }
 
 /// Reject `inner` when it is not contained by `outer`.
@@ -680,5 +811,138 @@ mod tests {
         let boxes = document.page_boxes(0).expect("boxes");
         assert_eq!(boxes.media(), Rectangle::new(0.0, 0.0, 400.0, 500.0));
         assert!(!boxes.is_explicit(BoxKind::Media), "inherited, not direct");
+    }
+
+    #[test]
+    fn normalize_rectangle_orders_swapped_coordinates() {
+        let swapped = Rectangle::new(612.0, 792.0, 0.0, 0.0);
+        let normalized = normalize_rectangle(swapped).expect("ordered");
+        assert_eq!(normalized, Rectangle::new(0.0, 0.0, 612.0, 792.0));
+        assert_eq!(normalized.width(), 612.0);
+        assert_eq!(normalized.height(), 792.0);
+        // Already-ordered input is unchanged.
+        assert_eq!(
+            normalize_rectangle(normalized).expect("idempotent"),
+            normalized
+        );
+    }
+
+    #[test]
+    fn normalize_rectangle_rejects_non_finite_and_zero_area() {
+        let non_finite = Rectangle::new(0.0, 0.0, f64::NAN, 792.0);
+        assert!(matches!(
+            normalize_rectangle(non_finite),
+            Err(Error::NonFiniteBoxCoordinate { name: "Rectangle" })
+        ));
+        let infinite = Rectangle::new(0.0, 0.0, f64::INFINITY, 792.0);
+        assert!(normalize_rectangle(infinite).is_err());
+        let flat = Rectangle::new(10.0, 10.0, 10.0, 792.0);
+        assert!(matches!(
+            normalize_rectangle(flat),
+            Err(Error::DegenerateBox { name: "Rectangle" })
+        ));
+    }
+
+    #[test]
+    fn rectangle_intersection_clips_and_reports_disjoint() {
+        let a = Rectangle::new(0.0, 0.0, 100.0, 100.0);
+        let b = Rectangle::new(25.0, 25.0, 200.0, 75.0);
+        assert_eq!(
+            rectangle_intersection(a, b),
+            Some(Rectangle::new(25.0, 25.0, 100.0, 75.0))
+        );
+        let disjoint = Rectangle::new(150.0, 0.0, 200.0, 100.0);
+        assert_eq!(rectangle_intersection(a, disjoint), None);
+        // Touching only along an edge has zero area.
+        let touching = Rectangle::new(100.0, 0.0, 200.0, 100.0);
+        assert_eq!(rectangle_intersection(a, touching), None);
+        // Non-finite input never panics and yields no overlap.
+        let bad = Rectangle::new(0.0, 0.0, f64::NAN, 10.0);
+        assert_eq!(rectangle_intersection(a, bad), None);
+    }
+
+    #[test]
+    fn normalized_boxes_are_canonical_and_idempotent() {
+        let media = Rectangle::new(0.0, 0.0, 612.0, 792.0);
+        // Crop escapes the MediaBox, Bleed is disjoint from it, Trim sits near
+        // the top-right corner and Art escapes the CropBox. Every rectangle is
+        // finite and non-degenerate, but the hierarchy is non-canonical.
+        let hostile = PageBoxes::from_media(media)
+            .expect("media")
+            .with_crop(Rectangle::new(-50.0, -50.0, 700.0, 800.0))
+            .expect("crop")
+            .with_bleed(Rectangle::new(700.0, 700.0, 800.0, 800.0))
+            .expect("bleed")
+            .with_trim(Rectangle::new(500.0, 500.0, 580.0, 580.0))
+            .expect("trim")
+            .with_art(Rectangle::new(500.0, 500.0, 900.0, 900.0))
+            .expect("art");
+        assert!(hostile.validate().is_err(), "source is non-canonical");
+
+        let normalized = hostile.normalized().expect("normalized");
+        assert!(normalized.validate().is_ok(), "result must be canonical");
+        assert_eq!(normalized, normalized.normalized().expect("idempotent"));
+        assert_eq!(normalized.media(), media);
+        // Crop was clipped to the MediaBox; the disjoint Bleed fell back to it.
+        assert_eq!(normalized.crop(), media);
+        assert_eq!(normalized.bleed(), media);
+    }
+
+    #[test]
+    fn inherited_crop_box_is_used_when_page_has_none() {
+        let objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /CropBox [10 10 400 500] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+        ];
+        let document = Document::from_bytes(assemble(&objects)).expect("valid fixture");
+        let boxes = document.page_boxes(0).expect("boxes");
+        assert_eq!(boxes.crop(), Rectangle::new(10.0, 10.0, 400.0, 500.0));
+        assert_eq!(boxes.media(), Rectangle::new(0.0, 0.0, 612.0, 792.0));
+        assert!(!boxes.is_explicit(BoxKind::Crop), "inherited, not direct");
+        assert!(boxes.is_explicit(BoxKind::Media), "direct on the page");
+    }
+
+    #[test]
+    fn malformed_box_array_is_a_typed_error() {
+        let short = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612] >>".to_owned(),
+        ];
+        let document = Document::from_bytes(assemble(&short)).expect("parses structurally");
+        assert!(matches!(
+            document.page_boxes(0),
+            Err(Error::InvalidMediaBox(3))
+        ));
+
+        let not_a_number = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 (oops)] >>".to_owned(),
+        ];
+        let document = Document::from_bytes(assemble(&not_a_number)).expect("parses structurally");
+        assert!(matches!(
+            document.page_boxes(0),
+            Err(Error::InvalidMediaBox(3))
+        ));
+
+        // A malformed non-MediaBox array is rejected by page_boxes itself with
+        // a typed error naming the box and the page object (no panic).
+        let bad_trim = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /TrimBox [10 10 100] >>"
+                .to_owned(),
+        ];
+        let document = Document::from_bytes(assemble(&bad_trim)).expect("parses structurally");
+        assert!(matches!(
+            document.page_boxes(0),
+            Err(Error::InvalidBoxArray {
+                page: 3,
+                name: "TrimBox"
+            })
+        ));
     }
 }

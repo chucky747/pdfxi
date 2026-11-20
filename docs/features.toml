@@ -2102,13 +2102,25 @@ title = "Measurement distance area and perimeter"
 docs = [
     "crates/pdfxi-standards/src/document_profile.rs",
     "crates/pdfxi-standards/src/fixup.rs",
-    "crates/pdfxi-standards/src/lib.rs",
-    "docs/evidence/convert/T-0079.md",
+    "docs/evidence/core/T-0127.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-standards: 49 passed; 0 failed (22 new for T-0079). fmt/clippy/doc EXIT=0. See docs/evidence/convert/T-0079.md."
+evidence = "cargo test -p pdfxi-standards: 74 unit passed, 0 failed (6 new for T-0127); TEST_EXIT=0. clippy --all-targets --no-deps -D warnings and RUSTDOCFLAGS=-D warnings cargo doc --no-deps both EXIT=0. Full output in docs/evidence/core/T-0127.md."
 id = "PRINT-001"
-notes = "Opt-in, reported fixups plus PDF/A-3b and PDF/E-1 profiles and ordered annotation/forbidden-entry rules. Row stays in-progress: ICC validation, byte-level fixup adapter, veraPDF CI oracle, and UI/CLI exposure remain."
+notes = """
+Profiles continue to produce deterministic findings with stable IDs and order.
+T-0127 adds explicit module documentation that this is a deterministic subset
+preflight, not a certification: checks run over a caller-built PreflightInput
+snapshot, fixups edit a clone and add placeholders, and real ICC/font payloads
+plus an independent validator (veraPDF in CI) are still required. New tests
+cover PDF/A-3b and PDF/E-1 findings, PDF/X-4 page-box findings with page
+locations, canonical report stability, opt-in fixup application to a realistic
+snapshot, deterministic fixup reporting in request order, and the
+version-below-minimum typed error. Both crates are dependency-free so a
+byte-level fixup adapter cannot live in either without an integrator-owned
+manifest change; that adapter, ICC validation, the veraPDF oracle and UI/CLI
+exposure remain future work, so the row stays in-progress.
+"""
 priority = "P2"
 status = "in-progress"
 tests = [
@@ -2123,6 +2135,12 @@ tests = [
     "fixup::tests::remove_prohibited_entry_fixup_is_opt_in",
     "fixup::tests::fixup_report_is_accurate",
     "fixup::tests::suggested_fixups_resolve_only_mechanical_findings",
+    "document_profile::t0127_tests::t0127_pdfa3b_and_e1_profiles_report_deterministic_findings",
+    "document_profile::t0127_tests::t0127_missing_print_boxes_are_reported_with_page_location",
+    "document_profile::t0127_tests::t0127_report_is_stable_and_findings_are_canonical",
+    "fixup::t0127_tests::t0127_fixups_apply_to_realistic_snapshot_and_reduce_errors",
+    "fixup::t0127_tests::t0127_fixup_report_records_fixups_in_request_order",
+    "fixup::t0127_tests::t0127_version_fixup_is_blocked_when_below_the_profile_minimum",
 ]
 title = "Preflight profiles checks and fixups"
 
@@ -2210,23 +2228,24 @@ title = "Trapping presets and transparency flattening"
 docs = [
     "crates/pdfxi-core/src/boxes.rs",
     "crates/pdfxi-core/src/printer_marks.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0127.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-core: 125 unit + 6 integration passed, 0 failed. fmt, clippy -D warnings, and RUSTDOCFLAGS=-D warnings cargo doc all clean. See docs/evidence/core/T-0059.md."
+evidence = "cargo test -p pdfxi-core: 211 unit + 6 integration passed, 0 failed (9 new for T-0127); TEST_EXIT=0. fmt/clippy(--all-targets --no-deps -D warnings)/doc(-D warnings) all EXIT=0. Full output in docs/evidence/core/T-0127.md."
 id = "PRINT-007"
 notes = """
-Core support is implemented: typed MediaBox/CropBox/BleedBox/TrimBox/ArtBox
-model with validation, ISO fallbacks, inheritance and copy-on-write read/write
-that preserves unknown page keys; plus a deterministic printer-mark content
-stream (crop marks, registration marks, CMYK colour bar, page information) with
-an overlay box and Form XObject.
-
-Row remains in-progress because the whole user-visible feature is not complete:
-no UI/CLI surface exposes box editing or mark placement, no print-dialog or
-imposition integration consumes the overlay stream, mark styles/inks are not
-user-configurable beyond PrinterMarkOptions, mdBook documentation for print
-production is not written, and an independent reviewer/security sign-off has
-not been recorded. Remaining work belongs to other lanes or later tasks.
+All five page boxes are parsed with ISO inheritance and fallback rules, are
+written deterministically through copy-on-write, and survive save/reparse.
+T-0127 adds public normalize_rectangle and rectangle_intersection helpers plus
+PageBoxes::normalized(), which clips a non-canonical hierarchy into a valid,
+idempotent set that passes validate() while preserving explicitness flags;
+reversed, non-finite, zero-area, disjoint and edge-touching inputs are handled
+without panics. Printer marks keep typed options, deterministic geometry and a
+Form XObject whose BBox and stream bytes survive a save/reparse round-trip.
+The row stays in-progress: no UI/CLI box editing or mark placement surface, no
+print-dialog/imposition consumer, no user-configurable mark styles beyond
+PrinterMarkOptions, no mdBook print-production page and no reviewer sign-off.
 """
 priority = "P2"
 status = "in-progress"
@@ -2246,6 +2265,15 @@ tests = [
     "printer_marks::tests::marks_stay_on_sheet_at_the_documented_minimum_margin",
     "printer_marks::tests::tight_trim_margins_are_rejected_with_a_typed_error",
     "printer_marks::tests::sub_precision_options_are_rejected",
+    "boxes::tests::normalize_rectangle_orders_swapped_coordinates",
+    "boxes::tests::normalize_rectangle_rejects_non_finite_and_zero_area",
+    "boxes::tests::rectangle_intersection_clips_and_reports_disjoint",
+    "boxes::tests::normalized_boxes_are_canonical_and_idempotent",
+    "boxes::tests::inherited_crop_box_is_used_when_page_has_none",
+    "boxes::tests::malformed_box_array_is_a_typed_error",
+    "printer_marks::tests::marks_form_xobject_survives_save_and_reparse",
+    "printer_marks::tests::color_bar_has_four_ordered_cmyk_swatches",
+    "printer_marks::tests::disabled_mark_families_produce_empty_geometry",
 ]
 title = "Page boxes bleed crop and printer marks"
 

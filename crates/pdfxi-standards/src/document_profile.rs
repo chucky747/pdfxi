@@ -10,6 +10,19 @@
 //! A check only reports facts that are decidable from the snapshot. Missing
 //! optional data (for example no per-page details) never causes a panic; at
 //! most it yields a warning that manual inspection is needed.
+//!
+//! # Scope: subset preflight, not certification
+//!
+//! These profiles and their opt-in fixups are a **deterministic subset
+//! preflight**, not a conformance certification. They inspect a caller-built
+//! `PreflightInput` snapshot rather than raw PDF bytes, do not validate ICC
+//! profile payloads or embedded font programs, and cannot decide rules that
+//! need content-stream semantics or a rendering oracle. Fixups only edit a
+//! cloned snapshot and add *placeholders* (XMP skeleton, output intent without
+//! an ICC stream, version bump); a producer must supply real data and an
+//! independent validator (for example veraPDF in CI) before claiming PDF/A,
+//! PDF/X, PDF/E, or PDF/UA conformance. A passing report means "no decidable
+//! rule in this subset fired", not "certified conforming".
 
 use crate::Severity;
 use crate::Standard;
@@ -1630,5 +1643,137 @@ mod t0093_tests {
                 .any(|item| item.code() == "PDFA2B.OUTPUT_INTENT_NO_PROFILE"),
             "a real ICC profile is still required"
         );
+    }
+}
+
+/// T-0127 focused coverage: deterministic subset-preflight findings across the
+/// PDF/A-3b, PDF/E-1 and PDF/X-4 profiles, including page-box findings and a
+/// stable canonical report ordering.
+#[cfg(test)]
+mod t0127_tests {
+    use super::*;
+    use crate::input::{
+        AnnotationInfo, CatalogInfo, FontInfo, FontType, OutputIntent, PageBoxes, PageInfo,
+    };
+    use crate::{PreflightFinding, PreflightProfile, Severity};
+
+    /// A conforming snapshot for the profiles exercised in this module.
+    fn conforming(standard: Standard) -> PreflightInput {
+        let (version, subtype) = match standard {
+            Standard::PdfA3b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
+            Standard::PdfX4 => (PdfVersion::new(1, 6), "GTS_PDFX"),
+            Standard::PdfE1 => (PdfVersion::new(1, 6), ""),
+            other => panic!("test: unexpected standard {other}"),
+        };
+        let mut catalog = CatalogInfo {
+            has_xmp_metadata: true,
+            ..Default::default()
+        };
+        if standard != Standard::PdfE1 {
+            catalog
+                .output_intents
+                .push(OutputIntent::new(subtype, true));
+        }
+        PreflightInput {
+            version,
+            catalog,
+            page_count: 1,
+            pages: vec![PageInfo {
+                number: 1,
+                boxes: PageBoxes::all_present(),
+            }],
+            fonts: vec![FontInfo {
+                name: "/F1".to_owned(),
+                font_type: FontType::TrueType,
+                embedded: true,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn t0127_pdfa3b_and_e1_profiles_report_deterministic_findings() {
+        let mut input = conforming(Standard::PdfA3b);
+        input.catalog.has_xmp_metadata = false;
+        input.version = PdfVersion::new(1, 4);
+        input.fonts[0].embedded = false;
+        let report = PdfA3bProfile::new().report(&input);
+        let codes: Vec<&str> = report
+            .findings()
+            .iter()
+            .map(PreflightFinding::code)
+            .collect();
+        assert!(codes.contains(&"PDFA3B.NO_XMP_METADATA"));
+        assert!(codes.contains(&"PDFA3B.VERSION_TOO_LOW"));
+        assert!(codes.contains(&"PDFA3B.FONT_NOT_EMBEDDED"));
+        assert!(!report.is_conforming());
+
+        // PDF/A-3 permits embedded files, unlike PDF/A-1 and PDF/A-2.
+        input.catalog.forbidden_entries = vec!["/EmbeddedFiles".to_owned()];
+        assert!(
+            !PdfA3bProfile::new()
+                .check(&input)
+                .iter()
+                .any(|finding| finding.code().ends_with("FORBIDDEN_ENTRY"))
+        );
+
+        // PDF/E-1 needs neither an output intent nor XMP metadata.
+        let e1 = conforming(Standard::PdfE1);
+        let e1_report = PdfE1Profile::new().report(&e1);
+        assert!(e1_report.findings().is_empty(), "{}", e1_report.summary());
+        assert!(e1_report.is_conforming());
+    }
+
+    #[test]
+    fn t0127_missing_print_boxes_are_reported_with_page_location() {
+        let mut input = conforming(Standard::PdfX4);
+        if let Some(page) = input.pages.first_mut() {
+            page.boxes = PageBoxes::default();
+        }
+        let findings = PdfX4Profile::new().check(&input);
+        let mut missing: Vec<&str> = findings
+            .iter()
+            .filter(|finding| finding.code().starts_with("PDFX4.PAGE_NO_"))
+            .map(PreflightFinding::code)
+            .collect();
+        missing.sort_unstable();
+        assert_eq!(
+            missing,
+            vec![
+                "PDFX4.PAGE_NO_BLEEDBOX",
+                "PDFX4.PAGE_NO_MEDIABOX",
+                "PDFX4.PAGE_NO_TRIMBOX"
+            ]
+        );
+        assert!(
+            findings
+                .iter()
+                .filter(|finding| finding.code().starts_with("PDFX4.PAGE_NO_"))
+                .all(|finding| finding.location() == Some("page 1"))
+        );
+    }
+
+    #[test]
+    fn t0127_report_is_stable_and_findings_are_canonical() {
+        let mut input = conforming(Standard::PdfX4);
+        input.is_encrypted = true;
+        input.catalog.has_xmp_metadata = false;
+        input.version = PdfVersion::new(1, 3);
+        input.annotations.push(AnnotationInfo::new("/Popup", true));
+        let profile = PdfX4Profile::new();
+        let first = profile.report(&input);
+        let second = profile.report(&input);
+        assert_eq!(first, second, "report() must be deterministic");
+        for finding in first.findings() {
+            let code = finding.code();
+            assert!(code.starts_with("PDFX4."));
+            let suffix = code.trim_start_matches("PDFX4.");
+            assert_eq!(suffix, suffix.to_uppercase());
+            assert!(!suffix.contains(' '));
+            assert!(
+                finding.severity() == Severity::Error || finding.severity() == Severity::Warning
+            );
+        }
+        assert_eq!(first.findings(), profile.check_sorted(&input).as_slice());
     }
 }

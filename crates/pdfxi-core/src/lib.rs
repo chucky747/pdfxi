@@ -37,7 +37,7 @@ mod writer;
 #[cfg(test)]
 mod xref_tests;
 
-pub use boxes::{BoxKind, PageBoxes};
+pub use boxes::{BoxKind, PageBoxes, normalize_rectangle, rectangle_intersection};
 pub use compatibility::{
     CompatibilityReport, CompatibilityWarning, HEADER_SCAN_LIMIT, PdfVersion, VersionSource,
     analyze_compatibility,

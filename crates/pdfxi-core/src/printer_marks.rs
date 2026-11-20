@@ -822,4 +822,115 @@ mod tests {
             Err(Error::InvalidPrinterMarkOptions("mark_gap"))
         ));
     }
+
+    /// Assemble a one-page classic-table PDF whose content stream is `stream`.
+    fn pdf_with_content_stream(stream: &[u8]) -> Vec<u8> {
+        let mut out = String::from("%PDF-1.7\n%PDFXI\n");
+        let mut bodies = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".to_owned(),
+        ];
+        let mut stream_body = format!("<< /Length {} >>\nstream\n", stream.len());
+        stream_body.push_str(&String::from_utf8_lossy(stream));
+        stream_body.push_str("\nendstream");
+        bodies.push(stream_body);
+
+        let mut offsets = Vec::with_capacity(bodies.len());
+        for (index, body) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
+        }
+        let xref = out.len();
+        out.push_str(&format!("xref\n0 {}\n", bodies.len() + 1));
+        out.push_str("0000000000 65535 f \n");
+        for offset in &offsets {
+            out.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            bodies.len() + 1
+        ));
+        out.into_bytes()
+    }
+
+    #[test]
+    fn marks_form_xobject_survives_save_and_reparse() {
+        let marks = generate_printer_marks(&sample_boxes(), &PrinterMarkOptions::default())
+            .expect("generate");
+        let form = marks.to_form_xobject();
+        let (dictionary, data) = match &form {
+            Object::Stream { dictionary, data } => (dictionary, data),
+            _ => panic!("test: a form XObject must be a stream"),
+        };
+        assert_eq!(data.as_slice(), marks.content_stream());
+        assert_eq!(
+            dictionary
+                .get("BBox")
+                .and_then(Object::as_array)
+                .map(|items| items.len()),
+            Some(4)
+        );
+
+        let original = pdf_with_content_stream(marks.content_stream());
+        let document = crate::Document::from_bytes(original).expect("fixture parses");
+        let saved = document.save().expect("save");
+        let reparsed = crate::Document::from_bytes(saved).expect("saved parses");
+        assert_eq!(reparsed.page_count().expect("page count"), 1);
+        let reloaded = reparsed
+            .object(crate::ObjectId::new(4, 0))
+            .expect("content stream object");
+        match reloaded {
+            Object::Stream { data, .. } => {
+                assert_eq!(
+                    data.as_slice(),
+                    marks.content_stream(),
+                    "mark bytes survived a save/reparse round-trip"
+                );
+            }
+            _ => panic!("test: object 4 must still be a stream"),
+        }
+    }
+
+    #[test]
+    fn color_bar_has_four_ordered_cmyk_swatches() {
+        let marks = generate_printer_marks(&sample_boxes(), &PrinterMarkOptions::default())
+            .expect("generate");
+        let swatches = &marks.geometry().color_bar_rects;
+        assert_eq!(swatches.len(), 4, "CMYK has four swatches");
+        for pair in swatches.windows(2) {
+            assert!(
+                pair[0].right <= pair[1].left,
+                "swatches must be in left-to-right order without overlap"
+            );
+            assert_eq!(pair[0].bottom, pair[1].bottom);
+        }
+        let text = String::from_utf8(marks.content_stream().to_vec()).expect("ASCII stream");
+        assert_eq!(text.matches(" re f").count(), 4, "four filled rectangles");
+    }
+
+    #[test]
+    fn disabled_mark_families_produce_empty_geometry() {
+        let options = PrinterMarkOptions {
+            crop_marks: false,
+            registration_marks: false,
+            color_bars: false,
+            page_info: false,
+            ..Default::default()
+        };
+        let marks = generate_printer_marks(&sample_boxes(), &options).expect("generate");
+        assert!(marks.geometry().crop_segments.is_empty());
+        assert!(marks.geometry().registration_segments.is_empty());
+        assert!(marks.geometry().registration_circles.is_empty());
+        assert!(marks.geometry().color_bar_rects.is_empty());
+        assert_eq!(marks.geometry().page_info_origin, None);
+        let text = String::from_utf8(marks.content_stream().to_vec()).expect("ASCII stream");
+        assert!(!text.contains("Tj"), "no page-information text");
+        assert!(!text.contains(" re f"), "no colour-bar swatches");
+        assert!(!text.contains(" c\n"), "no registration circles");
+        assert!(
+            !marks.overlay_box().width().is_nan(),
+            "overlay box is bounded"
+        );
+    }
 }

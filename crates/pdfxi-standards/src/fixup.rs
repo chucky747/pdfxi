@@ -961,3 +961,135 @@ mod tests {
         assert!(suggested_fixups(Standard::PdfA1b, &report).is_empty());
     }
 }
+
+/// T-0127 focused coverage: opt-in fixups applied to a realistic snapshot and
+/// deterministic audit reporting. The crate is dependency-free and edits a
+/// `PreflightInput` snapshot, not PDF bytes; a producer adapts the result back
+/// into its object model. A byte-level fixup adapter belongs to a downstream
+/// crate, so no byte-level assertion is made here.
+#[cfg(test)]
+mod t0127_tests {
+    use super::*;
+    use crate::input::{
+        CatalogInfo, FontInfo, FontType, ImageFilter, ImageInfo, PageBoxes, PageInfo,
+    };
+    use crate::{PdfA2bProfile, PreflightProfile};
+
+    /// A realistic PDF/A-2b snapshot with three mechanical problems and one that
+    /// fixups deliberately do not touch (a prohibited catalog entry).
+    fn realistic_a2b_snapshot() -> PreflightInput {
+        PreflightInput {
+            version: PdfVersion::new(1, 4),
+            catalog: CatalogInfo {
+                forbidden_entries: vec!["/JavaScript".to_owned()],
+                ..Default::default()
+            },
+            page_count: 1,
+            pages: vec![PageInfo {
+                number: 1,
+                boxes: PageBoxes::all_present(),
+            }],
+            fonts: vec![FontInfo {
+                name: "/F1".to_owned(),
+                font_type: FontType::TrueType,
+                embedded: true,
+            }],
+            images: vec![ImageInfo {
+                name: "/Im1".to_owned(),
+                filter: ImageFilter::FlateDecode,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn t0127_fixups_apply_to_realistic_snapshot_and_reduce_errors() {
+        let input = realistic_a2b_snapshot();
+        let before = PdfA2bProfile::new().report(&input);
+        assert!(before.error_count() > 0);
+
+        let suggestions = suggested_fixups(Standard::PdfA2b, &before);
+        assert_eq!(
+            suggestions,
+            vec![
+                Fixup::SetOutputIntent {
+                    subtype: "GTS_PDFA1".to_owned(),
+                },
+                Fixup::AddXmpMetadata,
+                Fixup::NormalizeVersion {
+                    version: PdfVersion::new(1, 7),
+                },
+            ]
+        );
+
+        // Without opt-in, applying any requested fixup is a typed error.
+        let denied = apply_fixups(Standard::PdfA2b, &input, &FixupPolicy::none(), &suggestions);
+        assert!(matches!(denied, Err(FixupError::NotEnabled(_))));
+
+        // With opt-in, the snapshot is corrected and the outcome is deterministic.
+        let first = apply_fixups(Standard::PdfA2b, &input, &FixupPolicy::all(), &suggestions)
+            .expect("test: enabled fixups apply");
+        let second = apply_fixups(Standard::PdfA2b, &input, &FixupPolicy::all(), &suggestions)
+            .expect("test: enabled fixups apply again");
+        assert_eq!(first, second);
+        assert_eq!(first.report.applied_count(), suggestions.len());
+        assert_eq!(first.report.applied_count(), 3);
+
+        let after = PdfA2bProfile::new().report(&first.input);
+        assert!(after.error_count() < before.error_count());
+        // A real ICC profile is still required: subset preflight, not certification.
+        assert!(
+            after
+                .findings()
+                .iter()
+                .any(|finding| finding.code() == "PDFA2B.OUTPUT_INTENT_NO_PROFILE")
+        );
+        // Fixups never touch the caller's snapshot.
+        assert_eq!(input.version, PdfVersion::new(1, 4));
+        assert!(!input.catalog.has_xmp_metadata);
+    }
+
+    #[test]
+    fn t0127_fixup_report_records_fixups_in_request_order() {
+        let input = realistic_a2b_snapshot();
+        let requested = vec![
+            Fixup::NormalizeVersion {
+                version: PdfVersion::new(1, 7),
+            },
+            Fixup::AddXmpMetadata,
+        ];
+        let outcome = apply_fixups(Standard::PdfA2b, &input, &FixupPolicy::all(), &requested)
+            .expect("test: enabled fixups apply");
+        assert_eq!(
+            outcome.report.applied(),
+            &[
+                FixupRecord::new(Fixup::NormalizeVersion {
+                    version: PdfVersion::new(1, 7),
+                }),
+                FixupRecord::new(Fixup::AddXmpMetadata),
+            ]
+        );
+        assert_eq!(outcome.report.summary(), "PDF/A-2b: 2 fixup(s) applied");
+        assert_eq!(outcome.input.version, PdfVersion::new(1, 7));
+        assert!(outcome.input.catalog.has_xmp_metadata);
+    }
+
+    #[test]
+    fn t0127_version_fixup_is_blocked_when_below_the_profile_minimum() {
+        let input = realistic_a2b_snapshot();
+        let policy = FixupPolicy {
+            normalize_version: true,
+            ..FixupPolicy::none()
+        };
+        let too_low = Fixup::NormalizeVersion {
+            version: PdfVersion::new(1, 3),
+        };
+        assert_eq!(
+            apply_fixups(Standard::PdfA2b, &input, &policy, &[too_low]),
+            Err(FixupError::VersionBelowMinimum {
+                version: PdfVersion::new(1, 3),
+                minimum: PdfVersion::new(1, 7),
+            })
+        );
+    }
+}

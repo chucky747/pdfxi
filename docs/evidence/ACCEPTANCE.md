@@ -9,7 +9,7 @@ Last updated: 2026-11-19 (M1 and M2 in progress; 30 verified feature rows of 140
 | ID | Criterion | Status | Evidence | Blocker |
 |---|---|---|---|---|
 | AC-01 | Reproducible bootstrap | partial | `scripts/bootstrap.ps1`, `scripts/env.ps1`, `docs/decisions/0001-toolchain.md`; user-local Rust/GCC/MinGit bootstrap works, winget elevation path not exercised | Needs a clean-machine dry run record |
-| AC-02 | Build quality | partial | per-crate `clippy -D warnings` green for core, render, app, text, edit, forms, security, convert, standards, automation, testkit, cli, xtask; workspace-wide gate pending M1 exit | `cargo build --workspace --release` not yet run end-to-end |
+| AC-02 | Build quality | partial | per-crate clippy `-D warnings` green for all first-party crates; `cargo build --workspace --release` succeeded in 26.21 s (2026-11-19, target/integration) | Workspace-wide fmt/clippy gate re-run at a quiescent checkpoint |
 | AC-03 | Tests | partial | unit/integration tests across all lanes; doctests host-limited (ADR-0005/`docs/ASSUMPTIONS.md`); five fuzz targets with seed corpus and a smoke example (T-0081); `cargo xtask corpus smoke` passed 8/8 with manifest hashes (2026-11-19) | Full-profile fuzz run and coverage targets pending |
 | AC-04 | Feature parity | not met | `docs/features.toml` 140 rows, 30 verified | 110 rows open |
 | AC-05 | Performance | not met | raw timings only (`bench_open` in T-0024/T-0030) | Budgets in `docs/TESTING.md` not yet measured |
