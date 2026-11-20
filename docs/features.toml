@@ -1552,9 +1552,9 @@ docs = "crates/pdfxi-forms/src/reader_enable.rs, docs/evidence/forms/T-0115.md"
 domain = "Forms"
 evidence = "docs/evidence/forms/T-0115.md"
 id = "FORMS-008"
-notes = "Local usage-rights metadata plan with a placeholder signature; explicitly not Adobe certification and no cryptography."
+notes = "Local usage-rights metadata plan with a placeholder signature; explicitly not Adobe certification and no cryptography. Reader-enable form filling/saving itself remains unverified, so the row stays in-progress."
 priority = "P3"
-status = "verified"
+status = "in-progress"
 tests = [
     "reader_enable::tests::plan_emits_local_usage_rights_metadata",
     "reader_enable::tests::report_is_deterministic_and_not_certified",
