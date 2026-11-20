@@ -4374,6 +4374,9 @@ pdfium.dll loaded from the install directory, then uninstalls and asserts the
 directory, key and shortcuts are gone and that the real installation and desktop
 shortcut are byte-for-byte and timestamp-for-timestamp untouched. It skips with exit 0
 and a loud SKIPPED line when Inno Setup is absent, and exits 1 on any failed assertion.
+The proof for this row is that scripted run (cargo xtask installer-test, 22 assertions
+passed); the cited Rust test only guards that the script, the separate smoke identity and
+the xtask wiring stay in place and does not perform an installation itself.
 """
 priority = "P1"
 status = "verified"
