@@ -1,0 +1,15 @@
+{
+  "id": "T-0149",
+  "lane": "forms",
+  "title": "Field property UI model and signature workflow closure",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0147"],
+  "owns": [
+    "crates/pdfxi-forms/**",
+    "docs/evidence/forms/T-0149.md",
+    "orchestration/feature-updates/T-0149.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-forms",
+  "evidence": ""
+}

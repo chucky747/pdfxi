@@ -1,0 +1,15 @@
+{
+  "id": "T-0153",
+  "lane": "render",
+  "title": "Media annotations and interactive action models",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0134"],
+  "owns": [
+    "crates/pdfxi-render/**",
+    "docs/evidence/render/T-0153.md",
+    "orchestration/feature-updates/T-0153.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-render",
+  "evidence": "docs/evidence/render/T-0153.md"
+}

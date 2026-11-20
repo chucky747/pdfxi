@@ -68,6 +68,23 @@
 //! georeferences, bounds validation, and deterministic affine coordinate
 //! mapping for geographic systems. Unsupported projections are reported rather
 //! than silently mis-mapped.
+//!
+//! The [`mod@media`] module models `/Sound`, `/Movie` and `/Screen` multimedia
+//! annotations (feature MEDIA-001): local/embedded sources, poster and
+//! rendition references, playback controls, activation triggers, and a
+//! deterministic playback plan for a host player. No codec is decoded and no OS
+//! playback is started.
+//!
+//! The [`mod@html5_media`] module models a local HTML5 replacement envelope
+//! (feature MEDIA-002). It validates that every media source is local or
+//! embedded, rejects remote/unsupported sources with typed errors, and emits a
+//! deterministic descriptor and inert player markup. It never fetches a network
+//! resource or executes script.
+//!
+//! The [`mod@actions`] module models annotation `/AA` interactive actions
+//! (feature MEDIA-005): a typed whitelist of trigger events (`E`/`X`/`D`/`U`/
+//! `Fo`/`Po`/`PV`/`PI`), deterministic trigger ordering, and rejection of
+//! dangerous or unsupported actions. No script is executed.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -144,6 +161,29 @@ pub mod three_d;
 /// mapping and honest reporting of unsupported projections.
 pub mod geospatial;
 
+/// Audio and video annotation model (feature MEDIA-001).
+///
+/// Parses and validates `/Sound`, `/Movie` and `/Screen` annotations — their
+/// media sources, poster and rendition references, playback controls and
+/// activation triggers — and produces a deterministic playback plan for a host
+/// player. It decodes no codec and starts no OS playback.
+pub mod media;
+
+/// Local HTML5 media replacement envelope (feature MEDIA-002).
+///
+/// Validates that every media source is local or embedded, rejects
+/// remote/unsupported sources with typed errors, and produces a deterministic
+/// descriptor and inert HTML5 player markup. It performs no network access and
+/// executes no script.
+pub mod html5_media;
+
+/// Interactive `/AA` actions and triggers (feature MEDIA-005).
+///
+/// Parses additional-action events into a typed whitelist, orders triggers
+/// deterministically, and rejects dangerous or unsupported actions. No script
+/// is executed and no external application is launched.
+pub mod actions;
+
 pub use color::{
     ColorError, ConversionPlan, DeviceClass, DeviceColor, DeviceColorSpace, ICC_HEADER_SIZE,
     IccColorSpace, IccHeader, IccProfile, MAX_ICC_PROFILE_BYTES, MAX_ICC_TAG_COUNT,
@@ -186,6 +226,24 @@ pub use geospatial::{
     GeospatialError, GeospatialPlan, LocalPoints, MAX_COORD_ABS,
     MAX_NAME_BYTES as MAX_GEO_NAME_BYTES, MAX_VIEWPORTS, Measure, MeasureSubtype, PdfRect,
     PlanNote, Projection, Unit, Viewport, ViewportInput,
+};
+
+pub use media::{
+    ActivationTrigger, HostRequirement, MAX_MIME_BYTES as MAX_MEDIA_MIME_BYTES,
+    MAX_NAME_BYTES as MAX_MEDIA_NAME_BYTES, MAX_RENDITIONS, MediaAnnotation, MediaDictionary,
+    MediaError, MediaKind, MediaSource, PlaybackControl, PlaybackPlan, Rendition, RenditionInput,
+    RenditionSelection,
+};
+
+pub use html5_media::{
+    Html5Descriptor, Html5EnvelopeInput, Html5MediaError, Html5Source, Html5SourceInput,
+    LocalMediaRef, MAX_DIMENSION, MAX_MIME_BYTES as MAX_HTML5_MIME_BYTES, MAX_SOURCE_BYTES,
+    MAX_SOURCES, MediaCategory,
+};
+
+pub use actions::{
+    AaActionSet, AaEvent, ActionError, ActionPlan, AdditionalActionInput, MAX_ACTION_PAGE,
+    MAX_ACTIONS, MAX_NAME_BYTES as MAX_ACTION_NAME_BYTES, PlannedAction, SafeAction,
 };
 
 pub use print::{

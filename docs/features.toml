@@ -3524,25 +3524,73 @@ tests = []
 title = "Network and SharePoint-style integration"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/media.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/render/T-0153.md",
+]
 domain = "Multimedia and 3D"
-evidence = ""
+evidence = "docs/evidence/render/T-0153.md: 6 new media::tests pass (sound/movie parse, rendition selection, invalid activation, bounded input, plan reflection, determinism); full crate 163 passed, 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-001"
-notes = ""
+notes = """
+Validated `/Sound`, `/Movie` and `/Screen` annotation model: bounded media source
+(embedded stream name, local file name, or object reference), poster reference,
+a list of bounded renditions with MIME types, a deterministic rendition
+selection (first / named / clamped index), a typed activation trigger whitelist
+(PV/PI/PO/PC), volume in 0.0..=1.0, and a sorted/deduplicated playback-control
+whitelist. `resolve_plan` emits a deterministic PlaybackPlan listing the exact
+host-player capabilities required (MediaPlayer, PosterFrame, FullScreen).
+
+Honest scope: model + plan only. No codec is decoded, no OS media sink is opened,
+and no file/network source is read; a named rendition that does not exist and an
+unknown activation code are typed errors. Therefore `in-progress`, not verified.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "media::tests::sound_and_movie_annotations_parse",
+    "media::tests::rendition_selection_resolves_named_default_and_indexed",
+    "media::tests::invalid_activation_trigger_is_a_typed_error",
+    "media::tests::bounded_input_is_enforced",
+    "media::tests::playback_plan_reflects_selection_poster_and_controls",
+    "media::tests::plan_is_deterministic_and_omits_unneeded_requirements",
+]
 title = "Audio and video annotations"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/html5_media.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/render/T-0153.md",
+]
 domain = "Multimedia and 3D"
-evidence = ""
+evidence = "docs/evidence/render/T-0153.md: 7 new html5_media::tests pass (local descriptor, markup determinism, audio element, remote/scheme rejection, absolute/traversal rejection, unsupported/unsafe rejection, bounded input); full crate 163 passed, 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-002"
-notes = ""
+notes = """
+Local HTML5 playback envelope model. `Html5Descriptor` validates a bounded set of
+sources where each reference is either embedded (`@name`) or a relative local
+path with no traversal segments, with a MIME whitelist of common audio/video
+types and optional bounded poster/dimensions. Typed `Html5MediaError` variants
+reject remote/protocol-relative URLs, data/javascript/other schemes, absolute
+paths, parent-directory traversal, markup-unsafe characters and unsupported
+MIME types. `to_markup` emits deterministic, inert `<audio>`/`<video>` markup
+with attributes and sources in fixed order.
+
+Honest scope: descriptor + inert markup only. The host renders the element;
+nothing is fetched, decoded, or executed and no real Flash-to-HTML5 migration of
+a PDF's RichMedia/Flash content is performed. Therefore `in-progress`.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "html5_media::tests::local_envelope_produces_a_video_descriptor",
+    "html5_media::tests::descriptor_markup_is_deterministic",
+    "html5_media::tests::audio_only_envelope_uses_audio_element",
+    "html5_media::tests::remote_and_scheme_sources_are_rejected",
+    "html5_media::tests::absolute_and_traversal_paths_are_rejected",
+    "html5_media::tests::unsupported_and_unsafe_sources_are_rejected",
+    "html5_media::tests::bounded_input_is_enforced",
+]
 title = "HTML5 media replacement for Flash"
 
 [[feature]]
@@ -3616,14 +3664,40 @@ tests = [
 title = "Geospatial PDF support"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-render/src/actions.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/render/T-0153.md",
+]
 domain = "Multimedia and 3D"
-evidence = ""
+evidence = "docs/evidence/render/T-0153.md: 8 new actions::tests pass (AA event parsing, trigger ordering, dangerous-action rejection, unsupported-action rejection, safe navigation, invalid targets, bounded input, determinism); full crate 163 passed, 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
 id = "MEDIA-005"
-notes = ""
+notes = """
+Typed `/AA` additional-action model. `AaEvent` whitelists the eight annotation
+trigger codes E/X/D/U/Fo/Po/PV/PI with a stable canonical order. `AaActionSet`
+validates a bounded list of actions, rejects dangerous actions (JavaScript, JS,
+Launch, ImportData, SubmitForm, ResetForm) with `ActionError::DangerousAction`
+and network/multimedia actions (URI, GoToR, Movie, Sound, Rendition, unknown
+kinds) with `ActionError::UnsupportedAction`, then builds a deterministic
+`ActionPlan` whose actions are sorted by trigger rank with declaration order as
+a stable tie-breaker. Safe actions are navigation/view commands only.
+
+Honest scope: the plan is data for a host to consume; no script is executed, no
+external application is launched, and no PDF object stream is parsed here (a
+caller supplies the intermediate actions). Therefore `in-progress`.
+"""
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "actions::tests::aa_event_parsing_round_trips_every_code",
+    "actions::tests::actions_are_ordered_by_canonical_trigger_rank",
+    "actions::tests::dangerous_actions_are_rejected_without_a_plan",
+    "actions::tests::network_and_mmultimedia_actions_are_unsupported",
+    "actions::tests::safe_navigation_actions_are_planned",
+    "actions::tests::invalid_targets_and_empty_kinds_are_typed_errors",
+    "actions::tests::bounded_input_is_enforced",
+    "actions::tests::plan_is_deterministic_regardless_of_input_order",
+]
 title = "Interactive actions and triggers"
 
 [[feature]]

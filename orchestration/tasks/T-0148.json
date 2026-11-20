@@ -1,0 +1,15 @@
+{
+  "id": "T-0148",
+  "lane": "security",
+  "title": "Password permissions sanitize and metadata closure",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0143"],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/security/T-0148.md",
+    "orchestration/feature-updates/T-0148.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security",
+  "evidence": ""
+}
