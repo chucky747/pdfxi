@@ -12,16 +12,67 @@
 //! Every read goes through the same bounds-checked `Lexer` used by the object
 //! parser, so truncated or hostile streams produce an [`Error`] instead of a
 //! panic. Nesting and the number of pending operands are bounded to prevent a
-//! malicious file from exhausting memory. Other content-stream operators (for
-//! example `BT`, `ET`, `Tf`, and `Td`) are parsed but deliberately ignored: this
-//! module extracts *what* is shown, not *where* or *how* it is drawn.
+//! malicious file from exhausting memory.
+//!
+//! When a [`FontMap`] is supplied through [`extract_text_with_fonts`], `Tf`
+//! selects the active font and its `/ToUnicode` CMap (ISO 32000-1 section
+//! 9.10.3) decodes every shown string, so a subset font yields its real Unicode
+//! text instead of raw character codes. Fonts without a `/ToUnicode` entry keep
+//! the byte-for-byte fallback of [`extract_text`]. Layout operators such as
+//! `BT`, `ET`, `Td` and `Tm` are parsed but deliberately ignored: this module
+//! extracts *what* is shown, not *where* or *how* it is drawn.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::lexer::Lexer;
 use crate::object::Object;
+use crate::tounicode::ToUnicodeMap;
 use crate::{Error, Result};
 
 /// Maximum number of operands retained before an operator is applied.
 const MAX_OPERANDS: usize = 64;
+
+/// The `/ToUnicode` mappings of the fonts named in one page's resources.
+///
+/// Build the map from a page resource dictionary (the core library does this in
+/// [`crate::Document::page_text`]) and pass it to
+/// [`extract_text_with_fonts`]. Fonts without a `/ToUnicode` entry are simply
+/// absent, which selects the legacy byte-for-byte fallback.
+#[derive(Debug, Clone, Default)]
+pub struct FontMap {
+    fonts: BTreeMap<String, Arc<ToUnicodeMap>>,
+}
+
+impl FontMap {
+    /// Create an empty font map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add the decoded `/ToUnicode` CMap for the resource name `name`.
+    ///
+    /// `name` is the key used by the `Tf` operator without its leading slash,
+    /// for example `F4`.
+    pub fn insert(&mut self, name: impl Into<String>, map: Arc<ToUnicodeMap>) {
+        self.fonts.insert(name.into(), map);
+    }
+
+    /// Return the mapping registered for `name`, if any.
+    pub fn get(&self, name: &str) -> Option<&ToUnicodeMap> {
+        self.fonts.get(name).map(Arc::as_ref)
+    }
+
+    /// Return the number of fonts with a `/ToUnicode` mapping.
+    pub fn len(&self) -> usize {
+        self.fonts.len()
+    }
+
+    /// Return `true` when no font carries a `/ToUnicode` mapping.
+    pub fn is_empty(&self) -> bool {
+        self.fonts.is_empty()
+    }
+}
 
 /// Extract the text shown by the four text-showing operators in `content`.
 ///
@@ -42,9 +93,31 @@ const MAX_OPERANDS: usize = 64;
 /// string, contains an unbalanced delimiter, or supplies more than 64 pending
 /// operands.
 pub fn extract_text(content: &[u8]) -> Result<String> {
+    extract_text_inner(content, None)
+}
+
+/// Extract text using per-font `/ToUnicode` CMaps (ISO 32000-1 section 9.10.3).
+///
+/// Behaves like [`extract_text`], but tracks the font selected by `Tf` and
+/// decodes each shown string through the matching [`FontMap`] entry before
+/// falling back to the byte-for-byte decoding described on [`extract_text`].
+/// A font that is absent from the map, or a code with no mapping, uses that
+/// fallback or a U+FFFD replacement respectively; extraction never fails
+/// because of an unmapped code.
+///
+/// # Errors
+///
+/// Returns the same errors as [`extract_text`].
+pub fn extract_text_with_fonts(content: &[u8], fonts: &FontMap) -> Result<String> {
+    extract_text_inner(content, Some(fonts))
+}
+
+/// Shared implementation for the public extraction entry points.
+fn extract_text_inner(content: &[u8], fonts: Option<&FontMap>) -> Result<String> {
     let mut lexer = Lexer::new(content, 0)?;
     let mut operands: Vec<Object> = Vec::new();
     let mut out = String::new();
+    let mut current_font: Option<String> = None;
 
     loop {
         lexer.skip_ws();
@@ -72,9 +145,18 @@ pub fn extract_text(content: &[u8]) -> Result<String> {
             continue;
         }
 
-        // Anything else is an operator keyword. Only the four text-showing
-        // operators consume operands; all others are parsed and discarded.
-        apply_operator(token, &operands, &mut out);
+        // `Tf` sets the active font; every other operator is parsed and
+        // discarded unless it is one of the four text-showing operators.
+        if token == b"Tf" {
+            if let Some(Object::Name(name)) = operands.first() {
+                current_font = Some(name.clone());
+            }
+        } else {
+            let map = current_font
+                .as_deref()
+                .and_then(|name| fonts.and_then(|map| map.get(name)));
+            apply_operator(token, &operands, &mut out, map);
+        }
         operands.clear();
     }
 
@@ -100,11 +182,16 @@ fn push_operand(operands: &mut Vec<Object>, value: Object) -> Result<()> {
 }
 
 /// Apply one content-stream operator using the pending operands.
-fn apply_operator(operator: &[u8], operands: &[Object], out: &mut String) {
+fn apply_operator(
+    operator: &[u8],
+    operands: &[Object],
+    out: &mut String,
+    font: Option<&ToUnicodeMap>,
+) {
     match operator {
         b"Tj" => {
             if let Some(bytes) = last_string(operands) {
-                out.push_str(&decode_string(bytes));
+                out.push_str(&decode_with(bytes, font));
             }
         }
         b"TJ" => {
@@ -115,7 +202,7 @@ fn apply_operator(operator: &[u8], operands: &[Object], out: &mut String) {
             {
                 for item in items {
                     if let Object::String(bytes) = item {
-                        out.push_str(&decode_string(bytes));
+                        out.push_str(&decode_with(bytes, font));
                     }
                 }
             }
@@ -123,10 +210,18 @@ fn apply_operator(operator: &[u8], operands: &[Object], out: &mut String) {
         b"'" | b"\"" => {
             out.push('\n');
             if let Some(bytes) = last_string(operands) {
-                out.push_str(&decode_string(bytes));
+                out.push_str(&decode_with(bytes, font));
             }
         }
         _ => {}
+    }
+}
+
+/// Decode a string through the active font's CMap, or use the fallback.
+fn decode_with(bytes: &[u8], font: Option<&ToUnicodeMap>) -> String {
+    match font {
+        Some(map) => map.decode(bytes),
+        None => decode_string(bytes),
     }
 }
 

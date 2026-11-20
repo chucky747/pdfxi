@@ -26,7 +26,6 @@ producer = "edge"
 sha256 = "7a837a076e32ac768538009dca96785f0c25a42a205bd2f898f4d330934cf948"
 pages = 1
 markers = ["kestrel browser", "kestrel anchor"]
-known_failure = "page_text returns glyph indices from the Edge subset font because the ToUnicode CMap is not applied; marker words are absent"
 
 [[fixture]]
 name = "microsoft-excel-2019-sample.pdf"

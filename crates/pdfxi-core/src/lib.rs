@@ -39,6 +39,7 @@ pub mod preservation;
 pub mod printer_marks;
 pub mod repair;
 pub mod structure;
+pub mod tounicode;
 pub mod transparency;
 pub mod unicode;
 pub mod xref_stream;
@@ -72,7 +73,7 @@ pub use conformance::{
     ConformanceReport, ConformanceVerdict, DocumentFacts, FindingSeverity, MAX_FACT_NAMES,
     MAX_FACT_PAGES, MAX_NAME_LEN, StandardRow,
 };
-pub use content::extract_text;
+pub use content::{FontMap, extract_text, extract_text_with_fonts};
 pub use filter::{
     DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
 };
@@ -135,6 +136,7 @@ pub use structure::{
     MAX_ROLE_LEN, MAX_STRUCTURE_DEPTH, MAX_STRUCTURE_NODES, MAX_STRUCTURE_TOKEN_LEN,
     ParentTreeEntry, StructureError, StructureNode, StructureRole, StructureTree,
 };
+pub use tounicode::{MAX_CMAP_ENTRIES, MAX_CODE_BYTES, MAX_CODESPACE_RANGES, ToUnicodeMap};
 pub use transparency::{
     BackendRequirement, BlendBackend, BlendCategory, BlendLayer, BlendMode, BlendPlan, BlendSpec,
     CompositingPlan, CompositingStep, GroupColorSpace, GroupIsolation, GroupKnockout, MAX_ALPHA,
@@ -156,7 +158,8 @@ pub use xref_stream::{
     write_xref_stream_document,
 };
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 
 use parser::Structure;
 
@@ -416,6 +419,20 @@ pub struct Document {
     /// Trailer keys staged by metadata writes, applied on top of the source
     /// trailer by both save paths. Copy-on-write like [`Self::changes`].
     trailer_entries: Dictionary,
+    /// Parsed `/ToUnicode` CMaps keyed by their stream object, so extracting
+    /// many pages parses each shared font CMap only once. `None` records a
+    /// stream that could not be decoded or parsed.
+    to_unicode_cache: Arc<Mutex<HashMap<ObjectId, Option<Arc<crate::ToUnicodeMap>>>>>,
+}
+
+/// Decode a `/ToUnicode` stream payload and parse its CMap.
+///
+/// Returns `None` for an unsupported filter, corrupt compressed data or a
+/// malformed CMap; callers then keep the raw-code text fallback.
+fn decode_to_unicode(dictionary: &Dictionary, data: &[u8]) -> Option<crate::ToUnicodeMap> {
+    let filters = filter::filters_from_dictionary(dictionary).ok()?;
+    let decoded = filter::decode_stream(data, &filters).ok()?;
+    crate::ToUnicodeMap::parse(&decoded).ok()
 }
 
 impl Document {
@@ -440,6 +457,7 @@ impl Document {
             structure,
             changes: BTreeMap::new(),
             trailer_entries: Dictionary::new(),
+            to_unicode_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -535,12 +553,121 @@ impl Document {
     /// bytes with [`Document::page_content`] and passes them to
     /// [`extract_text`]. It supports the `Tj`, `TJ`, `'` and `"` operators.
     ///
+    /// The page's `/Resources /Font` dictionary is resolved and each font's
+    /// `/ToUnicode` CMap (ISO 32000-1 section 9.10.3) is applied to the strings
+    /// shown while that font is selected, so subset and CID-keyed fonts yield
+    /// Unicode text instead of raw character codes. Fonts without a usable
+    /// `/ToUnicode` stream keep the byte-for-byte fallback of [`extract_text`].
+    /// Parsed CMaps are cached per stream object, so a long document parses
+    /// each font once.
+    ///
     /// # Errors
     ///
-    /// Returns any error from [`Document::page_content`] or [`extract_text`].
+    /// Returns any error from [`Document::page_content`]. A missing or
+    /// malformed `/ToUnicode` stream is not fatal to extraction: the font falls
+    /// back to raw-code decoding.
     pub fn page_text(&self, index: usize) -> Result<String> {
         let bytes = self.page_content(index)?;
-        extract_text(&bytes)
+        let fonts = self.page_font_map(index).unwrap_or_default();
+        extract_text_with_fonts(&bytes, &fonts)
+    }
+
+    /// Build the `/ToUnicode` font map for one page's resource dictionary.
+    ///
+    /// Resource dictionaries may be inline (common in browser-produced files)
+    /// or indirect, and the `/Font` dictionary has the same two forms. Missing
+    /// pieces yield an empty map rather than an error so text extraction still
+    /// returns the raw-code result.
+    fn page_font_map(&self, index: usize) -> Result<FontMap> {
+        let structure = self.structure.as_ref().map_err(Clone::clone)?;
+        let page = structure
+            .pages
+            .get(index)
+            .ok_or(Error::PageNotFound(index))?;
+        let mut map = FontMap::new();
+
+        let page_object = parser::load_object(&self.bytes, &structure.xref, page.id)?;
+        let Some(page_dictionary) = page_object.as_dictionary() else {
+            return Ok(map);
+        };
+        let resources = match page_dictionary.get("Resources") {
+            Some(Object::Reference(id)) => parser::load_object(&self.bytes, &structure.xref, *id)?,
+            Some(value) => value.clone(),
+            None => match page.resources {
+                Some(id) => parser::load_object(&self.bytes, &structure.xref, id)?,
+                None => return Ok(map),
+            },
+        };
+        let Some(resources) = resources.as_dictionary() else {
+            return Ok(map);
+        };
+        let fonts = match resources.get("Font") {
+            Some(Object::Reference(id)) => parser::load_object(&self.bytes, &structure.xref, *id)?,
+            Some(value) => value.clone(),
+            None => return Ok(map),
+        };
+        let Some(fonts) = fonts.as_dictionary() else {
+            return Ok(map);
+        };
+
+        for (name, value) in fonts {
+            let font = match value {
+                Object::Reference(id) => parser::load_object(&self.bytes, &structure.xref, *id)?,
+                other => other.clone(),
+            };
+            let Some(font) = font.as_dictionary() else {
+                continue;
+            };
+            let Some(to_unicode) = font.get("ToUnicode") else {
+                continue;
+            };
+            let (stream_id, stream) = match to_unicode {
+                Object::Reference(id) => {
+                    let stream = parser::load_object(&self.bytes, &structure.xref, *id)?;
+                    (Some(*id), stream)
+                }
+                other => (None, other.clone()),
+            };
+            let Object::Stream { dictionary, data } = stream else {
+                continue;
+            };
+            let parsed = match stream_id {
+                Some(id) => self.cached_to_unicode(id, &dictionary, &data),
+                None => decode_to_unicode(&dictionary, &data).map(Arc::new),
+            };
+            if let Some(parsed) = parsed {
+                map.insert(name.clone(), parsed);
+            }
+        }
+        Ok(map)
+    }
+
+    /// Return a parsed `/ToUnicode` CMap, reusing the cache for its stream id.
+    fn cached_to_unicode(
+        &self,
+        id: ObjectId,
+        dictionary: &Dictionary,
+        data: &[u8],
+    ) -> Option<Arc<crate::ToUnicodeMap>> {
+        if let Some(cached) = self.to_unicode_cache_guard().get(&id).cloned() {
+            return cached;
+        }
+        let parsed = decode_to_unicode(dictionary, data).map(Arc::new);
+        self.to_unicode_cache_guard().insert(id, parsed.clone());
+        parsed
+    }
+
+    /// Lock the CMap cache, recovering from a poisoned lock.
+    ///
+    /// The cache only holds immutable parsed maps, so a panic in another thread
+    /// cannot leave it inconsistent.
+    fn to_unicode_cache_guard(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<ObjectId, Option<Arc<crate::ToUnicodeMap>>>> {
+        match self.to_unicode_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     /// Return the indirect identifier of the catalog referenced by `/Root`.

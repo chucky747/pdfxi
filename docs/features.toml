@@ -4185,11 +4185,19 @@ tests = [
 title = "CLI info command with stable JSON output"
 
 [[feature]]
-docs = "docs/evidence/core/T-0010.md"
+docs = "docs/evidence/hardening/T-0216.md"
 domain = "Automation"
-evidence = "cargo test -p pdfxi-core -p pdfxi-cli: 24 + 9 passed; docs/evidence/core/T-0010.md"
+evidence = "docs/evidence/hardening/T-0216.md"
 id = "AUTO-010"
-notes = "Bounds-checked Tj, TJ, single-quote, and double-quote extraction; compressed streams return a clear error."
+notes = """
+Bounds-checked Tj, TJ, single-quote and double-quote extraction, now with
+per-font `/ToUnicode` CMap decoding (bfchar, bfrange increment and array,
+UTF-16BE and surrogate destinations, code-space segmentation, U+FFFD for
+unmapped codes) applied before the byte fallback. `Document::page_text`
+resolves inline and indirect page font resources and caches parsed CMaps per
+stream object. Edge subset-font text is now Unicode; Excel and PowerPoint
+markers are unchanged.
+"""
 priority = "P1"
 status = "verified"
 tests = [
@@ -4197,6 +4205,14 @@ tests = [
     "cli::text_extracts_tj_tj_array_and_quote_operators",
     "cli::text_extracts_each_page_of_multipage_fixture",
     "cli::text_filtered_stream_fails",
+    "tounicode::tests::parses_bfchar_bfrange_and_arrays",
+    "tounicode::tests::unmapped_codes_become_replacements_without_stalling",
+    "tounicode::tests::parses_one_byte_codespace",
+    "tounicode::tests::increments_carry_across_destination_bytes",
+    "tounicode_text::page_text_applies_bfchar_bfrange_and_array_destinations",
+    "tounicode_text::page_text_switches_fonts_with_tf",
+    "tounicode_text::page_text_without_to_unicode_is_unchanged",
+    "tounicode_text::browser_print_fixture_extracts_unicode_markers",
 ]
 title = "CLI text extraction for uncompressed content streams"
 
