@@ -64,7 +64,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use crate::OpenError;
-use crate::design::{self, Icon, Palette, ThemeMode, TitlePalette, icon, metrics};
+use crate::design::{self, Palette, ThemeMode, TitlePalette, metrics};
 use crate::settings::{self, LaunchOptions, ThemePreference, WindowControlStyle};
 use egui::Key;
 
@@ -76,17 +76,20 @@ use crate::{
 };
 
 #[cfg(feature = "pdfium")]
-use crate::Rotation;
+use crate::raster::RasterCache;
 #[cfg(feature = "pdfium")]
-use crate::raster::{RasterCache, RasterKey};
-#[cfg(feature = "pdfium")]
-use crate::uv_quad_for_rotation;
-#[cfg(feature = "pdfium")]
-use pdfxi_render::{
-    CancellationToken, PageIndex, PdfiumRenderer, Renderer, thumbnail::ThumbnailSpec,
-};
+use pdfxi_render::{CancellationToken, PageIndex, PdfiumRenderer, Renderer};
 #[cfg(feature = "pdfium")]
 use pdfxi_text::TextExtractor;
+
+#[path = "shell/mod.rs"]
+mod shell;
+
+pub use shell::commands::AppCommand;
+use shell::widgets::shell_panel_frame;
+pub use shell::widgets::{
+    CAPTION_BUTTON_WIDTH, CaptionAction, CaptionSide, caption_command, caption_layout,
+};
 
 /// An `egui` texture plus the raster key it currently holds.
 ///
@@ -449,40 +452,6 @@ pub fn run() -> Result<(), String> {
         }),
     )
     .map_err(|error| format!("PDFXI viewer exited with an error: {error}"))
-}
-
-/// Paint a cached page texture into `rect`, rotating the texture UVs so the
-/// raster appears turned rather than stretched into a swapped page rectangle.
-///
-/// The four UV corners come from [`uv_quad_for_rotation`]; they are assigned to
-/// the displayed rectangle's corners in `(top-left, top-right, bottom-right,
-/// bottom-left)` order and drawn as two triangles. This is a pure GPU-side
-/// transform - no re-render or blocking I/O is involved.
-#[cfg(feature = "pdfium")]
-fn paint_rotated_image(
-    painter: &egui::Painter,
-    texture_id: egui::TextureId,
-    rect: egui::Rect,
-    rotation: Rotation,
-) {
-    let uv = uv_quad_for_rotation(rotation);
-    let corners = [
-        rect.left_top(),
-        rect.right_top(),
-        rect.right_bottom(),
-        rect.left_bottom(),
-    ];
-    let mut mesh = egui::Mesh::with_texture(texture_id);
-    for (corner, (u, v)) in corners.iter().zip(uv.iter()) {
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos: *corner,
-            uv: egui::pos2(*u, *v),
-            color: egui::Color32::WHITE,
-        });
-    }
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(mesh);
 }
 
 /// The eframe application implementing the PDFXI viewer shell.
@@ -875,31 +844,6 @@ impl PdfxiApp {
             self.status = "Dropped files are not PDFs".to_owned();
         }
         opened
-    }
-
-    /// Draw the in-app "Open PDF" path dialog.
-    ///
-    /// The shell links no native file picker, so this is intentionally a typed
-    /// path plus drag-and-drop support. It mutates only in-memory state.
-    fn open_dialog_ui(&mut self, _ctx: &egui::Context) {
-        if !self.open_dialog_open {
-            return;
-        }
-        // Consume the request first so a failed or cancelled picker cannot
-        // reopen the dialog on the next frame.
-        self.open_dialog_open = false;
-        // The native picker is modal; it runs between frames, never inside a
-        // paint callback, so the window cannot deadlock itself. Multi-select
-        // opens each chosen file in its own tab.
-        let chosen = rfd::FileDialog::new()
-            .set_title("Open PDF")
-            .add_filter("PDF documents", &["pdf"])
-            .pick_files();
-        if let Some(paths) = chosen {
-            for path in paths {
-                self.open_document(&path);
-            }
-        }
     }
 
     /// Close every tab except the active one, consulting the configured
@@ -1302,146 +1246,6 @@ impl PdfxiApp {
         }
     }
 
-    /// Upload (or refresh) the cached thumbnail for `page` into an egui texture.
-    ///
-    /// The texture handle is reused across frames and re-uploaded only when the
-    /// cached thumbnail changes, avoiding a new GPU allocation every frame.
-    #[cfg(feature = "pdfium")]
-    #[allow(dead_code)]
-    fn thumbnail_texture(
-        &mut self,
-        ctx: &egui::Context,
-        page: usize,
-        spec: &ThumbnailSpec,
-    ) -> Option<egui::TextureHandle> {
-        let thumbnail = self.thumbs.cached_thumbnail(page, spec)?.clone();
-        let width = thumbnail.width() as usize;
-        let height = thumbnail.height() as usize;
-        let pixels = thumbnail.pixels();
-        let expected = width.checked_mul(height)?.checked_mul(4)?;
-        if width == 0 || height == 0 || pixels.len() != expected {
-            return None;
-        }
-        let image = || egui::ColorImage::from_rgba_unmultiplied([width, height], pixels);
-        match self.thumb_textures.get_mut(&page) {
-            Some(handle) => handle.set(image(), egui::TextureOptions::LINEAR),
-            None => {
-                let handle = ctx.load_texture(
-                    format!("pdfxi-thumb-{page}"),
-                    image(),
-                    egui::TextureOptions::LINEAR,
-                );
-                self.thumb_textures.insert(page, handle);
-            }
-        }
-        self.thumb_textures.get(&page).cloned()
-    }
-
-    /// Render the left thumbnail navigation side panel.
-    ///
-    /// With `pdfium`, only visible rows (plus the pane's documented prefetch
-    /// margin) are enqueued, and at most [`THUMBS_PER_FRAME`] are generated per
-    /// frame so scrolling never blocks on rasterization. Without it, every tile
-    /// is drawn as a placeholder. Clicking a tile calls
-    /// [`Self::select_thumbnail_page`]; scrolling updates the pane's visible
-    /// range so the next frame requests the right thumbnails.
-    #[allow(dead_code)]
-    fn thumbnails_ui(&mut self, ui: &mut egui::Ui) {
-        let page_count = self.state.active_tab().map_or(0, |tab| tab.page_count());
-        if self.thumbs.page_count() != page_count {
-            self.thumbs.reset(page_count);
-            #[cfg(feature = "pdfium")]
-            self.thumb_textures.clear();
-        }
-        self.thumbs.set_row_height(THUMB_ROW_HEIGHT);
-        self.thumbs
-            .set_viewport_height(ui.available_height().max(1.0));
-
-        #[cfg(feature = "pdfium")]
-        {
-            if let Some(renderer) = self.pdfium_renderer.as_ref() {
-                let spec = ThumbnailSpec::new(THUMB_MAX_SIDE, THUMB_MAX_SIDE);
-                let _ = self.thumbs.enqueue_visible(&spec);
-                let token = CancellationToken::new();
-                for _ in 0..THUMBS_PER_FRAME {
-                    match self
-                        .thumbs
-                        .generate_pending(renderer, &spec, 1, &token, &mut |_| {})
-                    {
-                        Ok(0) => break,
-                        Ok(_) => {}
-                        Err(error) => {
-                            self.status = format!("Thumbnail error: {error}");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        let active = self.thumbs.active_page();
-        let follow = self.thumb_follow_active;
-        let mut clicked = None;
-        let tile_size = egui::vec2(THUMB_TILE_WIDTH, THUMB_TILE_HEIGHT);
-        #[cfg(feature = "pdfium")]
-        let spec = ThumbnailSpec::new(THUMB_MAX_SIDE, THUMB_MAX_SIDE);
-
-        let output = egui::ScrollArea::vertical().show(ui, |ui| {
-            for page in 0..page_count {
-                let is_active = page == active;
-                let (_, _response) = ui
-                    .vertical_centered(|ui| {
-                        let (rect, response) =
-                            ui.allocate_exact_size(tile_size, egui::Sense::click());
-                        let fill = if is_active {
-                            egui::Color32::from_rgb(214, 231, 252)
-                        } else {
-                            ui.visuals().extreme_bg_color
-                        };
-                        let stroke = if is_active {
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(40, 110, 200))
-                        } else {
-                            ui.visuals().widgets.inactive.fg_stroke
-                        };
-                        ui.painter().rect_filled(rect, 3.0, fill);
-                        ui.painter()
-                            .rect_stroke(rect, 3.0, stroke, egui::StrokeKind::Outside);
-
-                        #[cfg(feature = "pdfium")]
-                        if let Some(texture) = self.thumbnail_texture(ui.ctx(), page, &spec) {
-                            let full_uv = egui::Rect::from_min_max(
-                                egui::pos2(0.0, 0.0),
-                                egui::pos2(1.0, 1.0),
-                            );
-                            ui.painter()
-                                .image(texture.id(), rect, full_uv, egui::Color32::WHITE);
-                        }
-
-                        if response.clicked() {
-                            clicked = Some(page);
-                        }
-                        if follow && is_active {
-                            response.scroll_to_me(Some(egui::Align::Center));
-                        }
-                        if is_active {
-                            ui.label(egui::RichText::new(format!("Page {}", page + 1)).strong());
-                        } else {
-                            ui.label(format!("Page {}", page + 1));
-                        }
-                        (rect, response)
-                    })
-                    .inner;
-                ui.add_space(8.0);
-            }
-        });
-
-        self.thumbs.set_scroll_offset(output.state.offset.y);
-        self.thumb_follow_active = false;
-        if let Some(page) = clicked {
-            self.select_thumbnail_page(page);
-        }
-    }
-
     /// Apply a relative change to the active tab's custom zoom.
     fn adjust_zoom(&mut self, delta: f32, action: &str) {
         let new_zoom = match self.state.active_tab() {
@@ -1457,330 +1261,6 @@ impl PdfxiApp {
         match self.state.set_zoom(new_zoom) {
             Ok(()) => self.status = format!("{action}: {new_zoom}"),
             Err(error) => self.status = error.to_string(),
-        }
-    }
-
-    /// Rasterize the pages visible in `layout` into the cache (PDFium build only).
-    ///
-    /// A fresh [`CancellationToken`] is scoped to this frame; the renderer
-    /// checks it between steps so a closed document can stop outstanding work.
-    /// Each raster is keyed by that page's effective rotation, matching the
-    /// rotation used when painting the cached texture below.
-    #[cfg(feature = "pdfium")]
-    fn ensure_rasters(&mut self, layout: &CanvasLayout, pixel_ratio: f32) {
-        let Some(renderer) = self.pdfium_renderer.as_ref() else {
-            return;
-        };
-        let scroll = CanvasPoint::new(self.scroll_x, self.scroll_y);
-        let token = self.raster_cancel.clone();
-        match self.raster_cache.ensure_visible_capped_at(
-            renderer,
-            layout,
-            scroll,
-            pixel_ratio,
-            &token,
-            RASTERS_PER_FRAME,
-            &mut |_| {},
-        ) {
-            Ok(_) => {}
-            Err(error) => self.status = format!("Render error: {error}"),
-        }
-    }
-
-    /// Upload the cached raster for `page` into a reusable `egui` texture.
-    ///
-    /// Returns `None` when the page is not cached or its pixel buffer is not a
-    /// valid tightly packed RGBA image. The handle is reused across frames and
-    /// only re-uploaded when the scale or rotation key changes.
-    #[cfg(feature = "pdfium")]
-    fn raster_texture(
-        &mut self,
-        ctx: &egui::Context,
-        page: usize,
-        scale: f32,
-        rotation: Rotation,
-    ) -> Option<egui::TextureHandle> {
-        let key = RasterKey::new(page, scale, rotation);
-        // Clone out of the cache so the pixel borrow does not overlap the
-        // mutable borrow of the texture map below.
-        let raster = self.raster_cache.get(key)?.clone();
-        let width = raster.width() as usize;
-        let height = raster.height() as usize;
-        let pixels = raster.pixels();
-        let expected = width.checked_mul(height)?.checked_mul(4)?;
-        if width == 0 || height == 0 || pixels.len() != expected {
-            return None;
-        }
-        let image = || egui::ColorImage::from_rgba_unmultiplied([width, height], pixels);
-        let scale_bits = key.scale_bits();
-        let rotation_degrees = key.rotation_degrees();
-        match self.textures.get_mut(&page) {
-            Some(live) if live.scale_bits == scale_bits && live.rotation == rotation_degrees => {}
-            Some(live) => {
-                live.handle.set(image(), egui::TextureOptions::LINEAR);
-                live.scale_bits = scale_bits;
-                live.rotation = rotation_degrees;
-            }
-            None => {
-                let handle = ctx.load_texture(
-                    format!("pdfxi-page-{page}"),
-                    image(),
-                    egui::TextureOptions::LINEAR,
-                );
-                self.textures.insert(
-                    page,
-                    LiveTexture {
-                        handle,
-                        scale_bits,
-                        rotation: rotation_degrees,
-                    },
-                );
-            }
-        }
-        self.textures.get(&page).map(|live| live.handle.clone())
-    }
-
-    /// Render the in-document find bar.
-    ///
-    /// The query field mirrors into [`FindState`] on change; the two toggles
-    /// rebuild the search with new options; Next/Previous navigate with
-    /// wrap-around and request a scroll to the current match.
-    fn find_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Find:");
-            let response = ui.text_edit_singleline(&mut self.find_query);
-            if response.changed() {
-                self.find.set_query(self.find_query.as_str());
-            }
-            if ui.checkbox(&mut self.find_case, "Match case").changed() {
-                self.set_find_options(self.find_case, self.find_word);
-            }
-            if ui.checkbox(&mut self.find_word, "Whole word").changed() {
-                self.set_find_options(self.find_case, self.find_word);
-            }
-            if ui.button("Previous").clicked() {
-                self.find_previous();
-            }
-            if ui.button("Next").clicked() {
-                self.find_next();
-            }
-            ui.label(self.find.match_summary());
-            if ui.button("Close").clicked() {
-                self.close_find();
-            }
-        });
-    }
-
-    /// Render the document tab strip.
-    ///
-    /// Labels, order, and the active highlight come from the window-free
-    /// [`Self::tab_strip_snapshot`]. Each tab also gets a small close button;
-    /// close requests are deferred until after the `egui` closure so the
-    /// workspace is never mutated while the UI borrows it. With no open tab the
-    /// strip shows a fixed placeholder.
-    #[allow(dead_code)]
-    fn tabs_ui(&mut self, ui: &mut egui::Ui) {
-        let snapshot = self.tab_strip_snapshot();
-        if snapshot.is_empty() {
-            ui.label("No documents open");
-            return;
-        }
-        let mut activate = None;
-        let mut close = None;
-        ui.horizontal_wrapped(|ui| {
-            for (id, label, is_active) in snapshot {
-                if ui.selectable_label(is_active, label).clicked() {
-                    activate = Some(id);
-                }
-                if ui.small_button("-").clicked() {
-                    close = Some(id);
-                }
-            }
-        });
-        if let Some(id) = activate {
-            self.activate_tab(id);
-        }
-        if let Some(id) = close {
-            self.close_tab_by_id(id);
-        }
-    }
-
-    /// Render the document canvas, or the empty Home state with no document.
-    fn canvas_ui(&mut self, ui: &mut egui::Ui) {
-        let palette = Palette::for_mode(self.theme);
-        let canvas_rect = ui.max_rect();
-        egui::Frame::new()
-            .fill(palette.canvas)
-            .inner_margin(egui::Margin::same(18))
-            .show(ui, |ui| {
-                if self.state.active_tab().is_none() {
-                    self.empty_home_ui(ui, palette);
-                    return;
-                }
-                let viewport = CanvasSize::new(ui.available_width(), ui.available_height());
-                let Some(layout) = layout_for_state(&self.state, viewport, &self.page_sizes) else {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(48.0);
-                        ui.label(egui::RichText::new(canvas_placeholder(&self.state)).weak());
-                    });
-                    return;
-                };
-
-                // Fill the LRU cache with real rasters before painting. This
-                // happens only with PDFium; otherwise the placeholder stands.
-                #[cfg(feature = "pdfium")]
-                let pixels_per_point = ui.ctx().pixels_per_point();
-                #[cfg(feature = "pdfium")]
-                self.ensure_rasters(&layout, pixels_per_point);
-
-                let origin = ui.min_rect().left_top();
-                // Centre a page narrower than the viewport; wider pages keep
-                // normal left-aligned scrolling with no extra offset.
-                let content_right = layout
-                    .pages()
-                    .iter()
-                    .map(|page| page.rect.x + page.rect.width)
-                    .fold(0.0_f32, f32::max);
-                let pad_x = ((viewport.width - content_right) * 0.5).max(0.0);
-                let text_tool = self.state.active_tool() == Toolset::TextSelection;
-                let (scroll_delta, hover, pressed, dragging) = ui.input(|input| {
-                    let pointer = &input.pointer;
-                    let pressed = pointer.primary_pressed();
-                    (
-                        input.smooth_scroll_delta,
-                        pointer.hover_pos(),
-                        pressed,
-                        pointer.primary_down() && !pressed,
-                    )
-                });
-
-                // Scroll, clamped to the laid-out content (never blocks on I/O).
-                let scrolled = layout.clamp_scroll(
-                    self.scroll_x + scroll_delta.x,
-                    self.scroll_y + scroll_delta.y,
-                );
-                self.scroll_x = scrolled.x;
-                self.scroll_y = scrolled.y;
-
-                // A thumbnail click scrolls the canvas to that page. The scroll
-                // is applied here because this is where a layout is available.
-                if let Some(page) = self.pending_page_scroll.take() {
-                    self.scroll_y = scroll_offset_for_page(&layout, page);
-                }
-
-                // A find navigation request scrolls the current match into view
-                // once a layout is available, using the pure helper below.
-                if self.pending_scroll {
-                    if let Some(page) = self.find.current().map(FindMatch::page) {
-                        self.scroll_y = scroll_offset_for_page(&layout, page);
-                    }
-                    self.pending_scroll = false;
-                }
-
-                // Keep the thumbnail pane's active tile in sync with canvas
-                // scrolling. A change asks the pane to scroll that row into view
-                // on its next frame; an unchanged frame leaves manual pane
-                // scrolling alone.
-                let _ = self.sync_active_page_from_canvas(&layout);
-
-                // Text drag: anchor on press, advance the head while dragging.
-                // Real page text is not wired yet, so the slice is empty.
-
-                if text_tool && let Some(pos) = hover {
-                    let point = screen_to_canvas(pos, origin, self.scroll_x - pad_x, self.scroll_y);
-                    if pressed {
-                        self.selection.begin_at(point, &layout, &self.text_pages);
-                    } else if dragging {
-                        self.selection.update_to(point, &layout, &self.text_pages);
-                    }
-                }
-
-                // Report the page under the cursor in canvas coordinates.
-
-                #[cfg(feature = "pdfium")]
-                let ctx = ui.ctx().clone();
-                let painter = ui.painter();
-                let stroke = ui.visuals().widgets.inactive.fg_stroke;
-                for page in layout.pages() {
-                    let rect = egui::Rect::from_min_size(
-                        egui::pos2(
-                            origin.x + page.rect.x - self.scroll_x + pad_x,
-                            origin.y + page.rect.y - self.scroll_y,
-                        ),
-                        egui::vec2(page.rect.width, page.rect.height),
-                    );
-                    #[cfg(feature = "pdfium")]
-                    if let Some(texture) = self.raster_texture(
-                        &ctx,
-                        page.page,
-                        page.scale * pixels_per_point,
-                        page.rotation,
-                    ) {
-                        // Paint the real page raster inside the rotated page
-                        // rectangle, rotating its UVs to match the view.
-                        paint_rotated_image(painter, texture.id(), rect, page.rotation);
-                        continue;
-                    }
-                    // Without a cached raster (or without PDFium), draw the
-                    // outlined page rectangle.
-                    painter.rect(
-                        rect,
-                        0.0,
-                        egui::Color32::TRANSPARENT,
-                        stroke,
-                        egui::StrokeKind::Outside,
-                    );
-                }
-
-                // Highlight every find match; the current one gets a stronger
-                // fill and an outline. Geometry is computed by pure helpers so
-                // the coordinate mapping is testable without a window.
-                let current_index = self.find.current_index();
-                let mut highlights: Vec<(egui::Rect, bool)> = Vec::new();
-                for (index, find_hit) in self.find.matches().iter().enumerate() {
-                    let Some(local) = match_rect(find_hit, &self.text_pages) else {
-                        continue;
-                    };
-                    // Map the page-local match rectangle forward through the
-                    // page's effective rotation so highlights follow the
-                    // rotated page instead of stretching with it.
-                    let Some(mapped) = layout.page_rect_to_canvas(find_hit.page(), local) else {
-                        continue;
-                    };
-                    let rect = egui::Rect::from_min_size(
-                        egui::pos2(
-                            origin.x + mapped.x - self.scroll_x + pad_x,
-                            origin.y + mapped.y - self.scroll_y,
-                        ),
-                        egui::vec2(mapped.width, mapped.height),
-                    );
-                    highlights.push((rect, Some(index) == current_index));
-                }
-                for (rect, is_current) in highlights {
-                    let fill = if is_current {
-                        egui::Color32::from_rgba_unmultiplied(255, 196, 0, 130)
-                    } else {
-                        egui::Color32::from_rgba_unmultiplied(255, 230, 80, 70)
-                    };
-                    painter.rect_filled(rect, 2.0, fill);
-                    if is_current {
-                        painter.rect_stroke(
-                            rect,
-                            2.0,
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 180, 0)),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
-                }
-
-                // Persist the active tab's final scroll position so a later tab
-                // switch can restore exactly where the user left this document.
-                if let Some(tab) = self.state.active_tab_mut() {
-                    tab.set_scroll_offset(CanvasPoint::new(self.scroll_x, self.scroll_y));
-                }
-            });
-        if self.state.active_tab().is_some() {
-            self.floating_page_bar_ui(ui, canvas_rect, palette);
         }
     }
 
@@ -1830,42 +1310,49 @@ impl PdfxiApp {
             });
 
         if open {
-            self.open_dialog_open = true;
+            self.dispatch(AppCommand::OpenDialog, Some(ctx));
         }
         if next_tab {
-            self.activate_next_tab();
+            self.dispatch(AppCommand::ActivateNextTab, Some(ctx));
         }
         if prev_tab {
-            self.activate_previous_tab();
+            self.dispatch(AppCommand::ActivatePreviousTab, Some(ctx));
         }
         if close {
-            self.close_active_tab();
+            self.dispatch(AppCommand::CloseActiveTab, Some(ctx));
         }
         if let Some(command) = view_command {
-            self.apply_view_command(command);
+            let command = match command {
+                ViewCommand::RotateClockwise => AppCommand::RotateClockwise,
+                ViewCommand::RotateCounterclockwise => AppCommand::RotateCounterclockwise,
+                ViewCommand::ResetRotation => AppCommand::ResetRotation,
+                ViewCommand::FitPage => AppCommand::FitPage,
+                ViewCommand::FitWidth => AppCommand::FitWidth,
+                ViewCommand::ActualSize => AppCommand::ActualSize,
+                ViewCommand::ZoomIn => AppCommand::ZoomIn,
+                ViewCommand::ZoomOut => AppCommand::ZoomOut,
+            };
+            self.dispatch(command, Some(ctx));
         }
         if open_find {
-            self.open_find();
+            self.dispatch(AppCommand::OpenFind, Some(ctx));
         }
         if next {
-            self.find_next();
+            self.dispatch(AppCommand::FindNext, Some(ctx));
         }
         if prev {
-            self.find_previous();
+            self.dispatch(AppCommand::FindPrevious, Some(ctx));
         }
         if copy {
-            let text = self.selected_text();
-            if !text.is_empty() {
-                ctx.copy_text(text);
-                self.status = "Copied selection to clipboard".to_string();
-            }
+            self.dispatch(AppCommand::CopySelection, Some(ctx));
         }
         if escape {
-            if self.find_open {
-                self.close_find();
+            let command = if self.find_open {
+                AppCommand::CloseFind
             } else {
-                self.clear_selection();
-            }
+                AppCommand::ClearSelection
+            };
+            self.dispatch(command, Some(ctx));
         }
     }
 }
@@ -1897,17 +1384,6 @@ impl PdfxiApp {
     pub fn clear_open_errors(&mut self) {
         self.open_errors.clear();
     }
-
-    fn open_errors_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Recent document-open failures:");
-        let messages: Vec<String> = self.open_errors.iter().map(ToString::to_string).collect();
-        for message in messages {
-            ui.label(message);
-        }
-        if ui.button("Clear").clicked() {
-            self.clear_open_errors();
-        }
-    }
 }
 impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -1924,7 +1400,7 @@ impl eframe::App for PdfxiApp {
                 .collect()
         });
         if !dropped.is_empty() {
-            self.open_dropped(&dropped);
+            self.dispatch(AppCommand::OpenDropped(dropped), Some(ctx));
         }
         self.open_dialog_ui(ctx);
         self.shell_ui(ctx);
@@ -1940,329 +1416,7 @@ impl eframe::App for PdfxiApp {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Product shell: Acrobat-style chrome around the existing viewer surface.
-// ---------------------------------------------------------------------------
-
-/// Panel background frame with horizontal padding.
-fn shell_panel_frame(palette: Palette, horizontal: i8) -> egui::Frame {
-    egui::Frame::new()
-        .fill(palette.panel)
-        .inner_margin(egui::Margin {
-            left: horizontal,
-            right: horizontal,
-            top: 0,
-            bottom: 0,
-        })
-}
-
-/// A borderless icon button used across the shell.
-fn shell_icon_button(
-    ui: &mut egui::Ui,
-    palette: Palette,
-    glyph: Icon,
-    size: f32,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-    if response.hovered() {
-        ui.painter().rect_filled(rect, 7.0, palette.surface);
-    }
-    let color = if response.hovered() {
-        palette.text
-    } else {
-        palette.text_muted
-    };
-    icon(ui.painter(), rect.shrink(size * 0.27), glyph, color);
-    response
-}
-
-/// A macOS-style traffic light in the custom title bar.
-///
-/// The three lights are the window controls: red closes, amber minimizes and
-/// green toggles maximize. The glyph appears on hover so the bar stays quiet.
-fn traffic_light(
-    ui: &mut egui::Ui,
-    fill: egui::Color32,
-    glyph: Icon,
-    hover_text: &str,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
-    let center = rect.center();
-    let lit = if response.hovered() {
-        fill.gamma_multiply(1.08)
-    } else {
-        fill
-    };
-    ui.painter().circle_filled(center, 6.0, lit);
-    if response.hovered() {
-        icon(
-            ui.painter(),
-            egui::Rect::from_center_size(center, egui::Vec2::splat(7.0)),
-            glyph,
-            egui::Color32::from_black_alpha(160),
-        );
-    }
-    response.on_hover_text(hover_text)
-}
-
-/// Width of one Windows caption button in the title bar, in UI points.
-pub const CAPTION_BUTTON_WIDTH: f32 = 46.0;
-
-/// A window-control action drawn in the custom title bar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CaptionAction {
-    /// Minimize the window.
-    Minimize,
-    /// Toggle between maximized and restored.
-    ToggleMaximize,
-    /// Close the window.
-    Close,
-}
-
-/// The edge of the title bar that holds the caption buttons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaptionSide {
-    /// Left edge (macOS traffic lights).
-    Left,
-    /// Right edge (Windows caption buttons).
-    Right,
-}
-
-/// Ordered caption buttons for a control style, and the side they occupy.
-///
-/// The array is ordered left to right exactly as it is drawn.
-#[must_use]
-pub fn caption_layout(style: WindowControlStyle) -> (CaptionSide, [CaptionAction; 3]) {
-    match style {
-        WindowControlStyle::Windows => (
-            CaptionSide::Right,
-            [
-                CaptionAction::Minimize,
-                CaptionAction::ToggleMaximize,
-                CaptionAction::Close,
-            ],
-        ),
-        WindowControlStyle::MacOs => (
-            CaptionSide::Left,
-            [
-                CaptionAction::Close,
-                CaptionAction::Minimize,
-                CaptionAction::ToggleMaximize,
-            ],
-        ),
-    }
-}
-
-/// The viewport command a caption button sends.
-#[must_use]
-pub fn caption_command(action: CaptionAction, maximized: bool) -> egui::ViewportCommand {
-    match action {
-        CaptionAction::Minimize => egui::ViewportCommand::Minimized(true),
-        CaptionAction::ToggleMaximize => egui::ViewportCommand::Maximized(!maximized),
-        CaptionAction::Close => egui::ViewportCommand::Close,
-    }
-}
-
-/// Draw a native-weight Windows caption glyph.
-///
-/// Glyphs are 10 pt wide with a one-physical-pixel stroke, snapped to half
-/// pixels so they stay crisp hairlines at any scale. The general icon set is
-/// deliberately not used here: its strokes are too heavy for caption buttons.
-fn caption_glyph(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    action: CaptionAction,
-    maximized: bool,
-    color: egui::Color32,
-) {
-    let pixels = painter.pixels_per_point();
-    let snap = |value: f32| ((value * pixels - 0.5).round() + 0.5) / pixels;
-    let stroke = egui::Stroke::new(1.0 / pixels, color);
-    let cx = snap(center.x);
-    let cy = snap(center.y);
-    let left = cx - 5.0;
-    let right = cx + 5.0;
-    let top = cy - 5.0;
-    let bottom = cy + 5.0;
-    match action {
-        CaptionAction::Minimize => {
-            painter.line_segment([egui::pos2(left, cy), egui::pos2(right, cy)], stroke);
-        }
-        CaptionAction::ToggleMaximize if maximized => {
-            // Restore: a back square offset up and right behind a front one.
-            painter.rect_stroke(
-                egui::Rect::from_min_max(
-                    egui::pos2(left + 2.0, top),
-                    egui::pos2(right, bottom - 2.0),
-                ),
-                0.0,
-                stroke,
-                egui::StrokeKind::Middle,
-            );
-            painter.rect_stroke(
-                egui::Rect::from_min_max(
-                    egui::pos2(left, top + 2.0),
-                    egui::pos2(right - 2.0, bottom),
-                ),
-                0.0,
-                stroke,
-                egui::StrokeKind::Middle,
-            );
-        }
-        CaptionAction::ToggleMaximize => {
-            painter.rect_stroke(
-                egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom)),
-                0.0,
-                stroke,
-                egui::StrokeKind::Middle,
-            );
-        }
-        CaptionAction::Close => {
-            painter.line_segment([egui::pos2(left, top), egui::pos2(right, bottom)], stroke);
-            painter.line_segment([egui::pos2(right, top), egui::pos2(left, bottom)], stroke);
-        }
-    }
-}
-
-/// A borderless icon button on the dark title bar.
-fn title_icon_button(
-    ui: &mut egui::Ui,
-    palette: TitlePalette,
-    glyph: Icon,
-    size: f32,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-    if response.hovered() {
-        ui.painter().rect_filled(rect, 7.0, palette.hover);
-    }
-    let color = if response.hovered() {
-        palette.text
-    } else {
-        palette.text_muted
-    };
-    icon(ui.painter(), rect.shrink(size * 0.27), glyph, color);
-    response
-}
-
-/// Toolbar button with an icon and label.
-fn shell_tool_button(
-    ui: &mut egui::Ui,
-    palette: Palette,
-    glyph: Icon,
-    label: &str,
-    active: bool,
-) -> egui::Response {
-    let font = egui::FontId::proportional(12.0);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), palette.text);
-    let width = galley.size().x + 40.0;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
-    let background = if active {
-        palette.accent_soft
-    } else if response.hovered() {
-        palette.surface
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, 8.0, background);
-    let color = if active { palette.accent } else { palette.text };
-    icon(
-        ui.painter(),
-        egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 15.0, rect.center().y),
-            egui::Vec2::splat(14.0),
-        ),
-        glyph,
-        color,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + 27.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font,
-        color,
-    );
-    response
-}
-
-/// Thin vertical separator.
-fn shell_divider(ui: &mut egui::Ui, palette: Palette) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 22.0), egui::Sense::hover());
-    ui.painter().line_segment(
-        [
-            egui::pos2(rect.center().x, rect.top()),
-            egui::pos2(rect.center().x, rect.bottom()),
-        ],
-        egui::Stroke::new(1.0_f32, palette.border),
-    );
-}
-
-/// What a click on a title-bar tab means.
-enum TabAction {
-    /// Nothing was clicked.
-    None,
-    /// Activate this tab.
-    Activate,
-    /// Close this tab.
-    Close,
-}
-
 impl PdfxiApp {
-    /// Resize the undecorated window when the pointer is near an edge.
-    ///
-    /// The window has no native frame, so the shell owns the edge hit zones.
-    /// The zones are deliberately thin (6 pt) and only react to the primary
-    /// button, matching the behaviour of a normal Windows frame. A maximized
-    /// window has no draggable frame edges, so no resize is started there.
-    fn window_resize_handles(&self, ctx: &egui::Context) {
-        if ctx.input(|input| input.viewport().maximized.unwrap_or(false)) {
-            return;
-        }
-        let Some(pointer) = ctx.input(|input| input.pointer.hover_pos()) else {
-            return;
-        };
-        let rect = ctx.content_rect();
-        let edge = 6.0;
-        let left = pointer.x <= rect.left() + edge;
-        let right = pointer.x >= rect.right() - edge;
-        let top = pointer.y <= rect.top() + edge;
-        let bottom = pointer.y >= rect.bottom() - edge;
-        use egui::viewport::ResizeDirection;
-        let direction = if left && top {
-            Some(ResizeDirection::NorthWest)
-        } else if right && top {
-            Some(ResizeDirection::NorthEast)
-        } else if left && bottom {
-            Some(ResizeDirection::SouthWest)
-        } else if right && bottom {
-            Some(ResizeDirection::SouthEast)
-        } else if left {
-            Some(ResizeDirection::West)
-        } else if right {
-            Some(ResizeDirection::East)
-        } else if top {
-            Some(ResizeDirection::North)
-        } else if bottom {
-            Some(ResizeDirection::South)
-        } else {
-            None
-        };
-        let Some(direction) = direction else {
-            return;
-        };
-        ctx.set_cursor_icon(match direction {
-            ResizeDirection::NorthWest | ResizeDirection::SouthEast => egui::CursorIcon::ResizeNwSe,
-            ResizeDirection::NorthEast | ResizeDirection::SouthWest => egui::CursorIcon::ResizeNeSw,
-            ResizeDirection::North | ResizeDirection::South => egui::CursorIcon::ResizeVertical,
-            ResizeDirection::East | ResizeDirection::West => egui::CursorIcon::ResizeHorizontal,
-        });
-        if ctx.input(|input| input.pointer.primary_pressed()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
-        }
-    }
-
     /// Measure real page sizes in points from the renderer.
     ///
     /// Each page is rasterized at a tiny scale and its pixel size converted
@@ -2360,20 +1514,7 @@ impl PdfxiApp {
             .frame(egui::Frame::new().fill(title_palette.background))
             .show(ctx, |ui| self.title_bar_ui(ui, title_palette));
 
-        if let Some(message) = self.open_error_banner.clone() {
-            egui::TopBottomPanel::top("shell_error")
-                .frame(shell_panel_frame(palette, 14))
-                .show(ctx, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        ui.label(egui::RichText::new(message).color(palette.accent));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Dismiss").clicked() {
-                                self.open_error_banner = None;
-                            }
-                        });
-                    });
-                });
-        }
+        self.error_banner_ui(ctx, palette);
 
         egui::TopBottomPanel::top("shell_command")
             .exact_height(metrics::TOOL_BAR)
@@ -2408,416 +1549,6 @@ impl PdfxiApp {
             .show(ctx, |ui| self.canvas_ui(ui));
     }
 
-    /// The document command bar: only controls wired to real document state.
-    fn document_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let has_document = self.state.active_tab().is_some();
-        ui.horizontal_centered(|ui| {
-            if shell_tool_button(ui, palette, Icon::File, "Open", false).clicked() {
-                self.open_dialog_open = true;
-            }
-            ui.add_space(8.0);
-            ui.add_enabled_ui(has_document, |ui| {
-                if shell_icon_button(ui, palette, Icon::ArrowLeft, 30.0)
-                    .on_hover_text("Rotate counter-clockwise")
-                    .clicked()
-                {
-                    self.rotate_counterclockwise();
-                }
-                if shell_icon_button(ui, palette, Icon::ArrowRight, 30.0)
-                    .on_hover_text("Rotate clockwise")
-                    .clicked()
-                {
-                    self.rotate_clockwise();
-                }
-                if shell_tool_button(ui, palette, Icon::FitPage, "Fit", false)
-                    .on_hover_text("Fit the page in the window")
-                    .clicked()
-                {
-                    self.fit_page();
-                }
-                if shell_tool_button(ui, palette, Icon::Fullscreen, "Actual", false)
-                    .on_hover_text("Actual size")
-                    .clicked()
-                {
-                    self.actual_size();
-                }
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if shell_tool_button(ui, palette, Icon::Search, "Find", self.find_open).clicked() {
-                    if self.find_open {
-                        self.close_find();
-                    } else {
-                        self.open_find();
-                    }
-                }
-            });
-        });
-    }
-
-    /// Empty-document Home state: app mark, open action, drop hint, shortcut.
-    fn empty_home_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(96.0);
-            let (mark, _) = ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
-            ui.painter().rect_filled(mark, 14.0, palette.accent);
-            icon(
-                ui.painter(),
-                mark.shrink(15.0),
-                Icon::File,
-                egui::Color32::WHITE,
-            );
-            ui.add_space(16.0);
-            ui.label(
-                egui::RichText::new("Open a PDF to begin")
-                    .size(20.0)
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.add_space(14.0);
-            let open =
-                egui::Button::new(egui::RichText::new("Open a PDF").color(egui::Color32::WHITE))
-                    .fill(palette.accent)
-                    .corner_radius(8.0)
-                    .min_size(egui::vec2(150.0, 36.0));
-            if ui.add(open).clicked() {
-                self.open_dialog_open = true;
-            }
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new("or drop a file here").color(palette.text_muted));
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("Ctrl+O")
-                    .monospace()
-                    .color(palette.text_muted),
-            );
-        });
-    }
-
-    fn title_bar_ui(&mut self, ui: &mut egui::Ui, palette: TitlePalette) {
-        let panel = ui.max_rect();
-        let maximized = ui
-            .ctx()
-            .input(|input| input.viewport().maximized.unwrap_or(false));
-
-        // The title bar is the window drag handle. Tabs and buttons are added
-        // afterwards, so they win the pointer over this background interaction.
-        let drag = ui.interact(
-            panel,
-            egui::Id::new("shell-title-drag"),
-            egui::Sense::click_and_drag(),
-        );
-        let pointer_y = ui
-            .ctx()
-            .input(|input| input.pointer.hover_pos())
-            .map_or(f32::MAX, |position| position.y);
-        if drag.drag_started() && pointer_y > panel.top() + 6.0 {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-        }
-        if drag.double_clicked() {
-            ui.ctx()
-                .send_viewport_cmd(caption_command(CaptionAction::ToggleMaximize, maximized));
-        }
-
-        let (side, actions) = caption_layout(self.window_controls);
-        let mut caption_width = 0.0;
-        if side == CaptionSide::Right {
-            caption_width = actions.len() as f32 * CAPTION_BUTTON_WIDTH;
-            for (index, action) in actions.iter().enumerate() {
-                let left = panel.right() - (actions.len() - index) as f32 * CAPTION_BUTTON_WIDTH;
-                let rect = egui::Rect::from_min_max(
-                    egui::pos2(left, panel.top()),
-                    egui::pos2(left + CAPTION_BUTTON_WIDTH, panel.bottom()),
-                );
-                let response = ui.interact(
-                    rect,
-                    egui::Id::new(("caption-button", action)),
-                    egui::Sense::click(),
-                );
-                let close = *action == CaptionAction::Close;
-                let hovered = response.hovered();
-                if hovered {
-                    ui.painter().rect_filled(
-                        rect,
-                        0.0,
-                        if close {
-                            egui::Color32::from_rgb(0xe8, 0x11, 0x23)
-                        } else {
-                            palette.hover
-                        },
-                    );
-                }
-                caption_glyph(
-                    ui.painter(),
-                    rect.center(),
-                    *action,
-                    maximized,
-                    if close && hovered {
-                        egui::Color32::WHITE
-                    } else {
-                        palette.text
-                    },
-                );
-                if response.clicked() {
-                    ui.ctx()
-                        .send_viewport_cmd(caption_command(*action, maximized));
-                }
-            }
-        }
-
-        // Keep the ordinary title content clear of the caption strip so the
-        // right-side buttons sit to the left of the window controls.
-        let right_inset = if caption_width > 0.0 {
-            caption_width + 6.0
-        } else {
-            12.0
-        };
-        let content = egui::Rect::from_min_max(
-            egui::pos2(panel.left() + 12.0, panel.top()),
-            egui::pos2(
-                (panel.right() - right_inset).max(panel.left() + 12.0),
-                panel.bottom(),
-            ),
-        );
-
-        ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
-            ui.horizontal_centered(|ui| {
-                if side == CaptionSide::Left {
-                    // macOS traffic lights, driven through the same ordered
-                    // caption model as the Windows caption buttons.
-                    for action in actions {
-                        let (fill, glyph, hover_text) = match action {
-                            CaptionAction::Close => (
-                                egui::Color32::from_rgb(0xff, 0x5f, 0x57),
-                                Icon::Close,
-                                "Close",
-                            ),
-                            CaptionAction::Minimize => (
-                                egui::Color32::from_rgb(0xfe, 0xbc, 0x2e),
-                                Icon::Minimize,
-                                "Minimize",
-                            ),
-                            CaptionAction::ToggleMaximize => (
-                                egui::Color32::from_rgb(0x28, 0xc8, 0x40),
-                                Icon::Maximize,
-                                "Maximize",
-                            ),
-                        };
-                        if traffic_light(ui, fill, glyph, hover_text).clicked() {
-                            ui.ctx()
-                                .send_viewport_cmd(caption_command(action, maximized));
-                        }
-                    }
-                    ui.add_space(10.0);
-                }
-
-                let (logo, _) =
-                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
-                ui.painter().rect_filled(logo, 6.0, palette.accent);
-                icon(
-                    ui.painter(),
-                    logo.shrink(5.5),
-                    Icon::File,
-                    egui::Color32::WHITE,
-                );
-                ui.add_space(7.0);
-                ui.label(
-                    egui::RichText::new("PDFXI")
-                        .size(13.5)
-                        .strong()
-                        .color(palette.text),
-                );
-                ui.add_space(14.0);
-
-                let tabs = self.tab_strip_snapshot();
-                let mut activate = None;
-                let mut close_tab = None;
-                for (index, (id, title, active)) in tabs.iter().enumerate() {
-                    match self.title_tab(ui, palette, index, *id, title, *active) {
-                        TabAction::None => {}
-                        TabAction::Activate => activate = Some(*id),
-                        TabAction::Close => close_tab = Some(*id),
-                    }
-                }
-                if title_icon_button(ui, palette, Icon::Plus, 26.0)
-                    .on_hover_text("Open a PDF")
-                    .clicked()
-                {
-                    self.open_dialog_open = true;
-                }
-                if let Some(id) = activate {
-                    self.activate_tab(id);
-                }
-                if let Some(id) = close_tab {
-                    self.close_tab_by_id(id);
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let theme_glyph = match self.theme {
-                        ThemeMode::Light => Icon::Moon,
-                        ThemeMode::Dark => Icon::Sun,
-                    };
-                    if title_icon_button(ui, palette, theme_glyph, 26.0)
-                        .on_hover_text("Switch light/dark")
-                        .clicked()
-                    {
-                        let preference = match self.theme {
-                            ThemeMode::Light => ThemePreference::Dark,
-                            ThemeMode::Dark => ThemePreference::Light,
-                        };
-                        self.set_theme_preference(preference);
-                    }
-                    let gear =
-                        title_icon_button(ui, palette, Icon::Gear, 26.0).on_hover_text("Settings");
-                    let mut theme_choice = None;
-                    let mut controls_choice = None;
-                    egui::Popup::from_toggle_button_response(&gear)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            ui.set_min_width(200.0);
-                            ui.label(egui::RichText::new("Theme").strong());
-                            for preference in [
-                                ThemePreference::Light,
-                                ThemePreference::Dark,
-                                ThemePreference::System,
-                            ] {
-                                if ui
-                                    .radio(self.theme_preference == preference, preference.label())
-                                    .clicked()
-                                {
-                                    theme_choice = Some(preference);
-                                }
-                            }
-                            ui.separator();
-                            ui.label(egui::RichText::new("Window controls").strong());
-                            for style in [WindowControlStyle::Windows, WindowControlStyle::MacOs] {
-                                if ui
-                                    .radio(self.window_controls == style, style.label())
-                                    .clicked()
-                                {
-                                    controls_choice = Some(style);
-                                }
-                            }
-                        });
-                    if let Some(preference) = theme_choice {
-                        self.set_theme_preference(preference);
-                    }
-                    if let Some(style) = controls_choice {
-                        self.set_window_controls(style);
-                    }
-                });
-            });
-        });
-
-        // Draw the hairline last so caption hover fills cannot cover it.
-        ui.painter().line_segment(
-            [
-                egui::pos2(panel.left(), panel.bottom()),
-                egui::pos2(panel.right(), panel.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, palette.border),
-        );
-    }
-
-    fn title_tab(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: TitlePalette,
-        index: usize,
-        _id: TabId,
-        title: &str,
-        active: bool,
-    ) -> TabAction {
-        let mut label: String = title.chars().take(28).collect();
-        if title.chars().count() > 28 {
-            label.push('\u{2026}');
-        }
-        let font = egui::FontId::proportional(11.5);
-        let galley = ui
-            .painter()
-            .layout_no_wrap(label.clone(), font.clone(), palette.text);
-        let width = (galley.size().x + 54.0).clamp(132.0, 232.0);
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
-        if active {
-            ui.painter().rect_filled(rect, 8.0, palette.surface);
-            ui.painter().rect_stroke(
-                rect,
-                8.0,
-                egui::Stroke::new(1.0_f32, palette.border),
-                egui::StrokeKind::Inside,
-            );
-        } else if response.hovered() {
-            ui.painter().rect_filled(rect, 8.0, palette.hover);
-        }
-        icon(
-            ui.painter(),
-            egui::Rect::from_center_size(
-                egui::pos2(rect.left() + 15.0, rect.center().y),
-                egui::Vec2::splat(13.0),
-            ),
-            Icon::File,
-            if active {
-                palette.accent
-            } else {
-                palette.text_muted
-            },
-        );
-        ui.painter().text(
-            egui::pos2(rect.left() + 26.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            font,
-            if active {
-                palette.text
-            } else {
-                palette.text_muted
-            },
-        );
-        if active || response.hovered() {
-            let close_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.right() - 13.0, rect.center().y),
-                egui::Vec2::splat(16.0),
-            );
-            let close_response = ui.interact(
-                close_rect,
-                egui::Id::new(("tab-close", index)),
-                egui::Sense::click(),
-            );
-            if close_response.hovered() {
-                ui.painter()
-                    .circle_filled(close_rect.center(), 7.0, palette.hover);
-            }
-            icon(
-                ui.painter(),
-                close_rect.shrink(4.5),
-                Icon::Close,
-                palette.text_muted,
-            );
-            if close_response.clicked() {
-                return TabAction::Close;
-            }
-        }
-        if response.clicked() {
-            return TabAction::Activate;
-        }
-        TabAction::None
-    }
-
-    fn side_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        let panel = ui.max_rect();
-        ui.painter().line_segment(
-            [
-                egui::pos2(panel.right(), panel.top()),
-                egui::pos2(panel.right(), panel.bottom()),
-            ],
-            egui::Stroke::new(1.0_f32, palette.border),
-        );
-        // Only real thumbnails are shown, and only for a real open document.
-        if self.state.active_tab().is_some() {
-            self.thumbnails_ui(ui);
-        }
-    }
-
     fn step_page(&mut self, delta: isize) {
         let Some(tab) = self.state.active_tab() else {
             self.status = "No document open".to_owned();
@@ -2830,131 +1561,6 @@ impl PdfxiApp {
         let current = tab.current_page() as isize;
         let target = (current + delta).clamp(0, count as isize - 1) as usize;
         self.select_thumbnail_page(target);
-    }
-
-    /// Floating page and zoom controls over the bottom of the canvas.
-    ///
-    /// The reference keeps the page controls in a compact pill instead of a
-    /// full-width status bar, so the canvas keeps its full height.
-    fn floating_page_bar_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        canvas_rect: egui::Rect,
-        palette: Palette,
-    ) {
-        let width = 260.0_f32;
-        let pos = egui::pos2(
-            canvas_rect.center().x - width / 2.0,
-            canvas_rect.bottom() - 54.0,
-        );
-        egui::Area::new(egui::Id::new("shell-page-bar"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::new()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(1.0_f32, palette.border))
-                    .corner_radius(20.0)
-                    .inner_margin(egui::Margin {
-                        left: 8,
-                        right: 8,
-                        top: 4,
-                        bottom: 4,
-                    })
-                    .show(ui, |ui| {
-                        ui.horizontal_centered(|ui| {
-                            if shell_icon_button(ui, palette, Icon::ChevronLeft, 24.0)
-                                .on_hover_text("Previous page")
-                                .clicked()
-                            {
-                                self.step_page(-1);
-                            }
-                            let (current, count) = self
-                                .state
-                                .active_tab()
-                                .map(|tab| (tab.current_page(), tab.page_count()))
-                                .unwrap_or((0, 0));
-                            ui.label(
-                                egui::RichText::new(format!("{} of {}", current + 1, count.max(1)))
-                                    .size(10.5)
-                                    .color(palette.text),
-                            );
-                            if shell_icon_button(ui, palette, Icon::ChevronRight, 24.0)
-                                .on_hover_text("Next page")
-                                .clicked()
-                            {
-                                self.step_page(1);
-                            }
-                            shell_divider(ui, palette);
-                            let zoom_label = self
-                                .state
-                                .active_tab()
-                                .map(|tab| match tab.zoom().scale() {
-                                    Some(scale) => format!("{:.0}%", scale * 100.0),
-                                    None => "Fit".to_owned(),
-                                })
-                                .unwrap_or_else(|| "Untitled".to_owned());
-                            ui.menu_button(
-                                egui::RichText::new(zoom_label)
-                                    .size(10.5)
-                                    .color(palette.text),
-                                |ui| {
-                                    if ui.button("Fit Page").clicked() {
-                                        self.fit_page();
-                                        ui.close();
-                                    }
-                                    if ui.button("Fit Width").clicked() {
-                                        self.fit_width();
-                                        ui.close();
-                                    }
-                                    if ui.button("Actual Size").clicked() {
-                                        self.actual_size();
-                                        ui.close();
-                                    }
-                                    ui.separator();
-                                    if ui.button("Zoom In").clicked() {
-                                        self.zoom_in();
-                                        ui.close();
-                                    }
-                                    if ui.button("Zoom Out").clicked() {
-                                        self.zoom_out();
-                                        ui.close();
-                                    }
-                                },
-                            );
-                            if shell_icon_button(ui, palette, Icon::ZoomOut, 24.0)
-                                .on_hover_text("Zoom out")
-                                .clicked()
-                            {
-                                self.zoom_out();
-                            }
-                            if shell_icon_button(ui, palette, Icon::ZoomIn, 24.0)
-                                .on_hover_text("Zoom in")
-                                .clicked()
-                            {
-                                self.zoom_in();
-                            }
-                            if shell_icon_button(ui, palette, Icon::FitPage, 24.0)
-                                .on_hover_text("Fit page")
-                                .clicked()
-                            {
-                                self.fit_page();
-                            }
-                        });
-                    });
-            });
-    }
-
-    #[allow(dead_code)]
-    fn cache_usage(&self) -> (usize, usize) {
-        #[cfg(feature = "pdfium")]
-        {
-            (self.raster_cache.bytes(), self.raster_cache.max_bytes())
-        }
-        #[cfg(not(feature = "pdfium"))]
-        {
-            (0, 256 * 1024 * 1024)
-        }
     }
 }
 
@@ -3229,6 +1835,80 @@ mod tests {
             app.state().active_tab().expect("tab").current_page(),
             0,
             "the first page is a hard stop"
+        );
+    }
+
+    #[test]
+    fn every_parameterless_command_is_safe_without_a_document() {
+        let mut app = PdfxiApp::new();
+        let commands = [
+            AppCommand::OpenDialog,
+            AppCommand::CloseActiveTab,
+            AppCommand::CloseOtherTabs,
+            AppCommand::ActivateNextTab,
+            AppCommand::ActivatePreviousTab,
+            AppCommand::NextPage,
+            AppCommand::PreviousPage,
+            AppCommand::ZoomIn,
+            AppCommand::ZoomOut,
+            AppCommand::FitPage,
+            AppCommand::FitWidth,
+            AppCommand::ActualSize,
+            AppCommand::RotateClockwise,
+            AppCommand::RotateCounterclockwise,
+            AppCommand::ResetRotation,
+            AppCommand::ToggleFind,
+            AppCommand::OpenFind,
+            AppCommand::CloseFind,
+            AppCommand::FindNext,
+            AppCommand::FindPrevious,
+            AppCommand::CopySelection,
+            AppCommand::ClearSelection,
+            AppCommand::ToggleTheme,
+            AppCommand::StartWindowDrag,
+            AppCommand::DismissOpenError,
+            AppCommand::ClearOpenErrors,
+        ];
+        for command in commands {
+            let label = command.label();
+            assert!(!label.is_empty(), "every command needs a stable label");
+            app.dispatch(command, None);
+        }
+        assert_eq!(app.state().tab_count(), 0);
+        assert!(app.state().active_tab().is_none());
+    }
+
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn dispatched_commands_match_the_direct_view_calls() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/realworld/microsoft-excel-2019-sample.pdf");
+        let path_text = path.to_str().expect("utf-8 fixture path");
+        let mut dispatched = PdfxiApp::new();
+        let mut direct = PdfxiApp::new();
+        assert!(dispatched.open_path_text(path_text));
+        assert!(direct.open_path_text(path_text));
+
+        let page = |app: &PdfxiApp| app.state().active_tab().map(|tab| tab.current_page());
+        dispatched.dispatch(AppCommand::NextPage, None);
+        direct.step_page(1);
+        assert_eq!(page(&dispatched), page(&direct));
+        dispatched.dispatch(AppCommand::PreviousPage, None);
+        direct.step_page(-1);
+        assert_eq!(page(&dispatched), page(&direct));
+
+        dispatched.dispatch(AppCommand::ZoomIn, None);
+        direct.zoom_in();
+        assert_eq!(
+            dispatched.state().active_tab().map(|tab| tab.zoom()),
+            direct.state().active_tab().map(|tab| tab.zoom())
+        );
+
+        dispatched.dispatch(AppCommand::RotateClockwise, None);
+        direct.rotate_clockwise();
+        assert_eq!(
+            dispatched.state().active_tab().map(|tab| tab.rotation()),
+            direct.state().active_tab().map(|tab| tab.rotation())
         );
     }
 }

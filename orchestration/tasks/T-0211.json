@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Split ui.rs into shell modules with one AppCommand dispatcher",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [],
   "owns": [
     "crates/pdfxi-app/src/ui.rs",

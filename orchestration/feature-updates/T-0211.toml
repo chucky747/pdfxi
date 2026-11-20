@@ -1,0 +1,46 @@
+# T-0211 - split ui.rs into shell modules with one AppCommand dispatcher
+#
+# Pure refactor of the native viewer shell. Drawing code moves out of ui.rs into
+# shell/{title_bar,command_bar,side_panel,document_view,find_bar,empty_state,
+# dialogs,widgets}.rs and every widget, menu item and keyboard shortcut routes
+# through `PdfxiApp::dispatch(AppCommand)`. No behaviour, wording or visual
+# change. No feature row status changes.
+
+task = "T-0211"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0211.md"
+docs = [
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/title_bar.rs",
+    "crates/pdfxi-app/src/shell/document_view.rs",
+    "crates/pdfxi-app/src/shell/widgets.rs",
+    "crates/pdfxi-app/src/shell/command_bar.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/shell/find_bar.rs",
+    "crates/pdfxi-app/src/shell/empty_state.rs",
+    "crates/pdfxi-app/src/shell/dialogs.rs",
+    "docs/evidence/ui/T-0211.md",
+    "docs/evidence/ui/t0211-doc-light-windows.png",
+]
+notes = """
+Splits the 3,000-line viewer shell into ten modules under
+crates/pdfxi-app/src/shell/. `AppCommand` (41 variants) plus
+`PdfxiApp::dispatch` become the single mutation point for controls; every
+button, menu item and keyboard shortcut builds a command instead of touching
+state. `AppCommand::label()` is the stable id for the T-0212 no-dead-controls
+harness. Public paths `pdfxi_app::ui::run` and `pdfxi_app::ui::PdfxiApp` are
+unchanged; the `pdfxi-ui` binary compiled without edits. Two tests were added:
+parameterless-command safety on an empty app, and dispatched NextPage /
+PreviousPage / ZoomIn / RotateClockwise compared with the old direct calls on
+fixtures/realworld/microsoft-excel-2019-sample.pdf. All 442 app tests pass and
+the requested capture is pixel-for-pixel identical to
+docs/evidence/ui/final-doc-light-windows.png (max channel delta 0). No feature
+row changes.
+"""
+tests = [
+    "ui::tests::every_parameterless_command_is_safe_without_a_document",
+    "ui::tests::dispatched_commands_match_the_direct_view_calls",
+]
