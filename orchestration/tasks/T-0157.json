@@ -1,0 +1,15 @@
+{
+  "id": "T-0157",
+  "lane": "convert",
+  "title": "Printable source and portfolio creation models",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0151"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "docs/evidence/convert/T-0157.md",
+    "orchestration/feature-updates/T-0157.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert",
+  "evidence": ""
+}

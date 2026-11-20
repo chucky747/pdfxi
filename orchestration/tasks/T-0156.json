@@ -1,0 +1,15 @@
+{
+  "id": "T-0156",
+  "lane": "core",
+  "title": "Platform integration local equivalents",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0139"],
+  "owns": [
+    "crates/pdfxi-core/**",
+    "docs/evidence/core/T-0156.md",
+    "orchestration/feature-updates/T-0156.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core",
+  "evidence": ""
+}
