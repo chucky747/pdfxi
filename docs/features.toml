@@ -3346,60 +3346,48 @@ tests = [
 title = "PDF/UA conformance"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/lib.rs"
+docs = [
+    "crates/pdfxi-core/src/incremental.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "docs/evidence/core/T-0108.md",
+]
 domain = "Standards"
-evidence = """
-CARGO_TARGET_DIR=target/lanes/core; cargo test -p pdfxi-core: 66 passed; 0 failed; 0 ignored; 0 measured (doc-tests 0 passed).
-cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings: EXIT 0, clean.
-rustfmt --edition 2024 --check on crates/pdfxi-core/src/{lib,parser,writer,lexer}.rs: EXIT 0.
-RUSTDOCFLAGS='-D warnings' cargo doc -p pdfxi-core --no-deps: EXIT 0.
-Note: cargo fmt -p pdfxi-core -- --check still reports pre-existing diffs in
-crates/pdfxi-core/examples/bench_open_500.rs, a file owned by another task;
-it was not edited for this feature.
-"""
+evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 242 unit + 6 integration passed, 0 failed, TEST_EXIT=0, including 18 incremental::tests covering single/multi-object updates, allocation and reuse rejection, exact prefix preservation, /Prev and second-save chains, /ID first-preserved/second-regenerated, metadata and page-label preservation, reparse round-trip, determinism, xref-stream sections, malformed prior xref and encrypted rejection. fmt/clippy(doc -D warnings)/doc all EXIT=0. Full output in docs/evidence/core/T-0108.md."
 id = "STD-010"
 notes = """
-Added dependency-free save support to pdfxi-core. Document::set_object stages a
-replacement or new indirect object (copy-on-write; rejects object number 0 and
-non-zero generations with Error::InvalidObjectId). Document::save serializes a
-standalone PDF: it preserves object numbers and copies unchanged objects from
-the source byte-for-byte via the xref offsets, so stream payloads (including
-Flate data) are never re-compressed or rewritten; staged objects are encoded by
-a new writer module. Regenerates a single classic xref table with grouped
-subsections, a free object 0, the merged trailer with updated /Size and /Root,
-startxref and %%EOF. Document::save_incremental keeps the original bytes as an
-exact prefix, appends staged objects and a new xref section whose trailer /Prev
-points at the original startxref, so reparse resolves the newest entries first.
-
-Limitations: classic-table PDFs only. Encrypted documents (trailer /Encrypt)
-and cross-reference-stream documents return Error::UnsupportedState rather than
-panicking; malformed trailers surface the existing structured parse errors.
-Non-zero object generations and non-finite reals are rejected. Object-stream
-and linearization-hint support is provided separately by STD-003. Row stays
-in-progress because digital preservation also covers validation, signing and
-long-term packaging.
+Adds configurable incremental save and preservation reporting in a new
+pdfxi-core::incremental module. Document::save_incremental_with appends a
+classic-table or xref-stream section with /Prev to the prior startxref, carries
+over /Root, /Info, the first /ID element and unknown trailer keys, and
+regenerates /Size, /Prev and a deterministic second /ID element. Object-number
+allocation never reuses an existing number; a typed PreservationReport states
+what was preserved versus regenerated, and typed errors cover encrypted input
+and malformed prior xrefs. Existing Document::save and save_incremental remain
+unchanged for compatibility. The broader digital-preservation row stays
+in-progress because validation, signing and long-term packaging are not part
+of this task.
 """
 priority = "P1"
 status = "in-progress"
 tests = [
-    "tests::save_round_trips_minimal_fixture",
-    "tests::save_round_trips_text_fixture",
-    "tests::save_round_trips_multipage_fixture_in_order",
-    "tests::save_preserves_object_numbers_and_compressed_stream_bytes",
-    "tests::save_writes_staged_change_with_preserved_object_numbers",
-    "tests::incremental_save_preserves_original_bytes_as_prefix",
-    "tests::incremental_save_links_new_xref_to_previous_with_prev",
-    "tests::incremental_save_changed_stream_is_visible_after_reparse",
-    "tests::set_object_rejects_invalid_object_ids",
-    "tests::save_rejects_encrypted_document_with_structured_error",
-    "tests::save_rejects_xref_stream_with_structured_error",
-    "tests::save_rejects_malformed_document_with_structured_error",
-    "writer::tests::escapes_unsafe_name_bytes",
-    "writer::tests::writes_hex_strings_and_integral_reals",
-    "writer::tests::rejects_non_finite_reals",
-    "writer::tests::stream_serialization_sets_exact_length",
-    "writer::tests::xref_section_groups_consecutive_objects",
-    "writer::tests::write_trailer_emits_expected_tail",
+    "incremental::tests::single_object_update_writes_only_that_object",
+    "incremental::tests::multi_object_update_writes_both_in_number_order",
+    "incremental::tests::allocate_object_number_never_reuses_existing_or_staged_numbers",
+    "incremental::tests::reserve_rejects_every_in_use_number",
+    "incremental::tests::original_bytes_are_preserved_exactly",
+    "incremental::tests::trailer_points_prev_at_prior_startxref",
+    "incremental::tests::second_incremental_save_chains_three_sections",
+    "incremental::tests::id_first_is_preserved_and_second_is_regenerated",
+    "incremental::tests::seeded_id_is_deterministic_and_seed_dependent",
+    "incremental::tests::output_is_deterministic_for_a_change_set",
+    "incremental::tests::catalog_unknown_entries_labels_and_metadata_are_preserved",
+    "incremental::tests::explicit_catalog_change_is_reported_as_regenerated",
+    "incremental::tests::reparse_round_trip_keeps_page_count_and_text",
+    "incremental::tests::xref_stream_section_reparses",
+    "incremental::tests::malformed_prior_xref_returns_a_typed_error",
+    "incremental::tests::encrypted_document_is_rejected_with_a_typed_error",
+    "incremental::tests::empty_change_set_appends_a_valid_revision",
+    "incremental::tests::first_id_element_helper_handles_absent_and_malformed_ids",
 ]
 title = "Incremental update and digital preservation"
 

@@ -19,6 +19,7 @@ pub mod boxes;
 pub mod compatibility;
 pub mod content;
 pub mod filter;
+pub mod incremental;
 pub mod linearization;
 pub mod linearize;
 pub mod metadata;
@@ -46,6 +47,7 @@ pub use content::extract_text;
 pub use filter::{
     DEFAULT_DECODE_CAP, Filter, FlateParams, Predictor, decode_stream, decode_stream_with_limit,
 };
+pub use incremental::{IncrementalSaveOptions, IncrementalSaveResult, PreservationReport};
 pub use linearization::{HintStreamRange, Linearization, parse_linearization};
 pub use linearize::{
     HintStream, LinearizationOptions, LinearizedLayout, PageHint, SharedObjectHint,
@@ -285,6 +287,26 @@ pub enum Error {
     /// The document optimizer could not produce a valid result.
     #[error("optimization failed: {0}")]
     OptimizationFailed(String),
+    /// The document is encrypted, so an incremental update is declined.
+    ///
+    /// The writer never encrypts its output, so appending a plaintext revision
+    /// to an encrypted file would produce an unreadable document.
+    #[error("encrypted documents cannot be updated incrementally")]
+    EncryptedDocument,
+    /// The cross-reference section that an incremental update must chain to
+    /// could not be read.
+    ///
+    /// This is distinct from the general parse errors because it specifically
+    /// describes the prior revision that `/Prev` would point at.
+    #[error("malformed prior cross-reference section: {0}")]
+    MalformedPriorXref(String),
+    /// A caller attempted to allocate or reserve an object number already in
+    /// use by the source document or a staged change.
+    #[error("object number {0} is already in use")]
+    ObjectNumberInUse(u32),
+    /// No fresh object number remains in the `u32` object-number space.
+    #[error("object number space is exhausted")]
+    ObjectNumberExhausted,
 }
 
 /// Result type used by the core crate.
