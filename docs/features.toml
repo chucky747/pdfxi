@@ -2996,16 +2996,16 @@ tests = [
 title = "Droplets hot folders and batch preflight"
 
 [[feature]]
-docs = "crates/pdfxi-accessibility/src/authoring.rs, docs/evidence/app/T-0171.md"
+docs = "crates/pdfxi-accessibility/src/authoring.rs, docs/evidence/author/T-0177.md"
 domain = "Accessibility"
-evidence = "docs/evidence/app/T-0171.md"
+evidence = "docs/evidence/author/T-0177.md"
 id = "ACCESS-001"
-notes = "Authoring plan, reading-order export and structure round-trip projection are complete; ActualText, expansion text and Artifact serialization remain in the structure writer."
+notes = "Authoring plan, reading-order export (artifacts and artifact subtrees excluded) and structure round-trip projection now cover alt text, ActualText and expansion. Host boundary: no tag-tree/reading-order editor UI and no PDF byte writer; a host applies the projection through compose_page_content."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "authoring::tests::authoring_plan_is_deterministic",
-    "authoring::tests::reading_order_export_matches_the_tree",
+    "structure::tests::mcid_allocation_is_dense_unique_and_excludes_artifacts_from_parent_tree",
+    "structure::tests::nested_lists_and_tables_serialize_with_correct_hierarchy",
 ]
 title = "Tag tree and reading order editor"
 
@@ -4151,16 +4151,17 @@ tests = [
 title = "Transparency and blend modes"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/structure.rs, docs/evidence/core/T-0166.md"
+docs = "crates/pdfxi-accessibility/src/structure.rs, docs/evidence/author/T-0177.md"
 domain = "Standards"
-evidence = "docs/evidence/core/T-0166.md"
+evidence = "docs/evidence/author/T-0177.md"
 id = "STD-006"
-notes = "Bounded structure-role model, canonical token round-trip, parent-tree index and typed validation; writing the tree into PDF objects and the reading-order editor remain."
+notes = "Bounded structure-role model, canonical token round-trip, ActualText/expansion/Alt round-trip, artifact marked content, parent-tree index, object-level projection and typed semantic validation. Host boundary: no xref/object-stream byte emission in pdfxi-core, no tag-tree UI; the projection is a canonical intermediate and overlays are merged by the host via compose_page_content."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "structure::tests::nested_tree_round_trips_exactly",
-    "structure::tests::parent_tree_is_deterministic_and_resolves_paths",
+    "structure::tests::round_trip_reconstructs_original_tree",
+    "structure::tests::projection_is_byte_stable_and_ordered",
+    "structure::tests::projection_rejects_dangling_parent_and_cycle_and_duplicate_mcids",
 ]
 title = "Tagged PDF and structure tree"
 

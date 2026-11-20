@@ -9,11 +9,12 @@
 //! round-trip check. Every failure is a typed [`AuthoringError`]; no operation
 //! can panic on caller-supplied nodes, indices, or identifiers.
 //!
-//! The structure check intentionally compares the fields the tagged-PDF writer
-//! serializes (role, hierarchy, page association, text, and alternative text).
-//! `ActualText`, abbreviation expansions, and the artifact flag remain
-//! model-only in the writer; they are preserved in the reported tree but are not
-//! part of the round-trip projection.
+//! The structure check compares the fields the tagged-PDF writer serializes
+//! (role, hierarchy, page association, text, alternative text, `/ActualText`,
+//! and `/E` expansions). Artifacts are emitted as `/Artifact` marked content
+//! rather than structure elements, so they are excluded from both the round-trip
+//! projection and the exported reading order; they remain in the reported tree
+//! so a host can still edit or toggle them.
 
 use core::fmt;
 
@@ -246,40 +247,70 @@ fn apply_step(editor: &mut TagEditor, step: &AuthoringStep) -> Result<(), EditEr
 }
 
 /// Builds a validated [`ReadingOrder`] from an [`A11yTree`].
+///
+/// Artifact nodes are decorative marked content, not real content, so they and
+/// their subtrees are omitted. Child lists are pruned of artifact references so
+/// the exported order never presents an artifact to assistive technology.
 pub fn export_reading_order(tree: &A11yTree) -> Result<ReadingOrder, ReadingOrderError> {
     let nodes = tree
         .nodes()
         .iter()
+        .filter(|node| !node.artifact)
         .map(|node| {
-            ReadingOrderNode::new(
-                node.id.get(),
-                node.role,
-                node.children.iter().map(|child| child.get()).collect(),
-            )
+            let children = node
+                .children
+                .iter()
+                .filter(|child| tree.node(**child).is_some_and(|child| !child.artifact))
+                .map(|child| child.get())
+                .collect();
+            ReadingOrderNode::new(node.id.get(), node.role, children)
         })
         .collect();
     ReadingOrder::new(nodes)
 }
 
-type StructureRow = (u64, TagRole, usize, String, Option<String>, Vec<u64>);
+type StructureRow = (
+    u64,
+    TagRole,
+    usize,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Vec<u64>,
+);
 
 fn structure_projection(tree: &A11yTree) -> (Vec<StructureRow>, Vec<u64>) {
     let mut rows: Vec<StructureRow> = tree
         .nodes()
         .iter()
+        .filter(|node| !node.artifact)
         .map(|node| {
+            let children = node
+                .children
+                .iter()
+                .filter(|child| tree.node(**child).is_some_and(|child| !child.artifact))
+                .map(|child| child.get())
+                .collect();
             (
                 node.id.get(),
                 node.role,
                 node.page,
                 node.text.clone(),
                 node.alt_text.clone(),
-                node.children.iter().map(|child| child.get()).collect(),
+                node.actual_text.clone(),
+                node.expansion.clone(),
+                children,
             )
         })
         .collect();
     rows.sort_by_key(|row| row.0);
-    let roots = tree.roots().iter().map(|root| root.get()).collect();
+    let roots = tree
+        .roots()
+        .iter()
+        .filter(|root| tree.node(**root).is_some_and(|node| !node.artifact))
+        .map(|root| root.get())
+        .collect();
     (rows, roots)
 }
 
@@ -421,8 +452,8 @@ mod tests {
         assert_eq!(image.role, TagRole::Image);
         assert_eq!(image.alt_text.as_deref(), Some("chart"));
         assert!(report.tree.nodes()[3].artifact);
-        // Artifact/ActualText/expansion are model-only, but the serialized
-        // projection (including alt text) still round-trips.
+        // The artifact is emitted as marked content and excluded from the
+        // structure projection; all serialized fields still round-trip.
         assert!(report.structure_round_trip_ok);
     }
 

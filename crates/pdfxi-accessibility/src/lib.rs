@@ -7,7 +7,9 @@
 //! validated [`A11yTree`]; [`builder`] derives such a tree from ordered page
 //! text blocks; [`export`] serializes it to plain text with a stable
 //! summary; [`structure`] writes a validated tree into tagged-PDF structure
-//! objects and reads it back for verification; and [`checker`] audits a tree
+//! objects (including `/ActualText`, `/E`, and `/Artifact` marked content),
+//! projects it into deterministic object-level dictionary entries, and reads it
+//! back for verification; and [`checker`] audits a tree
 //! plus document metadata with a deterministic, non-certifying PDF/UA-oriented
 //! rule set; [`editor`] adds copy-on-write tag-tree edits, reading-order edits,
 //! alt-text/table models, and a bounded undo/redo journal; [`authoring`] layers
@@ -45,9 +47,11 @@ pub use editor::{
 pub use export::{AltTextCoverage, RoleCount, TreeSummary, summarize, to_plain_text};
 pub use reading_order::{ReadingOrder, ReadingOrderError, ReadingOrderNode};
 pub use structure::{
-    ObjRef, PageTagInfo, PdfDict, PdfValue, StructDocument, StructError, StructOptions,
-    ViewerPreferences, compose_page_content, is_standard_pdf_role, read_structure_tree, role_map,
-    role_pdf_name, write_structure_tree,
+    ObjRef, PageTagInfo, PdfDict, PdfValue, StructDocument, StructEntryType, StructError,
+    StructKid, StructOptions, StructureEntry, StructureProjection, ViewerPreferences,
+    compose_page_content, is_standard_pdf_role, project_structure, read_structure_tree,
+    role_forbids_expansion, role_map, role_pdf_name, validate_structure_semantics,
+    write_structure_tree,
 };
 pub use tree::{A11yNode, A11yTree, BBox, NodeId, TreeError};
 

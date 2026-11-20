@@ -2,10 +2,13 @@
 //!
 //! [`write_structure_tree`] maps a validated [`A11yTree`] into the indirect
 //! objects of a tagged PDF: a `/StructTreeRoot` with ordered `/K` kids, one
-//! `/StructElem` per accessibility node, a `/ParentTree` number tree plus
-//! `/ParentTreeNextKey`, a `/RoleMap` for non-standard roles, `/Alt` for
-//! figures and images, per-page `/StructParents` keys, and marked-content
-//! identifiers (`/MCID`) embedded in additive page-content overlays.
+//! `/StructElem` per non-artifact accessibility node, a `/ParentTree` number
+//! tree plus `/ParentTreeNextKey`, a `/RoleMap` for non-standard roles, `/Alt`
+//! for figures and images, `/ActualText` replacement text, `/E` abbreviation
+//! expansions, per-page `/StructParents` keys, and marked-content identifiers
+//! (`/MCID`) embedded in additive page-content overlays. Artifact nodes are
+//! *not* written as structure elements; their marked-content sequences are
+//! emitted with the `/Artifact` tag so assistive technology skips them.
 //!
 //! The writer is deliberately *intermediate*: it never opens or rewrites a
 //! concrete PDF file. It returns a [`StructDocument`] holding numbered PDF
@@ -24,7 +27,7 @@
 //! `unwrap`/`expect`/`panic` outside tests.
 
 use core::fmt;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{A11yNode, A11yTree, BBox, NodeId, TagRole, TreeError};
 
@@ -353,6 +356,16 @@ pub enum StructError {
     BadStructElem(String),
     /// A role name could not be mapped back to a [`TagRole`].
     UnknownRole(String),
+    /// `/ActualText` was attached to a node that has children.
+    ActualTextOnNonLeaf(NodeId),
+    /// `/ActualText` was an empty or whitespace-only string.
+    EmptyActualText(NodeId),
+    /// An artifact node contained a non-artifact (structure) child.
+    ArtifactHasStructureKids(NodeId),
+    /// An abbreviation expansion was attached to a role that forbids it.
+    ExpansionForbiddenRole(NodeId, TagRole),
+    /// Two marked-content sequences were assigned the same `/MCID`.
+    DuplicateMcid(u32),
 }
 
 impl fmt::Display for StructError {
@@ -370,6 +383,17 @@ impl fmt::Display for StructError {
             Self::MissingObject(number) => write!(f, "missing object number {number}"),
             Self::BadStructElem(message) => write!(f, "malformed structure element: {message}"),
             Self::UnknownRole(name) => write!(f, "unknown structure role /{name}"),
+            Self::ActualTextOnNonLeaf(id) => {
+                write!(f, "node {id} has /ActualText but is not a leaf")
+            }
+            Self::EmptyActualText(id) => write!(f, "node {id} has empty /ActualText"),
+            Self::ArtifactHasStructureKids(id) => {
+                write!(f, "artifact node {id} contains structure children")
+            }
+            Self::ExpansionForbiddenRole(id, role) => {
+                write!(f, "node {id} has /E but role {role} forbids expansions")
+            }
+            Self::DuplicateMcid(mcid) => write!(f, "duplicate marked-content identifier {mcid}"),
         }
     }
 }
@@ -389,6 +413,8 @@ pub struct PageTagInfo {
     pub overlay_content: Vec<u8>,
     /// Marked-content identifiers allocated on this page, in order.
     pub mcid_ids: Vec<u32>,
+    /// Subset of [`Self::mcid_ids`] that were emitted as `/Artifact` markers.
+    pub artifact_mcids: Vec<u32>,
 }
 
 /// Complete tagged-structure intermediate produced by [`write_structure_tree`].
@@ -596,6 +622,73 @@ fn require_ref(map: &HashMap<NodeId, ObjRef>, id: NodeId) -> Result<ObjRef, Stru
     })
 }
 
+/// Returns `true` when `role` is a pure structural container that never
+/// carries text and therefore forbids an abbreviation expansion (`/E`).
+///
+/// Extensions such as `Paragraph`, `Span`, `Code`, `BibEntry`, and table cells
+/// legitimately expand abbreviations; container roles do not.
+pub fn role_forbids_expansion(role: TagRole) -> bool {
+    matches!(
+        role,
+        TagRole::Document
+            | TagRole::Page
+            | TagRole::Part
+            | TagRole::Sect
+            | TagRole::Div
+            | TagRole::List
+            | TagRole::Table
+            | TagRole::TableRow
+            | TagRole::Form
+    )
+}
+
+/// Validates the tagged-PDF-specific semantics of `tree`.
+///
+/// This is stricter than [`A11yTree::validate`]: in addition to the structural
+/// invariants it enforces the writer's rules for `/ActualText`, `/E`, and
+/// artifacts. It is called automatically by [`write_structure_tree`] but is
+/// public so a host can reject a tree before allocating any object numbers.
+pub fn validate_structure_semantics(tree: &A11yTree) -> Result<(), StructError> {
+    for node in tree.nodes() {
+        if let Some(actual) = &node.actual_text {
+            if actual.trim().is_empty() {
+                return Err(StructError::EmptyActualText(node.id));
+            }
+            if !node.children.is_empty() {
+                return Err(StructError::ActualTextOnNonLeaf(node.id));
+            }
+        }
+        if node.expansion.is_some() && role_forbids_expansion(node.role) {
+            return Err(StructError::ExpansionForbiddenRole(node.id, node.role));
+        }
+    }
+
+    let index: HashMap<NodeId, usize> = tree
+        .nodes()
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id, index))
+        .collect();
+    for artifact in tree.nodes().iter().filter(|node| node.artifact) {
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        let mut stack: Vec<NodeId> = artifact.children.clone();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(&position) = index.get(&id) else {
+                continue;
+            };
+            let child = &tree.nodes()[position];
+            if !child.artifact {
+                return Err(StructError::ArtifactHasStructureKids(artifact.id));
+            }
+            stack.extend(child.children.iter().copied());
+        }
+    }
+    Ok(())
+}
+
 fn bbox_values(box_: BBox) -> PdfValue {
     PdfValue::Array(vec![
         PdfValue::Real(f64::from(box_.x0())),
@@ -613,10 +706,13 @@ fn mcr_value(page: ObjRef, mcid: u32) -> PdfValue {
     PdfValue::Dict(dict)
 }
 
-fn build_overlay(mcids: &[u32]) -> Vec<u8> {
+fn build_overlay(mcids: &[(u32, bool)]) -> Vec<u8> {
     let mut out = String::new();
-    for &mcid in mcids {
-        out.push_str("/Span << /MCID ");
+    for &(mcid, artifact) in mcids {
+        let tag = if artifact { "Artifact" } else { "Span" };
+        out.push('/');
+        out.push_str(tag);
+        out.push_str(" << /MCID ");
         out.push_str(&mcid.to_string());
         out.push_str(" >> BDC\nEMC\n");
     }
@@ -646,16 +742,21 @@ pub fn compose_page_content(existing: &[u8], overlay: &[u8]) -> Vec<u8> {
 ///
 /// Object numbers are deterministic: `/StructTreeRoot` is 1, `/ParentTree` is 2,
 /// and structure elements are numbered from 3 in depth-first presentation order.
+/// Artifact nodes receive no structure element; their marked-content sequences
+/// are emitted with the `/Artifact` tag in the page overlay instead.
 /// Marked-content identifiers are allocated in the same order for every node
-/// carrying non-empty text, which guarantees uniqueness and stable ordering.
+/// carrying non-empty text, including artifacts, which guarantees uniqueness
+/// and stable ordering.
 ///
-/// Returns a typed [`StructError`] for an invalid tree, inconsistent options, or
-/// a node whose page falls outside the supplied page range.
+/// Returns a typed [`StructError`] for an invalid tree (including the semantic
+/// rules enforced by [`validate_structure_semantics`]), inconsistent options,
+/// or a node whose page falls outside the supplied page range.
 pub fn write_structure_tree(
     tree: &A11yTree,
     options: &StructOptions,
 ) -> Result<StructDocument, StructError> {
     tree.validate().map_err(StructError::InvalidTree)?;
+    validate_structure_semantics(tree)?;
     options.validate()?;
 
     for node in tree.nodes() {
@@ -683,8 +784,16 @@ pub fn write_structure_tree(
         }
     }
 
-    let mut elem_ref: HashMap<NodeId, ObjRef> = HashMap::with_capacity(tree.len());
-    for (next_object, &id) in (3u32..).zip(traversal.iter()) {
+    // Artifacts are marked content, not structure elements, so they get no
+    // object number and never appear in /K, /P, or the parent tree.
+    let struct_traversal: Vec<NodeId> = traversal
+        .iter()
+        .copied()
+        .filter(|id| tree.node(*id).is_some_and(|node| !node.artifact))
+        .collect();
+
+    let mut elem_ref: HashMap<NodeId, ObjRef> = HashMap::with_capacity(struct_traversal.len());
+    for (next_object, &id) in (3u32..).zip(struct_traversal.iter()) {
         elem_ref.insert(id, ObjRef::new(next_object));
     }
 
@@ -697,8 +806,20 @@ pub fn write_structure_tree(
             next_mcid += 1;
         }
     }
+    // MCIDs are allocated densely, so this is an invariant guard rather than a
+    // reachable state; it keeps the "no duplicate MCIDs" rule explicit.
+    let mut allocated: Vec<u32> = mcid_of.values().copied().collect();
+    allocated.sort_unstable();
+    if allocated.windows(2).any(|pair| pair[0] == pair[1]) {
+        let duplicate = allocated
+            .windows(2)
+            .find(|pair| pair[0] == pair[1])
+            .map(|pair| pair[0])
+            .unwrap_or(0);
+        return Err(StructError::DuplicateMcid(duplicate));
+    }
 
-    let mut page_mcids: Vec<Vec<u32>> = vec![Vec::new(); options.page_count];
+    let mut page_mcids: Vec<Vec<(u32, bool)>> = vec![Vec::new(); options.page_count];
     for &id in &traversal {
         let node = require_node(tree, id)?;
         if let Some(&mcid) = mcid_of.get(&id) {
@@ -708,13 +829,13 @@ pub fn write_structure_tree(
                     page_count: options.page_count,
                 });
             }
-            page_mcids[node.page].push(mcid);
+            page_mcids[node.page].push((mcid, node.artifact));
         }
     }
 
-    let mut objects: Vec<(u32, PdfValue)> = Vec::with_capacity(tree.len() + 2);
+    let mut objects: Vec<(u32, PdfValue)> = Vec::with_capacity(struct_traversal.len() + 2);
 
-    for &id in &traversal {
+    for &id in &struct_traversal {
         let node = require_node(tree, id)?;
         let self_ref = require_ref(&elem_ref, id)?;
         let mut dict = PdfDict::new();
@@ -741,6 +862,15 @@ pub fn write_structure_tree(
             kids.push(mcr_value(page, mcid));
         }
         for &child in &node.children {
+            // A valid tree cannot be a structure kid of an artifact, but the
+            // check keeps this loop total if a caller bypasses the semantic
+            // validator and supplies an artifact parent directly.
+            if tree
+                .node(child)
+                .is_some_and(|child_node| child_node.artifact)
+            {
+                continue;
+            }
             kids.push(PdfValue::Ref(require_ref(&elem_ref, child)?));
         }
         dict.insert("K".into(), PdfValue::Array(kids));
@@ -758,6 +888,12 @@ pub fn write_structure_tree(
         if let Some(alt) = &node.alt_text {
             dict.insert("Alt".into(), PdfValue::Text(alt.clone()));
         }
+        if let Some(actual) = &node.actual_text {
+            dict.insert("ActualText".into(), PdfValue::Text(actual.clone()));
+        }
+        if let Some(expansion) = &node.expansion {
+            dict.insert("E".into(), PdfValue::Text(expansion.clone()));
+        }
 
         let order = declared_index.get(&id).copied().ok_or_else(|| {
             StructError::BadStructElem(format!("no declaration index for node {id}"))
@@ -774,6 +910,15 @@ pub fn write_structure_tree(
         if let Some(alt) = &node.alt_text {
             dict.insert("XI_Alt".into(), PdfValue::Text(alt.clone()));
         }
+        if let Some(actual) = &node.actual_text {
+            dict.insert("XI_ActualText".into(), PdfValue::Text(actual.clone()));
+        }
+        if let Some(expansion) = &node.expansion {
+            dict.insert("XI_Expansion".into(), PdfValue::Text(expansion.clone()));
+        }
+        if node.artifact {
+            dict.insert("XI_Artifact".into(), PdfValue::Bool(true));
+        }
 
         objects.push((self_ref.number, PdfValue::Dict(dict)));
     }
@@ -783,6 +928,7 @@ pub fn write_structure_tree(
     let root_kids: Vec<PdfValue> = tree
         .roots()
         .iter()
+        .filter(|id| tree.node(**id).is_some_and(|node| !node.artifact))
         .map(|id| require_ref(&elem_ref, *id).map(PdfValue::Ref))
         .collect::<Result<Vec<_>, _>>()?;
     root.insert("K".into(), PdfValue::Array(root_kids));
@@ -806,10 +952,12 @@ pub fn write_structure_tree(
                     page_count: options.page_count,
                 })?;
         let mut value: Vec<PdfValue> = Vec::new();
-        for &mcid in mcids {
-            value.push(mcr_value(page_ref, mcid));
+        for &(mcid, artifact) in mcids {
+            if !artifact {
+                value.push(mcr_value(page_ref, mcid));
+            }
         }
-        for &id in &traversal {
+        for &id in &struct_traversal {
             let node = require_node(tree, id)?;
             if node.page == page {
                 value.push(PdfValue::Ref(require_ref(&elem_ref, id)?));
@@ -848,7 +996,12 @@ pub fn write_structure_tree(
             page_object: page_ref,
             struct_parents: page as u32,
             overlay_content: build_overlay(mcids),
-            mcid_ids: mcids.clone(),
+            mcid_ids: mcids.iter().map(|(mcid, _)| *mcid).collect(),
+            artifact_mcids: mcids
+                .iter()
+                .filter(|(_, artifact)| *artifact)
+                .map(|(mcid, _)| *mcid)
+                .collect(),
         });
     }
 
@@ -947,18 +1100,38 @@ fn parse_struct_elem(dict: &PdfDict) -> Result<(usize, A11yNode), StructError> {
         .and_then(PdfValue::as_text)
         .or_else(|| dict.get("Alt").and_then(PdfValue::as_text))
         .map(str::to_string);
+    let actual_text = dict
+        .get("XI_ActualText")
+        .and_then(PdfValue::as_text)
+        .or_else(|| dict.get("ActualText").and_then(PdfValue::as_text))
+        .map(str::to_string);
+    let expansion = dict
+        .get("XI_Expansion")
+        .and_then(PdfValue::as_text)
+        .or_else(|| dict.get("E").and_then(PdfValue::as_text))
+        .map(str::to_string);
+    let artifact = dict
+        .get("XI_Artifact")
+        .and_then(PdfValue::as_bool)
+        .unwrap_or(false);
 
     let mut node = A11yNode::new(id, role, page as usize, bbox, text, Vec::new());
     node.alt_text = alt_text;
+    node.actual_text = actual_text;
+    node.expansion = expansion;
+    node.artifact = artifact;
     Ok((order as usize, node))
 }
 
-/// Reconstructs the exact [`A11yTree`] encoded in a [`StructDocument`].
+/// Reconstructs the [`A11yTree`] encoded in a [`StructDocument`].
 ///
 /// This is the inverse of [`write_structure_tree`]: node ids, roles, pages,
-/// boxes, text, alternative text, child order, and root order all survive the
-/// round-trip because the writer records them in documented `XI_` extension
-/// entries. Returns a typed [`StructError`] for malformed generated objects.
+/// boxes, text, alternative text, `/ActualText`, `/E` expansions, child order,
+/// and root order all survive the round-trip because the writer records them in
+/// documented `XI_` extension entries. Artifact nodes are emitted as `/Artifact`
+/// marked content rather than structure elements, so they are intentionally
+/// absent from the reconstructed tree. Returns a typed [`StructError`] for
+/// malformed generated objects.
 pub fn read_structure_tree(doc: &StructDocument) -> Result<A11yTree, StructError> {
     let root_dict = doc
         .object(doc.struct_tree_root)
@@ -1020,6 +1193,349 @@ pub fn read_structure_tree(doc: &StructDocument) -> Result<A11yTree, StructError
 
     let tree = A11yTree::new(nodes, roots).map_err(StructError::InvalidTree)?;
     Ok(tree)
+}
+
+/// Kind of a projected structure dictionary entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StructEntryType {
+    /// The catalog `/StructTreeRoot` dictionary.
+    StructTreeRoot,
+    /// The `/ParentTree` number tree dictionary.
+    ParentTree,
+    /// A `/StructElem` dictionary for one non-artifact node.
+    StructElem,
+    /// Any other generated dictionary.
+    Other,
+}
+
+impl StructEntryType {
+    /// Stable token used by [`StructureProjection::to_canonical_bytes`].
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StructTreeRoot => "StructTreeRoot",
+            Self::ParentTree => "ParentTree",
+            Self::StructElem => "StructElem",
+            Self::Other => "Other",
+        }
+    }
+}
+
+/// A child reference inside a projected structure dictionary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StructKid {
+    /// An indirect reference to another structure element.
+    Ref(ObjRef),
+    /// A marked-content reference to a page and `/MCID`.
+    MarkedContent {
+        /// Page object carrying the marked-content sequence.
+        page: ObjRef,
+        /// Marked-content identifier.
+        mcid: u32,
+        /// Whether the sequence carries the `/Artifact` tag.
+        artifact: bool,
+    },
+}
+
+/// One structure dictionary entry in a [`StructureProjection`].
+///
+/// The fields mirror what a PDF object writer needs: object number, type,
+/// role, alternative/replacement/expansion text, ordered kids, and parent
+/// reference.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructureEntry {
+    /// Indirect reference of this dictionary.
+    pub object: ObjRef,
+    /// Kind of dictionary.
+    pub entry_type: StructEntryType,
+    /// Structure role, present for [`StructEntryType::StructElem`] entries.
+    pub role: Option<TagRole>,
+    /// Alternative text (`/Alt`).
+    pub alt: Option<String>,
+    /// Replacement text (`/ActualText`).
+    pub actual_text: Option<String>,
+    /// Abbreviation expansion (`/E`).
+    pub expansion: Option<String>,
+    /// Ordered children, as element references or marked-content references.
+    pub kids: Vec<StructKid>,
+    /// Parent structure element, or the root for top-level elements.
+    pub parent: Option<ObjRef>,
+}
+
+/// A deterministic, object-level projection of a tagged structure tree.
+///
+/// Produced by [`project_structure`] from the underlying [`StructDocument`].
+/// Entries are ordered by object number, so repeated projections of the same
+/// model are byte-identical. [`Self::validate_consistency`] checks that the
+/// `/StructTreeRoot` and `/ParentTree` references agree and that no entry has a
+/// dangling parent, a parent cycle, or a duplicate `/MCID`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructureProjection {
+    /// The generated object document this projection was derived from.
+    pub document: StructDocument,
+    /// Structure dictionary entries, ordered by object number.
+    pub entries: Vec<StructureEntry>,
+    /// Reference the root records as its `/ParentTree`.
+    pub root_parent_tree: Option<ObjRef>,
+    /// Reference to the generated `/StructTreeRoot`.
+    pub struct_tree_root: ObjRef,
+    /// Reference to the generated `/ParentTree`.
+    pub parent_tree: ObjRef,
+    /// Value of `/ParentTreeNextKey`.
+    pub parent_tree_next_key: u32,
+}
+
+impl StructureProjection {
+    /// Serializes the projection into a byte-stable, line-oriented form.
+    ///
+    /// The output depends only on the ordered fields of [`Self::entries`] and
+    /// the root/parent-tree references. Text fields escape backslashes, tabs,
+    /// and newlines so distinct models never collide.
+    pub fn to_canonical_bytes(&self) -> Vec<u8> {
+        let mut out = String::from("PDFXI-STRUCT-PROJECTION\t1\n");
+        out.push_str(&format!(
+            "ROOT\t{}\t{}\t{}\n",
+            self.struct_tree_root.number, self.parent_tree.number, self.parent_tree_next_key
+        ));
+        for entry in &self.entries {
+            out.push_str(&format!(
+                "E\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t",
+                entry.object.number,
+                entry.entry_type.as_str(),
+                entry
+                    .role
+                    .map_or_else(|| "-".to_string(), |role| role.as_str().to_string()),
+                escape_field(entry.alt.as_deref()),
+                escape_field(entry.actual_text.as_deref()),
+                escape_field(entry.expansion.as_deref()),
+                entry
+                    .parent
+                    .map_or_else(|| "-".to_string(), |parent| parent.number.to_string()),
+            ));
+            for kid in &entry.kids {
+                match kid {
+                    StructKid::Ref(reference) => {
+                        out.push_str(&format!("R{}:", reference.number));
+                    }
+                    StructKid::MarkedContent {
+                        page,
+                        mcid,
+                        artifact,
+                    } => {
+                        out.push_str(&format!(
+                            "M{}:{}:{}:",
+                            page.number,
+                            mcid,
+                            if *artifact { "A" } else { "C" }
+                        ));
+                    }
+                }
+            }
+            out.push('\n');
+        }
+        out.into_bytes()
+    }
+
+    /// Checks the projection for dangling parents, cycles, duplicate object
+    /// numbers, duplicate `/MCID` values, and inconsistent root references.
+    pub fn validate_consistency(&self) -> Result<(), StructError> {
+        let by_number: HashMap<u32, &StructureEntry> = self
+            .entries
+            .iter()
+            .map(|entry| (entry.object.number, entry))
+            .collect();
+        let mut numbers: HashSet<u32> = HashSet::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            if !numbers.insert(entry.object.number) {
+                return Err(StructError::DuplicateObject(entry.object.number));
+            }
+        }
+        if !by_number.contains_key(&self.struct_tree_root.number) {
+            return Err(StructError::MissingObject(self.struct_tree_root.number));
+        }
+        if !by_number.contains_key(&self.parent_tree.number) {
+            return Err(StructError::MissingObject(self.parent_tree.number));
+        }
+        if self.root_parent_tree != Some(self.parent_tree) {
+            return Err(StructError::BadStructElem(
+                "StructTreeRoot /ParentTree is inconsistent".to_string(),
+            ));
+        }
+
+        // Every parent must resolve, and following parent links must terminate.
+        for entry in &self.entries {
+            let mut seen: HashSet<u32> = HashSet::new();
+            let mut current = Some(entry.object);
+            while let Some(reference) = current {
+                if !seen.insert(reference.number) {
+                    return Err(StructError::BadStructElem(
+                        "structure parent cycle".to_string(),
+                    ));
+                }
+                let Some(parent_entry) = by_number.get(&reference.number) else {
+                    return Err(StructError::MissingObject(reference.number));
+                };
+                current = parent_entry.parent;
+            }
+        }
+
+        let mut mcids: Vec<u32> = Vec::new();
+        for entry in &self.entries {
+            for kid in &entry.kids {
+                if let StructKid::MarkedContent { mcid, .. } = kid {
+                    mcids.push(*mcid);
+                }
+            }
+        }
+        mcids.sort_unstable();
+        if mcids.windows(2).any(|pair| pair[0] == pair[1]) {
+            let duplicate = mcids
+                .windows(2)
+                .find(|pair| pair[0] == pair[1])
+                .map(|pair| pair[0])
+                .unwrap_or(0);
+            return Err(StructError::DuplicateMcid(duplicate));
+        }
+        Ok(())
+    }
+}
+
+fn escape_field(value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return "-".to_string();
+    };
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn project_kid(value: &PdfValue) -> StructKid {
+    if let Some(reference) = value.as_ref() {
+        return StructKid::Ref(reference);
+    }
+    if let Some(dict) = value.as_dict() {
+        let mcid = dict
+            .get("MCID")
+            .and_then(PdfValue::as_int)
+            .unwrap_or(0)
+            .max(0) as u32;
+        let page = dict
+            .get("Pg")
+            .and_then(PdfValue::as_ref)
+            .unwrap_or_else(|| ObjRef::new(0));
+        let artifact = dict
+            .get("Artifact")
+            .and_then(PdfValue::as_bool)
+            .unwrap_or(false);
+        return StructKid::MarkedContent {
+            page,
+            mcid,
+            artifact,
+        };
+    }
+    StructKid::MarkedContent {
+        page: ObjRef::new(0),
+        mcid: 0,
+        artifact: false,
+    }
+}
+
+/// Projects a validated [`A11yTree`] into an ordered set of structure
+/// dictionary entries that a caller can serialize.
+///
+/// The projection is derived from [`write_structure_tree`], so it shares the
+/// writer's single source of truth for object numbering and field values.
+pub fn project_structure(
+    tree: &A11yTree,
+    options: &StructOptions,
+) -> Result<StructureProjection, StructError> {
+    let document = write_structure_tree(tree, options)?;
+    let mut entries: Vec<StructureEntry> = Vec::with_capacity(document.objects.len());
+    for (_, value) in &document.objects {
+        let Some(dict) = value.as_dict() else {
+            continue;
+        };
+        let type_name = dict.get("Type").and_then(PdfValue::as_name);
+        let entry_type = match type_name {
+            Some("StructTreeRoot") => StructEntryType::StructTreeRoot,
+            Some("StructElem") => StructEntryType::StructElem,
+            _ if dict.contains_key("Nums") => StructEntryType::ParentTree,
+            _ => StructEntryType::Other,
+        };
+        let role = dict
+            .get("XI_Role")
+            .and_then(PdfValue::as_name)
+            .and_then(role_from_model_name)
+            .or_else(|| {
+                dict.get("S")
+                    .and_then(PdfValue::as_name)
+                    .and_then(role_from_pdf_name)
+            });
+        let kids = dict
+            .get("K")
+            .and_then(PdfValue::as_array)
+            .map(|items| items.iter().map(project_kid).collect())
+            .unwrap_or_default();
+        let parent = dict.get("P").and_then(PdfValue::as_ref).or(
+            if entry_type == StructEntryType::StructElem {
+                Some(document.struct_tree_root)
+            } else {
+                None
+            },
+        );
+        entries.push(StructureEntry {
+            object: ObjRef::new(0),
+            entry_type,
+            role,
+            alt: dict
+                .get("XI_Alt")
+                .and_then(PdfValue::as_text)
+                .or_else(|| dict.get("Alt").and_then(PdfValue::as_text))
+                .map(str::to_string),
+            actual_text: dict
+                .get("XI_ActualText")
+                .and_then(PdfValue::as_text)
+                .or_else(|| dict.get("ActualText").and_then(PdfValue::as_text))
+                .map(str::to_string),
+            expansion: dict
+                .get("XI_Expansion")
+                .and_then(PdfValue::as_text)
+                .or_else(|| dict.get("E").and_then(PdfValue::as_text))
+                .map(str::to_string),
+            kids,
+            parent,
+        });
+    }
+    // Object numbers are read from the sorted document so `entries` is ordered
+    // by construction; assigning them here keeps the projection deterministic.
+    for ((number, _), entry) in document.objects.iter().zip(entries.iter_mut()) {
+        entry.object = ObjRef::new(*number);
+    }
+    let struct_tree_root = document.struct_tree_root;
+    let parent_tree = document.parent_tree;
+    let parent_tree_next_key = document.parent_tree_next_key;
+    let root_parent_tree = document
+        .object(struct_tree_root)
+        .and_then(PdfValue::as_dict)
+        .and_then(|dict| dict.get("ParentTree"))
+        .and_then(PdfValue::as_ref);
+    let projection = StructureProjection {
+        document,
+        entries,
+        root_parent_tree,
+        struct_tree_root,
+        parent_tree,
+        parent_tree_next_key,
+    };
+    projection.validate_consistency()?;
+    Ok(projection)
 }
 
 #[cfg(test)]
@@ -1436,5 +1952,392 @@ mod tests {
         let mut literal = String::new();
         write_literal("a(b)\\c", &mut literal);
         assert_eq!(literal, "(a\\(b\\)\\\\c)");
+    }
+
+    fn elem_for(doc: &StructDocument, id: u64) -> PdfDict {
+        doc.objects
+            .iter()
+            .find_map(|(_, value)| {
+                let dict = value.as_dict()?;
+                if dict.get("XI_NodeId").and_then(PdfValue::as_int) == Some(id as i64) {
+                    Some(dict.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("no structure element for node {id}"))
+    }
+
+    fn tree_with_annotations() -> A11yTree {
+        A11yTree::new(
+            vec![
+                node(1, TagRole::Document, 0, "", vec![NodeId::new(2)]),
+                node(
+                    2,
+                    TagRole::Page,
+                    0,
+                    "",
+                    vec![
+                        NodeId::new(3),
+                        NodeId::new(4),
+                        NodeId::new(5),
+                        NodeId::new(6),
+                    ],
+                ),
+                node(3, TagRole::Heading1, 0, "Intro", vec![]),
+                node(4, TagRole::Paragraph, 0, "fb", vec![])
+                    .with_actual_text("feedback")
+                    .with_expansion("feedback"),
+                node(5, TagRole::Figure, 0, "", vec![]).with_alt_text("chart"),
+                node(6, TagRole::Artifact, 0, "decorative", vec![]).with_artifact(true),
+            ],
+            vec![NodeId::new(1)],
+        )
+        .unwrap_or_else(|error| panic!("enriched tree must be valid: {error}"))
+    }
+
+    fn tree_with_artifact_subtree() -> A11yTree {
+        A11yTree::new(
+            vec![
+                node(1, TagRole::Document, 0, "", vec![NodeId::new(2)]),
+                node(
+                    2,
+                    TagRole::Page,
+                    0,
+                    "",
+                    vec![NodeId::new(3), NodeId::new(4)],
+                ),
+                node(3, TagRole::Paragraph, 0, "real", vec![]),
+                node(4, TagRole::Artifact, 0, "", vec![NodeId::new(5)]).with_artifact(true),
+                node(5, TagRole::Artifact, 0, "noise", vec![]).with_artifact(true),
+            ],
+            vec![NodeId::new(1)],
+        )
+        .unwrap_or_else(|error| panic!("artifact-subtree tree must be valid: {error}"))
+    }
+
+    #[test]
+    fn actual_text_and_expansion_are_serialized_and_restored() {
+        let doc = write_structure_tree(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("write: {error}"));
+        let paragraph = elem_for(&doc, 4);
+        assert_eq!(
+            paragraph.get("ActualText").and_then(PdfValue::as_text),
+            Some("feedback")
+        );
+        assert_eq!(
+            paragraph.get("E").and_then(PdfValue::as_text),
+            Some("feedback")
+        );
+        assert_eq!(
+            paragraph.get("XI_ActualText").and_then(PdfValue::as_text),
+            Some("feedback")
+        );
+        assert_eq!(
+            paragraph.get("XI_Expansion").and_then(PdfValue::as_text),
+            Some("feedback")
+        );
+        let restored = read_structure_tree(&doc).unwrap_or_else(|error| panic!("read: {error}"));
+        let node = restored
+            .node(NodeId::new(4))
+            .unwrap_or_else(|| panic!("paragraph must survive"));
+        assert_eq!(node.actual_text.as_deref(), Some("feedback"));
+        assert_eq!(node.expansion.as_deref(), Some("feedback"));
+    }
+
+    #[test]
+    fn artifact_is_marked_content_not_a_structure_element() {
+        let doc = write_structure_tree(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("write: {error}"));
+        assert_eq!(
+            doc.objects
+                .iter()
+                .filter(|(_, value)| {
+                    value
+                        .as_dict()
+                        .and_then(|dict| dict.get("XI_NodeId"))
+                        .and_then(PdfValue::as_int)
+                        == Some(6)
+                })
+                .count(),
+            0,
+            "artifact node must not be a StructElem"
+        );
+        let page = elem_for(&doc, 2);
+        let kids = page
+            .get("K")
+            .and_then(PdfValue::as_array)
+            .unwrap_or_else(|| panic!("page kids"));
+        assert_eq!(kids.len(), 3, "artifact child must be pruned from /K");
+        let overlay = core::str::from_utf8(
+            doc.overlay_for_page(0)
+                .unwrap_or_else(|| panic!("page 0 overlay")),
+        )
+        .unwrap_or_else(|error| panic!("overlay is UTF-8: {error}"));
+        assert!(overlay.contains("/Artifact << /MCID 2 >> BDC"));
+        assert!(overlay.contains("/Span << /MCID 0 >> BDC"));
+    }
+
+    #[test]
+    fn artifact_subtree_is_excluded_from_reading_order_and_structure() {
+        let tree = tree_with_artifact_subtree();
+        let order =
+            crate::export_reading_order(&tree).unwrap_or_else(|error| panic!("order: {error}"));
+        assert_eq!(order.traversal(), vec![1, 2, 3]);
+        assert_eq!(order.len(), 3);
+        let doc = write_structure_tree(&tree, &options(1))
+            .unwrap_or_else(|error| panic!("write: {error}"));
+        for id in [4, 5] {
+            assert!(
+                doc.objects.iter().all(|(_, value)| value
+                    .as_dict()
+                    .and_then(|dict| dict.get("XI_NodeId"))
+                    .and_then(PdfValue::as_int)
+                    != Some(id)),
+                "artifact {id} must not be a StructElem"
+            );
+        }
+        let overlay = core::str::from_utf8(
+            doc.overlay_for_page(0)
+                .unwrap_or_else(|| panic!("page 0 overlay")),
+        )
+        .unwrap_or_else(|error| panic!("overlay is UTF-8: {error}"));
+        assert_eq!(overlay.matches("/Artifact << /MCID").count(), 1);
+        assert_eq!(doc.pages[0].artifact_mcids, vec![1]);
+    }
+
+    #[test]
+    fn projection_is_byte_stable_and_ordered() {
+        let tree = tree_with_annotations();
+        let left = project_structure(&tree, &options(1))
+            .unwrap_or_else(|error| panic!("project: {error}"));
+        let right = project_structure(&tree, &options(1))
+            .unwrap_or_else(|error| panic!("project: {error}"));
+        assert_eq!(left.entries, right.entries);
+        assert_eq!(left.to_canonical_bytes(), right.to_canonical_bytes());
+        assert!(
+            left.entries
+                .windows(2)
+                .all(|pair| pair[0].object.number < pair[1].object.number)
+        );
+        let text = String::from_utf8(left.to_canonical_bytes())
+            .unwrap_or_else(|error| panic!("canonical bytes are UTF-8: {error}"));
+        assert!(text.starts_with("PDFXI-STRUCT-PROJECTION\t1\n"));
+        assert!(text.contains("feedback"));
+        assert!(left.entries.iter().any(|entry| {
+            entry.entry_type == StructEntryType::StructElem
+                && entry.actual_text.as_deref() == Some("feedback")
+                && entry.expansion.as_deref() == Some("feedback")
+        }));
+    }
+
+    #[test]
+    fn projection_consistency_accepts_a_valid_tree() {
+        let projection = project_structure(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("project: {error}"));
+        assert_eq!(projection.validate_consistency(), Ok(()));
+        assert_eq!(projection.entries.len(), 7);
+        assert_eq!(projection.root_parent_tree, Some(projection.parent_tree));
+        assert_eq!(projection.parent_tree_next_key, 1);
+    }
+
+    #[test]
+    fn projection_rejects_a_dangling_parent() {
+        let mut projection = project_structure(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("project: {error}"));
+        let entry = projection
+            .entries
+            .iter_mut()
+            .find(|entry| entry.entry_type == StructEntryType::StructElem)
+            .unwrap_or_else(|| panic!("struct elem"));
+        entry.parent = Some(ObjRef::new(999));
+        assert_eq!(
+            projection.validate_consistency(),
+            Err(StructError::MissingObject(999))
+        );
+    }
+
+    #[test]
+    fn projection_rejects_a_parent_cycle() {
+        let mut projection = project_structure(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("project: {error}"));
+        let struct_root = projection.struct_tree_root;
+        let child = projection
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.entry_type == StructEntryType::StructElem && entry.parent == Some(struct_root)
+            })
+            .map(|entry| entry.object)
+            .unwrap_or_else(|| panic!("top-level struct elem"));
+        let root = projection
+            .entries
+            .iter_mut()
+            .find(|entry| entry.entry_type == StructEntryType::StructTreeRoot)
+            .unwrap_or_else(|| panic!("root entry"));
+        root.parent = Some(child);
+        assert!(matches!(
+            projection.validate_consistency(),
+            Err(StructError::BadStructElem(ref message)) if message.contains("cycle")
+        ));
+    }
+
+    #[test]
+    fn projection_rejects_duplicate_mcids() {
+        let mut projection = project_structure(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("project: {error}"));
+        let kid = StructKid::MarkedContent {
+            page: ObjRef::new(100),
+            mcid: 42,
+            artifact: false,
+        };
+        let first = projection
+            .entries
+            .iter_mut()
+            .find(|entry| entry.entry_type == StructEntryType::StructElem)
+            .unwrap_or_else(|| panic!("first elem"));
+        first.kids.push(kid.clone());
+        let second = projection
+            .entries
+            .iter_mut()
+            .rev()
+            .find(|entry| entry.entry_type == StructEntryType::StructElem)
+            .unwrap_or_else(|| panic!("second elem"));
+        second.kids.push(kid);
+        assert_eq!(
+            projection.validate_consistency(),
+            Err(StructError::DuplicateMcid(42))
+        );
+    }
+
+    #[test]
+    fn actual_text_on_a_non_leaf_is_a_typed_error() {
+        let tree = A11yTree::new(
+            vec![
+                node(1, TagRole::Document, 0, "", vec![NodeId::new(2)])
+                    .with_actual_text("not a leaf"),
+                node(2, TagRole::Paragraph, 0, "body", vec![]),
+            ],
+            vec![NodeId::new(1)],
+        )
+        .unwrap_or_else(|error| panic!("tree must be structurally valid: {error}"));
+        let expected = Err(StructError::ActualTextOnNonLeaf(NodeId::new(1)));
+        assert_eq!(validate_structure_semantics(&tree), expected);
+        assert_eq!(
+            write_structure_tree(&tree, &options(1)).err(),
+            expected.err()
+        );
+    }
+
+    #[test]
+    fn empty_actual_text_is_a_typed_error() {
+        let tree = A11yTree::new(
+            vec![
+                node(1, TagRole::Document, 0, "", vec![NodeId::new(2)]),
+                node(2, TagRole::Paragraph, 0, "body", vec![]).with_actual_text("   "),
+            ],
+            vec![NodeId::new(1)],
+        )
+        .unwrap_or_else(|error| panic!("tree must be structurally valid: {error}"));
+        let expected = Err(StructError::EmptyActualText(NodeId::new(2)));
+        assert_eq!(validate_structure_semantics(&tree), expected);
+        assert_eq!(
+            write_structure_tree(&tree, &options(1)).err(),
+            expected.err()
+        );
+    }
+
+    #[test]
+    fn artifact_with_structure_kids_is_a_typed_error() {
+        let tree = A11yTree::new(
+            vec![
+                node(1, TagRole::Document, 0, "", vec![NodeId::new(2)]).with_artifact(true),
+                node(2, TagRole::Paragraph, 0, "real content", vec![]),
+            ],
+            vec![NodeId::new(1)],
+        )
+        .unwrap_or_else(|error| panic!("tree must be structurally valid: {error}"));
+        let expected = Err(StructError::ArtifactHasStructureKids(NodeId::new(1)));
+        assert_eq!(validate_structure_semantics(&tree), expected);
+        assert_eq!(
+            write_structure_tree(&tree, &options(1)).err(),
+            expected.err()
+        );
+    }
+
+    #[test]
+    fn expansion_on_a_forbidden_role_is_a_typed_error() {
+        let tree = A11yTree::new(
+            vec![
+                node(1, TagRole::Document, 0, "", vec![NodeId::new(2)]).with_expansion("document"),
+                node(2, TagRole::Paragraph, 0, "body", vec![]),
+            ],
+            vec![NodeId::new(1)],
+        )
+        .unwrap_or_else(|error| panic!("tree must be structurally valid: {error}"));
+        let expected = Err(StructError::ExpansionForbiddenRole(
+            NodeId::new(1),
+            TagRole::Document,
+        ));
+        assert_eq!(validate_structure_semantics(&tree), expected);
+        assert_eq!(
+            write_structure_tree(&tree, &options(1)).err(),
+            expected.err()
+        );
+        assert!(role_forbids_expansion(TagRole::Document));
+        assert!(role_forbids_expansion(TagRole::Table));
+        assert!(!role_forbids_expansion(TagRole::Paragraph));
+        assert!(!role_forbids_expansion(TagRole::BibEntry));
+    }
+
+    #[test]
+    fn alt_text_and_annotations_round_trip_together() {
+        let doc = write_structure_tree(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("write: {error}"));
+        let restored = read_structure_tree(&doc).unwrap_or_else(|error| panic!("read: {error}"));
+        assert!(
+            restored.node(NodeId::new(6)).is_none(),
+            "artifact is marked content, not a structure node"
+        );
+        let paragraph = restored
+            .node(NodeId::new(4))
+            .unwrap_or_else(|| panic!("paragraph must survive"));
+        assert_eq!(paragraph.actual_text.as_deref(), Some("feedback"));
+        assert_eq!(paragraph.expansion.as_deref(), Some("feedback"));
+        let figure = restored
+            .node(NodeId::new(5))
+            .unwrap_or_else(|| panic!("figure must survive"));
+        assert_eq!(figure.alt_text.as_deref(), Some("chart"));
+        assert_eq!(restored.validate(), Ok(()));
+    }
+
+    #[test]
+    fn mcid_allocation_is_dense_unique_and_excludes_artifacts_from_parent_tree() {
+        let doc = write_structure_tree(&tree_with_annotations(), &options(1))
+            .unwrap_or_else(|error| panic!("write: {error}"));
+        assert_eq!(doc.pages[0].mcid_ids, vec![0, 1, 2]);
+        assert_eq!(doc.pages[0].artifact_mcids, vec![2]);
+        let parent_tree = doc
+            .object(doc.parent_tree)
+            .and_then(PdfValue::as_dict)
+            .and_then(|dict| dict.get("Nums"))
+            .and_then(PdfValue::as_array)
+            .unwrap_or_else(|| panic!("parent tree Nums"));
+        let page_zero_values = parent_tree[1]
+            .as_array()
+            .unwrap_or_else(|| panic!("page 0 values"));
+        assert_eq!(
+            page_zero_values.len(),
+            7,
+            "two non-artifact MCRs plus five structure-element refs"
+        );
+        assert!(
+            !page_zero_values.iter().any(|value| value
+                .as_dict()
+                .and_then(|dict| dict.get("MCID"))
+                .and_then(PdfValue::as_int)
+                == Some(2)),
+            "artifact MCID must not appear in the parent tree"
+        );
     }
 }
