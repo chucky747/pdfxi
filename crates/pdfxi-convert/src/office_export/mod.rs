@@ -22,7 +22,7 @@
 //! 5. [`DocxExporter`] writes paragraphs, headings, lists, and tables.
 //!    [`XlsxExporter`] writes one sheet per page or per table with typed cells.
 //!    [`PptxExporter`] writes one slide per page with positioned text boxes.
-//! 6. Input sizes are bounded by documented constants in [`model`] so a hostile
+//! 6. Input sizes are bounded by documented constants in the `model` module so a hostile
 //!    model cannot force unbounded allocation.
 
 mod docx;

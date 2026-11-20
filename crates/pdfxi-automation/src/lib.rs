@@ -3,37 +3,37 @@
 //! This crate currently provides the dependency-free in-memory model for
 //! actions and batch jobs. The core abstractions are:
 //!
-//! - [`Action`] / [`ActionStep`] / [`StepKind`] — a named, ordered, validatable
+//! - [`Action`] / [`ActionStep`] / [`StepKind`] â€” a named, ordered, validatable
 //!   sequence of operations with stable step-kind identifiers and lossless text
 //!   import/export.
-//! - [`BatchJob`] / [`BatchQueue`] — a deterministic, single-threaded runner
+//! - [`BatchJob`] / [`BatchQueue`] â€” a deterministic, single-threaded runner
 //!   that executes jobs through a [`StepExecutor`], isolates failures, supports
 //!   cooperative cancellation, and records a [`JobOutcome`] per file.
-//! - [`DocumentOperations`] / [`DocumentExecutor`] — the object-safe document
+//! - [`DocumentOperations`] / [`DocumentExecutor`] â€” the object-safe document
 //!   interface and its real executor. [`DocumentExecutor`] maps each step kind to
 //!   one operation, threads the produced [`Artifact`] between steps, honours
 //!   cancellation, and records stable [`StepResult`]s. [`BatchQueue::run_with`]
 //!   drives it through the object-safe [`JobExecutor`] bridge.
-//! - [`ActionLibrary`] — a multi-action container that parses several named
+//! - [`ActionLibrary`] â€” a multi-action container that parses several named
 //!   actions from one tab-delimited text file, the format consumed by the CLI's
 //!   `action list`, `action show`, `action run`, and `droplet` commands.
-//! - [`AutomationError`] — actionable, self-describing errors for every
+//! - [`AutomationError`] â€” actionable, self-describing errors for every
 //!   rejection path.
-//! - [`ApiEngine`] / [`Request`] / [`Response`] — a versioned, line-delimited
+//! - [`ApiEngine`] / [`Request`] / [`Response`] â€” a versioned, line-delimited
 //!   JSON API over a bounded, socket-free text protocol. Commands point at
 //!   saved action files, run batches, and perform dry-run validation through
 //!   an injected [`ApiHost`]. [`JsonValue`] provides canonical parsing and
 //!   serialization with no external dependency.
-//! - [`Toolset`] / [`Tool`] — named JSON files mapping friendly aliases to
+//! - [`Toolset`] / [`Tool`] â€” named JSON files mapping friendly aliases to
 //!   saved actions plus parameter defaults, validated and runnable through the
 //!   same API, with dangerous aliases and step kinds rejected.
-//! - [`Script`] / [`Limits`] / [`run_script`] — a dependency-free, deterministic
+//! - [`Script`] / [`Limits`] / [`run_script`] â€” a dependency-free, deterministic
 //!   JavaScript subset for document actions, with explicit CPU-step, call,
 //!   iteration, size, wall-clock, and cancellation budgets. The [`HostObject`]
 //!   trait is an audited boundary for exposing future document operations; no
 //!   real PDF mutation is wired up in this milestone.
 //! - [`AcrobatContext`] / [`FieldStore`] / [`EventData`] / [`run_acrobat_script`]
-//!   — an explicitly injected, in-memory Acrobat compatibility layer providing
+//!   â€” an explicitly injected, in-memory Acrobat compatibility layer providing
 //!   `this.getField` read/write, `event`, the `AFNumber_*`, `AFPercent_*`, and
 //!   `AFDate_*` helpers, and a documented `util.printf` subset for field format,
 //!   validate, and calculate scripts. No I/O, clock, randomness, or ambient
@@ -41,8 +41,10 @@
 //!
 //! All behavior is deterministic and allocates only as needed. The crate has no
 //! external dependencies, forbids `unsafe`, and keeps panics out of non-test
-//! code. Future milestones will add watched folders and the plugin host on top
-//! of these contracts.
+//! code. [`WatchedFolder`] adds a deterministic watched-folder plan and execution
+//! adapter with host-driven `poll_once` calls, validated rooted folder config,
+//! per-file outcomes, and in-memory idempotency markers; no thread or OS watcher
+//! is started. The plugin host remains future work.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -56,6 +58,7 @@ mod js;
 mod json;
 mod library;
 mod toolset;
+mod watched;
 
 pub use action::{Action, ActionStep, StepKind};
 pub use api::{
@@ -78,6 +81,11 @@ pub use js::{
 pub use json::{JsonError, JsonValue, MAX_DEPTH, MAX_NODES};
 pub use library::ActionLibrary;
 pub use toolset::{TOOLSET_VERSION, Tool, Toolset, ToolsetError};
+pub use watched::{
+    FileOutcome, FileOutcomeState, FolderConverter, FolderPlan, PassthroughConverter, PollReport,
+    ProcessedMarkers, WATCHED_MAX_DEPTH, WATCHED_MAX_FILE_BYTES, WATCHED_MAX_FILES, WatchedFolder,
+    WatchedFolderConfig, WatchedFolderError,
+};
 
 /// Return the implementation name for diagnostics.
 pub fn engine_name() -> &'static str {

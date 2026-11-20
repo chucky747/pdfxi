@@ -1,0 +1,15 @@
+{
+  "id": "T-0135",
+  "lane": "forms",
+  "title": "Local reader-enable form filling model",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0115"],
+  "owns": [
+    "crates/pdfxi-forms/**",
+    "docs/evidence/forms/T-0135.md",
+    "orchestration/feature-updates/T-0135.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-forms",
+  "evidence": ""
+}

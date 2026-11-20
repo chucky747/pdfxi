@@ -3,7 +3,7 @@
   "lane": "convert",
   "title": "Local capture adapters and watched folders",
   "priority": "P3",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0093"],
   "owns": [
     "crates/pdfxi-convert/**",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0107.toml"
   ],
   "acceptance": "cargo test -p pdfxi-convert -p pdfxi-automation",
-  "evidence": ""
+  "evidence": "docs/evidence/convert/T-0107.md"
 }

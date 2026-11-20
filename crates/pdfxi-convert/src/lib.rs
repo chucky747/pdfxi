@@ -64,6 +64,13 @@
 //!   inversion), page navigation, allow-listed hyperlinks, and local image
 //!   references only when the caller supplies an already-extracted, safe
 //!   filename. It emits no script and fetches nothing.
+//! - [`capture`] replaces the retired browser-capture extension with local,
+//!   caller-supplied inputs: a saved HTML file, supplied markup, or an MHTML-like
+//!   payload. It renders through the bounded HTML subset, fetches nothing, and
+//!   exposes typed size/active-content/traversal errors.
+//! - [`email`] replaces retired email-capture services by parsing a saved
+//!   `.eml` message (folded headers, MIME parts, text/plain and text/html bodies)
+//!   into a PDF. Attachments are listed by name only and never decoded.
 //! - [`office_export`] writes editable `.docx`, `.xlsx`, and `.pptx` archives
 //!   from a caller-supplied extraction model using only self-generated ZIP and
 //!   XML. The three local adapters implement a typed [`OfficeExporter`]
@@ -104,15 +111,18 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod capture;
 pub mod conformance;
 mod converter;
 pub mod create;
+pub mod email;
 mod error;
 mod export;
 mod export_options;
 pub mod html_export;
 pub mod image;
 mod json;
+mod mime;
 pub mod office_export;
 mod options;
 #[cfg(feature = "renderer")]
@@ -125,6 +135,10 @@ mod tagged_text;
 mod text;
 mod text_converter;
 
+pub use capture::{
+    CAPTURE_MAX_BYTES, CAPTURE_MAX_PARTS, CaptureError, CaptureOptions, CaptureResult,
+    capture_html_file, capture_html_markup, capture_mhtml,
+};
 pub use conformance::{
     ConformanceExport, ConformanceExportError, ConformanceExportReport, ConformanceFinding,
     ConformanceRequest, ConformanceTarget, ExportSeverity, NormalizationOptions,
@@ -136,6 +150,11 @@ pub use create::{
     Margins, PageSize, create_from_html, create_from_html_with_options, create_from_image,
     create_from_markdown, create_from_text, create_pdf_from_file, create_pdf_from_html_file,
     create_pdf_from_html_file_with_options, create_pdf_from_path,
+};
+pub use email::{
+    EMAIL_MAX_ATTACHMENTS, EMAIL_MAX_BYTES, EMAIL_MAX_DEPTH, EMAIL_MAX_PARTS, EmailBodyKind,
+    EmailDocument, EmailError, EmailLimits, EmailOptions, EmailPdf, create_pdf_from_eml,
+    create_pdf_from_eml_file, parse_eml, parse_eml_with_limits, render_email_pdf,
 };
 pub use error::ConversionError;
 pub use export::ExportKind;

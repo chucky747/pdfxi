@@ -660,25 +660,45 @@ tests = []
 title = "Create and customize PDF Portfolios"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-convert/src/capture.rs, docs/evidence/convert/T-0107.md"
 domain = "Create"
-evidence = ""
+evidence = "docs/evidence/convert/T-0107.md"
 id = "CREATE-011"
-notes = ""
+notes = "Replaced by the local `pdfxi_convert::capture` adapter (ADR 0008): `capture_html_file`, `capture_html_markup`, and `capture_mhtml` render caller-supplied local HTML/MHTML-like input through the existing bounded HTML subset. No remote fetch, browser extension, active content, or traversal; typed size/encoding errors. No CLI exposure in this task."
 priority = "P3"
-status = "planned"
-tests = []
+status = "replaced"
+tests = [
+    "capture::tests::markup_is_rendered_through_the_existing_html_subset",
+    "capture::tests::remote_urls_are_rejected_with_a_typed_html_error",
+    "capture::tests::oversized_markup_is_rejected_before_parsing",
+    "capture::tests::local_file_capture_rejects_relative_and_traversal_paths",
+    "capture::tests::mhtml_extracts_quoted_printable_html_and_ignores_resources",
+    "capture::tests::mhtml_rejects_payloads_without_an_html_part",
+    "capture::tests::mhtml_rejects_unsupported_transfer_encoding",
+    "capture::tests::mhtml_requires_multipart_related_with_a_boundary",
+    "capture::tests::local_file_capture_renders_a_saved_html_file",
+]
 title = "Browser page capture extension"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-convert/src/email.rs, docs/evidence/convert/T-0107.md"
 domain = "Create"
-evidence = ""
+evidence = "docs/evidence/convert/T-0107.md"
 id = "CREATE-012"
-notes = ""
+notes = "Replaced by local `pdfxi_convert::email` ingestion (ADR 0008): a saved .eml file is parsed for folded headers, bounded MIME parts, and text/plain or text/html bodies and rendered to PDF. Attachment names are listed only; content is never decoded or embedded. No network or mail client."
 priority = "P3"
-status = "planned"
-tests = []
+status = "replaced"
+tests = [
+    "email::tests::plain_text_message_is_parsed_and_rendered",
+    "email::tests::folded_headers_are_joined_and_addresses_split",
+    "email::tests::multipart_alternative_prefers_the_html_body",
+    "email::tests::attachment_names_are_listed_but_content_is_not_embedded",
+    "email::tests::malformed_message_without_a_boundary_is_a_typed_error",
+    "email::tests::unsupported_transfer_encoding_is_a_typed_error",
+    "email::tests::oversized_message_is_rejected_before_parsing",
+    "email::tests::part_budget_is_enforced",
+    "email::tests::message_file_is_read_with_a_bound",
+]
 title = "Email-to-PDF capture"
 
 [[feature]]
@@ -693,14 +713,24 @@ tests = []
 title = "PostScript and Distiller-compatible ingestion"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-automation/src/watched.rs, docs/evidence/convert/T-0107.md"
 domain = "Create"
-evidence = ""
+evidence = "docs/evidence/convert/T-0107.md"
 id = "CREATE-014"
-notes = ""
+notes = "Local watched-folder adapter delivered in `pdfxi_automation::watched`: validated rooted/traversal-free config, deterministic sorted plan, host-driven `poll_once`, per-file outcomes, in-memory idempotency markers, symlink rejection. No background thread or OS watcher by design; CLI/host wiring and output persistence remain future work, so the row stays in-progress."
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "watched::tests::config_rejects_relative_roots",
+    "watched::tests::config_rejects_traversal_and_nul",
+    "watched::tests::config_rejects_unsafe_extensions_and_zero_limits",
+    "watched::tests::empty_folder_produces_an_empty_deterministic_report",
+    "watched::tests::plan_is_sorted_and_poll_records_per_file_outcomes",
+    "watched::tests::poll_is_idempotent_and_failed_files_are_retried",
+    "watched::tests::non_recursive_mode_ignores_descendants",
+    "watched::tests::too_many_files_is_a_typed_error",
+    "watched::tests::oversized_file_fails_only_its_outcome",
+]
 title = "Watched-folder conversion"
 
 [[feature]]
@@ -2830,19 +2860,18 @@ tests = [
 title = "Batch processing and command sequences"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-cli/src/action.rs",
-    "crates/pdfxi-cli/src/main.rs",
-]
+docs = "crates/pdfxi-automation/src/watched.rs, docs/evidence/convert/T-0107.md"
 domain = "Automation"
-evidence = "T-0050: droplet_matches_action_run_with_defaults compares both text and JSON output with action run; droplet_isolates_a_failing_file_and_exits_nonzero confirms non-zero exit. 30/30 cli.rs passed."
+evidence = "docs/evidence/convert/T-0107.md"
 id = "AUTO-003"
-notes = "Droplet-style entry is delivered as `pdfxi droplet <ACTION_FILE> <NAME> <INPUT>...`, byte-for-byte equivalent to `action run` with defaults, with a documented Windows Explorer drop-handler registration example. Watched folders are not implemented, so the row stays in-progress."
+notes = "Existing droplet CLI evidence is unchanged (T-0050). This task adds the library-side watched-folder half at `pdfxi_automation::watched` with a host-supplied FolderConverter and poll_once; the CLI still exposes only droplets, so the combined row remains in-progress."
 priority = "P3"
 status = "in-progress"
 tests = [
-    "droplet_matches_action_run_with_defaults",
-    "droplet_isolates_a_failing_file_and_exits_nonzero",
+    "watched::tests::plan_is_sorted_and_poll_records_per_file_outcomes",
+    "watched::tests::poll_is_idempotent_and_failed_files_are_retried",
+    "watched::tests::empty_folder_produces_an_empty_deterministic_report",
+    "watched::tests::oversized_file_fails_only_its_outcome",
 ]
 title = "Droplets and watched folders"
 

@@ -1,10 +1,10 @@
 //! Byte-level preflight adapter: run `pdfxi-standards` profiles over real PDF bytes.
 //!
-//! [`pdfxi-standards`] deliberately stays dependency-free: its
+//! `pdfxi-standards` deliberately stays dependency-free: its
 //! [`pdfxi_standards::PreflightInput`] is a plain-data snapshot that a caller
 //! fills from a parsed document. This module is that caller. It loads PDF bytes
 //! through [`pdfxi_core::Document`], derives the facts the profiles can check,
-//! runs the selected deterministic profile, and — when explicitly requested —
+//! runs the selected deterministic profile, and â€” when explicitly requested â€”
 //! applies the opt-in, byte-expressible fixups through the existing
 //! [`crate::conformance`] normalizer.
 //!
