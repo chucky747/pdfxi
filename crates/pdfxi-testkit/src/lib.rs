@@ -36,18 +36,32 @@
 //! to the real parser, filter, content, form, and crypto code. They back both
 //! the committed `fuzz/fuzz_targets/*.rs` libFuzzer files and the deterministic
 //! `fuzz_smoke` example and integration tests.
+//!
+//! # Fuzz seed corpus
+//!
+//! [`seed_corpus`] regenerates the deterministic fuzz seeds under
+//! `fuzz/corpus/<target>/` and their SHA-256 descriptor manifest. The corpus can
+//! be recreated on any host with an env-gated example, so no binary blobs need
+//! to be committed by hand (see that module for the exact command).
+//!
+//! # Performance budgets
+//!
+//! [`budget`] parses the documented budget descriptor and scales the tracked
+//! operation budgets by page count, mirroring the `cargo xtask bench` gate.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod authoring;
 pub mod bench;
+pub mod budget;
 pub mod fixtures;
 pub mod fuzz;
 pub mod golden;
 pub mod hash;
 pub mod malformed;
 pub mod perf;
+pub mod seed_corpus;
 
 /// Default page width in PDF points (US Letter portrait).
 const DEFAULT_WIDTH: f64 = 612.0;

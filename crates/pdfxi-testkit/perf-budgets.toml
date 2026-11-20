@@ -1,0 +1,50 @@
+# T-0144 performance budget descriptor.
+#
+# This file is the checked-in, human-readable counterpart to the tracked
+# `cargo xtask bench` gate implemented in xtask/src/bench.rs (T-0120). It records
+# the documented budgets for the five logical operations named in AC-05's source
+# table (docs/TESTING.md): open, parse, render, text-extraction and search. The
+# `harness_metric` field maps each logical operation to the concrete metric the
+# harness emits. "parse" shares the harness `open` metric because that operation
+# validates the header, startxref, xref table and page-tree count, i.e. the
+# structural parse proxy. Save and memory remain tracked by the harness's
+# `save` and `peak_allocation_estimate` metrics and the committed baseline.
+#
+# Parsed and validated by pdfxi-testkit::budget. Regeneration of measured
+# timings is a separate step: run `cargo xtask bench` (or `--report`) and paste
+# the summary into docs/evidence/qa/T-0144.md. Budgets are host-independent;
+# the baseline you compare against is host-specific and lives in
+# docs/evidence/qa/bench-baseline.json.
+
+version = 1
+reference_pages = 500
+
+[[budget]]
+operation = "open"
+harness_metric = "open"
+base_ms = 1500.0
+doc = "Open a 50 MB / 500-page document in under 1.5 s."
+
+[[budget]]
+operation = "parse"
+harness_metric = "open"
+base_ms = 1500.0
+doc = "Structural parse (header/xref/page tree) shares the harness open metric."
+
+[[budget]]
+operation = "render"
+harness_metric = "first_page_render"
+base_ms = 150.0
+doc = "Render a 1080p page in under 150 ms (the harness uses a bounded mock)."
+
+[[budget]]
+operation = "text_extraction"
+harness_metric = "text_extract"
+base_ms = 1000.0
+doc = "Extract text from 500 pages in under 1 s."
+
+[[budget]]
+operation = "search"
+harness_metric = "search_index_build"
+base_ms = 1000.0
+doc = "Build a search index over 500 pages in under 1 s."

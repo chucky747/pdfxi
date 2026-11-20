@@ -20,6 +20,9 @@ use std::path::PathBuf;
 
 use pdfxi_testkit::fixtures::{self, CORPUS_SIZE_BUDGET, CommittedFixture, FIXTURE_COUNT};
 use pdfxi_testkit::hash::sha256_hex;
+use pdfxi_testkit::seed_corpus::{
+    corpus_root, manifest_path, parse_manifest as parse_seed_manifest, verify_corpus,
+};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -369,5 +372,23 @@ fn corpus_manifest_triggers_no_downloads() {
     assert!(
         descriptors > 0,
         "expected at least one documented corpus descriptor"
+    );
+}
+
+/// The generated fuzz seeds are part of the smoke corpus. Verify each listed
+/// seed against its recorded SHA-256 and print the audit trail so a `cargo
+/// xtask corpus smoke` run reports the manifest hashes (with `--nocapture`).
+#[test]
+fn fuzz_seed_manifest_hashes_are_valid() {
+    let text = fs::read_to_string(manifest_path()).expect("fuzz seed manifest exists");
+    let entries = parse_seed_manifest(&text).expect("fuzz seed manifest parses");
+    let audit = verify_corpus(&corpus_root(), &entries).expect("fuzz seeds match manifest");
+    for (target, name, sha256) in &audit {
+        println!("SEED {target}/{name} sha256={sha256}");
+    }
+    assert_eq!(
+        audit.len(),
+        entries.len(),
+        "every manifest row was verified"
     );
 }
