@@ -74,9 +74,24 @@ redacted areas is owned by later edit/render work.
 - `SEC-008` (in-progress): category-based plans for metadata, embedded files,
   annotations, JavaScript, and form values, with deterministic ordered actions
   and strict/permissive verification against a caller-supplied inventory.
-- `SEC-009` (in-progress): Info dictionary and XMP scrubbing are modelled as two
-  deterministic `Remove` actions. Real stream deletion in the core writer is not
-  wired yet.
+- `SEC-009` (in-progress): `pdfxi-security::scrub` provides copy-on-write
+  scrubbing of the Info dictionary and XMP metadata. XMP is written with one of
+  three strategies: **deterministic replace** (`XmpStrategy::ReplaceCanonical`,
+  the default) emits a minimal canonical RDF/XML packet containing only
+  allowlisted properties; **remove** (`XmpStrategy::RemovePacket`) drops the
+  `/Metadata` stream entirely; and **selective round-trip**
+  (`XmpStrategy::Selective`) parses an existing packet, filters its properties
+  against the allowlist, and re-serialises it. Profiles choose which identifiers
+  survive: `ScrubProfile::All` removes everything, `KeepProducer` preserves the
+  PDF producer in Info and XMP, and `Custom(Allowlist)` preserves exactly the
+  allowlisted info keys and XMP properties. Prefixes and local names are
+  validated as XML NCNames and values are XML-escaped when the packet is
+  serialised. **Selective parsing is limited to the crate's own structured
+  packet** - it is not a general XML parser and rejects arbitrary text,
+  malformed `rdf:RDF` roots, and oversized or deeply nested input. Real PDF
+  object/stream deletion and byte output are owned by the core writer and are
+  not wired yet, so this row stays in-progress. Evidence is in
+  `../../evidence/security/T-0078.md`.
 
 ## Related pages
 

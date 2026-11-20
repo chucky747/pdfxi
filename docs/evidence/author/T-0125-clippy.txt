@@ -1,0 +1,8 @@
+﻿cargo :     Checking pdfxi-edit v0.1.0 (D:\Documents\opencode-work\crates\pdfxi-edit)
+At line:1 char:212
++ ... TEXITCODE"; cargo clippy -p pdfxi-edit --all-targets --no-deps -- -D  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking pd...tes\pdfxi-edit):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.94s

@@ -2471,6 +2471,7 @@ dependencies = [
  "pdfxi-accessibility",
  "pdfxi-core",
  "pdfxi-render",
+ "pdfxi-standards",
  "thiserror 2.0.21",
 ]
 

@@ -1,0 +1,9 @@
+﻿cargo :  Documenting pdfxi-edit v0.1.0 (D:\Documents\opencode-work\crates\pdfxi-edit)
+At line:1 char:434
++ ... OCFLAGS='-D warnings'; cargo doc -p pdfxi-edit --no-deps 2>&1 | Out-F ...
++                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ( Documenting pd...tes\pdfxi-edit):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.74s
+   Generated D:\Documents\opencode-work\target\lanes\author\doc\pdfxi_edit\index.html

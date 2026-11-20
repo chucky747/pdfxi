@@ -1,0 +1,345 @@
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\compare_view.rs:297:
+         let mut summary = PagePairSummary::default();
+         let (mut i, mut j) = (0usize, 0usize);
+         while i < left.len() && j < right.len() {
+[31m-            let (kind, left_page, right_page, advance_left, advance_right) =
+[0m[31m-                if left[i] == right[j] {
+[0m[31m-                    (PagePairKind::Aligned, Some(left[i]), Some(right[j]), true, true)
+[0m[31m-                } else if left[i] < right[j] {
+[0m[31m-                    (PagePairKind::Deleted, Some(left[i]), None, true, false)
+[0m[31m-                } else {
+[0m[31m-                    (PagePairKind::Inserted, None, Some(right[j]), false, true)
+[0m[31m-                };
+[0m[32m+            let (kind, left_page, right_page, advance_left, advance_right) = if left[i] == right[j]
+[0m[32m+            {
+[0m[32m+                (
+[0m[32m+                    PagePairKind::Aligned,
+[0m[32m+                    Some(left[i]),
+[0m[32m+                    Some(right[j]),
+[0m[32m+                    true,
+[0m[32m+                    true,
+[0m[32m+                )
+[0m[32m+            } else if left[i] < right[j] {
+[0m[32m+                (PagePairKind::Deleted, Some(left[i]), None, true, false)
+[0m[32m+            } else {
+[0m[32m+                (PagePairKind::Inserted, None, Some(right[j]), false, true)
+[0m[32m+            };
+[0m             push_page_pair(&mut pairs, &mut summary, kind, left_page, right_page);
+             if advance_left {
+                 i += 1;
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\compare_view.rs:998:
+     fn page_pairing_is_stable_for_identical_and_empty_inputs() {
+         let same = PagePairing::build(&[2, 5], &[2, 5]).expect("pairing");
+         assert!(same.is_aligned());
+[31m-        assert_eq!(same.render_summary(), "aligned=2 inserted=0 deleted=0 pages=2");
+[0m[32m+        assert_eq!(
+[0m[32m+            same.render_summary(),
+[0m[32m+            "aligned=2 inserted=0 deleted=0 pages=2"
+[0m[32m+        );
+[0m         let empty_left = PagePairing::build(&[], &[7]).expect("pairing");
+         assert_eq!(
+             kinds(&empty_left),
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\compare_view.rs:1017:
+     fn page_pairing_rejects_zero_duplicate_and_non_monotonic_pages() {
+         assert_eq!(
+             PagePairing::build(&[0], &[]),
+[31m-            Err(CompareViewError::InvalidPageNumber { pane: "left", page: 0 })
+[0m[32m+            Err(CompareViewError::InvalidPageNumber {
+[0m[32m+                pane: "left",
+[0m[32m+                page: 0
+[0m[32m+            })
+[0m         );
+         assert_eq!(
+             PagePairing::build(&[], &[3, 0]),
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\compare_view.rs:1024:
+[31m-            Err(CompareViewError::InvalidPageNumber { pane: "right", page: 0 })
+[0m[32m+            Err(CompareViewError::InvalidPageNumber {
+[0m[32m+                pane: "right",
+[0m[32m+                page: 0
+[0m[32m+            })
+[0m         );
+         assert_eq!(
+             PagePairing::build(&[2, 2], &[]),
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\compare_view.rs:1028:
+[31m-            Err(CompareViewError::DuplicatePage { pane: "left", page: 2 })
+[0m[32m+            Err(CompareViewError::DuplicatePage {
+[0m[32m+                pane: "left",
+[0m[32m+                page: 2
+[0m[32m+            })
+[0m         );
+         assert_eq!(
+             PagePairing::build(&[], &[4, 2]),
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\compare_view.rs:1035:
+ 
+     #[test]
+     fn view_model_page_pairing_matches_pane_page_numbers() {
+[31m-        let left = pane("l", vec![(4, vec!["x"]), (1, vec!["a"]), (2, vec!["b"])], "left");
+[0m[31m-        let right = pane("r", vec![(3, vec!["y"]), (4, vec!["x"]), (1, vec!["a"])], "right");
+[0m[32m+        let left = pane(
+[0m[32m+            "l",
+[0m[32m+            vec![(4, vec!["x"]), (1, vec!["a"]), (2, vec!["b"])],
+[0m[32m+            "left",
+[0m[32m+        );
+[0m[32m+        let right = pane(
+[0m[32m+            "r",
+[0m[32m+            vec![(3, vec!["y"]), (4, vec!["x"]), (1, vec!["a"])],
+[0m[32m+            "right",
+[0m[32m+        );
+[0m         let model = CompareViewModel::new(&left, &right).expect("model");
+         let pairing = model.page_pairing().expect("pairing");
+         assert_eq!(
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\lib.rs:249:
+     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
+ };
+ pub use shared_folder::{
+[31m-    DEFAULT_SHARED_FOLDER_MAX_ENTRIES, MAX_REVISION_LEN, MAX_SHARED_FOLDER_EXTENSIONS,
+[0m[31m-    MAX_SHARED_FOLDER_ROOT_LEN, MAX_SYNC_ITEMS, ConflictKind, ConflictReport, SharedFolderError,
+[0m[32m+    ConflictKind, ConflictReport, DEFAULT_SHARED_FOLDER_MAX_ENTRIES, MAX_REVISION_LEN,
+[0m[32m+    MAX_SHARED_FOLDER_EXTENSIONS, MAX_SHARED_FOLDER_ROOT_LEN, MAX_SYNC_ITEMS, SharedFolderError,
+[0m     SharedFolderListingPlan, SharedFolderPath, SharedFolderSource, SyncAction, SyncConflict,
+     SyncItem, SyncPlan, SyncStep, WorkspaceDescriptor, detect_conflicts,
+ };
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\portfolio_manage.rs:291:
+ 
+ /// Read a field by index with a consistent out-of-shape error.
+ fn field<'a>(fields: &'a [String], index: usize, line: usize) -> Result<&'a str, ManageError> {
+[31m-    fields.get(index).map(String::as_str).ok_or(ManageError::InvalidPlan {
+[0m[31m-        line,
+[0m[31m-        reason: "wrong field count",
+[0m[31m-    })
+[0m[32m+    fields
+[0m[32m+        .get(index)
+[0m[32m+        .map(String::as_str)
+[0m[32m+        .ok_or(ManageError::InvalidPlan {
+[0m[32m+            line,
+[0m[32m+            reason: "wrong field count",
+[0m[32m+        })
+[0m }
+ 
+ fn parse_u64_field(value: &str, line: usize, reason: &'static str) -> Result<u64, ManageError> {
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\portfolio_manage.rs:301:
+[31m-    value.parse::<u64>().map_err(|_| ManageError::InvalidPlan { line, reason })
+[0m[32m+    value
+[0m[32m+        .parse::<u64>()
+[0m[32m+        .map_err(|_| ManageError::InvalidPlan { line, reason })
+[0m }
+ 
+ fn parse_add(fields: &[String], line: usize) -> Result<ManageOp, ManageError> {
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\portfolio_manage.rs:318:
+     let modified = if modified_raw.is_empty() {
+         None
+     } else {
+[31m-        Some(parse_u64_field(modified_raw, line, "invalid modified timestamp")?)
+[0m[32m+        Some(parse_u64_field(
+[0m[32m+            modified_raw,
+[0m[32m+            line,
+[0m[32m+            "invalid modified timestamp",
+[0m[32m+        )?)
+[0m     };
+     if folder != entry_folder {
+         return Err(ManageError::InvalidPlan {
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:669:
+             start_ms = end_ms;
+         }
+         self.cursor = self.cursor.min(self.utterances.len().saturating_sub(1));
+[31m-        self.elapsed_ms = self.elapsed_ms.min(self.current().map(Utterance::span_ms).unwrap_or(0));
+[0m[32m+        self.elapsed_ms = self
+[0m[32m+            .elapsed_ms
+[0m[32m+            .min(self.current().map(Utterance::span_ms).unwrap_or(0));
+[0m     }
+ 
+     /// All utterances in reading order.
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:709:
+ 
+     /// Total plan duration including trailing pauses, in milliseconds.
+     pub fn total_duration_ms(&self) -> u64 {
+[31m-        self.utterances.last().map(|utterance| utterance.end_ms).unwrap_or(0)
+[0m[32m+        self.utterances
+[0m[32m+            .last()
+[0m[32m+            .map(|utterance| utterance.end_ms)
+[0m[32m+            .unwrap_or(0)
+[0m     }
+ 
+     /// Active cadence.
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:1072:
+         assert_eq!(queue.utterances()[3].pause_ms, 0); // final chunk
+         assert_eq!(queue.utterances()[3].end_ms, 100 + 300 + 100 + 100);
+         assert_eq!(queue.total_duration_ms(), 100 + 300 + 100 + 100);
+[31m-        assert_eq!(queue, UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("repeat"));
+[0m[32m+        assert_eq!(
+[0m[32m+            queue,
+[0m[32m+            UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("repeat")
+[0m[32m+        );
+[0m     }
+ 
+     #[test]
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:1079:
+     fn tick_remainder_carry_matches_one_large_tick() {
+         let p0 = [span("one two. three four.")];
+         let pages = [(0, p0.as_slice())];
+[31m-        let build = || {
+[0m[31m-            UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("queue")
+[0m[31m-        };
+[0m[32m+        let build =
+[0m[32m+            || UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("queue");
+[0m         let mut single = build();
+         single.play();
+         let one = single.tick(1_000);
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:1100:
+     fn pause_resume_seek_and_stop_are_deterministic() {
+         let p0 = [span("a b. c d.")];
+         let pages = [(0, p0.as_slice())];
+[31m-        let mut queue = UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence())
+[0m[31m-            .expect("queue");
+[0m[32m+        let mut queue =
+[0m[32m+            UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("queue");
+[0m         assert_eq!(queue.play(), PlaybackState::Playing);
+         assert_eq!(queue.tick(10).completed, 0);
+         assert_eq!(queue.pause(), PlaybackState::Paused);
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:1112:
+         assert_eq!(queue.seek_to_utterance(2), Ok(2));
+         assert_eq!(queue.state(), PlaybackState::Paused);
+         assert_eq!(queue.elapsed_ms(), 0);
+[31m-        assert_eq!(queue.seek_to_time(queue.utterances()[1].start_ms + 5), Ok(1));
+[0m[32m+        assert_eq!(
+[0m[32m+            queue.seek_to_time(queue.utterances()[1].start_ms + 5),
+[0m[32m+            Ok(1)
+[0m[32m+        );
+[0m         assert_eq!(queue.elapsed_ms(), 5);
+         assert_eq!(queue.stop(), PlaybackState::Stopped);
+         assert_eq!(queue.cursor(), 0);
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:1123:
+     fn cadence_change_recomputes_timing_deterministically() {
+         let p0 = [span("one two.")];
+         let pages = [(0, p0.as_slice())];
+[31m-        let mut queue = UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence())
+[0m[31m-            .expect("queue");
+[0m[32m+        let mut queue =
+[0m[32m+            UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("queue");
+[0m         let original = queue.total_duration_ms();
+         let faster = Cadence::new(50, 10, 100).expect("cadence");
+         queue.set_cadence(faster).expect("set cadence");
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\read_aloud.rs:1163:
+             Err(ReadAloudError::InvalidCadence { field: "word_ms" })
+         );
+         let spans = [span("a b.")];
+[31m-        let mut queue = UtteranceQueue::from_pages(&[(0, spans.as_slice())], ChunkMode::Word, cadence())
+[0m[31m-            .expect("queue");
+[0m[32m+        let mut queue =
+[0m[32m+            UtteranceQueue::from_pages(&[(0, spans.as_slice())], ChunkMode::Word, cadence())
+[0m[32m+                .expect("queue");
+[0m         let len = queue.len();
+         assert_eq!(
+             queue.seek_to_utterance(len),
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\reflow.rs:1037:
+                     .take_while(|line| line.paragraph_index == position)
+                     .count()
+             );
+[31m-            let slice = slice_canonical(
+[0m[31m-                layout.text(),
+[0m[31m-                paragraph.char_start,
+[0m[31m-                paragraph.char_end,
+[0m[31m-            );
+[0m[32m+            let slice = slice_canonical(layout.text(), paragraph.char_start, paragraph.char_end);
+[0m             assert!(!slice.is_empty());
+         }
+         // The same words in a different source layout produce the same spans.
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\reflow.rs:1048:
+         let reordered = blocks(&[(0, 0, "alpha beta\r\n\r\ngamma delta epsilon\r\n\r\nzeta")]);
+[31m-        assert_eq!(layout, ReflowLayout::new(&reordered, metric(1_500)).expect("crlf"));
+[0m[32m+        assert_eq!(
+[0m[32m+            layout,
+[0m[32m+            ReflowLayout::new(&reordered, metric(1_500)).expect("crlf")
+[0m[32m+        );
+[0m     }
+ 
+     #[test]
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\reflow.rs:1053:
+     fn paragraph_boundaries_survive_block_reordering() {
+[31m-        let first = blocks(&[
+[0m[31m-            (1, 0, "b one\n\nb two"),
+[0m[31m-            (0, 0, "a one\n\na two"),
+[0m[31m-        ]);
+[0m[31m-        let second = blocks(&[
+[0m[31m-            (0, 0, "a one\n\na two"),
+[0m[31m-            (1, 0, "b one\n\nb two"),
+[0m[31m-        ]);
+[0m[32m+        let first = blocks(&[(1, 0, "b one\n\nb two"), (0, 0, "a one\n\na two")]);
+[0m[32m+        let second = blocks(&[(0, 0, "a one\n\na two"), (1, 0, "b one\n\nb two")]);
+[0m         let a = ReflowLayout::new(&first, metric(2_000)).expect("a");
+         let b = ReflowLayout::new(&second, metric(2_000)).expect("b");
+         assert_eq!(a, b);
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\shared_folder.rs:333:
+         size: u64,
+     ) -> Result<Self, SharedFolderError> {
+         let path = source.validate_child(relative)?;
+[31m-        let leaf = path
+[0m[31m-            .as_str()
+[0m[31m-            .rsplit('/')
+[0m[31m-            .next()
+[0m[31m-            .unwrap_or(path.as_str());
+[0m[32m+        let leaf = path.as_str().rsplit('/').next().unwrap_or(path.as_str());
+[0m         validate_item_name(leaf)?;
+         let revision = revision.into();
+         if revision.is_empty()
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\shared_folder.rs:886:
+     fn workspace_descriptor_rejects_duplicates_and_enforces_cap() {
+         let source = source();
+         let item = SyncItem::new(&source, "b.txt", "r1", 1).unwrap_or_else(|_| panic!("item"));
+[31m-        let mut descriptor = WorkspaceDescriptor::new(&source).with_item(item.clone()).expect("add");
+[0m[32m+        let mut descriptor = WorkspaceDescriptor::new(&source)
+[0m[32m+            .with_item(item.clone())
+[0m[32m+            .expect("add");
+[0m         assert_eq!(descriptor.root(), "C:\\Shared");
+         assert_eq!(descriptor.items().len(), 1);
+         assert_eq!(
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\shared_folder.rs:906:
+                 .unwrap_or_else(|_| panic!("capped item"));
+             full = full.with_item(item).expect("fill descriptor");
+         }
+[31m-        let overflow = SyncItem::new(&source, "overflow.txt", "r1", 1)
+[0m[31m-            .unwrap_or_else(|_| panic!("overflow"));
+[0m[32m+        let overflow =
+[0m[32m+            SyncItem::new(&source, "overflow.txt", "r1", 1).unwrap_or_else(|_| panic!("overflow"));
+[0m         assert_eq!(
+             full.with_item(overflow),
+             Err(SharedFolderError::TooManyItems(MAX_SYNC_ITEMS))
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\shared_folder.rs:932:
+             .expect("remote c");
+         let report = detect_conflicts(&local, &remote).expect("conflicts");
+         assert_eq!(report.len(), 3);
+[31m-        assert_eq!(
+[0m[31m-            report.conflicts()[0].kind,
+[0m[31m-            ConflictKind::RevisionMismatch
+[0m[31m-        );
+[0m[32m+        assert_eq!(report.conflicts()[0].kind, ConflictKind::RevisionMismatch);
+[0m         assert_eq!(report.conflicts()[0].path, "a.txt");
+         assert_eq!(report.conflicts()[1].kind, ConflictKind::LocalOnly);
+         assert_eq!(report.conflicts()[2].kind, ConflictKind::RemoteOnly);
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\shared_folder.rs:989:
+         assert_eq!(plan.root(), "C:\\Shared");
+         assert_eq!(plan, SyncPlan::build(&local, &remote).expect("repeat"));
+         let serialized = plan.serialize();
+[31m-        assert_eq!(serialized, SyncPlan::build(&local, &remote).expect("repeat").serialize());
+[0m[32m+        assert_eq!(
+[0m[32m+            serialized,
+[0m[32m+            SyncPlan::build(&local, &remote)
+[0m[32m+                .expect("repeat")
+[0m[32m+                .serialize()
+[0m[32m+        );
+[0m         assert!(serialized.starts_with("SYNC|C:\\\\Shared\n"));
+         assert!(serialized.contains("STEP|RESOLVE|conflict.txt|r3"));
+         assert_eq!(plan.serialize().lines().count(), 5);
+Diff in \\?\D:\Documents\opencode-work\crates\pdfxi-app\src\shared_folder.rs:1005:
+             .with_item(SyncItem::new(&source, "a.txt", "r2", 1).expect("item"))
+             .expect("remote");
+         let report = detect_conflicts(&local, &remote).expect("report");
+[31m-        assert!(report.serialize().starts_with("CONFLICT|REVISION|a.txt|r1|r2"));
+[0m[32m+        assert!(
+[0m[32m+            report
+[0m[32m+                .serialize()
+[0m[32m+                .starts_with("CONFLICT|REVISION|a.txt|r1|r2")
+[0m[32m+        );
+[0m         let plan = SyncPlan::build(&local, &remote).expect("plan");
+         assert!(plan.serialize().starts_with("SYNC|relative\\\\root\n"));
+         assert!(plan.serialize().contains("STEP|RESOLVE|a.txt|r1"));
