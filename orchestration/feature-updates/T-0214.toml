@@ -1,0 +1,65 @@
+# T-0214 - pdfxi-document session crate: open, decrypt, mutate, undo/redo,
+# atomic save
+#
+# Infrastructure task from ADR 0010. It proposes no feature-row status change:
+# campaign rule 4 makes a row `verified` only with a GUI or CLI caller, and the
+# Phase 2 document features (A-05 undo/redo via T-0222, save via the editor
+# tasks, protect via T-0238) consume this crate. The fragment records the task,
+# its evidence, files and tests for the integrator, exactly as the T-0215
+# corpus fragment does for the QA lane.
+
+task = "T-0214"
+lane = "core"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0214.md"
+docs = [
+    "crates/pdfxi-document/Cargo.toml",
+    "crates/pdfxi-document/src/lib.rs",
+    "crates/pdfxi-document/src/session.rs",
+    "crates/pdfxi-document/src/error.rs",
+    "crates/pdfxi-document/src/atomic.rs",
+    "crates/pdfxi-document/src/identity.rs",
+    "crates/pdfxi-document/tests/session.rs",
+    "docs/evidence/hardening/T-0214.md",
+]
+notes = """
+crates/pdfxi-document now owns the open document per ADR 0010. DocumentSession
+opens a path or memory buffer, detects a trailing /Encrypt name token in the
+last 64 KiB with an alphanumeric delimiter check (so /EncryptMetadata does not
+trigger), decrypts RC4/AES-128/AES-256 sources through
+pdfxi_security::open_encrypted, and exposes decrypted plaintext bytes plus a
+typed DecryptionReport. Missing and wrong passwords are typed
+(PasswordRequired, WrongPassword). Incremental edit appends through
+Document::save_incremental, records start_len, delta and before/after SHA-256,
+and reparses the result; undo verifies the prefix hash and truncates to the
+boundary; redo re-appends the stored delta. History is capped at 50 revisions,
+drops the oldest, and reports it through a sticky flag. edit_full uses
+Document::save, clears history, and returns UndoAcrossRewrite at the rewrite
+boundary. Saves write a sibling temporary file, sync_all, then rename, so a
+failure leaves the destination untouched; save compares length, mtime and
+head/tail SHA-256 with the identity captured at load or last save and returns
+ExternallyModified unless save_forced is used. Saving an encrypted session is
+refused with EncryptedSaveUnsupported until re-encryption is wired (T-0238).
+Handoff for the app lane: after each mutation the viewer reopens
+session.bytes() through PDFium (this crate stays rendering-free). Six
+integration tests cover the encrypted fixture (decrypt, page text, password
+errors, save refusal), Excel 2019 incremental edit + undo/redo with text,
+failed atomic save over a directory, external append detection + forced save,
+a full rewrite boundary, and the 50-revision cap; two unit tests cover
+/Encrypt detection.
+"""
+tests = [
+    "session::tests::encrypt_detection_ignores_the_metadata_key",
+    "session::tests::encrypt_detection_finds_the_trailer_reference",
+    "session::encrypted_fixture_opens_with_password_and_extracts_text",
+    "session::incremental_edits_undo_and_redo_keep_values_and_page_text",
+    "session::failed_atomic_save_leaves_the_original_untouched",
+    "session::external_change_is_reported_unless_forced",
+    "session::full_rewrite_edit_makes_earlier_revisions_non_undoable",
+    "session::revision_cap_drops_the_oldest_and_reports_it",
+]
+
+# Cargo note (integrator-owned): the workspace dependency `pdfxi-document` is
+# currently unused, so every cargo command warns
+# `unused workspace dependency pdfxi-document`. The first dependent
+# (pdfxi-app, Phase 2) clears it. No gate fails on it here.

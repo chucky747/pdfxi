@@ -2555,6 +2555,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfxi-document"
+version = "0.1.0"
+dependencies = [
+ "pdfxi-core",
+ "pdfxi-security",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pdfxi-edit"
 version = "0.1.0"
 

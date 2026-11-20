@@ -3,9 +3,31 @@
 //! mutations, and atomic save, as specified by ADR 0010
 //! (`docs/decisions/0010-document-session-and-write-path.md`).
 //!
-//! This crate is a scaffold only. The session type, the mutation and undo/redo
-//! model, external-change detection, and the atomic save path are not
-//! implemented yet; task T-0214 fills in this body.
+//! The session owns the current file bytes, the parsed document, the open
+//! password, the dirty flag, and the incremental undo/redo history. Mutations
+//! are appended by [`pdfxi_core::Document::save_incremental`], undo truncates
+//! back to the stored revision boundary, and saves are written through a
+//! temporary file in the destination directory and renamed into place.
+//!
+//! # Round A limits
+//!
+//! - An encrypted source is decrypted on open with
+//!   [`pdfxi_security::open_encrypted`], so reading, editing and undo work on
+//!   the plaintext. Writing it back is refused with
+//!   [`SessionError::EncryptedSaveUnsupported`] until re-encryption is wired.
+//! - External-change detection compares length, last-write time, and a SHA-256
+//!   of the first and last 4 KiB, not the whole file.
+//! - `/Encrypt` detection scans the trailing 64 KiB for a name token, so a
+//!   literal `/Encrypt` in a trailing stream payload is reported by the
+//!   security layer as an invalid document rather than treated as plaintext.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+
+mod atomic;
+mod error;
+mod identity;
+mod session;
+
+pub use error::SessionError;
+pub use session::{DocumentSession, DocumentSnapshot, MAX_REVISIONS};
