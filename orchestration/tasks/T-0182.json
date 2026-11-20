@@ -1,0 +1,16 @@
+{
+  "id": "T-0182",
+  "lane": "convert",
+  "title": "Office integration and remaining platform rows",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0180"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "crates/pdfxi-standards/**",
+    "docs/evidence/convert/T-0182.md",
+    "orchestration/feature-updates/T-0182.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert -p pdfxi-standards",
+  "evidence": ""
+}

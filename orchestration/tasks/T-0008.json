@@ -1,7 +1,7 @@
 {
     "acceptance":  "cargo test -p pdfxi-core",
     "id":  "T-0008",
-    "evidence":  "docs/features.toml (STD-001, STD-002 in-progress) + cargo test -p pdfxi-core",
+    "evidence":  "docs/evidence/core/T-0008.md",
     "owns":  [
                  "crates/pdfxi-core/**",
                  "orchestration/feature-updates/T-0008.toml"
