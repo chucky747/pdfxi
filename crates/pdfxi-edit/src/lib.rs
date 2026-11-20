@@ -13,7 +13,12 @@
 //! (free text, callout, line, arrow, shape, cloud, ink, stamp, and file
 //! attachment), each round-tripping through a private dictionary namespace.
 //! [`review`] models comment threads, workflow states, and a filterable review
-//! registry with a dictionary round-trip and printable/participant views. [`header_footer`]
+//! registry with a dictionary round-trip, printable/participant views, and a
+//! network-free local shared-review file with deterministic merge and conflict
+//! reporting. [`compare`] deterministically diffs two already-extracted
+//! page-text documents into bounded added/removed/changed hunks. [`measurement`]
+//! computes validated distance/area/perimeter geometry with explicit scale and
+//! units. [`header_footer`]
 //! models six-slot headers, footers, and page numbering and renders them as
 //! additive content-stream overlays, including whole-page-set application with
 //! filename tokens and alternate page selection. [`watermark`] models text,
@@ -35,10 +40,12 @@
 #![forbid(unsafe_code)]
 
 pub mod annotation;
+pub mod compare;
 pub mod flatten;
 pub mod geometry;
 pub mod header_footer;
 pub mod markup;
+pub mod measurement;
 pub mod navigation;
 pub mod pdf;
 pub mod redaction;
@@ -47,6 +54,10 @@ pub mod watermark;
 
 pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
+};
+pub use compare::{
+    CompareError, CompareOptions, CompareResult, CompareSummary, Hunk, HunkKind, TextDocument,
+    TextPage, compare_documents,
 };
 pub use flatten::{
     Appearance, AppearanceResource, FlattenError, FlattenEvent, FlattenInput, FlattenOptions,
@@ -62,7 +73,13 @@ pub use header_footer::{
 pub use markup::{
     ArrowHead, ArrowOptions, AttachmentIcon, CalloutOptions, CloudOptions, DrawingKind,
     DrawingOptions, FileAttachmentOptions, FreeTextOptions, InkOptions, LineOptions,
-    MarkupAppearance, MarkupError, ShapeKind, ShapeOptions, StampName, StampOptions, TextAlignment,
+    MAX_ATTACHMENT_NAME_BYTES, MarkupAppearance, MarkupError, ShapeKind, ShapeOptions,
+    StampCatalogEntry, StampName, StampOptions, StampPreset, TextAlignment, stamp_catalog,
+    validate_attachment_reference,
+};
+pub use measurement::{
+    MeasureScale, MeasureUnit, Measurement, MeasurementAppearance, MeasurementError,
+    MeasurementKind,
 };
 pub use navigation::{
     Attachment, Bookmark, BookmarkPath, Destination, FitType, Link, LinkBorder, LinkHighlight,

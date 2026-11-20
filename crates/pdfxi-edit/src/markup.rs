@@ -58,6 +58,8 @@ pub enum MarkupError {
     TooFewVertices,
     /// A border style failed validation.
     InvalidBorder(String),
+    /// An attachment reference was not a safe, deterministic name (REVIEW-003).
+    InvalidAttachmentReference(String),
 }
 
 impl fmt::Display for MarkupError {
@@ -75,6 +77,9 @@ impl fmt::Display for MarkupError {
             Self::EmptyInkPaths => f.write_str("an ink annotation needs at least one stroke"),
             Self::TooFewVertices => f.write_str("a polygon needs at least three vertices"),
             Self::InvalidBorder(reason) => write!(f, "invalid border style: {reason}"),
+            Self::InvalidAttachmentReference(name) => {
+                write!(f, "unsafe file-attachment reference `{name}`")
+            }
         }
     }
 }
@@ -226,8 +231,12 @@ impl ShapeKind {
     }
 }
 
-/// Standard stamp captions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Standard stamp captions in the local stamp catalog (REVIEW-003).
+///
+/// The catalog is a clean-room set of conventional review captions, not a copy
+/// of any vendor's bitmap stamp assets. Each caption maps to a deterministic
+/// vector/text preset (see [`StampPreset`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StampName {
     /// "APPROVED".
     Approved,
@@ -237,9 +246,29 @@ pub enum StampName {
     Draft,
     /// "FINAL".
     Final,
+    /// "COPY".
+    Copy,
+    /// "REVISED".
+    Revised,
+    /// "VOID".
+    Void,
+    /// "NOT FOR PUBLIC RELEASE".
+    NotForPublicRelease,
 }
 
 impl StampName {
+    /// All catalog captions in a fixed declaration order.
+    pub const ALL: [Self; 8] = [
+        Self::Approved,
+        Self::Confidential,
+        Self::Draft,
+        Self::Final,
+        Self::Copy,
+        Self::Revised,
+        Self::Void,
+        Self::NotForPublicRelease,
+    ];
+
     /// Stable name used in dictionaries and the printed caption.
     pub fn as_name(self) -> &'static str {
         match self {
@@ -247,6 +276,10 @@ impl StampName {
             Self::Confidential => "Confidential",
             Self::Draft => "Draft",
             Self::Final => "Final",
+            Self::Copy => "Copy",
+            Self::Revised => "Revised",
+            Self::Void => "Void",
+            Self::NotForPublicRelease => "NotForPublicRelease",
         }
     }
 
@@ -257,12 +290,114 @@ impl StampName {
             "Confidential" => Ok(Self::Confidential),
             "Draft" => Ok(Self::Draft),
             "Final" => Ok(Self::Final),
+            "Copy" => Ok(Self::Copy),
+            "Revised" => Ok(Self::Revised),
+            "Void" => Ok(Self::Void),
+            "NotForPublicRelease" => Ok(Self::NotForPublicRelease),
             other => Err(MarkupError::InvalidName {
                 key: "XI_DrawStamp",
                 value: other.to_string(),
             }),
         }
     }
+
+    /// The vector preset associated with this caption in the catalog.
+    pub fn default_preset(self) -> StampPreset {
+        match self {
+            Self::Approved | Self::Final | Self::Revised | Self::Copy => StampPreset::Boxed,
+            Self::Confidential | Self::Draft | Self::Void | Self::NotForPublicRelease => {
+                StampPreset::DiagonalBand
+            }
+        }
+    }
+}
+
+/// The vector preset drawn for a catalog stamp (REVIEW-003).
+///
+/// Each preset is a purely local vector recipe; it never loads or copies a
+/// vendor asset. The caption itself is carried as a separate text line by
+/// [`DrawingOptions::appearance`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StampPreset {
+    /// Only the annotation frame is drawn.
+    Plain,
+    /// The frame plus an inset inner frame.
+    Boxed,
+    /// The frame plus two deterministic diagonal band lines.
+    DiagonalBand,
+}
+
+impl StampPreset {
+    /// Stable name used in dictionaries.
+    pub fn as_name(self) -> &'static str {
+        match self {
+            Self::Plain => "Plain",
+            Self::Boxed => "Boxed",
+            Self::DiagonalBand => "DiagonalBand",
+        }
+    }
+
+    /// Parses a preset name.
+    pub fn from_name(name: &str) -> Result<Self, MarkupError> {
+        match name {
+            "Plain" => Ok(Self::Plain),
+            "Boxed" => Ok(Self::Boxed),
+            "DiagonalBand" => Ok(Self::DiagonalBand),
+            other => Err(MarkupError::InvalidName {
+                key: "XI_DrawStampPreset",
+                value: other.to_string(),
+            }),
+        }
+    }
+
+    /// Deterministic vector commands for this preset within `rect`.
+    pub fn commands(self, rect: &Rect, border: &BorderStyle) -> Vec<PathCommand> {
+        let mut commands = crate::pdf::appearance::border_path(rect, border).commands;
+        match self {
+            Self::Plain => {}
+            Self::Boxed => {
+                let inset = (rect.width().min(rect.height()) / 10.0).max(0.0);
+                if let Some(inner) = rect.inset(inset, inset) {
+                    commands.extend(crate::pdf::appearance::border_path(&inner, border).commands);
+                }
+            }
+            Self::DiagonalBand => {
+                let inset = (rect.width().min(rect.height()) / 6.0).max(0.0);
+                let lower_left = Point::new(rect.x0() + inset, rect.y0() + inset);
+                let upper_right = Point::new(rect.x1() - inset, rect.y1() - inset);
+                let lower_right = Point::new(rect.x1() - inset, rect.y0() + inset);
+                let upper_left = Point::new(rect.x0() + inset, rect.y1() - inset);
+                commands.push(PathCommand::MoveTo(lower_left));
+                commands.push(PathCommand::LineTo(upper_right));
+                commands.push(PathCommand::MoveTo(lower_right));
+                commands.push(PathCommand::LineTo(upper_left));
+            }
+        }
+        commands
+    }
+}
+
+/// One entry of the local stamp catalog (REVIEW-003).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StampCatalogEntry {
+    /// Caption shown by this stamp.
+    pub name: StampName,
+    /// Default vector preset for this caption.
+    pub preset: StampPreset,
+}
+
+/// Returns the deterministic local stamp catalog (REVIEW-003).
+///
+/// Entries follow [`StampName::ALL`] order, and each entry's preset is the one
+/// [`StampName::default_preset`] assigns to its caption.
+pub fn stamp_catalog() -> Vec<StampCatalogEntry> {
+    StampName::ALL
+        .iter()
+        .map(|name| StampCatalogEntry {
+            name: *name,
+            preset: name.default_preset(),
+        })
+        .collect()
 }
 
 /// Icon drawn for a [`FileAttachmentOptions`].
@@ -505,15 +640,64 @@ impl InkOptions {
 pub struct StampOptions {
     /// Caption printed inside the stamp.
     pub name: StampName,
+    /// Vector preset drawn from the local stamp catalog.
+    pub preset: StampPreset,
     /// Border appearance of the stamp box.
     pub border: BorderStyle,
 }
 
 impl StampOptions {
-    /// Creates stamp options for a caption.
+    /// Creates stamp options for a caption, using its catalog preset.
     pub fn new(name: StampName, border: BorderStyle) -> Self {
-        Self { name, border }
+        Self {
+            name,
+            preset: name.default_preset(),
+            border,
+        }
     }
+
+    /// Overrides the vector preset used for this stamp.
+    pub fn with_preset(mut self, preset: StampPreset) -> Self {
+        self.preset = preset;
+        self
+    }
+}
+
+/// Maximum number of bytes in a validated attachment reference name.
+pub const MAX_ATTACHMENT_NAME_BYTES: usize = 255;
+
+/// Validates a file-attachment reference name (REVIEW-003).
+///
+/// A reference is a *bare* embedded-file name, never a path. It must be
+/// non-empty, at most [`MAX_ATTACHMENT_NAME_BYTES`] bytes, free of control
+/// characters, path separators, drive/URI prefixes, and `.`/`..` segments.
+/// This rejects traversal and symlink-escape style inputs before the name ever
+/// reaches an export or extraction boundary.
+pub fn validate_attachment_reference(name: &str) -> Result<(), MarkupError> {
+    if name.is_empty() {
+        return Err(MarkupError::MissingKey("attachment_name"));
+    }
+    if name.len() > MAX_ATTACHMENT_NAME_BYTES {
+        return Err(MarkupError::InvalidAttachmentReference(name.to_string()));
+    }
+    if name.chars().any(|ch| ch.is_control()) {
+        return Err(MarkupError::InvalidAttachmentReference(name.to_string()));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains(':') {
+        return Err(MarkupError::InvalidAttachmentReference(name.to_string()));
+    }
+    // Reject drive-letter-like and URI-like prefixes plus dot segments even
+    // though the separator check above already covers most of them.
+    if name
+        .split(['/', '\\'])
+        .any(|part| part == "." || part == "..")
+    {
+        return Err(MarkupError::InvalidAttachmentReference(name.to_string()));
+    }
+    if name.starts_with('.') {
+        return Err(MarkupError::InvalidAttachmentReference(name.to_string()));
+    }
+    Ok(())
 }
 
 /// Typed options for a file-attachment annotation (REVIEW-003).
@@ -538,9 +722,7 @@ impl FileAttachmentOptions {
         border: BorderStyle,
     ) -> Result<Self, MarkupError> {
         let attachment_name = attachment_name.into();
-        if attachment_name.is_empty() {
-            return Err(MarkupError::MissingKey("attachment_name"));
-        }
+        validate_attachment_reference(&attachment_name)?;
         Ok(Self {
             attachment_name,
             icon,
@@ -632,7 +814,7 @@ impl DrawingOptions {
                 (commands, Vec::new())
             }
             Self::Stamp(options) => (
-                crate::pdf::appearance::border_path(rect, &options.border).commands,
+                options.preset.commands(rect, &options.border),
                 vec![options.name.as_name().to_string()],
             ),
             Self::FileAttachment(options) => {
@@ -744,6 +926,10 @@ impl DrawingOptions {
                     "XI_DrawStamp".to_string(),
                     Value::Name(options.name.as_name().to_string()),
                 );
+                dict.insert(
+                    "XI_DrawStampPreset".to_string(),
+                    Value::Name(options.preset.as_name().to_string()),
+                );
                 write_border(&mut dict, &options.border);
             }
             Self::FileAttachment(options) => {
@@ -804,10 +990,21 @@ impl DrawingOptions {
                 )?)
             }
             "ink" => Self::Ink(InkOptions::new(read_paths(dict)?, read_border(dict)?)?),
-            "stamp" => Self::Stamp(StampOptions::new(
-                StampName::from_name(&required_name(dict, "XI_DrawStamp")?)?,
-                read_border(dict)?,
-            )),
+            "stamp" => {
+                let name = StampName::from_name(&required_name(dict, "XI_DrawStamp")?)?;
+                let mut options = StampOptions::new(name, read_border(dict)?);
+                if let Some(preset_name) = dict.get("XI_DrawStampPreset") {
+                    let preset_name =
+                        preset_name
+                            .as_name()
+                            .ok_or_else(|| MarkupError::WrongType {
+                                key: "XI_DrawStampPreset".to_string(),
+                                expected: "a name",
+                            })?;
+                    options.preset = StampPreset::from_name(preset_name)?;
+                }
+                Self::Stamp(options)
+            }
             "file_attachment" => Self::FileAttachment(FileAttachmentOptions::new(
                 required_text(dict, "XI_DrawAttachment")?,
                 AttachmentIcon::from_name(&required_name(dict, "XI_DrawIcon")?)?,
@@ -1363,6 +1560,81 @@ mod tests {
         assert_eq!(DrawingOptions::from_dict(&dict).expect("parse"), attachment);
         assert!(matches!(
             FileAttachmentOptions::new("", AttachmentIcon::Graph, border()),
+            Err(MarkupError::MissingKey(_))
+        ));
+    }
+
+    #[test]
+    fn stamp_catalog_covers_every_caption_with_a_deterministic_preset() {
+        let catalog = stamp_catalog();
+        assert_eq!(catalog.len(), StampName::ALL.len());
+        let names: Vec<StampName> = catalog.iter().map(|entry| entry.name).collect();
+        assert_eq!(names, StampName::ALL);
+        for entry in &catalog {
+            assert_eq!(entry.preset, entry.name.default_preset());
+            assert_eq!(
+                StampPreset::from_name(entry.preset.as_name()).expect("preset name"),
+                entry.preset
+            );
+            assert!(StampName::from_name(entry.name.as_name()).is_ok());
+        }
+        assert_eq!(stamp_catalog(), catalog);
+    }
+
+    #[test]
+    fn stamp_presets_emit_deterministic_vector_geometry() {
+        let plain = StampPreset::Plain.commands(&rect(), &border());
+        let boxed = StampPreset::Boxed.commands(&rect(), &border());
+        let band = StampPreset::DiagonalBand.commands(&rect(), &border());
+        assert_eq!(
+            plain,
+            crate::pdf::appearance::border_path(&rect(), &border()).commands
+        );
+        assert!(boxed.len() > plain.len());
+        assert!(band.contains(&PathCommand::MoveTo(point(0.0, 0.0))));
+        assert_eq!(band, StampPreset::DiagonalBand.commands(&rect(), &border()));
+
+        let stamp = DrawingOptions::Stamp(
+            StampOptions::new(StampName::Confidential, border()).with_preset(StampPreset::Plain),
+        );
+        assert_eq!(stamp.appearance(&rect()).commands, plain);
+        assert_eq!(
+            DrawingOptions::from_dict(&stamp.to_dict()).expect("parse"),
+            stamp
+        );
+        assert!(matches!(
+            StampPreset::from_name("Bogus"),
+            Err(MarkupError::InvalidName { .. })
+        ));
+    }
+
+    #[test]
+    fn attachment_reference_validation_rejects_traversal_and_unsafe_names() {
+        for unsafe_name in [
+            "../secret.txt",
+            "a/b.txt",
+            "a\\b.txt",
+            "C:report.txt",
+            "https://example.com/x",
+            ".hidden",
+            "bad\nname",
+            &"x".repeat(MAX_ATTACHMENT_NAME_BYTES + 1),
+        ] {
+            assert!(
+                matches!(
+                    validate_attachment_reference(unsafe_name),
+                    Err(MarkupError::InvalidAttachmentReference(_))
+                ),
+                "expected `{unsafe_name}` to be rejected"
+            );
+            assert!(matches!(
+                FileAttachmentOptions::new(unsafe_name, AttachmentIcon::Graph, border()),
+                Err(MarkupError::InvalidAttachmentReference(_))
+            ));
+        }
+        assert!(validate_attachment_reference("report-v2.txt").is_ok());
+        assert!(matches!(
+            validate_attachment_reference(""),
             Err(MarkupError::MissingKey(_))
         ));
     }

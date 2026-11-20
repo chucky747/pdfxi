@@ -3,7 +3,7 @@
   "lane": "author",
   "title": "Stamp attachments compare and measurement review",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0104"],
   "owns": [
     "crates/pdfxi-edit/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0114.toml"
   ],
   "acceptance": "cargo test -p pdfxi-edit",
-  "evidence": ""
+  "evidence": "docs/evidence/author/T-0114.md"
 }

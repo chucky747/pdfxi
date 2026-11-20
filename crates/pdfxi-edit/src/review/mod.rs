@@ -17,6 +17,9 @@
 //!   keys.
 //! - The `report` module adds documented import/export and print views plus a
 //!   sorted participant/status summary derived from the registry.
+//! - The `share` module adds a local, network-free shared-review file format,
+//!   a deterministic merge of two files with conflict reporting, and
+//!   participant collaboration states (REVIEW-006).
 //!
 //! All edits here are copy-on-write by contract: the model owns its data and
 //! never mutates source document bytes.
@@ -25,6 +28,7 @@ mod error;
 mod registry;
 mod report;
 mod serialize;
+mod share;
 mod thread;
 mod workflow;
 
@@ -36,6 +40,10 @@ pub use report::{
     registry_to_text, root_annotation_ids,
 };
 pub use serialize::{dict_to_registry, registry_to_dict};
+pub use share::{
+    ConflictResolution, MergeConflict, MergeResult, ParticipantState, SHARED_REVIEW_VERSION,
+    ShareError, SharedParticipant, SharedReviewFile, derive_roster, merge_shared,
+};
 pub use thread::{CommentThread, Reply, ReplyId, ThreadId};
 pub use workflow::{HistoryEntry, ReviewState, ReviewStatus};
 

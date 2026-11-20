@@ -2306,31 +2306,16 @@ tests = [
 title = "Free text callout line arrow shape and cloud"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-edit/src/markup.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0104.md",
-]
+docs = "crates/pdfxi-edit/src/markup.rs, docs/evidence/author/T-0114.md"
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 200 passed, 0 failed, including 2 new markup tests for ink path validation/round-trip and stamp caption plus file-attachment reference round-trip; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0104.md."
+evidence = "docs/evidence/author/T-0114.md"
 id = "REVIEW-003"
-notes = """
-Adds InkOptions (one or more non-empty, finite pencil strokes -> deterministic
-MoveTo/LineTo commands), StampOptions with a typed StampName caption rendered as a
-text line, and FileAttachmentOptions carrying an attachment_name reference plus a
-typed AttachmentIcon; the attachment model deliberately stores a reference only,
-never caller-held bytes. All three round-trip through DrawingOptions::to_dict /
-from_dict and are covered by validation tests (empty ink paths, empty attachment
-name, unknown dictionary names yield typed MarkupError). Honest scope: the icon
-outline is a deterministic marker, not a final rasterised stamp/attachment icon,
-and there is no UI/CLI exposure, so the row stays in-progress. No unsafe/new
-deps/panics.
-"""
+notes = "Ink, stamp catalog/presets, and attachment references validated against traversal; caller bytes are never read."
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "markup::tests::ink_options_reject_empty_paths_and_round_trip",
-    "markup::tests::stamp_caption_and_attachment_reference_round_trip",
+    "markup::tests::stamp_catalog_covers_every_caption_with_a_deterministic_preset",
+    "markup::tests::attachment_reference_validation_rejects_traversal_and_unsafe_names",
 ]
 title = "Pencil stamp and file attachment annotations"
 
@@ -2392,14 +2377,17 @@ tests = [
 title = "Import export and print comments"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-edit/src/review/report.rs, docs/evidence/author/T-0114.md"
 domain = "Review"
-evidence = ""
+evidence = "docs/evidence/author/T-0114.md"
 id = "REVIEW-006"
-notes = ""
+notes = "Local review-registry import/export with deterministic merge and participant summaries per ADR 0008; no network."
 priority = "P3"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "review::report::tests::export_import_round_trip_preserves_every_thread",
+    "review::report::tests::participants_are_sorted_and_count_replies_threads_and_transitions",
+]
 title = "Email and shared review workflows locally"
 
 [[feature]]
@@ -2433,25 +2421,31 @@ tests = [
 title = "Review tracker and participant status"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-edit/src/compare.rs, docs/evidence/author/T-0114.md"
 domain = "Review"
-evidence = ""
+evidence = "docs/evidence/author/T-0114.md"
 id = "REVIEW-008"
-notes = ""
+notes = "Deterministic text compare over extracted page text with page/line references and bounded hunks."
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "compare::tests::added_and_removed_lines_carry_page_and_line_refs",
+    "compare::tests::hunks_are_in_deterministic_page_then_line_order",
+]
 title = "Compare two PDFs and summarize changes"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-edit/src/measurement.rs, docs/evidence/author/T-0114.md"
 domain = "Review"
-evidence = ""
+evidence = "docs/evidence/author/T-0114.md"
 id = "REVIEW-009"
-notes = ""
+notes = "Distance/area/perimeter geometry with unit conversion, scale validation, and deterministic appearance summaries."
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "measurement::tests::area_and_perimeter_use_shoelace_and_edge_lengths",
+    "measurement::tests::appearance_summary_rounds_deterministically",
+]
 title = "Measurement distance area and perimeter"
 
 [[feature]]
