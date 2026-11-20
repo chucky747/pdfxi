@@ -3,7 +3,10 @@
 //! This crate owns the authoring-side document model. It is renderer-agnostic
 //! and depends only on the standard library: [`geometry`] defines validated
 //! page-space primitives, [`annotation`] defines the review and drawing
-//! annotation model with hit-testing, bounds, and clamping helpers, and [`pdf`]
+//! annotation model with hit-testing, bounds, and clamping helpers,
+//! [`document_annotations`] writes real note and highlight annotations into a
+//! [`pdfxi_core::Document`] (dictionary, `/Annots` entry and appearance stream)
+//! with XFDF import/export, and [`pdf`]
 //! maps annotations to and from a dependency-free PDF dictionary intermediate
 //! with validation and deterministic appearance geometry, and [`navigation`]
 //! models bookmarks, links, and attachments with the same dictionary
@@ -60,6 +63,7 @@
 pub mod annotation;
 pub mod bates;
 pub mod compare;
+pub mod document_annotations;
 pub mod find_replace;
 pub mod flatten;
 pub mod geometry;
@@ -86,6 +90,11 @@ pub use bates::{
 pub use compare::{
     CompareError, CompareOptions, CompareResult, CompareSummary, Hunk, HunkKind, TextDocument,
     TextPage, compare_documents,
+};
+pub use document_annotations::{
+    AnnotationEditError, AnnotationRef, AnnotationState, AnnotationSubtype, AnnotationView,
+    NOTE_ICON_SIZE, add_highlight, add_text_note, delete_annotation, export_xfdf, import_xfdf,
+    list_annotations, reply_to, set_state, update_contents,
 };
 pub use find_replace::{
     FindReplaceError, ReplaceAllPlan, ReplaceLimits, ReplaceStep, SearchDocument, SearchHit,
