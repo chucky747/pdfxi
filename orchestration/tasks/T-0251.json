@@ -3,7 +3,7 @@
   "lane": "automation",
   "title": "OpenCode client crate: discovery, auth, models, sessions, events and MCP attach",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0250"
   ],

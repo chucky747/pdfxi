@@ -9,6 +9,21 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-thiserror.workspace = true
+base64 = "0.23"
+http = "1.5"
+# Blocking HTTP/1.1 client. TLS is rustls configured with ring and the operating
+# system trust store, loaded through `rustls-native-certs`. ureq's default
+# `rustls` feature would pull `webpki-roots` and its `platform-verifier` feature
+# would pull `webpki-root-certs`: both are CDLA-Permissive-2.0, which is not in
+# the `deny.toml` allowlist.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+# Blocking WebSocket client for the client-MCP attach route. `rustls-tls-native-roots`
+# only provides the `MaybeTlsStream::Rustls` variant; the client config (ring +
+# operating-system roots) is built in this crate.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
+ureq = { version = "3.5.2", default-features = false, features = ["rustls-no-provider"] }
+url = "2.5"

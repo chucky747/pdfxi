@@ -1,0 +1,64 @@
+# T-0251 - OpenCode client crate: discovery, auth, models, sessions, events and MCP attach
+#
+# Library result, not a GUI-reachable feature. It proposes no docs/features.toml
+# status change: the assistant acceptance items are A-06 and A-16 in
+# docs/design/FEATURE_ACCEPTANCE.md, and only the orchestrator ticks them after
+# checking the installed viewer. This fragment records the crate contract for
+# the integrator and for the app Connect/assistant tasks (T-0252/T-0253).
+
+task = "T-0251"
+lane = "automation"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0251.md"
+docs = [
+    "docs/evidence/hardening/T-0251.md",
+    "docs/decisions/0011-ai-assistant-through-opencode.md",
+]
+pinned_opencode_version = "2.3.2"
+acceptance_items = ["A-06", "A-16"]
+
+tests = [
+    "crates/pdfxi-assistant/src/endpoint.rs::tests::reads_a_valid_registration",
+    "crates/pdfxi-assistant/src/endpoint.rs::tests::debug_redacts_the_password",
+    "crates/pdfxi-assistant/src/endpoint.rs::tests::discovered_registration_must_be_loopback",
+    "crates/pdfxi-assistant/src/endpoint.rs::tests::explicit_remote_endpoint_requires_https",
+    "crates/pdfxi-assistant/src/models.rs::tests::parses_the_pinned_model_shape",
+    "crates/pdfxi-assistant/src/models.rs::tests::parses_assistant_message_and_extracts_only_answer_text",
+    "crates/pdfxi-assistant/src/error.rs::tests::redacts_json_password",
+    "crates/pdfxi-assistant/src/error.rs::tests::redacts_basic_authorization_header",
+    "crates/pdfxi-assistant/src/events.rs::tests::dispatches_a_data_frame",
+    "crates/pdfxi-assistant/src/mcp.rs::tests::initialize_response_carries_protocol_and_server_info",
+    "crates/pdfxi-assistant/src/mcp.rs::tests::answers_tools_list_with_the_read_only_set",
+    "crates/pdfxi-assistant/src/mcp.rs::tests::dispatches_tool_calls_to_the_provider",
+    "crates/pdfxi-assistant/tests/service.rs::sends_basic_auth_and_lists_typed_models",
+    "crates/pdfxi-assistant/tests/service.rs::ask_polls_until_the_idle_item_and_returns_text_usage_and_finish",
+    "crates/pdfxi-assistant/tests/service.rs::a_cancelled_flag_stops_before_any_request",
+    "crates/pdfxi-assistant/tests/service.rs::server_error_body_is_redacted_and_capped",
+    "crates/pdfxi-assistant/tests/mcp.rs::completes_the_handshake_and_answers_tools_list",
+    "crates/pdfxi-assistant/tests/mcp_live.rs::live_client_mcp_handshake_and_tools_list",
+    "crates/pdfxi-assistant/tests/live.rs::live_discovery_models_and_one_prompt",
+]
+
+notes = """
+Library result: 66 offline tests pass (49 unit, 13 stub, 3 MCP, 1 doctest) and
+two live tests are #[ignore]. Discovery reads
+<USERPROFILE|HOME>/.local/state/opencode/service.json at runtime, accepts only
+loopback registrations, and requires https for an explicit remote override;
+the credential is redacted in Debug and every error. HTTP is blocking ureq with
+rustls, ring and operating-system roots from rustls-native-certs (webpki roots
+were removed because CDLA-Permissive-2.0 is not allowlisted), redirects are
+never followed, every phase has a timeout and every call takes a CancelFlag.
+Routes are pinned to 2.3.2: info, provider, model, session create, prompt,
+message read, model switch and a live-only SSE stream. Round B attaches as a
+client MCP over a Basic-authenticated loopback WebSocket: initialize with
+protocolVersion 2025-11-25 and serverInfo pdfxi, notifications/initialized,
+tools/list and tools/call for the read-only document tools document_info,
+page_text, search, selection and outline, with -32601/-32602/-32002 JSON-RPC
+errors, isError tool failures and a 64 KiB tool-text cap. Live on 2.3.2 the
+service requested tools/list immediately after notifications/initialized
+(3 messages, 5 tools advertised, no tool call) and the single generation on
+opencode-go/hy4-flash-free returned "pong". Not done: session create with a
+Permission.Ruleset, interrupt-based cancellation, and any UI. T-0252/T-0253 own
+the Connect screen and the assistant panel; they should use
+Assistant::attach_client_mcp and keep to the five read-only tools.
+"""
