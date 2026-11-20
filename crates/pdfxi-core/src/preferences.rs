@@ -2,9 +2,13 @@
 //!
 //! This module models a versioned preferences file: schema version, documented
 //! defaults, strict validation, and a byte-for-byte deterministic serialize /
-//! parse round-trip. The path is supplied by the caller and is only *validated
-//! and stored*; this module never writes to it, never reads from it, and never
-//! touches the filesystem. A host owns all I/O.
+//! parse round-trip. On top of the base set, [`DeploymentPreferences`] models
+//! deployment customization — named feature toggles, allowed local paths and
+//! an update channel — with deterministic merge/override semantics and its own
+//! stable serialization. The path is supplied by the caller and is only
+//! *validated and stored*; this module never writes to it, never reads from it,
+//! and never touches the filesystem. A host owns all I/O, managed policy and
+//! MSI/GPO deployment.
 //!
 //! The on-disk format is intentionally a small, sorted `key=value` text format
 //! so it needs no external TOML dependency and so two hosts always produce the
@@ -199,6 +203,268 @@ impl PreferencesFile {
     }
 }
 
+/// The release channel a deployment follows for updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateChannel {
+    /// Only stable releases.
+    Stable,
+    /// Stable releases plus beta builds.
+    Beta,
+    /// The newest nightly builds.
+    Nightly,
+    /// Automatic updates are disabled.
+    Off,
+}
+
+impl UpdateChannel {
+    /// Return the stable lowercase token used in the deployment document.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+            Self::Nightly => "nightly",
+            Self::Off => "off",
+        }
+    }
+
+    /// Parse an update-channel token (case-insensitive).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PreferencesError::InvalidUpdateChannel`] for an unknown token.
+    pub fn parse(token: &str) -> Result<Self, PreferencesError> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "stable" => Ok(Self::Stable),
+            "beta" => Ok(Self::Beta),
+            "nightly" => Ok(Self::Nightly),
+            "off" => Ok(Self::Off),
+            other => Err(PreferencesError::InvalidUpdateChannel(other.to_owned())),
+        }
+    }
+}
+
+/// Maximum accepted byte length of a feature-toggle name.
+pub const MAX_TOGGLE_NAME_BYTES: usize = 64;
+
+/// A validated deployment-customization set layered over base preferences.
+///
+/// It models the library-level part of deployment customization: named feature
+/// toggles, a list of allowed local paths and an update channel, with
+/// deterministic merge/override semantics and a byte-stable serialization. No
+/// policy, registry, MSI transform or file I/O is performed — a host applies the
+/// values through [`Self::serialize`] output in its own deployment tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeploymentPreferences {
+    base: Preferences,
+    toggles: std::collections::BTreeMap<String, bool>,
+    allowed_paths: Vec<String>,
+    channel: UpdateChannel,
+}
+
+impl DeploymentPreferences {
+    /// Construct and validate a deployment-preferences set.
+    ///
+    /// Toggle names and allowed paths are validated; allowed paths are sorted
+    /// and de-duplicated so construction order cannot affect the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed [`PreferencesError`] for an invalid toggle name, an
+    /// unsafe allowed path or a control character.
+    pub fn new(
+        base: Preferences,
+        toggles: std::collections::BTreeMap<String, bool>,
+        allowed_paths: Vec<String>,
+        channel: UpdateChannel,
+    ) -> Result<Self, PreferencesError> {
+        for name in toggles.keys() {
+            validate_toggle_name(name)?;
+        }
+        for path in &allowed_paths {
+            validate_allowed_path(path)?;
+        }
+        let mut allowed_paths = allowed_paths;
+        allowed_paths.sort();
+        allowed_paths.dedup();
+        Ok(Self {
+            base,
+            toggles,
+            allowed_paths,
+            channel,
+        })
+    }
+
+    /// Return the underlying base preferences.
+    pub const fn base(&self) -> &Preferences {
+        &self.base
+    }
+
+    /// Return the named feature toggles, ordered by name.
+    pub fn toggles(&self) -> &std::collections::BTreeMap<String, bool> {
+        &self.toggles
+    }
+
+    /// Return the sorted, de-duplicated allowed paths.
+    pub fn allowed_paths(&self) -> &[String] {
+        &self.allowed_paths
+    }
+
+    /// Return the configured update channel.
+    pub const fn update_channel(&self) -> UpdateChannel {
+        self.channel
+    }
+
+    /// Return whether a named feature toggle is enabled (missing means `false`).
+    pub fn is_enabled(&self, name: &str) -> bool {
+        self.toggles.get(name).copied().unwrap_or(false)
+    }
+
+    /// Merge this set with an overlay using deterministic override semantics.
+    ///
+    /// The overlay's base preferences and update channel win outright; toggles
+    /// are unioned with overlay values taking precedence for shared names, and
+    /// allowed paths are unioned, sorted and de-duplicated. The result never
+    /// depends on input ordering and cannot fail because both inputs are valid.
+    #[must_use = "the merged deployment preferences carry the override result"]
+    pub fn merge(&self, overlay: &Self) -> Self {
+        let mut toggles = self.toggles.clone();
+        for (name, enabled) in &overlay.toggles {
+            toggles.insert(name.clone(), *enabled);
+        }
+        let mut allowed_paths = self.allowed_paths.clone();
+        allowed_paths.extend(overlay.allowed_paths.iter().cloned());
+        allowed_paths.sort();
+        allowed_paths.dedup();
+        Self {
+            base: overlay.base.clone(),
+            toggles,
+            allowed_paths,
+            channel: overlay.channel,
+        }
+    }
+
+    /// Serialize into a deterministic, sorted `key=value` document.
+    ///
+    /// Base keys carry a `base.` prefix, toggles `toggle.<name>`, allowed paths
+    /// `allowed_path.<index>` and the channel the `channel` key. All lines are
+    /// sorted lexicographically and the document ends with a newline.
+    #[must_use = "the serialized document carries the deployment preferences"]
+    pub fn serialize(&self) -> String {
+        let mut lines: Vec<String> = vec![format!("channel={}", self.channel.as_str())];
+        for line in serialize_preferences(&self.base).lines() {
+            lines.push(format!("base.{line}"));
+        }
+        for (name, enabled) in &self.toggles {
+            lines.push(format!("toggle.{name}={enabled}"));
+        }
+        for (index, path) in self.allowed_paths.iter().enumerate() {
+            lines.push(format!("allowed_path.{index}={path}"));
+        }
+        lines.sort();
+        let mut out = String::new();
+        for line in lines {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Parse a document produced by [`Self::serialize`].
+    ///
+    /// Every base key is required exactly once (validated by
+    /// [`parse_preferences`]), as is the `channel` key. Unknown or duplicate
+    /// keys, malformed lines and invalid values are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed [`PreferencesError`] describing the first violation.
+    pub fn parse(text: &str) -> Result<Self, PreferencesError> {
+        let mut base_lines: Vec<String> = Vec::new();
+        let mut toggles = std::collections::BTreeMap::new();
+        let mut allowed_paths: Vec<String> = Vec::new();
+        let mut channel: Option<UpdateChannel> = None;
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for line in text.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let (key, value) = line
+                .split_once('=')
+                .ok_or_else(|| PreferencesError::MalformedLine(line.to_owned()))?;
+            if !seen.insert(key.to_owned()) {
+                return Err(PreferencesError::DuplicateKey(key.to_owned()));
+            }
+            if key == "channel" {
+                channel = Some(UpdateChannel::parse(value)?);
+            } else if let Some(name) = key.strip_prefix("toggle.") {
+                let enabled = match value {
+                    "true" => true,
+                    "false" => false,
+                    other => return Err(PreferencesError::InvalidBoolean(other.to_owned())),
+                };
+                toggles.insert(name.to_owned(), enabled);
+            } else if key.starts_with("allowed_path.") {
+                allowed_paths.push(value.to_owned());
+            } else if let Some(base_key) = key.strip_prefix("base.") {
+                base_lines.push(format!("{base_key}={value}"));
+            } else {
+                return Err(PreferencesError::UnknownKey(key.to_owned()));
+            }
+        }
+        let channel = channel.ok_or(PreferencesError::MissingKey("channel"))?;
+        let base = parse_preferences(&base_lines.join("\n"))?;
+        Self::new(base, toggles, allowed_paths, channel)
+    }
+}
+
+impl Default for DeploymentPreferences {
+    fn default() -> Self {
+        Self {
+            base: Preferences::default(),
+            toggles: std::collections::BTreeMap::new(),
+            allowed_paths: Vec::new(),
+            channel: UpdateChannel::Stable,
+        }
+    }
+}
+
+/// Validate a feature-toggle name: bounded ASCII letters/digits, `_` or `-`.
+fn validate_toggle_name(name: &str) -> Result<(), PreferencesError> {
+    if name.is_empty()
+        || name.len() > MAX_TOGGLE_NAME_BYTES
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err(PreferencesError::InvalidToggleName(name.to_owned()));
+    }
+    Ok(())
+}
+
+/// Validate an allowed path: rooted, bounded, free of controls and traversal.
+fn validate_allowed_path(path: &str) -> Result<(), PreferencesError> {
+    if path.is_empty() || path.len() > MAX_PREFERENCES_PATH_BYTES {
+        return Err(PreferencesError::InvalidAllowedPath(path.to_owned()));
+    }
+    if path.chars().any(|c| c.is_control()) {
+        return Err(PreferencesError::ControlCharacter);
+    }
+    for component in path.split(['/', '\\']) {
+        if component == ".." || component == "." {
+            return Err(PreferencesError::InvalidAllowedPath(path.to_owned()));
+        }
+    }
+    let rooted = path.starts_with('/')
+        || path.starts_with('\\')
+        || (path.len() >= 2
+            && path.as_bytes()[0].is_ascii_alphabetic()
+            && path.as_bytes()[1] == b':');
+    if !rooted {
+        return Err(PreferencesError::InvalidAllowedPath(path.to_owned()));
+    }
+    Ok(())
+}
+
 /// Typed errors produced by preferences validation and parsing.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PreferencesError {
@@ -241,6 +507,15 @@ pub enum PreferencesError {
     /// A control character was found in a value or path.
     #[error("preferences contain a control character")]
     ControlCharacter,
+    /// A feature-toggle name was empty or malformed.
+    #[error("invalid deployment toggle name: {0}")]
+    InvalidToggleName(String),
+    /// An allowed path was empty, unrooted or contained traversal.
+    #[error("invalid deployment allowed path: {0}")]
+    InvalidAllowedPath(String),
+    /// An update-channel token was not recognized.
+    #[error("invalid update channel: {0}")]
+    InvalidUpdateChannel(String),
 }
 
 /// Validate a locale tag: 2..=35 ASCII letters/digits, `-` or `_`.
@@ -490,5 +765,148 @@ mod tests {
         assert_ne!(a, b);
         assert!(a.to_string().contains("7"));
         assert!(b.to_string().contains("theme"));
+    }
+
+    // ---- T-0181 PLAT-006 deployment customization ----
+
+    fn toggles(values: &[(&str, bool)]) -> std::collections::BTreeMap<String, bool> {
+        values
+            .iter()
+            .map(|(name, enabled)| ((*name).to_owned(), *enabled))
+            .collect()
+    }
+
+    fn deployment() -> DeploymentPreferences {
+        DeploymentPreferences::new(
+            Preferences::default(),
+            toggles(&[("dark_mode", true), ("beta_tools", false)]),
+            vec![
+                r"C:\Program Files\PDFXI".to_owned(),
+                "/opt/pdfxi".to_owned(),
+            ],
+            UpdateChannel::Beta,
+        )
+        .expect("valid deployment preferences")
+    }
+
+    #[test]
+    fn deployment_round_trip_is_lossless_and_deterministic() {
+        let original = deployment();
+        let text = original.serialize();
+        assert_eq!(text, original.serialize());
+        assert_eq!(text, deployment().serialize());
+        let parsed = DeploymentPreferences::parse(&text).expect("round trip");
+        assert_eq!(parsed, original);
+        assert_eq!(parsed.serialize(), text);
+        assert!(text.contains("channel=beta"));
+        assert!(text.contains("toggle.dark_mode=true"));
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn deployment_serialization_lines_are_sorted() {
+        let text = deployment().serialize();
+        let keys: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(key, _)| key))
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted);
+    }
+
+    #[test]
+    fn deployment_merge_overrides_deterministically() {
+        let base = deployment();
+        let overlay = DeploymentPreferences::new(
+            Preferences::default(),
+            toggles(&[("beta_tools", true), ("new_feature", true)]),
+            vec!["/opt/pdfxi".to_owned(), "/srv/data".to_owned()],
+            UpdateChannel::Nightly,
+        )
+        .expect("overlay");
+        let merged = base.merge(&overlay);
+        assert_eq!(merged.update_channel(), UpdateChannel::Nightly);
+        assert!(merged.is_enabled("dark_mode"));
+        assert!(merged.is_enabled("beta_tools"));
+        assert!(merged.is_enabled("new_feature"));
+        assert_eq!(
+            merged.allowed_paths(),
+            &[
+                "/opt/pdfxi".to_owned(),
+                "/srv/data".to_owned(),
+                r"C:\Program Files\PDFXI".to_owned(),
+            ]
+        );
+        assert_eq!(merged, base.merge(&overlay));
+        // The inputs are not mutated by the merge.
+        assert!(!base.is_enabled("new_feature"));
+        assert_eq!(base.update_channel(), UpdateChannel::Beta);
+    }
+
+    #[test]
+    fn deployment_validates_toggles_paths_and_channels() {
+        assert!(matches!(
+            DeploymentPreferences::new(
+                Preferences::default(),
+                toggles(&[("bad name", true)]),
+                vec![],
+                UpdateChannel::Stable,
+            ),
+            Err(PreferencesError::InvalidToggleName(_))
+        ));
+        assert!(matches!(
+            DeploymentPreferences::new(
+                Preferences::default(),
+                toggles(&[]),
+                vec!["relative/path".to_owned()],
+                UpdateChannel::Stable,
+            ),
+            Err(PreferencesError::InvalidAllowedPath(_))
+        ));
+        assert!(matches!(
+            DeploymentPreferences::new(
+                Preferences::default(),
+                toggles(&[]),
+                vec![r"C:\a\..\b".to_owned()],
+                UpdateChannel::Stable,
+            ),
+            Err(PreferencesError::InvalidAllowedPath(_))
+        ));
+        assert!(matches!(
+            UpdateChannel::parse("canary"),
+            Err(PreferencesError::InvalidUpdateChannel(_))
+        ));
+        assert_eq!(
+            UpdateChannel::parse("OFF").expect("channel"),
+            UpdateChannel::Off
+        );
+    }
+
+    #[test]
+    fn deployment_parse_rejects_malformed_documents() {
+        assert!(matches!(
+            DeploymentPreferences::parse("channel=beta\n"),
+            Err(PreferencesError::MissingKey(_))
+        ));
+        let mut text = deployment().serialize();
+        text.push_str("channel=stable\n");
+        assert!(matches!(
+            DeploymentPreferences::parse(&text),
+            Err(PreferencesError::DuplicateKey(_))
+        ));
+        let mut text = deployment().serialize();
+        text.push_str("bogus=1\n");
+        assert!(matches!(
+            DeploymentPreferences::parse(&text),
+            Err(PreferencesError::UnknownKey(_))
+        ));
+        let text = deployment()
+            .serialize()
+            .replace("channel=beta", "channel=canary");
+        assert!(matches!(
+            DeploymentPreferences::parse(&text),
+            Err(PreferencesError::InvalidUpdateChannel(_))
+        ));
     }
 }

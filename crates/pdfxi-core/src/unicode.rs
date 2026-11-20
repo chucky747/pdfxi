@@ -4,9 +4,13 @@
 //! mixed-script text. It provides script classification ([`Script`]), strong
 //! direction detection ([`Direction`]), bidirectional run detection
 //! ([`bidi_runs`]), base-direction resolution ([`resolve_base_direction`]) and
-//! a deterministic [`ShapingPlan`]. It performs **no glyph shaping**: a plan is
-//! an ordered list of same-script runs with byte ranges, scripts and directions
-//! so a renderer or extractor can apply font selection and layout later.
+//! a deterministic [`ShapingPlan`] and a [`FallbackPlan`] that assigns an
+//! ordered font-fallback chain to each script run from caller-supplied
+//! candidates. It performs **no glyph shaping and no font I/O**: a plan is an
+//! ordered list of same-script runs with byte ranges, scripts, directions and
+//! candidate font chains so a renderer or extractor can apply a real shaper and
+//! font selection later. A glyph-shaper backend (for example HarfBuzz or
+//! DirectWrite) remains a host/render boundary.
 //!
 //! # Grapheme safety and scope
 //!
@@ -104,6 +108,222 @@ impl Direction {
     }
 }
 
+/// Maximum accepted byte length of a caller-supplied font-family name.
+pub const MAX_FONT_FAMILY_BYTES: usize = 128;
+/// Maximum accepted number of font candidates in one fallback plan.
+pub const MAX_FONT_CANDIDATES: usize = 64;
+
+/// A caller-supplied font candidate with the scripts it can render.
+///
+/// The fallback planner never opens a font file or talks to a font engine. It
+/// only uses this declaration to choose an ordered chain for each script run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontCandidate {
+    family: String,
+    scripts: Vec<Script>,
+}
+
+impl FontCandidate {
+    /// Create a font candidate from a family name and the scripts it supports.
+    ///
+    /// Duplicate scripts are removed in first-mention order so the declaration
+    /// is deterministic.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TextError::EmptyFontFamily`] for an empty name,
+    /// [`TextError::InvalidFontFamily`] for an oversized or control-containing
+    /// name, and [`TextError::EmptyCandidates`] when no script is listed.
+    pub fn new(family: &str, scripts: Vec<Script>) -> Result<Self, TextError> {
+        if family.is_empty() {
+            return Err(TextError::EmptyFontFamily);
+        }
+        if family.len() > MAX_FONT_FAMILY_BYTES {
+            return Err(TextError::InvalidFontFamily(family.to_owned()));
+        }
+        if family.chars().any(|c| c.is_control()) {
+            return Err(TextError::InvalidFontFamily(family.to_owned()));
+        }
+        if scripts.is_empty() {
+            return Err(TextError::EmptyCandidates);
+        }
+        let mut unique = Vec::with_capacity(scripts.len());
+        for script in scripts {
+            if !unique.contains(&script) {
+                unique.push(script);
+            }
+        }
+        Ok(Self {
+            family: family.to_owned(),
+            scripts: unique,
+        })
+    }
+
+    /// Return the declared font-family name.
+    pub fn family(&self) -> &str {
+        &self.family
+    }
+
+    /// Return the declared scripts in first-mention order.
+    pub fn scripts(&self) -> &[Script] {
+        &self.scripts
+    }
+
+    /// Return whether this candidate declares support for `script`.
+    pub fn supports(&self, script: Script) -> bool {
+        self.scripts.contains(&script)
+    }
+}
+
+/// One script run assigned an ordered fallback font chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallbackStep {
+    start: usize,
+    end: usize,
+    script: Script,
+    direction: Direction,
+    chain: Vec<String>,
+}
+
+impl FallbackStep {
+    /// Byte offset of the first character of the run.
+    pub const fn start(&self) -> usize {
+        self.start
+    }
+
+    /// Byte offset just past the last character of the run.
+    pub const fn end(&self) -> usize {
+        self.end
+    }
+
+    /// The script family shared by the run.
+    pub const fn script(&self) -> Script {
+        self.script
+    }
+
+    /// The direction assigned to the run.
+    pub const fn direction(&self) -> Direction {
+        self.direction
+    }
+
+    /// The ordered fallback font-family names, most-preferred first.
+    pub fn font_chain(&self) -> &[String] {
+        &self.chain
+    }
+
+    /// The first font family in the chain (the one a host should try first).
+    pub fn primary_font(&self) -> &str {
+        self.chain.first().map_or("", |family| family.as_str())
+    }
+}
+
+/// A deterministic shaping/fallback plan built from bidi runs and candidates.
+///
+/// A plan is pure data: it records, for every input run, the ordered list of
+/// caller-supplied font families that declare support for its script. A real
+/// glyph shaper (for example HarfBuzz or DirectWrite) and font selection remain
+/// a host/render boundary; this crate performs no rasterization or font I/O.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallbackPlan {
+    steps: Vec<FallbackStep>,
+    summary: String,
+}
+
+impl FallbackPlan {
+    /// Return the ordered fallback steps, one per input run.
+    pub fn steps(&self) -> &[FallbackStep] {
+        &self.steps
+    }
+
+    /// Return a byte-for-byte deterministic summary of the plan.
+    ///
+    /// The form is `runs=<n>; chain=<script>:<font>><font>|...`; scripts and
+    /// fonts appear in run and candidate order respectively.
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+}
+
+impl std::fmt::Display for FallbackPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.summary)
+    }
+}
+
+/// Build a deterministic [`FallbackPlan`] from bidi runs and font candidates.
+///
+/// Runs are consumed in the order supplied (logical order from [`bidi_runs`], or
+/// visual order from [`ShapingPlan::runs`]). For each run, every candidate that
+/// declares support for the run's script contributes its family name to the
+/// chain in candidate order. The first chain entry is the preferred font.
+///
+/// # Errors
+///
+/// Returns [`TextError::EmptyInput`] for no runs, [`TextError::EmptyCandidates`]
+/// or [`TextError::TooManyCandidates`] for an invalid candidate set, and
+/// [`TextError::NoFontForScript`] when no candidate supports a run's script.
+pub fn build_fallback_plan(
+    runs: &[BidiRun],
+    candidates: &[FontCandidate],
+) -> Result<FallbackPlan, TextError> {
+    if runs.is_empty() {
+        return Err(TextError::EmptyInput);
+    }
+    if candidates.is_empty() {
+        return Err(TextError::EmptyCandidates);
+    }
+    if candidates.len() > MAX_FONT_CANDIDATES {
+        return Err(TextError::TooManyCandidates(
+            candidates.len(),
+            MAX_FONT_CANDIDATES,
+        ));
+    }
+    let mut steps = Vec::with_capacity(runs.len());
+    for run in runs {
+        let mut chain = Vec::new();
+        for candidate in candidates {
+            if candidate.supports(run.script()) {
+                chain.push(candidate.family().to_owned());
+            }
+        }
+        if chain.is_empty() {
+            return Err(TextError::NoFontForScript(run.script()));
+        }
+        steps.push(FallbackStep {
+            start: run.start(),
+            end: run.end(),
+            script: run.script(),
+            direction: run.direction(),
+            chain,
+        });
+    }
+    let parts: Vec<String> = steps
+        .iter()
+        .map(|step| format!("{}:{}", step.script.as_str(), step.chain.join(">")))
+        .collect();
+    let summary = format!("runs={}; chain={}", steps.len(), parts.join("|"));
+    Ok(FallbackPlan { steps, summary })
+}
+
+/// Convenience entry point that derives logical-order bidi runs from `text`.
+///
+/// This is equivalent to calling [`bidi_runs`] and passing the result to
+/// [`build_fallback_plan`]. The text is never shaped or rasterized here.
+///
+/// # Errors
+///
+/// Returns [`TextError::EmptyInput`] for empty text and any error from
+/// [`build_fallback_plan`].
+pub fn fallback_plan_from_text(
+    text: &str,
+    candidates: &[FontCandidate],
+) -> Result<FallbackPlan, TextError> {
+    if text.is_empty() {
+        return Err(TextError::EmptyInput);
+    }
+    build_fallback_plan(&bidi_runs(text), candidates)
+}
+
 /// Typed errors produced by Unicode text validation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TextError {
@@ -135,6 +355,21 @@ pub enum TextError {
     /// The supplied bytes were not valid UTF-8 (this also rejects surrogates).
     #[error("input is not valid UTF-8: {0}")]
     InvalidUtf8(#[from] std::str::Utf8Error),
+    /// A font-family name was empty.
+    #[error("font family name is empty")]
+    EmptyFontFamily,
+    /// A font-family name was oversized or contained a control character.
+    #[error("invalid font family name: {0}")]
+    InvalidFontFamily(String),
+    /// No font candidate declared support for a required script.
+    #[error("no font candidate supports script {0:?}")]
+    NoFontForScript(Script),
+    /// The font-candidate set was empty where at least one is required.
+    #[error("font candidate set is empty")]
+    EmptyCandidates,
+    /// Too many font candidates were supplied to a fallback plan.
+    #[error("font candidate count {0} exceeds the limit {1}")]
+    TooManyCandidates(usize, usize),
 }
 
 /// Validate that `bytes` is well-formed UTF-8.
@@ -816,5 +1051,124 @@ mod tests {
             assert!(text.is_char_boundary(run.start()));
             assert!(text.is_char_boundary(run.end()));
         }
+    }
+
+    // ---- T-0181 PLAT-007 deterministic shaping/fallback plan ----
+
+    #[test]
+    fn font_candidate_validation_normalizes_scripts() {
+        let candidate = FontCandidate::new("Noto", vec![Script::Cjk, Script::Latin, Script::Cjk])
+            .expect("candidate");
+        assert_eq!(candidate.family(), "Noto");
+        assert_eq!(candidate.scripts(), &[Script::Cjk, Script::Latin]);
+        assert!(candidate.supports(Script::Cjk));
+        assert!(!candidate.supports(Script::Arabic));
+        assert!(matches!(
+            FontCandidate::new("", vec![Script::Latin]),
+            Err(TextError::EmptyFontFamily)
+        ));
+        assert!(matches!(
+            FontCandidate::new("bad\0name", vec![Script::Latin]),
+            Err(TextError::InvalidFontFamily(_))
+        ));
+        assert!(matches!(
+            FontCandidate::new("Empty", vec![]),
+            Err(TextError::EmptyCandidates)
+        ));
+    }
+
+    #[test]
+    fn fallback_plan_selects_ordered_font_chain_per_run() {
+        let text = "hi שלום 漢字";
+        let runs = bidi_runs(text);
+        let candidates = [
+            FontCandidate::new(
+                "Fallback",
+                vec![Script::Latin, Script::Hebrew, Script::Cjk, Script::Other],
+            )
+            .expect("fallback"),
+            FontCandidate::new("CJK", vec![Script::Cjk]).expect("cjk"),
+            FontCandidate::new("Hebrew", vec![Script::Hebrew]).expect("hebrew"),
+        ];
+        let plan = build_fallback_plan(&runs, &candidates).expect("plan");
+        assert_eq!(
+            plan,
+            build_fallback_plan(&runs, &candidates).expect("plan again")
+        );
+        assert_eq!(plan.steps().len(), runs.len());
+        assert_eq!(plan.summary(), plan.to_string());
+        assert!(plan.summary().starts_with("runs="));
+        assert!(plan.summary().contains("chain="));
+        // The Latin run picks the first (fallback) candidate; the CJK run picks
+        // the fallback first and the dedicated CJK font second.
+        let cjk_step = plan
+            .steps()
+            .iter()
+            .find(|step| step.script() == Script::Cjk)
+            .expect("cjk step");
+        assert_eq!(
+            cjk_step.font_chain(),
+            &["Fallback".to_owned(), "CJK".to_owned()]
+        );
+        assert_eq!(cjk_step.primary_font(), "Fallback");
+        assert_eq!(cjk_step.direction(), Direction::Ltr);
+        let hebrew_step = plan
+            .steps()
+            .iter()
+            .find(|step| step.script() == Script::Hebrew)
+            .expect("hebrew step");
+        assert_eq!(hebrew_step.direction(), Direction::Rtl);
+        // Byte ranges still lie on character boundaries.
+        for step in plan.steps() {
+            assert!(text.is_char_boundary(step.start()));
+            assert!(text.is_char_boundary(step.end()));
+        }
+    }
+
+    #[test]
+    fn fallback_plan_from_text_matches_explicit_runs() {
+        let text = "hello world";
+        let candidates =
+            [FontCandidate::new("Base", vec![Script::Latin, Script::Other]).expect("candidate")];
+        let via_text = fallback_plan_from_text(text, &candidates).expect("plan from text");
+        let via_runs = build_fallback_plan(&bidi_runs(text), &candidates).expect("plan from runs");
+        assert_eq!(via_text, via_runs);
+        assert_eq!(
+            via_text.summary(),
+            "runs=3; chain=latin:Base|other:Base|latin:Base"
+        );
+    }
+
+    #[test]
+    fn fallback_plan_reports_typed_errors() {
+        let runs = bidi_runs("hello");
+        let base =
+            [FontCandidate::new("Base", vec![Script::Latin, Script::Other]).expect("candidate")];
+        assert_eq!(build_fallback_plan(&[], &base), Err(TextError::EmptyInput));
+        assert_eq!(
+            build_fallback_plan(&runs, &[]),
+            Err(TextError::EmptyCandidates)
+        );
+        assert_eq!(
+            fallback_plan_from_text("", &base),
+            Err(TextError::EmptyInput)
+        );
+        assert_eq!(
+            build_fallback_plan(&bidi_runs("漢字"), &base),
+            Err(TextError::NoFontForScript(Script::Cjk))
+        );
+        let too_many: Vec<FontCandidate> = (0..MAX_FONT_CANDIDATES.saturating_add(1))
+            .map(|index| {
+                FontCandidate::new(&format!("Font{index}"), vec![Script::Latin, Script::Other])
+                    .expect("candidate")
+            })
+            .collect();
+        assert_eq!(
+            build_fallback_plan(&runs, &too_many),
+            Err(TextError::TooManyCandidates(
+                MAX_FONT_CANDIDATES.saturating_add(1),
+                MAX_FONT_CANDIDATES
+            ))
+        );
     }
 }

@@ -3713,42 +3713,17 @@ tests = [
 title = "Interactive actions and triggers"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/launch.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0156.md",
-]
+docs = "crates/pdfxi-core/src/launch.rs, docs/evidence/core/T-0181.md"
 domain = "Platform"
-evidence = "docs/evidence/core/T-0156.md: 7 new launch::tests pass, including startup_plan_is_deterministic, invalid_dpi_is_rejected, invalid_args_are_rejected, conflicting_window_modes_are_rejected and typed_error_variants_are_distinct; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy --all-targets --no-deps/doc EXIT=0."
+evidence = "docs/evidence/core/T-0181.md"
 id = "PLAT-001"
-notes = """
-Adds `pdfxi_core::launch`, a headless launch/configuration model. A documented
-argument grammar (`--dpi`, `--single-instance`/`--multi-instance`, `--window
-WxH`, `--maximized`, `--fullscreen`, `--file`, plus positional file paths)
-parses into a validated `LaunchConfig`; `resolve_startup_plan` emits a
-deterministic `StartupPlan` with a stable `summary`. `DpiAwareness`
-(unaware/system/per-monitor/per-monitor-v2), `SingleInstanceMode`, and a bounded
-`WindowPreference` model the preferences; typed `LaunchError` variants reject
-unknown flags, missing/duplicate values, bad DPI/window tokens, conflicting
-presentation modes, empty/oversized args and too many files. No GUI, process,
-window or OS call is made.
-
-Honest remaining scope: no eframe/wgpu window, event loop, real single-instance
-IPC/handoff, native DPI-API calls, installer, or CLI host entry point. The host
-must translate the plan into an actual Windows application. Reported
-`in-progress`, not `verified`/`replaced`, because the desktop application itself
-is not delivered by this core-only task.
-"""
+notes = "Validated launch grammar, startup action resolution (open/print/reopen/single-instance handoff), window and DPI preference model with lossless session round-trip and typed errors. Host boundary: no eframe/wgpu window, event loop, native DPI call or installer."
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
-    "launch::tests::startup_plan_is_deterministic",
-    "launch::tests::defaults_are_stable",
-    "launch::tests::invalid_dpi_is_rejected",
-    "launch::tests::invalid_args_are_rejected",
-    "launch::tests::conflicting_window_modes_are_rejected",
-    "launch::tests::window_dimensions_are_bounded",
-    "launch::tests::typed_error_variants_are_distinct",
+    "launch::tests::startup_actions_resolve_for_open_print_reopen_and_handoff",
+    "launch::tests::session_window_state_round_trips_exactly",
+    "launch::tests::session_state_decode_rejects_malformed_tokens",
 ]
 title = "Windows desktop application"
 
@@ -3801,155 +3776,62 @@ tests = [
 title = "Microsoft Office integration"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/browser_handoff.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0156.md",
-]
+docs = "crates/pdfxi-core/src/browser_handoff.rs, docs/evidence/core/T-0181.md"
 domain = "Platform"
-evidence = "docs/evidence/core/T-0156.md: 7 new browser_handoff::tests pass, including browser_handoff_rejects_relative_paths, browser_handoff_rejects_parent_traversal, rooted_windows_path_builds_a_deterministic_file_url and fragments_are_validated_and_included; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/core/T-0181.md"
 id = "PLAT-004"
-notes = """
-Adds `pdfxi_core::browser_handoff`, a local "open in browser" handoff for an
-exported HTML file. `validate_rooted_path` accepts only rooted paths (Unix `/`,
-Windows drive, or UNC) with no `.`/`..` component, control character or
-non-HTML extension; `BrowserHandoff::with_fragment` validates a bounded safe
-fragment. `resolve_plan` produces a deterministic `file:` URL and summary
-string. No browser is launched and no network is contacted (ADR 0008).
-
-Honest remaining scope: this is a validated URL/plan only. It does not spawn a
-browser, query the OS default-browser association, register a protocol handler,
-read the exported file, or expose a CLI/UI entry point. The row stays
-in-progress, not replaced.
-"""
+notes = "Local-only browser handoff: validated request parsing for paths and file URLs, traversal and control-character rejection, MIME allowlist, deterministic open/download plan. Host boundary: no network, no browser extension, no protocol registration."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "browser_handoff::tests::rooted_windows_path_builds_a_deterministic_file_url",
-    "browser_handoff::tests::unix_and_unc_roots_are_accepted",
-    "browser_handoff::tests::browser_handoff_rejects_relative_paths",
-    "browser_handoff::tests::browser_handoff_rejects_parent_traversal",
-    "browser_handoff::tests::browser_handoff_rejects_bad_extension_and_control_chars",
-    "browser_handoff::tests::fragments_are_validated_and_included",
-    "browser_handoff::tests::browser_handoff_typed_errors_are_distinct",
+    "browser_handoff::tests::request_from_path_builds_a_deterministic_open_plan",
+    "browser_handoff::tests::percent_encoded_traversal_is_rejected",
+    "browser_handoff::tests::mime_allowlist_controls_the_decision_deterministically",
 ]
 title = "Browser integration"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/association.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0156.md",
-]
+docs = "crates/pdfxi-core/src/association.rs, docs/evidence/core/T-0181.md"
 domain = "Platform"
-evidence = "docs/evidence/core/T-0156.md: 6 new association::tests pass, including association_manifest_validation_accepts_a_valid_manifest, association_manifest_rejects_invalid_extensions_and_duplicates, association_manifest_rejects_dangerous_handlers and dry_run_plan_is_deterministic_regardless_of_input_order; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/core/T-0181.md"
 id = "PLAT-005"
-notes = """
-Adds `pdfxi_core::association`, a declarative extension-to-handler manifest
-model. `HandlerCommand` stores a program plus literal arguments and rejects
-empty/oversized strings, control characters and shell metacharacters;
-`AssociationEntry` normalizes an extension to lowercase without the dot;
-`AssociationManifest` enforces non-empty, bounded, case-insensitively unique
-extensions. `dry_run_plan` emits deterministic lines ordered by extension and a
-stable summary. No registry key, shell verb, filesystem entry or process is
-created (ADR 0008 declarative equivalent).
-
-Honest remaining scope: dry-run data only. No OS registry/shell association is
-written, no elevation/permission flow, no per-user vs machine scope, no
-icon/verb resource generation, and no CLI/UI entry point. The host must apply
-the plan explicitly; the row stays in-progress, not replaced.
-"""
+notes = "ProgId/scheme validation, command-template placeholders with Windows quoting and trailing-backslash escaping, and a deterministic association descriptor export. Host boundary: no registry writes and no process spawning; the dry-run plan is applied by the host installer."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "association::tests::association_manifest_validation_accepts_a_valid_manifest",
-    "association::tests::association_manifest_rejects_invalid_extensions_and_duplicates",
-    "association::tests::association_manifest_rejects_dangerous_handlers",
-    "association::tests::dry_run_plan_is_deterministic_regardless_of_input_order",
-    "association::tests::dry_run_plan_does_not_spawn_or_write",
-    "association::tests::association_typed_errors_are_distinct",
+    "association::tests::descriptor_registry_export_is_deterministic_regardless_of_order",
+    "association::tests::command_template_render_substitutes_a_quoted_argument",
+    "association::tests::quote_argument_escapes_spaces_quotes_and_trailing_backslashes",
 ]
 title = "Shell integration and file associations"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/preferences.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0156.md",
-]
+docs = "crates/pdfxi-core/src/preferences.rs, docs/evidence/core/T-0181.md"
 domain = "Platform"
-evidence = "docs/evidence/core/T-0156.md: 8 new preferences::tests pass, including preferences_round_trip_is_lossless, defaults_are_documented_and_valid, invalid_schema_is_rejected, serialization_ordering_is_deterministic and caller_supplied_path_is_validated_without_io; cargo test -p pdfxi-core 334 passed/0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/core/T-0181.md"
 id = "PLAT-006"
-notes = """
-Adds `pdfxi_core::preferences`, a deterministic preferences-file model. A
-versioned `Preferences` set (theme, locale, recent count, toolbar, default zoom,
-autosave) has documented `Default`s, strict range/format validation and typed
-`PreferencesError`s. `serialize_preferences` emits a sorted `key=value`
-document; `parse_preferences` requires every key exactly once, rejects unknown/
-duplicate/malformed lines and unsupported schema versions, and round-trips
-byte-for-byte. `PreferencesFile` validates and stores a caller-supplied path
-only: no read, write, or filesystem access occurs (ADR 0008 local equivalent).
-
-Honest remaining scope: in-memory model only. No file is created or read, no
-deployment customization (MSI transforms, managed policy, registry/GPO), no
-settings UI, no migration from older schemas, and no CLI/UI entry point. The
-host owns persistence at the caller-supplied path; the row stays in-progress,
-not replaced.
-"""
+notes = "Validated deployment preference set (toggles, allowed paths, update channel) with deterministic merge/override semantics, sorted lossless serialization and typed parse errors. Host boundary: no installer and no registry policy application."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "preferences::tests::defaults_are_documented_and_valid",
-    "preferences::tests::preferences_round_trip_is_lossless",
-    "preferences::tests::serialization_ordering_is_deterministic",
-    "preferences::tests::invalid_schema_is_rejected",
-    "preferences::tests::invalid_values_are_rejected",
-    "preferences::tests::malformed_documents_are_rejected",
-    "preferences::tests::caller_supplied_path_is_validated_without_io",
-    "preferences::tests::preferences_typed_errors_are_distinct",
+    "preferences::tests::deployment_merge_overrides_deterministically",
+    "preferences::tests::deployment_round_trip_is_lossless_and_deterministic",
+    "preferences::tests::deployment_validates_toggles_paths_and_channels",
 ]
 title = "Deployment preferences and customization"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-core/src/unicode.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0172.md",
-]
+docs = "crates/pdfxi-core/src/unicode.rs, docs/evidence/core/T-0181.md"
 domain = "Platform"
-evidence = "cargo test -p pdfxi-core --lib unicode:: (CARGO_TARGET_DIR=target/lanes/core): 13 passed, 0 failed (8 pre-existing + 5 new); full core suite 370 unit + 6 integration passed; fmt/clippy/doc EXIT=0. Full output in docs/evidence/core/T-0172.md."
+evidence = "docs/evidence/core/T-0181.md"
 id = "PLAT-007"
-notes = """
-Advances the dependency-free Unicode text model. Already present: Script
-classification by public Unicode ranges, Direction with inherent script
-direction, validate_utf8 and validate_grapheme_boundaries (UTF-8 char-boundary
-and strict-increase checks), bidi_runs, resolve_base_direction (first-strong),
-dominant_script, shaping_plan and shaping_plan_with_boundaries (deterministic,
-shaping-free visual ordering that reverses whole runs for an RTL base).
-T-0172 adds shaping_plan_with_base_direction so a caller who knows the paragraph
-direction from context can override the first-strong heuristic, and adds the
-aggregate TextAnalysis report with analyze_text/analyze_utf8: it combines dominant
-script, resolved direction, logical-order bidi runs and validated grapheme
-boundaries into a stable summary()/Display of the form
-bytes=<n> dominant=<script> base=<dir> runs=<n> boundaries=<n>. Five new tests
-cover explicit-direction override, report determinism and stable summary,
-grapheme-boundary validation errors, empty/invalid-UTF-8 typed errors, and
-character-boundary byte-range coverage.
-
-Honest status: in-progress. Exact remaining scope (outside this library-scoped
-task): real glyph shaping and font fallback/selection for CJK and RTL, full UAX
-#9 embedding-level and neutral-resolution, extended grapheme-cluster segmentation
-(the crate enforces caller-supplied boundary safety without a grapheme table),
-and viewer/UI integration. No renderer, font engine, or GUI code is added here.
-"""
+notes = "Script classification, bidi run/direction resolution with caller override, grapheme-boundary validation, deterministic analysis report, and an ordered font fallback chain per run from caller-supplied candidates. Host boundary: no rasterizer and no external shaper backend; the plan is consumed by the render lane."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
+    "unicode::tests::fallback_plan_selects_ordered_font_chain_per_run",
     "unicode::tests::explicit_base_direction_overrides_first_strong",
-    "unicode::tests::text_analysis_report_is_deterministic_and_has_stable_summary",
     "unicode::tests::text_analysis_validates_grapheme_boundaries",
-    "unicode::tests::text_analysis_empty_and_invalid_utf8_are_typed_errors",
-    "unicode::tests::text_analysis_byte_ranges_cover_text_on_char_boundaries",
 ]
 title = "Unicode CJK and right-to-left text"
 

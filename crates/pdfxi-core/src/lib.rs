@@ -51,13 +51,16 @@ mod writer;
 mod xref_tests;
 
 pub use association::{
-    AssociationEntry, AssociationError, AssociationManifest, DryRunPlan, HandlerCommand,
-    MAX_ASSOCIATIONS, MAX_EXTENSION_LEN, MAX_HANDLER_ARGS, MAX_PROGRAM_BYTES, dry_run_plan,
+    AssociationEntry, AssociationError, AssociationManifest, CommandTemplate, DescriptorDocument,
+    DescriptorRegistry, DryRunPlan, HandlerCommand, MAX_ASSOCIATIONS, MAX_EXTENSION_LEN,
+    MAX_HANDLER_ARGS, MAX_PROGID_BYTES, MAX_PROGRAM_BYTES, MAX_SCHEME_BYTES, MAX_TEMPLATE_BYTES,
+    ProgId, ProtocolDescriptor, ShellDescriptor, dry_run_plan, export_descriptors, quote_argument,
 };
 pub use boxes::{BoxKind, PageBoxes, normalize_rectangle, rectangle_intersection};
 pub use browser_handoff::{
-    BrowserHandoff, BrowserHandoffError, BrowserHandoffPlan, MAX_FRAGMENT_BYTES,
-    MAX_HANDOFF_PATH_BYTES, validate_rooted_path,
+    BrowserHandoff, BrowserHandoffError, BrowserHandoffPlan, HandoffDecision, HandoffMime,
+    HandoffPlan, HandoffRequest, HandoffSource, MAX_FRAGMENT_BYTES, MAX_HANDOFF_PATH_BYTES,
+    resolve_request, validate_local_file, validate_rooted_path,
 };
 pub use compatibility::{
     CompatibilityReport, CompatibilityWarning, FeatureGateEntry, FeatureGateReport, FeatureSupport,
@@ -81,8 +84,9 @@ pub use font::{
 };
 pub use incremental::{IncrementalSaveOptions, IncrementalSaveResult, PreservationReport};
 pub use launch::{
-    DpiAwareness, LaunchConfig, LaunchError, MAX_ARG_BYTES, MAX_LAUNCH_FILES, MAX_WINDOW_DIMENSION,
-    SingleInstanceMode, StartupPlan, WindowPreference, parse_launch_args, resolve_startup_plan,
+    DpiAwareness, LaunchAction, LaunchConfig, LaunchError, MAX_ARG_BYTES, MAX_LAUNCH_FILES,
+    MAX_WINDOW_DIMENSION, SessionWindowState, SingleInstanceMode, StartupPlan, WindowPreference,
+    parse_launch_args, resolve_startup_plan,
 };
 pub use linearization::{HintStreamRange, Linearization, parse_linearization};
 pub use linearize::{
@@ -109,8 +113,9 @@ pub use page::{Page, Rectangle};
 pub use pages::{PageOperation, PagePlan, RotationTarget};
 pub use parser::{XrefReport, XrefSectionKind, XrefSectionReport, inspect_xref};
 pub use preferences::{
-    MAX_LOCALE_BYTES, MAX_PREFERENCES_PATH_BYTES, Preferences, PreferencesError, PreferencesFile,
-    SCHEMA_VERSION, Theme, parse_preferences, serialize_preferences,
+    DeploymentPreferences, MAX_LOCALE_BYTES, MAX_PREFERENCES_PATH_BYTES, MAX_TOGGLE_NAME_BYTES,
+    Preferences, PreferencesError, PreferencesFile, SCHEMA_VERSION, Theme, UpdateChannel,
+    parse_preferences, serialize_preferences,
 };
 pub use preservation::{
     MAX_KEY_LEN, MAX_PRESERVED_KEYS, MAX_REVISIONS, PageTextSource, PreservationError,
@@ -132,10 +137,12 @@ pub use transparency::{
     TransparencyError, TransparencyGroup, TransparencyStack,
 };
 pub use unicode::{
-    BidiRun, Direction, Script, ShapingPlan, TextAnalysis, TextError, analyze_text, analyze_utf8,
-    bidi_runs, classify_char, dominant_script, is_strong_direction, resolve_base_direction,
-    shaping_plan, shaping_plan_with_base_direction, shaping_plan_with_boundaries,
-    validate_grapheme_boundaries, validate_utf8,
+    BidiRun, Direction, FallbackPlan, FallbackStep, FontCandidate, MAX_FONT_CANDIDATES,
+    MAX_FONT_FAMILY_BYTES, Script, ShapingPlan, TextAnalysis, TextError, analyze_text,
+    analyze_utf8, bidi_runs, build_fallback_plan, classify_char, dominant_script,
+    fallback_plan_from_text, is_strong_direction, resolve_base_direction, shaping_plan,
+    shaping_plan_with_base_direction, shaping_plan_with_boundaries, validate_grapheme_boundaries,
+    validate_utf8,
 };
 pub use xref_stream::{
     MAX_XREF_FIELD_BYTES, MAX_XREF_INDEX_SUBSECTIONS, MAX_XREF_STREAM_ENTRIES, XrefEntryKind,

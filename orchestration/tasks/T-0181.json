@@ -3,7 +3,7 @@
   "lane": "core",
   "title": "Platform integration rows closure",
   "priority": "P2",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0172"],
   "owns": [
     "crates/pdfxi-core/**",
@@ -12,5 +12,5 @@
     "orchestration/feature-updates/T-0181.toml"
   ],
   "acceptance": "cargo test -p pdfxi-core -p pdfxi-cli",
-  "evidence": ""
+  "evidence": "docs/evidence/core/T-0181.md"
 }
