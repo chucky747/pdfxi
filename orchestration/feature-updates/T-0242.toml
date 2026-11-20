@@ -1,0 +1,55 @@
+# T-0242 Round A - comments and markup UI
+#
+# Comments rail badge, note/highlight tools, page thread popup, resolve/delete,
+# and persistence through DocumentSession. Round B covers XFDF and shared-folder
+# review sync.
+
+task = "T-0242"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0242.md"
+docs = [
+    "crates/pdfxi-app/Cargo.toml",
+    "crates/pdfxi-app/src/shell/comments.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/rail.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/shell/document_view.rs",
+    "crates/pdfxi-app/src/shell/session.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/ui/T-0242.md",
+    "docs/evidence/ui/t0242-comments-light-windows.png",
+    "docs/evidence/ui/t0242-highlight-dark-windows.png",
+    "docs/evidence/ui/t0242-comments-dark-macos.png",
+]
+notes = """
+Adds pdfxi-edit and pdfxi-core to the app and enables Capability::Comments. The
+rail shows the real annotation count; the panel lists entries by page with
+subtype, snippet, author, date, resolved checkbox and delete; the page popup
+shows the thread with reply/resolve/edit/delete and closes on Escape. Comment
+arms a note tool that opens a draft on the next page click; Highlight converts
+the selected spans to PDF quads per page and adds /Highlight annotations, or
+shows a hint when nothing is selected. Every mutation runs the library on a
+clone of the session document and commits it as one DocumentSession::edit, so
+undo/redo, the dirty marker, save and reopen all see the annotations; reads
+refresh after open, tab switch, undo/redo and each edit. Edit PDF moved behind a
+new disabled Capability::Edit so Comments does not surface a dead control.
+Two defects found and fixed while capturing: the text baseline was treated as
+top-down (highlights landed at the page bottom) and a long comment label widened
+the side panel into a black strip beside the canvas. New AppCommand variants:
+AddNote, SaveNoteDraft, CancelNoteDraft, AddHighlight, OpenAnnotation,
+CloseAnnotationPopup, ReplyToAnnotation, SetAnnotationResolved, UpdateAnnotation,
+DeleteAnnotation. The date formatter uses the `time` crate (MIT OR
+Apache-2.0) with `formatting`, `macros` and `local-offset`; `chrono` was removed
+after RUSTSEC-2026-0543 so `cargo deny` stays clean.
+"""
+tests = [
+    "ui::shell::comments::tests::note_point_flips_the_page_axis",
+    "ui::shell::comments::tests::snippets_collapse_whitespace_and_truncate",
+    "ui::shell::comments::integration_tests::note_is_created_listed_saved_and_reopened",
+    "ui::shell::comments::integration_tests::reply_resolve_and_delete_follow_the_badge",
+    "ui::shell::comments::integration_tests::highlight_uses_the_selection_quads",
+    "ui::shell::comments::integration_tests::undo_removes_a_note_from_the_panel_and_from_saved_bytes",
+]
