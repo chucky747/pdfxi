@@ -1,0 +1,56 @@
+# T-0257 - Redaction sanitize and independent verification
+#
+# Library result, not a matrix promotion. Adds a real-`Document` sanitize pass
+# and an independent verifier around T-0237's content removal. SEC-008 and
+# SEC-009 stay `library`; T-0263 owns the app-level Protect/Redact promotion.
+
+task = "T-0257"
+lane = "security"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0257.md"
+docs = [
+    "docs/evidence/hardening/T-0257.md",
+    "crates/pdfxi-security/src/sanitize_verified.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "crates/pdfxi-security/Cargo.toml",
+    "crates/pdfxi-security/tests/sanitize_verified.rs",
+    "crates/pdfxi-security/tests/sanitize_pdfium.rs",
+]
+feature_rows = ["SEC-008", "SEC-009"]
+promoted_rows = []
+acceptance_items = ["O-06", "A-30"]
+tests = [
+    "crates/pdfxi-security/tests/sanitize_verified.rs::real_fixture_is_sanitized_saved_and_reopens_with_text",
+    "crates/pdfxi-security/tests/sanitize_verified.rs::synthetic_document_loses_all_categories_and_verifies_clean",
+    "crates/pdfxi-security/tests/sanitize_verified.rs::secret_outside_the_sanitized_categories_makes_verification_dirty",
+    "crates/pdfxi-security/tests/sanitize_verified.rs::default_hidden_optional_content_fails_closed",
+    "crates/pdfxi-security/tests/sanitize_verified.rs::attachment_name_validator_rejects_traversal_and_absolute_paths",
+    "crates/pdfxi-security/tests/sanitize_verified.rs::category_identifiers_round_trip",
+    "crates/pdfxi-security/tests/sanitize_pdfium.rs::pdfium_reopens_sanitized_bytes_and_sees_no_identifying_metadata",
+]
+notes = """
+Library scope: `sanitize_document_full(&Document, &SanitizeRequest)` clears the
+trailer `/Info`, detaches catalog `/Metadata`, removes `/Names /EmbeddedFiles`
+attachments with their file specs and embedded streams, removes catalog/page/
+annotation `/AA`, `/OpenAction`, `/Names /JavaScript` and every JavaScript
+action object, flattens visible `/OCProperties` (default-hidden layers fail
+closed with `UnsafeOptionalContent`), and removes `/Thumb` thumbnails. Every
+pass is a full `Document::save()` rewrite; a second pass over the reparsed
+classic output catches orphan category objects. A selected category that still
+survives returns `SanitizeResidual` and no bytes. Referenced child objects are
+nulled before keys are detached, so removed bytes do not remain in the output.
+
+`verify_sanitized(bytes, secrets)` is independent of the removal code: it
+reparses, re-extracts page text, scans the whole file and every text-candidate
+stored/Flate stream in UTF-8 and UTF-16LE, reports undecodable candidates as
+`UnreadableStream`, and re-derives the category inventory. Survivors identify a
+page, object number, category and secret index, never secret text or document
+content. PDFium is a second reader through the optional `pdfium` feature; it
+reopens the sanitized real fixture, extracts the surviving text and sees no
+title or author. A negative test proves an outside secret makes verification
+dirty. Round A limits: hidden optional-content layers need a content rewrite and
+fail closed; visible layers are flattened; untyped unreferenced streams are not
+detectable attachments. No UI/CLI entry point; SEC-008/SEC-009 stay `library`
+until T-0263.
+"""

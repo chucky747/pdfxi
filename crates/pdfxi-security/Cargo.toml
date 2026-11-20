@@ -33,6 +33,21 @@ cipher = "0.4"
 des = "0.8"
 sha1 = "0.10"
 
+# Optional native second reader for the T-0257 sanitize verification test.
+# Kept optional so default builds and tests stay dependency-light.
+pdfium-render = { version = "0.9.5", optional = true }
+
+[features]
+default = []
+# Enable the PDFium-backed independent-reader test. Requires a PDFium library
+# at runtime (see `PDFIUM_PATH` or the standard per-user install location).
+pdfium = ["dep:pdfium-render"]
+
+[lints.cargo]
+# `pdfium-render` is intentionally optional and is referenced only by the
+# feature-gated `tests/sanitize_pdfium.rs` target, not by the library.
+unused_dependencies = "allow"
+
 [dev-dependencies]
 rand = "0.8"
 

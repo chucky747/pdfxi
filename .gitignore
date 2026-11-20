@@ -20,3 +20,6 @@
 Thumbs.db
 .vscode/
 .idea/
+
+# Generated PFX/PKCS#12 test fixtures (never commit private containers).
+crates/pdfxi-security/tests/fixtures/pfx/*.pfx

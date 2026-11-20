@@ -128,6 +128,9 @@ mod protector;
 mod redaction;
 mod sanitization;
 pub mod sanitize_document;
+/// Document-level sanitization and independent verification over
+/// [`pdfxi_core::Document`] (T-0257).
+pub mod sanitize_verified;
 mod scrub;
 pub mod security_envelope;
 mod signature;
@@ -194,6 +197,11 @@ pub use sanitize_document::{
     AppliedSanitizationReport, HiddenInfoAction, HiddenInfoClass, HiddenInfoReport,
     HiddenInfoSanitized, HiddenInfoSelection, RemovedItem, SanitizedDocument,
     hidden_info_inventory, inventory_from_document, sanitize_document, sanitize_hidden_info,
+};
+pub use sanitize_verified::{
+    RemovedSanitizeItem, SanitizeCategory, SanitizeReport, SanitizeRequest, SanitizeSurvivor,
+    SanitizeSurvivorKind, SanitizeVerification, SanitizedPdf, is_safe_attachment_name,
+    sanitize_document_full, sanitize_inventory, verify_sanitized,
 };
 pub use scrub::{
     Allowlist, AnnotationRecord, Residual, ScrubAction, ScrubCategory, ScrubConfig, ScrubDocument,

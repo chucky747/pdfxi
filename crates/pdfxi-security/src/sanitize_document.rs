@@ -61,7 +61,7 @@ fn object_index(objects: &[(ObjectId, Object)], id: ObjectId) -> Option<usize> {
 }
 
 /// Locate an indirect reference stored under `key` in the trailer section.
-fn trailer_reference(bytes: &[u8], key: &str) -> Option<ObjectId> {
+pub(crate) fn trailer_reference(bytes: &[u8], key: &str) -> Option<ObjectId> {
     let start = bytes.windows(7).rposition(|window| window == b"trailer")?;
     let section = &bytes[start..];
     let needle = format!("/{key}").into_bytes();

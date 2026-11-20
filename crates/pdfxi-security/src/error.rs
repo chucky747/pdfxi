@@ -188,6 +188,17 @@ pub enum SecurityError {
     ///
     /// Carries only the stable class identifier, never document contents.
     HiddenInfoResidual(&'static str),
+    /// A selected document-level sanitization category survived a full
+    /// `Document::save()` rewrite and a second removal pass.
+    ///
+    /// Carries only the stable category identifier, never document contents.
+    SanitizeResidual(&'static str),
+    /// A document declares default-hidden optional-content layers whose
+    /// content cannot be removed without rewriting page content streams.
+    ///
+    /// Sanitization fails closed instead of removing `/OCProperties` and
+    /// accidentally revealing the hidden layer.
+    UnsafeOptionalContent,
     /// A metadata field identifier (key, name, prefix, or local name) was empty.
     ScrubInvalidFieldIdentifier,
     /// An XMP namespace prefix was not a valid XML NCName.
@@ -520,6 +531,13 @@ impl fmt::Display for SecurityError {
             Self::HiddenInfoResidual(class) => {
                 write!(f, "hidden-information class still present: {class}")
             }
+            Self::SanitizeResidual(category) => {
+                write!(f, "sanitization category still present: {category}")
+            }
+            Self::UnsafeOptionalContent => write!(
+                f,
+                "default-hidden optional content cannot be removed without rewriting page content"
+            ),
             Self::ScrubInvalidFieldIdentifier => {
                 write!(f, "metadata field identifier must not be empty")
             }
