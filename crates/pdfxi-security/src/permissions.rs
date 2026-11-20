@@ -60,6 +60,16 @@ impl Permission {
         Self(bits & Self::ALL.0)
     }
 
+    /// Build a permission mask from a raw `/P` value without validation.
+    ///
+    /// This is intended for callers modelling an untrusted on-disk `/P` word
+    /// that must be passed to a validator. Consumers such as
+    /// [`crate::password_policy::plan_encryption`] re-check the mask and return
+    /// [`SecurityError::InvalidPermissionBits`] when unknown bits are present.
+    pub const fn from_bits_unchecked(bits: u32) -> Self {
+        Self(bits)
+    }
+
     /// Build a permission mask from raw bits, rejecting unknown bits.
     pub fn from_bits_checked(bits: u32) -> Result<Self> {
         if bits & !Self::ALL.0 == 0 {

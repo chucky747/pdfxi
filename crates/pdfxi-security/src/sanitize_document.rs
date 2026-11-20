@@ -28,6 +28,7 @@
 //! No document contents or secrets are ever logged or embedded in an error.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
 use pdfxi_core::{Dictionary, Document, Object, ObjectId, Page};
 
@@ -471,6 +472,966 @@ pub fn sanitize_document(
             verification,
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// SEC-008: extended hidden-information removal
+// ---------------------------------------------------------------------------
+
+/// A class of hidden information that can be removed from a concrete PDF.
+///
+/// Declaration order is canonical for inventories and reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HiddenInfoClass {
+    /// Trailer `/Info` dictionary (author, title, subject, and so on).
+    DocumentInfo,
+    /// Catalog `/Metadata` XMP stream.
+    XmpMetadata,
+    /// Embedded-file name tree and its file-spec/stream objects.
+    Attachments,
+    /// Document- and page-level JavaScript, including name trees and `/AA`.
+    JavaScript,
+    /// Page annotations (comments, notes, and their appearance streams).
+    Annotations,
+    /// Page thumbnail images (`/Thumb`).
+    Thumbnails,
+    /// Private application data blocks (`/PieceInfo`).
+    PieceInfo,
+    /// Vendor-prefixed private keys and `/LastModified` in catalog, info, and
+    /// page dictionaries.
+    PrivateAppData,
+    /// Interactive form field values (`/V`, `/DV`, `/AP`, `/AS`).
+    FormValues,
+}
+
+impl HiddenInfoClass {
+    /// Every class in canonical order.
+    pub const ALL: [Self; 9] = [
+        Self::DocumentInfo,
+        Self::XmpMetadata,
+        Self::Attachments,
+        Self::JavaScript,
+        Self::Annotations,
+        Self::Thumbnails,
+        Self::PieceInfo,
+        Self::PrivateAppData,
+        Self::FormValues,
+    ];
+
+    /// Stable string identifier.
+    pub const fn as_id(self) -> &'static str {
+        match self {
+            Self::DocumentInfo => "document_info",
+            Self::XmpMetadata => "xmp_metadata",
+            Self::Attachments => "attachments",
+            Self::JavaScript => "javascript",
+            Self::Annotations => "annotations",
+            Self::Thumbnails => "thumbnails",
+            Self::PieceInfo => "piece_info",
+            Self::PrivateAppData => "private_app_data",
+            Self::FormValues => "form_values",
+        }
+    }
+
+    /// Parse an identifier produced by [`Self::as_id`].
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|class| class.as_id() == id)
+    }
+}
+
+impl fmt::Display for HiddenInfoClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_id())
+    }
+}
+
+/// Default prefix used to recognise vendor-private dictionary keys.
+const DEFAULT_PRIVATE_KEY_PREFIX: &str = "Private";
+
+/// A deterministic selection of hidden-information classes to remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HiddenInfoSelection {
+    classes: BTreeSet<HiddenInfoClass>,
+    private_key_prefix: String,
+}
+
+impl Default for HiddenInfoSelection {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl HiddenInfoSelection {
+    /// Select every known hidden-information class.
+    pub fn all() -> Self {
+        Self {
+            classes: HiddenInfoClass::ALL.into_iter().collect(),
+            private_key_prefix: DEFAULT_PRIVATE_KEY_PREFIX.to_owned(),
+        }
+    }
+
+    /// Select nothing, with the default private-key prefix.
+    pub fn empty() -> Self {
+        Self {
+            classes: BTreeSet::new(),
+            private_key_prefix: DEFAULT_PRIVATE_KEY_PREFIX.to_owned(),
+        }
+    }
+
+    /// Build a selection from an explicit set of classes.
+    pub fn new(classes: impl IntoIterator<Item = HiddenInfoClass>) -> Self {
+        Self {
+            classes: classes.into_iter().collect(),
+            private_key_prefix: DEFAULT_PRIVATE_KEY_PREFIX.to_owned(),
+        }
+    }
+
+    /// Add a class to the selection.
+    pub fn include(&mut self, class: HiddenInfoClass) {
+        self.classes.insert(class);
+    }
+
+    /// Remove a class from the selection.
+    pub fn exclude(&mut self, class: HiddenInfoClass) {
+        self.classes.remove(&class);
+    }
+
+    /// Whether `class` is selected.
+    pub fn contains(&self, class: HiddenInfoClass) -> bool {
+        self.classes.contains(&class)
+    }
+
+    /// Selected classes in canonical order.
+    pub fn classes(&self) -> impl Iterator<Item = HiddenInfoClass> + '_ {
+        self.classes.iter().copied()
+    }
+
+    /// Number of selected classes.
+    pub fn len(&self) -> usize {
+        self.classes.len()
+    }
+
+    /// Whether nothing is selected.
+    pub fn is_empty(&self) -> bool {
+        self.classes.is_empty()
+    }
+
+    /// Vendor-private key prefix used for detection and removal.
+    pub fn private_key_prefix(&self) -> &str {
+        &self.private_key_prefix
+    }
+
+    /// Set the vendor-private key prefix.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty prefix or one containing PDF name delimiters with
+    /// [`SecurityError::Configuration`].
+    pub fn set_private_key_prefix(&mut self, prefix: impl Into<String>) -> Result<()> {
+        let prefix = prefix.into();
+        if prefix.is_empty()
+            || prefix
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || b"/[]()<>{}%".contains(&byte))
+        {
+            return Err(SecurityError::Configuration(
+                "private key prefix must be a non-empty PDF name fragment".to_owned(),
+            ));
+        }
+        self.private_key_prefix = prefix;
+        Ok(())
+    }
+
+    /// Expand the selection into a deterministic, ordered action list.
+    pub fn plan(&self) -> Vec<HiddenInfoAction> {
+        let mut actions = Vec::new();
+        for class in &self.classes {
+            for target in targets_for(*class) {
+                actions.push(HiddenInfoAction::new(*class, target));
+            }
+        }
+        actions.sort();
+        actions
+    }
+}
+
+/// Canonical target keys for a hidden-information class.
+fn targets_for(class: HiddenInfoClass) -> &'static [&'static str] {
+    match class {
+        HiddenInfoClass::DocumentInfo => &["trailer/Info"],
+        HiddenInfoClass::XmpMetadata => &["Catalog/Metadata"],
+        HiddenInfoClass::Attachments => &["Names/EmbeddedFiles", "Objects/Filespec"],
+        HiddenInfoClass::JavaScript => &[
+            "Names/JavaScript",
+            "Catalog/OpenAction",
+            "Catalog/AA",
+            "Page/AA",
+            "Objects/JavaScript",
+        ],
+        HiddenInfoClass::Annotations => &["Page/Annots"],
+        HiddenInfoClass::Thumbnails => &["Page/Thumb"],
+        HiddenInfoClass::PieceInfo => &["Catalog/PieceInfo", "Page/PieceInfo"],
+        HiddenInfoClass::PrivateAppData => &["Dictionary/PrivateKeys", "Dictionary/LastModified"],
+        HiddenInfoClass::FormValues => &["AcroForm/FieldValues"],
+    }
+}
+
+/// One deterministic step in an extended sanitization plan.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HiddenInfoAction {
+    class: HiddenInfoClass,
+    target: &'static str,
+}
+
+impl HiddenInfoAction {
+    /// Build an action from a class and stable target identifier.
+    pub const fn new(class: HiddenInfoClass, target: &'static str) -> Self {
+        Self { class, target }
+    }
+
+    /// Class this action belongs to.
+    pub const fn class(&self) -> HiddenInfoClass {
+        self.class
+    }
+
+    /// Stable target identifier.
+    pub const fn target(&self) -> &'static str {
+        self.target
+    }
+}
+
+/// A concrete item that a sanitization run removed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RemovedItem {
+    class: HiddenInfoClass,
+    target: String,
+}
+
+impl RemovedItem {
+    /// Build a removed-item record.
+    pub fn new(class: HiddenInfoClass, target: impl Into<String>) -> Self {
+        Self {
+            class,
+            target: target.into(),
+        }
+    }
+
+    /// Class of the removed item.
+    pub const fn class(&self) -> HiddenInfoClass {
+        self.class
+    }
+
+    /// Stable identifier of the removed item.
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+}
+
+fn is_private_key(key: &str, prefix: &str) -> bool {
+    key == "LastModified" || key.starts_with(prefix)
+}
+
+fn dictionary_private_keys(dictionary: &Dictionary, prefix: &str) -> Vec<String> {
+    dictionary
+        .keys()
+        .filter(|key| is_private_key(key, prefix))
+        .cloned()
+        .collect()
+}
+
+/// Derive a hidden-information inventory from a real parsed object graph.
+///
+/// The private-key prefix comes from `selection`, so detection and removal use
+/// the exact same criterion.
+pub fn hidden_info_inventory(
+    document: &Document,
+    selection: &HiddenInfoSelection,
+) -> Result<BTreeSet<HiddenInfoClass>> {
+    let objects = load_objects(document)?;
+    let root = document.root().map_err(core_error)?;
+    let mut present = BTreeSet::new();
+    let prefix = selection.private_key_prefix();
+
+    if trailer_reference(document.bytes(), "Info")
+        .and_then(|id| find_object(&objects, id))
+        .and_then(dictionary_of)
+        .is_some_and(|dictionary| !dictionary.is_empty())
+    {
+        present.insert(HiddenInfoClass::DocumentInfo);
+    }
+    if catalog_has(&objects, root, "Metadata") {
+        present.insert(HiddenInfoClass::XmpMetadata);
+    }
+    if nested_has(&objects, root, "Names", "EmbeddedFiles")
+        || objects.iter().any(|(_, object)| {
+            dictionary_of(object).is_some_and(|dictionary| {
+                dictionary.get("Type").and_then(Object::as_name) == Some("Filespec")
+                    || dictionary.contains_key("EmbeddedFile")
+                    || dictionary.get("Type").and_then(Object::as_name) == Some("EmbeddedFile")
+            })
+        })
+    {
+        present.insert(HiddenInfoClass::Attachments);
+    }
+    let open_action_has_js = find_object(&objects, root)
+        .and_then(dictionary_of)
+        .and_then(|dictionary| dictionary.get("OpenAction"))
+        .and_then(|value| match value {
+            Object::Reference(id) => find_object(&objects, *id),
+            other => Some(other),
+        })
+        .and_then(dictionary_of)
+        .is_some_and(|dictionary| {
+            dictionary.contains_key("JS")
+                || dictionary.get("S").and_then(Object::as_name) == Some("JavaScript")
+        });
+    if nested_has(&objects, root, "Names", "JavaScript")
+        || open_action_has_js
+        || catalog_has(&objects, root, "AA")
+        || objects.iter().any(|(_, object)| {
+            dictionary_of(object).is_some_and(|dictionary| {
+                dictionary.get("S").and_then(Object::as_name) == Some("JavaScript")
+                    || dictionary.get("Type").and_then(Object::as_name) == Some("JavaScript")
+                    || dictionary.contains_key("AA")
+            })
+        })
+    {
+        present.insert(HiddenInfoClass::JavaScript);
+    }
+    let pages = document.pages().map_err(core_error)?;
+    if pages.iter().any(|page| {
+        find_object(&objects, page.id)
+            .and_then(dictionary_of)
+            .is_some_and(|dictionary| non_empty_array(dictionary, "Annots"))
+    }) {
+        present.insert(HiddenInfoClass::Annotations);
+    }
+    if pages.iter().any(|page| {
+        find_object(&objects, page.id)
+            .and_then(dictionary_of)
+            .is_some_and(|dictionary| dictionary.contains_key("Thumb"))
+    }) {
+        present.insert(HiddenInfoClass::Thumbnails);
+    }
+    if catalog_has(&objects, root, "PieceInfo")
+        || pages.iter().any(|page| {
+            find_object(&objects, page.id)
+                .and_then(dictionary_of)
+                .is_some_and(|dictionary| dictionary.contains_key("PieceInfo"))
+        })
+    {
+        present.insert(HiddenInfoClass::PieceInfo);
+    }
+    let mut private_sources: Vec<&Dictionary> = Vec::new();
+    if let Some(catalog) = find_object(&objects, root).and_then(dictionary_of) {
+        private_sources.push(catalog);
+    }
+    if let Some(info) = trailer_reference(document.bytes(), "Info")
+        .and_then(|id| find_object(&objects, id))
+        .and_then(dictionary_of)
+    {
+        private_sources.push(info);
+    }
+    for page in &pages {
+        if let Some(dictionary) = find_object(&objects, page.id).and_then(dictionary_of) {
+            private_sources.push(dictionary);
+        }
+    }
+    if private_sources
+        .iter()
+        .any(|dictionary| !dictionary_private_keys(dictionary, prefix).is_empty())
+    {
+        present.insert(HiddenInfoClass::PrivateAppData);
+    }
+    if objects.iter().any(|(_, object)| {
+        dictionary_of(object).is_some_and(|dictionary| {
+            dictionary.contains_key("FT")
+                && dictionary.get("V").is_some_and(|value| {
+                    *value != Object::Null
+                        && !matches!(value, Object::String(bytes) if bytes.is_empty())
+                })
+        })
+    }) {
+        present.insert(HiddenInfoClass::FormValues);
+    }
+
+    Ok(present)
+}
+
+/// Remove all keys `owner` holds that are identified as private app data.
+fn remove_private_keys(
+    objects: &mut [(ObjectId, Object)],
+    owner: ObjectId,
+    prefix: &str,
+    label: &str,
+    removed: &mut BTreeSet<RemovedItem>,
+    class: HiddenInfoClass,
+) {
+    let keys = dict_ref(objects, owner)
+        .map(|dictionary| dictionary_private_keys(dictionary, prefix))
+        .unwrap_or_default();
+    for key in keys {
+        neutralize_child(objects, owner, &key);
+        if dict_mut(objects, owner).is_some_and(|dictionary| dictionary.remove(&key).is_some()) {
+            removed.insert(RemovedItem::new(class, format!("{label}/{key}")));
+        }
+    }
+}
+
+fn apply_hidden_action(
+    action: &HiddenInfoAction,
+    objects: &mut [(ObjectId, Object)],
+    root: ObjectId,
+    pages: &[Page],
+    info_id: Option<ObjectId>,
+    selection: &HiddenInfoSelection,
+    removed: &mut BTreeSet<RemovedItem>,
+) {
+    let class = action.class();
+    match action.target() {
+        "trailer/Info" => {
+            if let Some(index) = info_id.and_then(|id| object_index(objects, id)) {
+                objects[index].1 = Object::Dictionary(Dictionary::new());
+                removed.insert(RemovedItem::new(class, "trailer/Info"));
+            }
+        }
+        "Catalog/Metadata" => {
+            if detach_catalog_key(objects, root, "Metadata") {
+                removed.insert(RemovedItem::new(class, "Catalog/Metadata"));
+            }
+        }
+        "Names/EmbeddedFiles" => {
+            if remove_names_key(objects, root, "EmbeddedFiles") {
+                removed.insert(RemovedItem::new(class, "Names/EmbeddedFiles"));
+            }
+        }
+        "Objects/Filespec" => {
+            let victims: Vec<ObjectId> = objects
+                .iter()
+                .filter(|(_, object)| {
+                    dictionary_of(object).is_some_and(|dictionary| {
+                        matches!(
+                            dictionary.get("Type").and_then(Object::as_name),
+                            Some("Filespec" | "EmbeddedFile")
+                        ) || dictionary.contains_key("EmbeddedFile")
+                    })
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            for id in victims {
+                if let Some(index) = object_index(objects, id) {
+                    objects[index].1 = Object::Null;
+                    removed.insert(RemovedItem::new(class, format!("Object/{id}")));
+                }
+            }
+        }
+        "Names/JavaScript" => {
+            if remove_names_key(objects, root, "JavaScript") {
+                removed.insert(RemovedItem::new(class, "Names/JavaScript"));
+            }
+        }
+        "Catalog/OpenAction" => {
+            if detach_catalog_key(objects, root, "OpenAction") {
+                removed.insert(RemovedItem::new(class, "Catalog/OpenAction"));
+            }
+        }
+        "Catalog/AA" => {
+            if detach_catalog_key(objects, root, "AA") {
+                removed.insert(RemovedItem::new(class, "Catalog/AA"));
+            }
+        }
+        "Page/AA" => {
+            for page in pages {
+                let id = page.id;
+                if let Some(index) = object_index(objects, id) {
+                    neutralize_child(objects, id, "AA");
+                    if let Object::Dictionary(dictionary) = &mut objects[index].1
+                        && dictionary.remove("AA").is_some()
+                    {
+                        removed.insert(RemovedItem::new(class, format!("Page/{id}/AA")));
+                    }
+                }
+            }
+        }
+        "Objects/JavaScript" => {
+            let victims: Vec<ObjectId> = objects
+                .iter()
+                .filter(|(_, object)| {
+                    dictionary_of(object).is_some_and(|dictionary| {
+                        dictionary.get("S").and_then(Object::as_name) == Some("JavaScript")
+                            || dictionary.get("Type").and_then(Object::as_name)
+                                == Some("JavaScript")
+                    })
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            for id in victims {
+                if let Some(index) = object_index(objects, id) {
+                    objects[index].1 = Object::Null;
+                    removed.insert(RemovedItem::new(class, format!("Object/{id}")));
+                }
+            }
+        }
+        "Page/Annots" => {
+            for page in pages {
+                let id = page.id;
+                let annot_refs: Vec<ObjectId> = dict_ref(objects, id)
+                    .and_then(|dictionary| dictionary.get("Annots"))
+                    .and_then(Object::as_array)
+                    .map(|array| array.iter().filter_map(Object::as_reference).collect())
+                    .unwrap_or_default();
+                for annot in annot_refs {
+                    if let Some(index) = object_index(objects, annot) {
+                        objects[index].1 = Object::Null;
+                    }
+                }
+                if let Some(index) = object_index(objects, id)
+                    && let Object::Dictionary(dictionary) = &mut objects[index].1
+                    && dictionary.remove("Annots").is_some()
+                {
+                    removed.insert(RemovedItem::new(class, format!("Page/{id}/Annots")));
+                }
+            }
+        }
+        "Page/Thumb" => {
+            for page in pages {
+                let id = page.id;
+                if let Some(index) = object_index(objects, id) {
+                    neutralize_child(objects, id, "Thumb");
+                    if let Object::Dictionary(dictionary) = &mut objects[index].1
+                        && dictionary.remove("Thumb").is_some()
+                    {
+                        removed.insert(RemovedItem::new(class, format!("Page/{id}/Thumb")));
+                    }
+                }
+            }
+        }
+        "Catalog/PieceInfo" => {
+            if detach_catalog_key(objects, root, "PieceInfo") {
+                removed.insert(RemovedItem::new(class, "Catalog/PieceInfo"));
+            }
+        }
+        "Page/PieceInfo" => {
+            for page in pages {
+                let id = page.id;
+                if let Some(index) = object_index(objects, id) {
+                    neutralize_child(objects, id, "PieceInfo");
+                    if let Object::Dictionary(dictionary) = &mut objects[index].1
+                        && dictionary.remove("PieceInfo").is_some()
+                    {
+                        removed.insert(RemovedItem::new(class, format!("Page/{id}/PieceInfo")));
+                    }
+                }
+            }
+        }
+        "Dictionary/PrivateKeys" => {
+            remove_private_keys(
+                objects,
+                root,
+                selection.private_key_prefix(),
+                "Catalog",
+                removed,
+                class,
+            );
+            if let Some(info) = info_id {
+                remove_private_keys(
+                    objects,
+                    info,
+                    selection.private_key_prefix(),
+                    "Info",
+                    removed,
+                    class,
+                );
+            }
+            for page in pages {
+                remove_private_keys(
+                    objects,
+                    page.id,
+                    selection.private_key_prefix(),
+                    "Page",
+                    removed,
+                    class,
+                );
+            }
+        }
+        "Dictionary/LastModified" => {
+            // `LastModified` is already covered by `is_private_key`, but keep a
+            // dedicated deterministic action so an explicit selection is clear.
+            for owner in std::iter::once(root).chain(pages.iter().map(|page| page.id)) {
+                let keys = dict_ref(objects, owner)
+                    .map(|dictionary| {
+                        dictionary
+                            .keys()
+                            .filter(|key| key.as_str() == "LastModified")
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for key in keys {
+                    neutralize_child(objects, owner, &key);
+                    if dict_mut(objects, owner)
+                        .is_some_and(|dictionary| dictionary.remove(&key).is_some())
+                    {
+                        removed.insert(RemovedItem::new(
+                            class,
+                            format!("Object/{owner}/LastModified"),
+                        ));
+                    }
+                }
+            }
+        }
+        "AcroForm/FieldValues" => {
+            for (id, object) in objects.iter_mut() {
+                if let Object::Dictionary(dictionary) = object
+                    && dictionary.contains_key("FT")
+                {
+                    for key in ["V", "DV", "AP", "AS"] {
+                        if dictionary.remove(key).is_some() {
+                            removed.insert(RemovedItem::new(class, format!("Object/{id}/{key}")));
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A deterministic report of an extended hidden-information sanitization run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HiddenInfoReport {
+    /// The selection that was applied.
+    pub selection: HiddenInfoSelection,
+    /// The full deterministic action plan.
+    pub planned: Vec<HiddenInfoAction>,
+    /// Concrete items removed, in canonical order.
+    pub removed: Vec<RemovedItem>,
+    /// Classes present in the source before the run.
+    pub before: BTreeSet<HiddenInfoClass>,
+    /// Classes present in the re-parsed output after the run.
+    pub after: BTreeSet<HiddenInfoClass>,
+}
+
+impl HiddenInfoReport {
+    /// Selected classes still present after sanitization, in canonical order.
+    pub fn residuals(&self) -> Vec<HiddenInfoClass> {
+        self.selection
+            .classes()
+            .filter(|class| self.after.contains(class))
+            .collect()
+    }
+
+    /// Whether no selected class remains.
+    pub fn is_clean(&self) -> bool {
+        self.residuals().is_empty()
+    }
+
+    /// Enforce strict verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityError::HiddenInfoResidual`] for the first residual
+    /// class when the caller requested strict verification.
+    pub fn check(&self, strict: bool) -> Result<()> {
+        if strict && let Some(class) = self.residuals().first() {
+            return Err(SecurityError::HiddenInfoResidual(class.as_id()));
+        }
+        Ok(())
+    }
+}
+
+/// The owned result of an extended hidden-information sanitization.
+#[derive(Debug, Clone)]
+pub struct HiddenInfoSanitized {
+    bytes: Vec<u8>,
+    report: HiddenInfoReport,
+}
+
+impl HiddenInfoSanitized {
+    /// Sanitized, standalone PDF bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Deterministic report of removed items and verification.
+    pub fn report(&self) -> &HiddenInfoReport {
+        &self.report
+    }
+
+    /// Re-parse the sanitized bytes with the core parser.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error if the produced bytes cannot be parsed.
+    pub fn document(&self) -> Result<Document> {
+        Document::from_bytes(self.bytes.clone()).map_err(core_error)
+    }
+}
+
+/// Apply `selection` to `source`, remove hidden information structurally, and
+/// verify the re-parsed output.
+///
+/// This extends [`sanitize_document`] with the classes it did not cover:
+/// thumbnails, private application data, and additional JavaScript locations,
+/// while accepting a vendor-private key prefix. Referenced child objects are
+/// nulled before their keys are detached, so information is removed rather
+/// than merely hidden behind an orphaned object.
+///
+/// # Errors
+///
+/// Returns a typed error for a damaged source, a serialization failure, or (in
+/// strict mode) a residual selected class. Document contents are never
+/// embedded in an error.
+pub fn sanitize_hidden_info(
+    source: &Document,
+    selection: &HiddenInfoSelection,
+    strict: bool,
+) -> Result<HiddenInfoSanitized> {
+    let before = hidden_info_inventory(source, selection)?;
+    let planned = selection.plan();
+    let root = source.root().map_err(core_error)?;
+    let pages = source.pages().map_err(core_error)?;
+    let info_id = trailer_reference(source.bytes(), "Info");
+
+    let mut objects = load_objects(source)?;
+    let mut removed = BTreeSet::new();
+    for action in &planned {
+        apply_hidden_action(
+            action,
+            &mut objects,
+            root,
+            &pages,
+            info_id,
+            selection,
+            &mut removed,
+        );
+    }
+
+    let mut trailer = Dictionary::new();
+    if let Some(id) = trailer_id(source.bytes()) {
+        trailer.insert("ID".to_owned(), id);
+    }
+    // Preserve the /Info reference unless the caller selected its removal:
+    // a targeted scrub must not drop structures the caller left untouched.
+    if !selection.contains(HiddenInfoClass::DocumentInfo)
+        && let Some(info) = info_id
+    {
+        trailer.insert("Info".to_owned(), Object::Reference(info));
+    }
+    let bytes = write_pdf(&objects, root, &trailer)?;
+
+    let output = Document::from_bytes(bytes.clone()).map_err(core_error)?;
+    let after = hidden_info_inventory(&output, selection)?;
+    let report = HiddenInfoReport {
+        selection: selection.clone(),
+        planned,
+        removed: removed.into_iter().collect(),
+        before,
+        after,
+    };
+    report.check(strict)?;
+
+    Ok(HiddenInfoSanitized { bytes, report })
+}
+
+#[cfg(test)]
+mod extended_tests {
+    use super::*;
+
+    const ID_HEX: &str = "00112233445566778899AABBCCDDEEFF";
+
+    fn build_pdf(objects: &[&str]) -> Vec<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, body).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+        out.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in &offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R /Info 6 0 R /ID [<{ID_HEX}> <{ID_HEX}>] >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    /// All nine hidden-information classes in one classic-xref document.
+    fn full_fixture() -> Vec<u8> {
+        build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /Names 5 0 R /Metadata 7 0 R /OpenAction 10 0 R /AcroForm << /Fields [11 0 R] >> /PieceInfo 12 0 R /AA << /WC 10 0 R >> /LastModified (D:20200101) /PrivateTag (secret private) >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [9 0 R] /Thumb 13 0 R /PieceInfo 14 0 R /AA << /O 10 0 R >> /PrivateNote (secret page) >>",
+            "<< /Length 23 >>\nstream\nBT (Visible text) Tj ET\nendstream",
+            "<< /EmbeddedFiles 8 0 R /JavaScript 15 0 R >>",
+            "<< /Title (Secret Title) /PrivateTag (secret info) >>",
+            "<< /Type /Metadata /Subtype /XML /Length 17 >>\nstream\n<xmp>secret</xmp>\nendstream",
+            "<< /Names [(secret.txt) 16 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /Contents (hidden note) >>",
+            "<< /S /JavaScript /JS (app.alert\\(1\\)) >>",
+            "<< /FT /Tx /T (field1) /V (secret value) >>",
+            "<< /Private 12 0 R >>",
+            "<< /Type /XObject /Subtype /Image /Length 3 >>\nstream\nJPG\nendstream",
+            "<< /Private 14 0 R >>",
+            "<< /Names [(JS) 10 0 R] >>",
+            "<< /Type /Filespec /F (secret.txt) /EF << /F 17 0 R >> >>",
+            "<< /Type /EmbeddedFile /Length 5 >>\nstream\nbytes\nendstream",
+        ])
+    }
+
+    fn doc(bytes: &[u8]) -> Document {
+        Document::from_bytes(bytes.to_vec()).expect("fixture parses")
+    }
+
+    #[test]
+    fn hidden_info_identifiers_round_trip() {
+        for class in HiddenInfoClass::ALL {
+            assert_eq!(HiddenInfoClass::from_id(class.as_id()), Some(class));
+        }
+        assert_eq!(HiddenInfoClass::from_id("unknown"), None);
+        assert_eq!(HiddenInfoClass::Thumbnails.to_string(), "thumbnails");
+    }
+
+    #[test]
+    fn full_selection_removes_every_hidden_class_on_real_bytes() {
+        let source = doc(&full_fixture());
+        let selection = HiddenInfoSelection::all();
+        let before = hidden_info_inventory(&source, &selection).expect("before inventory");
+        assert_eq!(before.len(), HiddenInfoClass::ALL.len());
+
+        let result = sanitize_hidden_info(&source, &selection, true).expect("sanitize");
+        let report = result.report();
+        assert!(report.is_clean());
+        assert!(report.check(true).is_ok());
+        assert!(report.after.is_empty());
+        assert_eq!(report.before.len(), HiddenInfoClass::ALL.len());
+        assert!(!report.removed.is_empty());
+        assert!(report.removed.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(report.planned.windows(2).all(|pair| pair[0] <= pair[1]));
+
+        let output = result.document().expect("output parses");
+        assert!(
+            hidden_info_inventory(&output, &selection)
+                .expect("after inventory")
+                .is_empty()
+        );
+        assert_eq!(output.page_text(0).expect("text"), "Visible text");
+    }
+
+    #[test]
+    fn removal_is_structural_not_cosmetic() {
+        let source = doc(&full_fixture());
+        let result =
+            sanitize_hidden_info(&source, &HiddenInfoSelection::all(), true).expect("sanitize");
+        let bytes = result.bytes();
+        for needle in [
+            &b"Secret Title"[..],
+            &b"secret.txt"[..],
+            &b"hidden note"[..],
+            &b"app.alert"[..],
+            &b"secret value"[..],
+            &b"secret private"[..],
+            &b"secret page"[..],
+            &b"secret info"[..],
+        ] {
+            assert!(
+                !bytes.windows(needle.len()).any(|w| w == needle),
+                "removed bytes must not survive in the output"
+            );
+        }
+    }
+
+    #[test]
+    fn targeted_selection_leaves_unselected_classes() {
+        let source = doc(&full_fixture());
+        let mut selection = HiddenInfoSelection::empty();
+        selection.include(HiddenInfoClass::Thumbnails);
+        let result = sanitize_hidden_info(&source, &selection, true).expect("thumbnails only");
+        let output = result.document().expect("output parses");
+        let after = hidden_info_inventory(&output, &selection).expect("after");
+        assert!(!after.contains(&HiddenInfoClass::Thumbnails));
+        let full = hidden_info_inventory(&output, &HiddenInfoSelection::all()).expect("full");
+        assert!(full.contains(&HiddenInfoClass::DocumentInfo));
+        assert!(full.contains(&HiddenInfoClass::Attachments));
+        assert!(full.contains(&HiddenInfoClass::FormValues));
+    }
+
+    #[test]
+    fn report_is_deterministic_and_source_is_unchanged() {
+        let bytes = full_fixture();
+        let source = doc(&bytes);
+        let original = source.bytes().to_vec();
+        let selection = HiddenInfoSelection::all();
+        let first = sanitize_hidden_info(&source, &selection, true).expect("first");
+        let second = sanitize_hidden_info(&source, &selection, true).expect("second");
+        assert_eq!(first.bytes(), second.bytes());
+        assert_eq!(first.report(), second.report());
+        assert_eq!(source.bytes(), original.as_slice());
+    }
+
+    #[test]
+    fn strict_residual_is_a_typed_error() {
+        let report = HiddenInfoReport {
+            selection: HiddenInfoSelection::new([HiddenInfoClass::Thumbnails]),
+            planned: Vec::new(),
+            removed: Vec::new(),
+            before: BTreeSet::new(),
+            after: BTreeSet::from([HiddenInfoClass::Thumbnails]),
+        };
+        assert!(!report.is_clean());
+        assert_eq!(
+            report.check(true),
+            Err(SecurityError::HiddenInfoResidual("thumbnails"))
+        );
+        assert_eq!(report.check(false), Ok(()));
+    }
+
+    #[test]
+    fn private_key_prefix_is_configurable_and_validated() {
+        let mut selection = HiddenInfoSelection::empty();
+        assert_eq!(selection.private_key_prefix(), "Private");
+        selection
+            .set_private_key_prefix("Custom")
+            .expect("valid prefix");
+        assert_eq!(selection.private_key_prefix(), "Custom");
+        assert!(selection.set_private_key_prefix("").is_err());
+        assert!(selection.set_private_key_prefix("bad/prefix").is_err());
+
+        let source = doc(&full_fixture());
+        let mut custom = HiddenInfoSelection::new([HiddenInfoClass::PrivateAppData]);
+        custom
+            .set_private_key_prefix("Secret")
+            .expect("valid prefix");
+        // With prefix "Secret" only /LastModified matches in the fixture.
+        let before = hidden_info_inventory(&source, &custom).expect("inventory");
+        assert!(before.contains(&HiddenInfoClass::PrivateAppData));
+        let result = sanitize_hidden_info(&source, &custom, true).expect("sanitize");
+        let output = result.document().expect("output parses");
+        assert!(
+            !hidden_info_inventory(&output, &custom)
+                .expect("after")
+                .contains(&HiddenInfoClass::PrivateAppData)
+        );
+    }
+
+    #[test]
+    fn empty_selection_is_a_no_op() {
+        let source = doc(&full_fixture());
+        let selection = HiddenInfoSelection::empty();
+        let result = sanitize_hidden_info(&source, &selection, true).expect("noop");
+        assert!(result.report().planned.is_empty());
+        assert!(result.report().removed.is_empty());
+        assert_eq!(result.report().before.len(), HiddenInfoClass::ALL.len());
+        assert_eq!(result.report().after, result.report().before);
+        assert!(result.report().is_clean());
+    }
 }
 
 #[cfg(test)]

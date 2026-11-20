@@ -23,6 +23,17 @@ pub enum SecurityError {
     InvalidPermissionBits(u32),
     /// A requested key length did not match the encryption method.
     InvalidKeyLength(u16),
+    /// The supplied password configuration described a conflicting state.
+    ///
+    /// The static label names the invariant that was violated; no password
+    /// bytes are ever carried in an error value.
+    PasswordConflict(&'static str),
+    /// A request would widen permissions granted to a user/open session.
+    ///
+    /// In particular, an empty user password must never elevate a session to
+    /// the owner role or grant permissions beyond the configured mask. The
+    /// static label names the attempted widening.
+    PermissionWideningRejected(&'static str),
     /// Encryption could not be completed.
     EncryptionFailed,
     /// Decryption failed (for example, invalid key or padding).
@@ -140,6 +151,11 @@ pub enum SecurityError {
         /// Category that was still present after sanitization.
         category: SanitizationCategory,
     },
+    /// An extended hidden-information class selected for removal is still
+    /// present after sanitization.
+    ///
+    /// Carries only the stable class identifier, never document contents.
+    HiddenInfoResidual(&'static str),
     /// A metadata field identifier (key, name, prefix, or local name) was empty.
     ScrubInvalidFieldIdentifier,
     /// An XMP namespace prefix was not a valid XML NCName.
@@ -283,6 +299,12 @@ impl fmt::Display for SecurityError {
             Self::InvalidKeyLength(bits) => {
                 write!(f, "invalid key length: {bits} bits")
             }
+            Self::PasswordConflict(reason) => {
+                write!(f, "conflicting password configuration: {reason}")
+            }
+            Self::PermissionWideningRejected(reason) => {
+                write!(f, "permission widening rejected: {reason}")
+            }
             Self::EncryptionFailed => write!(f, "encryption failed"),
             Self::DecryptionFailed => write!(f, "decryption failed"),
             Self::UnsupportedDocumentStructure(reason) => {
@@ -374,6 +396,9 @@ impl fmt::Display for SecurityError {
             ),
             Self::SanitizationVerificationFailed { category } => {
                 write!(f, "sanitization category still present: {category}")
+            }
+            Self::HiddenInfoResidual(class) => {
+                write!(f, "hidden-information class still present: {class}")
             }
             Self::ScrubInvalidFieldIdentifier => {
                 write!(f, "metadata field identifier must not be empty")

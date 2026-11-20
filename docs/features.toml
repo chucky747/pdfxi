@@ -2308,88 +2308,96 @@ title = "Trust manager and revocation checks"
 [[feature]]
 docs = [
     "crates/pdfxi-security/src/sanitize_document.rs",
-    "crates/pdfxi-security/src/lib.rs",
     "crates/pdfxi-security/src/error.rs",
-    "docs/evidence/security/T-0116.md",
+    "crates/pdfxi-security/src/lib.rs",
+    "docs/evidence/security/T-0148.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 236 passed, 0 failed, including all 7 new sanitize_document tests that build real classic-xref PDF bytes and verify every category is removed on the re-parsed output, determinism, copy-on-write source integrity, targeted removal, strict typed residuals, and damaged-source typed errors; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0116.md."
+evidence = "cargo test -p pdfxi-security: 305 passed, 0 failed, TEST_EXIT=0; includes 9 new sanitize_document::extended_tests. fmt/clippy(all-targets, -D warnings)/rustdoc(-D warnings) all EXIT=0. docs/evidence/security/T-0148.md"
 id = "SEC-008"
 notes = """
-Applies the existing Sanitizer plan to a concrete pdfxi_core::Document. Actions
-run in canonical order, are copy-on-write (the source is borrowed immutably),
-and the output is re-parsed so a fresh SanitizationInventory verifies removal
-of metadata, embedded files, annotations, JavaScript, and form values. The
-trailer /Info key is dropped and its object emptied; /Metadata, /Names entries,
-/OpenAction, and page /Annots are detached and their referenced objects nulled;
-form field value keys (/V, /DV, /AP, /AS) are cleared. Strict mode maps residuals
-to SecurityError::SanitizationVerificationFailed; structural failures map to a
-typed SanitizationCoreFailed. Honest scope: classic-xref, unencrypted PDFs only;
-xref-stream, linearized, and encrypted inputs are rejected with a typed error;
-detached objects remain as null placeholders rather than being renumbered away,
-and there is no host UI/CLI exposure, so the row stays in-progress. No
-unsafe/new deps/panics.
+Extends sanitize_document with an explicit, deterministic hidden-information
+model covering all classes named by the row: document Info, XMP metadata
+streams, attachments/embedded files, JavaScript (name trees, OpenAction, /AA,
+action objects), comments/annotations, thumbnails (/Thumb), private application
+data (/PieceInfo and vendor-prefixed keys plus /LastModified), and form values.
+
+HiddenInfoSelection is a canonical BTreeSet selection with include/exclude,
+a configurable validated private-key prefix, and a stable HiddenInfoAction
+plan. sanitize_hidden_info applies the plan copy-on-write to a real
+pdfxi_core::Document, structurally nulling referenced child objects before
+detaching keys (verified by byte scanning in removal_is_structural_not_cosmetic),
+preserving the /Info reference when its class is not selected, writing fresh
+classic-xref bytes, re-parsing them, and building before/after inventories.
+HiddenInfoReport lists concrete RemovedItems with stable target identifiers and
+returns typed SecurityError::HiddenInfoResidual in strict mode; residuals are
+selected classes still present after the sanitize, not merely hidden.
+
+Library scope boundary: as in SEC-008's earlier note, classic-xref unencrypted
+sources are the supported layout (xref-stream/linearized/encrypted inputs are
+rejected with a typed core error), detached objects remain null placeholders,
+and host UI/CLI exposure is outside this crate. No secrets/documents logged.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "sanitize_document::tests::full_sanitization_removes_every_category_on_real_bytes",
-    "sanitize_document::tests::targeted_sanitization_leaves_unselected_categories",
-    "sanitize_document::tests::source_is_unchanged_after_copy_on_write_sanitize",
-    "sanitize_document::tests::sanitization_is_deterministic",
-    "sanitize_document::tests::empty_plan_is_a_no_op_with_empty_applied_list",
-    "sanitize_document::tests::strict_residual_is_a_typed_error",
+    "sanitize_document::extended_tests::hidden_info_identifiers_round_trip",
+    "sanitize_document::extended_tests::full_selection_removes_every_hidden_class_on_real_bytes",
+    "sanitize_document::extended_tests::removal_is_structural_not_cosmetic",
+    "sanitize_document::extended_tests::targeted_selection_leaves_unselected_classes",
+    "sanitize_document::extended_tests::report_is_deterministic_and_source_is_unchanged",
+    "sanitize_document::extended_tests::strict_residual_is_a_typed_error",
+    "sanitize_document::extended_tests::private_key_prefix_is_configurable_and_validated",
+    "sanitize_document::extended_tests::empty_selection_is_a_no_op",
     "sanitize_document::tests::damaged_source_returns_a_typed_core_error",
 ]
 title = "Sanitize document and remove hidden information"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-security/src/xmp_scrub.rs",
     "crates/pdfxi-security/src/scrub.rs",
     "crates/pdfxi-security/src/error.rs",
-    "docs/book/src/security.md",
-    "docs/evidence/security/T-0078.md",
+    "crates/pdfxi-security/src/lib.rs",
+    "docs/evidence/security/T-0148.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security: 174 passed, 0 failed (17 original + 4 new scrub regression tests); fmt/clippy -D warnings/rustdoc -D warnings all EXIT=0 with CARGO_TARGET_DIR=target/lanes/security. See docs/evidence/security/T-0078.md (Reviewer fix pass (T-0091))."
+evidence = "cargo test -p pdfxi-security: 305 passed, 0 failed, TEST_EXIT=0; includes 8 new xmp_scrub tests and 1 new scrub trailing-content regression. fmt/clippy(all-targets, -D warnings)/rustdoc(-D warnings) all EXIT=0. docs/evidence/security/T-0148.md"
 id = "SEC-009"
 notes = """
-Copy-on-write security-layer scrubber with profiles (All / KeepProducer /
-Custom allowlist), three XMP strategies (deterministic ReplaceCanonical default,
-RemovePacket, and Selective round-trip), before/after inventory, and residual
-verification. Reviewer pass hardened XMP identifiers to XML NCNames with typed
-errors (ScrubInvalidXmpPrefix / ScrubInvalidXmpLocalName) and made from_xml accept
-only a bounded, case-insensitive <rdf:RDF> root with a matching close tag;
-arbitrary text, truncated/mismatched roots, and huge nesting are rejected.
-Rustdoc and docs/book/src/security.md now state exactly what is validated and
-escaped and that selective parsing only reads the crate's structured packet.
-Real PDF object/stream deletion and byte output remain owned by the core writer;
-row stays in-progress.
+Completes XMP scrubbing at the library level. XmpRemovalSpec selects namespace
+URIs and individual XmpPropertyKeys. scrub_xmp parses a bounded canonical packet
+with XmpPacket::from_xml, removes only the selected namespaces/properties, and
+re-serialises deterministically; unselected properties (including namespaces
+this crate does not know) are preserved as typed, escaped values in stable
+order. New XmpPacket helpers (remove_namespace, remove_property, retain,
+namespace_uris) support this without weakening the existing allowlist path.
+
+Malformed or oversized XML is rejected with typed SecurityError::ScrubXmpMalformed
+(or typed identifier errors). XmpPacket::from_xml now also rejects non-comment,
+non-PI, non-xmpmeta-close content after the rdf:RDF root so data cannot hide past
+the closing tag. verify_xmp_scrub re-parses the produced bytes and reports
+residuals; check() returns typed SecurityError::ScrubVerificationFailed scoped
+to ScrubCategory::Xmp. scrub_and_verify_xmp performs both steps atomically.
+
+Library scope boundary: parsing is intentionally limited to the canonical
+structured subset (arbitrary third-party XML byte surgery stays out of scope by
+design); real PDF object/stream deletion and byte output are handled by the
+existing sanitize_document/pdfxi-core writer path. No property values, document
+contents, or secrets appear in reports or errors.
 """
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "scrub::tests::info_removal_drops_entries_and_reports_before_after",
-    "scrub::tests::xmp_packet_can_be_removed_or_replaced",
-    "scrub::tests::allowlist_preserves_selected_entries",
-    "scrub::tests::custom_allowlist_preserves_named_info_key_and_xmp_property",
-    "scrub::tests::piece_info_and_thumbnails_are_removed",
-    "scrub::tests::embedded_files_are_removed",
-    "scrub::tests::annotation_contents_author_and_time_are_cleared",
-    "scrub::tests::form_values_and_layer_names_are_cleared",
-    "scrub::tests::residual_verification_detects_and_accepts",
-    "scrub::tests::report_is_deterministic_for_equivalent_configs",
-    "scrub::tests::no_op_when_nothing_is_selected",
-    "scrub::tests::source_is_unchanged_after_copy_on_write_scrub",
-    "scrub::tests::selective_xmp_parse_filter_and_reserialize_round_trips",
-    "scrub::tests::xmp_values_are_xml_escaped_and_parser_unescapes_them",
-    "scrub::tests::malformed_xmp_and_empty_identifiers_are_typed_errors",
-    "scrub::tests::debug_output_never_contains_document_values",
-    "scrub::tests::category_and_operation_identifiers_round_trip",
-    "scrub::tests::hostile_xmp_identifiers_are_rejected_as_typed_errors",
-    "scrub::tests::from_xml_rejects_non_root_rdf_and_malformed_roots",
-    "scrub::tests::from_xml_is_case_insensitive_and_accepts_a_bare_root",
-    "scrub::tests::from_xml_bounds_huge_nesting_and_oversized_input",
+    "xmp_scrub::tests::removal_kind_identifiers_round_trip",
+    "xmp_scrub::tests::remove_namespace_removes_only_that_namespace_and_preserves_unknown",
+    "xmp_scrub::tests::remove_property_removes_only_the_selected_property",
+    "xmp_scrub::tests::malformed_xmp_is_a_typed_error",
+    "xmp_scrub::tests::verify_scrub_detects_a_residual_as_a_typed_error",
+    "xmp_scrub::tests::scrub_is_deterministic_and_source_is_unchanged",
+    "xmp_scrub::tests::empty_spec_preserves_all_properties_deterministically",
+    "xmp_scrub::tests::removal_records_and_spec_are_deterministic",
+    "scrub::tests::from_xml_rejects_trailing_content_after_root",
 ]
 title = "Metadata and XMP scrubbing"
 

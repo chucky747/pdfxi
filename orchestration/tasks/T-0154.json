@@ -1,0 +1,15 @@
+{
+  "id": "T-0154",
+  "lane": "qa",
+  "title": "Acceptance gate evidence pack for build and tests",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0144"],
+  "owns": [
+    "crates/pdfxi-testkit/**",
+    "docs/evidence/qa/T-0154.md",
+    "orchestration/feature-updates/T-0154.toml"
+  ],
+  "acceptance": "cargo xtask verify",
+  "evidence": ""
+}

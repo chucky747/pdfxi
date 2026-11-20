@@ -8,6 +8,10 @@
 //! - [`Permission`] / [`Permissions`] — permission bit flags and the effective
 //!   rights of a session, taking the [`PasswordRole`] into account. The owner
 //!   role bypasses restrictions, as with the PDF owner password.
+//! - [`password_policy`] — end-to-end password planning: validates conflicting
+//!   user/owner states, reports the handler and key length a document would
+//!   use, and resolves open credentials without widening user permissions
+//!   (SEC-001).
 //! - [`SecurityError`] — actionable, specific error variants for wrong
 //!   passwords, invalid keys, tampering, expiry, and revocation.
 //! - [`SignatureInfo`] / [`SignatureStatus`] — a side-effect-free signature
@@ -33,9 +37,16 @@
 //! - [`sanitize_document()`] — applies those plans to a concrete
 //!   [`pdfxi_core::Document`] with copy-on-write byte output and verification
 //!   against the re-parsed result (SEC-008).
+//! - [`sanitize_hidden_info()`] — extended structural removal of thumbnails,
+//!   private application data, attachments, JavaScript locations, and other
+//!   hidden-information classes with a deterministic selection model, a report
+//!   of removed items, and post-sanitize verification (SEC-008).
 //! - [`ScrubDocument`] / [`ScrubReport`] — copy-on-write metadata and XMP
 //!   scrubbing with scrub profiles, deterministic XMP replacement, and residual
 //!   verification.
+//! - [`xmp_scrub`] — minimal XMP namespace/property removal that preserves
+//!   unselected (including unknown) properties deterministically, rejects
+//!   malformed XML with typed errors, and verifies the scrub (SEC-009).
 //! - [`der`] — a strict, dependency-free ASN.1 DER encoder/decoder subset.
 //! - [`cms`] — CMS/PKCS#7 `SignedData` creation and validation behind the
 //!   [`SignatureProvider`] trait, with a deterministic in-memory test provider.
@@ -86,6 +97,8 @@ pub mod digital_id_lifecycle;
 mod encryption;
 pub mod encryption_writer;
 mod error;
+/// End-to-end password and permission planning with conflict validation (SEC-001).
+pub mod password_policy;
 mod permissions;
 pub mod policy;
 mod protector;
@@ -102,6 +115,8 @@ pub mod timestamp_authority;
 /// Local trust manager, CRLs, and deterministic trust/revocation reports (SEC-007).
 pub mod trust_manager;
 pub mod x509;
+/// Minimal XMP namespace/property removal with post-scrub verification (SEC-009).
+pub mod xmp_scrub;
 
 pub use certificate_encryption::{
     AesKwKeyWrapProvider, ContentCipher, EnvelopedData, InMemoryKeyWrapProvider, KeyWrapProvider,
@@ -122,6 +137,11 @@ pub use encryption_writer::{
     open_encrypted,
 };
 pub use error::{Result, SecurityError};
+pub use password_policy::{
+    AppliedPasswordPlan, EncryptionPlan, PasswordCredentials, PasswordPlanInput,
+    PasswordResolution, SecurityHandler, apply_password_plan, plan_encryption,
+    resolve_open_credentials,
+};
 pub use permissions::{PasswordRole, Permission, Permissions};
 pub use policy::{
     PolicyAction, PolicyPlan, PolicyReport, PolicySet, PolicyStatus, ProtectionPolicy,
@@ -137,7 +157,9 @@ pub use sanitization::{
     SanitizationReport, Sanitizer,
 };
 pub use sanitize_document::{
-    AppliedSanitizationReport, SanitizedDocument, inventory_from_document, sanitize_document,
+    AppliedSanitizationReport, HiddenInfoAction, HiddenInfoClass, HiddenInfoReport,
+    HiddenInfoSanitized, HiddenInfoSelection, RemovedItem, SanitizedDocument,
+    hidden_info_inventory, inventory_from_document, sanitize_document, sanitize_hidden_info,
 };
 pub use scrub::{
     Allowlist, AnnotationRecord, Residual, ScrubAction, ScrubCategory, ScrubConfig, ScrubDocument,
@@ -173,6 +195,10 @@ pub use x509::{
     FixedClock, KeyHandle, KeyUsage, KeyUsageBit, Name, OpaqueKeyHandle, PublicKeyInfo,
     RejectingVerifier, RelativeDistinguishedName, SignatureAlgorithm, SubjectAltName, TrustStore,
     ValidationPolicy, Validity, ValidityStatus, verify_chain,
+};
+pub use xmp_scrub::{
+    XmpRemovalKind, XmpRemovalRecord, XmpRemovalSpec, XmpResidual, XmpScrubOutput, XmpScrubReport,
+    XmpScrubVerification, scrub_and_verify_xmp, scrub_xmp, verify_xmp_scrub,
 };
 
 #[cfg(test)]

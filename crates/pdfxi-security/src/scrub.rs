@@ -387,6 +387,44 @@ impl XmpPacket {
         self.properties.len()
     }
 
+    /// Remove every property whose namespace URI equals `namespace_uri`.
+    ///
+    /// Returns the number of removed properties. Unknown namespaces are left
+    /// untouched so safe, unrecognised content survives a scrub round trip.
+    pub fn remove_namespace(&mut self, namespace_uri: &str) -> usize {
+        let before = self.properties.len();
+        self.properties
+            .retain(|property| property.namespace_uri() != namespace_uri);
+        before - self.properties.len()
+    }
+
+    /// Remove every property whose `(namespace URI, local name)` key matches.
+    ///
+    /// Returns the number of removed properties.
+    pub fn remove_property(&mut self, key: &XmpPropertyKey) -> usize {
+        let before = self.properties.len();
+        self.properties.retain(|property| {
+            property.namespace_uri() != key.namespace_uri()
+                || property.local_name() != key.local_name()
+        });
+        before - self.properties.len()
+    }
+
+    /// Keep only properties for which `predicate` returns `true`.
+    pub fn retain(&mut self, predicate: impl FnMut(&XmpProperty) -> bool) {
+        self.properties.retain(predicate);
+    }
+
+    /// Distinct namespace URIs in deterministic (sorted) order.
+    pub fn namespace_uris(&self) -> impl Iterator<Item = &str> {
+        let uris: BTreeSet<&str> = self
+            .properties
+            .iter()
+            .map(|property| property.namespace_uri())
+            .collect();
+        uris.into_iter()
+    }
+
     /// Serialise the packet to a deterministic, well-formed RDF/XML XMP packet.
     pub fn to_xml(&self) -> String {
         let mut groups: BTreeMap<(String, String), Vec<&XmpProperty>> = BTreeMap::new();
@@ -621,7 +659,39 @@ fn validate_rdf_root(xml: &str) -> Result<(usize, usize)> {
     }
 
     let content_end = find_matching_rdf_close(bytes, content_start, &mut tags)?;
+    // Nothing may be hidden after the closing root tag. Only whitespace,
+    // processing instructions, comments, and the matching x:xmpmeta close are
+    // accepted; any other element or free text is rejected.
+    validate_trailing_content(bytes, content_end + "</rdf:RDF>".len(), &mut tags)?;
     Ok((content_start, content_end))
+}
+
+/// Reject content after the `rdf:RDF` root's closing tag.
+fn validate_trailing_content(bytes: &[u8], mut pos: usize, tags: &mut usize) -> Result<()> {
+    const META_CLOSE: &[u8] = b"</x:xmpmeta";
+    loop {
+        pos = skip_ws(bytes, pos);
+        if pos >= bytes.len() {
+            return Ok(());
+        }
+        if starts_with_ci(&bytes[pos..], b"<?") {
+            let end = find_ci(&bytes[pos..], b"?>").ok_or(SecurityError::ScrubXmpMalformed)?;
+            pos += end + 2;
+        } else if starts_with_ci(&bytes[pos..], b"<!--") {
+            let end = find_ci(&bytes[pos..], b"-->").ok_or(SecurityError::ScrubXmpMalformed)?;
+            pos += end + 3;
+        } else if starts_with_ci(&bytes[pos..], META_CLOSE)
+            && is_name_end(bytes, pos + META_CLOSE.len())
+        {
+            pos = tag_end(bytes, pos + 1)? + 1;
+        } else {
+            return Err(SecurityError::ScrubXmpMalformed);
+        }
+        *tags += 1;
+        if *tags > MAX_XMP_TAGS {
+            return Err(SecurityError::ScrubXmpMalformed);
+        }
+    }
 }
 
 /// Find the byte index where the `</rdf:RDF>` matching the root at `pos` opens.
@@ -2099,6 +2169,25 @@ mod tests {
         let original = sample_document()?.xmp().expect("packet present").to_xml();
         assert_eq!(XmpPacket::from_xml(&original)?.to_xml(), original);
         Ok(())
+    }
+
+    #[test]
+    fn from_xml_rejects_trailing_content_after_root() {
+        // Content after the closing rdf:RDF root could hide data from a scrub
+        // round trip, so it is rejected rather than silently dropped.
+        for xml in [
+            "<rdf:RDF></rdf:RDF><extra/>",
+            "<rdf:RDF></rdf:RDF>trailing text",
+        ] {
+            assert_eq!(
+                XmpPacket::from_xml(xml),
+                Err(SecurityError::ScrubXmpMalformed)
+            );
+        }
+        // Whitespace, comments, processing instructions and the canonical
+        // x:xmpmeta close remain acceptable.
+        let canonical = XmpPacket::empty().to_xml();
+        assert!(XmpPacket::from_xml(&canonical).is_ok());
     }
 
     #[test]
