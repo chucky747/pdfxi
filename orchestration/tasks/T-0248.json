@@ -1,0 +1,18 @@
+{
+  "id": "T-0248",
+  "lane": "forms",
+  "title": "Form appearance fidelity: embedded fonts and non-identity matrices",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0234"
+  ],
+  "owns": [
+    "crates/pdfxi-forms/**",
+    "docs/evidence/hardening/T-0248.md",
+    "orchestration/feature-updates/T-0248.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-forms; filled appearances survive a rotated and non-identity-matrix widget on a real fixture",
+  "notes": "Follow-up split from T-0234, which delivered filling, appearances, flatten and XFDF on an upright identity-matrix fixture. This task composes widget /Matrix with the page and annotation transforms, and embeds or references fonts so appearances do not depend on a Base-14 substitute, including rotated and skewed widgets and non-Latin values. Feature-matrix rows stay `library` until the T-0243 shell task exposes them; this task does not change library semantics already published.",
+  "evidence": "docs/evidence/hardening/T-0248.md"
+}

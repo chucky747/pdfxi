@@ -1451,230 +1451,129 @@ tests = [
 title = "Repair malformed documents"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-convert/src/office_export_plan.rs",
-    "crates/pdfxi-convert/src/extract_model.rs",
-    "crates/pdfxi-convert/src/office_export/docx.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "crates/pdfxi-convert/tests/t0180_closure.rs",
-    "docs/evidence/convert/T-0180.md",
-]
+docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
-evidence = "docs/evidence/convert/T-0180.md"
+evidence = "docs/evidence/hardening/T-0239.md"
 id = "EXPORT-001"
 notes = """
-Library-level gap closed. `pdfxi_convert::office_export_plan` maps a validated
-`ExtractedDocument` (caller-supplied runs, rectangular tables, positioned text
-boxes) into an `OfficeDocument` with deterministic reading order, top-to-bottom
-then left-to-right paragraph grouping, one-based paragraph numbering, and `Page
-N` labels. Vector art, non-rectangular tables, and embedded media are typed
-`OfficePlanUnsupported` findings merged into the returned report, never faked.
-`OfficeExportEnvelope` validates the document, exposes deterministic manifest
-bytes, and writes through the existing local `DocxExporter`. No new OOXML ZIP
-writer is added; the in-process writer from T-0151 is reused and no Office
-process or network access is involved. Documented input subset: the caller
-supplies already-extracted geometry; supported constructs are paragraphs,
-simple tables, and text boxes, and every other construct is typed and reported.
-
-Remaining host-only integration (listed verbatim): "CLI `ExportKind::Word`
-dispatch and desktop UI menu wiring that supply extracted runs and choose the
-output path; no PDF text extraction from raw bytes, external Office process, or
-file write is performed in this crate."
+End-to-end Word export from a parsed `pdfxi_core::Document`: one paragraph per
+extracted line, real `w:br w:type="page"` between source pages, source
+page size/orientation, validated package. Text only; images, vector art,
+charts, annotations and backgrounds are not embedded. DOCX was opened by the
+operator in round A.
 """
 priority = "P3"
-status = "model"
+status = "library"
 tests = [
-    "office_export_plan::tests::plan_orders_pages_and_labels_each_format",
-    "office_export_plan::tests::plan_maps_runs_tables_and_text_boxes_into_blocks",
-    "office_export_plan::tests::numbering_is_deterministic_across_shuffled_pages",
-    "office_export_plan::tests::unsupported_constructs_are_typed_and_ordered",
-    "office_export_plan::tests::non_rectangular_tables_are_reported_not_faked",
-    "office_export_plan::tests::envelope_writes_all_three_formats_deterministically",
-    "t0180_closure::t0180_office_envelope_writes_all_three_formats",
-    "t0180_closure::t0180_office_envelope_reports_typed_unsupported_and_numbers_paragraphs",
+    "pdf_export::tests::docx_export_from_real_fixtures_has_required_parts_and_page_breaks",
+    "pdf_export::tests::docx_export_contains_markers_for_both_fixtures",
+    "pdf_export::tests::docx_text_is_xml_escaped_and_control_characters_are_replaced",
+    "pdf_export::tests::implemented_formats_match_the_build_features",
 ]
 title = "Export PDF to editable Word"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-convert/src/office_export_plan.rs",
-    "crates/pdfxi-convert/src/extract_model.rs",
-    "crates/pdfxi-convert/src/office_export/xlsx.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "crates/pdfxi-convert/tests/t0180_closure.rs",
-    "docs/evidence/convert/T-0180.md",
-]
+docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
-evidence = "docs/evidence/convert/T-0180.md"
+evidence = "docs/evidence/hardening/T-0239.md"
 id = "EXPORT-002"
 notes = """
-Library-level gap closed. The same mapping layer emits a validated envelope for
-`XlsxExporter`: one `Sheet N` label per page in ascending index order, text runs
-as ordered cell paragraphs, rectangular tables as typed `TableBlock`s with
-caller names used for sheet naming, and deterministic one-based paragraph
-numbering. Non-rectangular tables and embedded media are typed and reported;
-unsupported findings are bounded and sorted. The local ZIP/XML writer is
-reused; no external Office process, network, or file-system write is used.
-
-Remaining host-only integration (listed verbatim): "CLI `ExportKind::Spreadsheet`
-dispatch and desktop UI menu wiring that supply extracted runs/tables and choose
-the output path; no PDF text extraction from raw bytes, external Office process,
-or file write is performed in this crate."
+End-to-end Excel export: one worksheet per source page named `Page N`, one
+extracted line per row in column A, bounded column widths. Text only; no
+formulas, charts, images, or numeric inference. Validated with Windows OPC:
+Excel fixture 2 sheets (Page 1, Page 2), PowerPoint fixture 3 sheets, every
+workbook and worksheet parsed as XML.
 """
 priority = "P3"
-status = "model"
+status = "library"
 tests = [
-    "office_export_plan::tests::plan_orders_pages_and_labels_each_format",
-    "office_export_plan::tests::numbering_is_deterministic_across_shuffled_pages",
-    "office_export_plan::tests::non_rectangular_tables_are_reported_not_faked",
-    "office_export_plan::tests::unsupported_budget_is_enforced",
-    "office_export_plan::tests::envelope_writes_all_three_formats_deterministically",
-    "t0180_closure::t0180_office_envelope_writes_all_three_formats",
-    "t0180_closure::t0180_office_envelope_rejects_invalid_models",
+    "pdf_export::tests::xlsx_export_from_real_fixtures_has_sheets_markers_and_widths",
+    "office_export::xlsx::tests::xlsx_declares_bounded_column_widths",
+    "pdf_export::tests::invalid_export_options_are_rejected_before_writing",
 ]
 title = "Export PDF to editable Excel"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-convert/src/office_export_plan.rs",
-    "crates/pdfxi-convert/src/extract_model.rs",
-    "crates/pdfxi-convert/src/office_export/pptx.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "crates/pdfxi-convert/tests/t0180_closure.rs",
-    "docs/evidence/convert/T-0180.md",
-]
+docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
-evidence = "docs/evidence/convert/T-0180.md"
+evidence = "docs/evidence/hardening/T-0239.md"
 id = "EXPORT-003"
 notes = """
-Library-level gap closed. The mapping layer produces one `Slide N` per extracted
-page in ascending order, with positioned text boxes carrying width/height/font
-metrics, heading detection from run font size, and deterministic paragraph
-numbering. Vector art, complex tables, and embedded media are typed findings in
-the envelope and the final report. `PptxExporter` writes the archive in-process;
-no external Office process, network, or file write is used. Documented input
-subset: the caller supplies already-extracted text runs and geometry.
-
-Remaining host-only integration (listed verbatim): "CLI `ExportKind::Presentation`
-dispatch and desktop UI menu wiring that supply extracted runs and choose the
-output path; no PDF text extraction from raw bytes, external Office process, or
-file write is performed in this crate."
+End-to-end PowerPoint export: one slide per source page, generated `Page N`
+title shape, body lines in a text box, slide size from the first source page
+aspect. Text only; generated boxes are reported as `text_layout_flattened`;
+no images, charts, or transitions. Validated with Windows OPC: 2 slides for
+the Excel fixture (612x792 pt), 3 for the PowerPoint fixture (720x405 pt),
+all titled `Page 1..3`.
 """
 priority = "P3"
-status = "model"
+status = "library"
 tests = [
-    "office_export_plan::tests::plan_orders_pages_and_labels_each_format",
-    "office_export_plan::tests::plan_maps_runs_tables_and_text_boxes_into_blocks",
-    "office_export_plan::tests::unsupported_constructs_are_typed_and_ordered",
-    "office_export_plan::tests::invalid_models_and_options_are_typed_errors",
-    "office_export_plan::tests::envelope_writes_all_three_formats_deterministically",
-    "office_export_plan::tests::export_kind_mapping_and_format_helpers_are_stable",
-    "t0180_closure::t0180_office_envelope_writes_all_three_formats",
+    "pdf_export::tests::pptx_export_from_real_fixtures_has_slides_titles_and_markers",
+    "office_export::pptx::tests::pptx_leading_title_paragraph_renders_a_title_shape",
+    "pdf_export::tests::invalid_export_options_are_rejected_before_writing",
 ]
 title = "Export PDF to editable PowerPoint"
 
 [[feature]]
-docs = "crates/pdfxi-convert/src/html_export.rs, docs/evidence/convert/T-0163.md"
+docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
-evidence = "docs/evidence/convert/T-0163.md"
+evidence = "docs/evidence/hardening/T-0239.md"
 id = "EXPORT-004"
-notes = "Single-file and page-set HTML with positioned spans, escaped text, safe link schemes, style hooks and content budgets. Host web view remains external."
+notes = """
+End-to-end HTML export: self-contained semantic markup with one `<section>`
+and `<h2>Page N</h2>` per source page, one escaped `<p>` per extracted line,
+inline CSS only, and no script, link, image, or remote URL. Text only; no
+positioned layout or hyperlinks.
+"""
 priority = "P2"
-status = "model"
+status = "library"
 tests = [
-    "html_export::tests::html_output_is_deterministic",
-    "html_export::tests::no_script_or_event_handlers_are_emitted",
+    "pdf_export::tests::html_export_from_real_fixtures_is_semantic_escaped_and_self_contained",
+    "pdf_export::tests::html_text_is_escaped",
 ]
 title = "Export PDF to HTML"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-convert/src/extract_model.rs",
-    "crates/pdfxi-convert/src/rtf.rs",
-    "crates/pdfxi-convert/src/text.rs",
-    "crates/pdfxi-convert/src/export_options.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "crates/pdfxi-convert/tests/t0180_closure.rs",
-    "docs/evidence/convert/T-0180.md",
-]
+docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
-evidence = "docs/evidence/convert/T-0180.md"
+evidence = "docs/evidence/hardening/T-0239.md"
 id = "EXPORT-005"
 notes = '''
-Library-level gap closed end-to-end from the export model. `ExtractedDocument`
-validates caller-supplied pages/runs, derives deterministic reading order
-(top-to-bottom then left-to-right, same-line runs joined with a space), and emits
-plain-text bytes (UTF-8 without BOM, UTF-16LE/BE with BOM, page headers,
-separators) and RTF bytes (fixed header/tables, `\uN?` escapes for non-ASCII,
-mixed newline paragraph breaks, `\page` separators) through the existing
-writers. Both paths are byte-deterministic and return typed errors
-(`ExtractModelError`, `TextModelExportError`) for invalid models or options.
-
-Remaining host-only integration (listed verbatim): "CLI/UI dispatch that chooses
-`.txt` versus `.rtf` from `ExportKind` and writes the returned bytes to a
-host-chosen path; no PDF text extraction from raw bytes is performed here."
+End-to-end RTF and plain-text export. RTF uses the existing RTF 1.9 writer:
+fixed header/font/colour tables, `\par` per line, `\page` between pages,
+signed `\uN?` escapes and pure-ASCII bytes. Text uses one line feed between
+pages. Both are produced from `Document::page_text` through the same page
+selection as the other formats.
 '''
 priority = "P1"
-status = "model"
+status = "library"
 tests = [
-    "extract_model::tests::reading_order_sorts_top_to_bottom_then_left_to_right",
-    "extract_model::tests::reading_order_is_independent_of_input_order",
-    "extract_model::tests::plain_text_emitter_is_deterministic_and_honours_encoding",
-    "extract_model::tests::rtf_emitter_is_deterministic_and_escapes_text",
-    "extract_model::tests::emitters_return_typed_errors_for_bad_models_and_options",
-    "extract_model::tests::boundary_sizes_are_enforced",
-    "t0180_closure::t0180_rtf_and_plain_text_emitters_are_deterministic_from_extraction",
+    "pdf_export::tests::text_dispatch_from_real_fixtures_has_markers_and_counts",
+    "pdf_export::tests::rtf_export_from_real_fixtures_is_ascii_with_page_breaks_and_markers",
+    "rtf::tests::rtf_escapes_special_characters_and_tabs",
+    "rtf::tests::rtf_unicode_uses_signed_utf16_escapes",
 ]
 title = "Export PDF to RTF and plain text"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-render/src/export.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "crates/pdfxi-render/tests/export_pdfium.rs",
-    "docs/evidence/render/T-0065.md",
-]
+docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
-evidence = "cargo test -p pdfxi-render: 62 passed, 0 failed, EXIT=0. cargo test -p pdfxi-render --features pdfium: 75 passed, 0 failed, EXIT=0 (incl. 1 PDFium export smoke). cargo fmt -p pdfxi-render -- --check: EXIT=0. clippy (-D warnings) and rustdoc (-D warnings) EXIT=0. Full pasted output in docs/evidence/render/T-0065.md."
+evidence = "docs/evidence/hardening/T-0239.md"
 id = "EXPORT-006"
 notes = """
-Page-image export now supports PNG, baseline JPEG (documented Annex K
-quantization and Huffman tables, IJG quality scaling) and uncompressed
-multi-page TIFF, with validated DPI (1..=12000), scale/fit-to-box modes, RGB/
-RGBA/grayscale colour handling, an explicit alpha policy, JPEG quality, one-
-based page ranges, cancellation and progress. PNG and TIFF bytes are
-deterministic; DPI metadata is embedded via PNG pHYs, JPEG JFIF density and
-TIFF X/YResolution rationals. Implemented in pdfxi-render's new export module
-which reuses the print pipeline; no new dependencies, no unsafe, no library
-unwrap/expect/panic; zero dimensions return a typed error before chunking.
-JPEG tests verify markers/DQT/SOF0/JFIF density/byte stuffing but do not decode
-the entropy scan end-to-end. pdfxi-convert keeps its separate PNG/PPM path;
-merging them is a documented follow-up.
+End-to-end PNG/JPEG export through `pdfxi-render`'s PDFium export path at the
+requested DPI and quality, with one part per selected page. Image formats are
+advertised by `ExportFormat::implemented()` only with the `pdfium` feature.
+On the Excel fixture page 1 (612x792 pt) the measured output is 612x792 px at
+72 DPI and 1224x1584 px at 144 DPI, and the rendered page is not uniform.
 """
 priority = "P0"
 status = "library"
 tests = [
-    "export::tests::alpha_flatten_composites_onto_the_background",
-    "export::tests::tiff_multipage_offsets_and_resolution_tags_are_consistent",
-    "export::tests::grayscale_rgb_rgba_produce_expected_channels_and_luma",
-    "export::tests::empty_data_with_nonzero_dimensions_is_rejected",
-    "export::tests::tiff_rgba_declares_extra_samples",
-    "export::tests::jpeg_rgba_with_flatten_is_rejected_in_validate",
-    "export::tests::mismatched_raster_buffer_is_rejected",
-    "export::tests::png_has_signature_ordered_chunks_and_pixel_round_trip",
-    "export::tests::jpeg_bit_writer_stuffs_0xff_bytes",
-    "export::tests::zero_dimension_page_from_renderer_is_typed_error",
-    "export::tests::zero_dimensions_are_rejected_before_chunking",
-    "export::tests::jpeg_header_quality_and_markers_are_valid",
-    "export::tests::jpeg_quality_is_validated",
-    "export::tests::fit_within_produces_a_bounded_raster",
-    "export::tests::cancellation_stops_export_before_and_between_pages",
-    "export::tests::dpi_scales_raster_dimensions_and_png_ihdr",
-    "export::tests::png_and_tiff_bytes_are_deterministic",
-    "export::tests::page_range_expands_to_sorted_zero_based_pages",
-    "export::tests::export_batches_tiff_pages_and_emits_one_file_per_png_page",
-    "export::tests::invalid_dpi_fit_and_alpha_policy_are_rejected",
-    "export_minimal_pdf_to_png_jpeg_and_tiff",
+    "pdf_export::tests::image_export_from_real_fixture_matches_geometry_and_is_not_blank",
+    "pdf_export::tests::implemented_formats_match_the_build_features",
+    "pdf_export::tests::invalid_export_options_are_rejected_before_writing",
 ]
 title = "Export pages to JPEG PNG and TIFF"
 
@@ -1773,52 +1672,31 @@ title = "Export to PostScript"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/fillworkflow.rs",
-    "crates/pdfxi-forms/src/fillworkflow/tests.rs",
+    "crates/pdfxi-forms/src/document_form.rs",
     "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0147.md",
+    "docs/evidence/hardening/T-0234.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms: 268 passed, 0 failed, TEST_EXIT=0; 13 new fillworkflow tests cover text/choice/checkbox end-to-end, validation failure, readonly rejection, required missing, reset, serialized round-trip value preservation, signature blocked without signature, signature transition recorded, deterministic bytes/plan, malformed input, parse-back rejection, number/clear and reset-field. fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0147.md."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 318 unit + 7 integration passed, 0 failed; fmt/clippy/doc EXIT=0. Real fixture fixtures/realworld/pdfxi-forms-selfmade.pdf read, filled, full-saved, reopened and re-read; artifact target/lanes/forms/t0234-out/filled.pdf. Full output in docs/evidence/hardening/T-0234.md."
 id = "FORMS-001"
 notes = """
-T-0147 closes the library-level headless fill workflow. `FillDocument` loads a
-caller-supplied parsed model either from `FieldSpec`s (`from_specs`) or from an
-already-loaded `Form` plus its matching `/AcroForm` dictionary model
-(`from_parts`, with shape and page-reference checks). `FillWorkflow` writes
-values with validation inherited from `Form::set_value`/`Form::validate`
-(readonly, required, type shape, choice/text constraints), supports clear,
-reset and per-field reset, and produces a deterministic `FilledDocumentPlan`:
-final field/widget dictionaries with `fill_acroform`-regenerated `/AP /N`
-appearances, a name-sorted `AcroFillReport`, a validation snapshot and signature
-workflow records. `FilledDocumentPlan::serialize` emits concrete PDF bytes with
-the T-0140 `serialize_form_pdf` serializer and `verify` parses them back with
-`parse_pdf`, reading each `/V` (with `/DV` fallback per PDF semantics) to prove
-the filled values survived. `finish` performs validate → plan → serialize →
-verify in one typed-error call.
-
-All new public items have rustdoc; the crate denies missing docs and forbids
-unsafe. Non-test code uses no unwrap/expect/panic. Read-only fields keep their
-caller-supplied dictionary entries and are not re-appeared by the fill pass.
-Host-level CLI/UI binding is a separate lane concern, not library scope, so the
-row is verified at the library boundary this task owns.
+The fill path now starts from real bytes: read_acroform resolves the catalog
+/AcroForm, inherited field attributes and fully qualified names against
+pdfxi_core::Document; set_text/set_checkbox/set_radio/set_choice write /V, widget
+/AS and regenerated /AP /N streams; needs_appearances and
+regenerate_appearances implement the NeedAppearances repair path. The model
+reports name, kind, value, options, read-only/required flags, rects and page
+indices. Text, checkbox, radio, choice, signature and pushbutton are covered,
+with radio states read from each widget /AP /N. The app shell still has to call
+the library and promote this row.
 """
 priority = "P1"
-status = "model"
+status = "library"
 tests = [
-    "fillworkflow::tests::fill_text_choice_and_checkbox_end_to_end",
-    "fillworkflow::tests::validation_failure_is_typed",
-    "fillworkflow::tests::readonly_field_rejection_is_typed",
-    "fillworkflow::tests::required_missing_is_typed",
-    "fillworkflow::tests::reset_restores_defaults_and_drops_signatures",
-    "fillworkflow::tests::serialized_round_trip_preserves_values",
-    "fillworkflow::tests::signature_field_blocked_without_signature",
-    "fillworkflow::tests::signature_workflow_transition_recorded",
-    "fillworkflow::tests::deterministic_plan_and_bytes",
-    "fillworkflow::tests::malformed_input_is_typed",
-    "fillworkflow::tests::verification_rejects_non_pdf_bytes",
-    "fillworkflow::tests::clear_and_number_values_round_trip",
-    "fillworkflow::tests::valid_signature_and_reset_field_record",
+    "reads_three_real_fields_with_inherited_attributes",
+    "fills_saves_reopens_and_writes_appearances",
+    "radio_group_fills_widget_states_on_a_derived_fixture",
+    "need_appearances_is_detected_and_repair_clears_it",
 ]
 title = "Fill existing AcroForm fields"
 
@@ -1936,62 +1814,46 @@ title = "Automatically recognize static form fields"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-forms/src/document_form.rs",
     "crates/pdfxi-forms/src/xfdf.rs",
-    "crates/pdfxi-forms/src/fdf.rs",
-    "docs/evidence/forms/T-0060.md",
+    "docs/evidence/hardening/T-0234.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 122 passed, 0 failed; 19 xfdf tests including per-type round trips, off-like option names, escaping, malformed XML, foreign prefixes, unknown namespace/field, and FormFill integration. Full output in docs/evidence/forms/T-0060.md."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): export_xfdf on the filled real fixture contains the three names and values, import into a fresh copy of the original and a full save/reopen reproduces text, checkbox and choice values. Output in docs/evidence/hardening/T-0234.md."
 id = "FORMS-006"
-notes = "FDF export/import was already complete. This task adds XFDF import: a bounded, dependency-free XML reader plus type-aware value mapping against a Form, with schema-compatible export from the existing export_xfdf. Text, checkbox, radio, choice, number and signature values round-trip; malformed XML, wrong namespace, unknown entity, unknown field, missing name and over-full scalar fields yield typed XfdfError variants. Scope: XFDF is a model-level subset (no <annots> or rich-text markup) and requires a Form for type mapping; see T-0060 notes."
+notes = """
+export_xfdf(&AcroFormModel) and import_xfdf(&mut Document, &str) bridge XFDF to
+real AcroForm fields rather than a caller-supplied Form. Export is name-sorted
+and escapes XML; import maps each value by the document field kind and rejects
+unknown names with a typed error. The existing model-level FDF/XFDF API remains;
+the crate root exposes the document entry points as export_xfdf_document and
+import_xfdf_document to avoid the name collision.
+"""
 priority = "P2"
-status = "model"
-tests = [
-    "xfdf::tests::xfdf_round_trip_text_and_signature",
-    "xfdf::tests::xfdf_round_trip_checkbox_and_radio",
-    "xfdf::tests::xfdf_round_trip_choice_multi_select",
-    "xfdf::tests::xfdf_round_trip_preserves_numbers_via_form_type",
-    "xfdf::tests::xfdf_escapes_and_decodes_xml_special_characters",
-    "xfdf::tests::xfdf_decodes_numeric_character_references",
-    "xfdf::tests::xfdf_accepts_default_and_prefixed_namespaces",
-    "xfdf::tests::xfdf_rejects_malformed_xml",
-    "xfdf::tests::xfdf_rejects_unknown_entity_and_namespace",
-    "xfdf::tests::xfdf_rejects_unknown_field",
-    "xfdf::tests::xfdf_supports_hierarchical_field_names",
-    "xfdf::tests::xfdf_imported_document_applies_to_a_fill_session",
-    "xfdf::tests::xfdf_preserves_off_like_option_names",
-    "xfdf::tests::xfdf_ignores_radio_value_outside_declared_choices",
-    "xfdf::tests::xfdf_rejects_foreign_prefixed_elements_and_attributes",
-]
+status = "library"
+tests = ["xfdf_round_trips_values_into_a_fresh_copy"]
 title = "Import and export FDF and XFDF"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-forms/src/document_form.rs",
     "crates/pdfxi-forms/src/flatten.rs",
-    "crates/pdfxi-forms/src/appearance.rs",
-    "docs/evidence/forms/T-0060.md",
+    "docs/evidence/hardening/T-0234.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 122 passed, 0 failed; 18 flatten tests covering text/checkbox/choice content presence, widget removal, non-widget annotation preservation, deterministic bytes, and unchanged-document no-op. Full output in docs/evidence/forms/T-0060.md."
+evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): flatten on the filled real fixture reports 3 fields / 3 widgets / 1 page, the saved reopen has no catalog /AcroForm and no widget annotations, and page text still contains 'Form page'. Output in docs/evidence/hardening/T-0234.md."
 id = "FORMS-007"
-notes = "Implements flatten_page/flatten_document over a documented adapter model: a stored-or-generated appearance is placed on the page with a q … cm … Q translation, appended to page content, widget annotations are removed, and non-widget annotations plus original content are preserved byte-for-byte. AppearancePolicy documents the PreferStored/Generate/StoredOnly sources and the generated fallback; stateful appearances resolve /AS then the value-derived state. The AcroForm dictionary is removed only when at least one widget was actually flattened; a document with no widgets is a no-op. Scope: arbitrary /Matrix and /Rotation placement needs a host adapter; see T-0060 notes."
+notes = """
+flatten(&mut Document) is the real-document counterpart of the existing
+adapter-model flatten_page/flatten_document. It resolves each widget's /AP /N
+stream (or /AS state), adds it to the page /Resources /XObject, appends a
+q ... cm /FmN Do Q block to /Contents, removes the widget annotation and removes
+the catalog AcroForm. Original page content is preserved, so existing page text
+is unchanged. Identity appearance /Matrix only in round A.
+"""
 priority = "P2"
-status = "model"
-tests = [
-    "flatten::tests::flatten_text_appearance_is_present_and_positioned",
-    "flatten::tests::flatten_checkbox_active_state_changes_the_output",
-    "flatten::tests::flatten_stored_checkbox_uses_the_active_state",
-    "flatten::tests::flatten_choice_lists_the_selected_values",
-    "flatten::tests::flatten_removes_widget_annotations",
-    "flatten::tests::flatten_preserves_non_widget_annotations_verbatim",
-    "flatten::tests::flatten_is_deterministic",
-    "flatten::tests::flatten_unchanged_document_is_a_noop",
-    "flatten::tests::flatten_prefers_stored_and_falls_back_when_absent",
-    "flatten::tests::flatten_stored_only_policy_errors_without_an_appearance",
-    "flatten::tests::flatten_rejects_unknown_fields",
-    "flatten::tests::flatten_document_counts_widgets_and_removes_the_acroform",
-    "flatten::tests::flatten_keeps_acroform_when_no_widgets_were_flattened",
-]
+status = "library"
+tests = ["flatten_paints_widgets_removes_acroform_and_keeps_page_text"]
 title = "Flatten forms and preserve appearance"
 
 [[feature]]
@@ -2202,26 +2064,28 @@ docs = [
     "crates/pdfxi-security/src/der.rs",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 93 passed, 0 failed. cargo clippy and cargo fmt -p pdfxi-security: clean. RUSTDOCFLAGS=-D warnings cargo doc: clean."
+evidence = "docs/evidence/hardening/T-0241.md"
 id = "SEC-005"
 notes = """
-CMS/PKCS#7 SignedData creation and validation now work at the library level:
-deterministic DER output with encapContentInfo, signerInfos, and signed
-attributes (contentType/messageDigest/signingTime); a SignatureProvider trait
-keeps keys and certificates out of the crate; verification maps to
-SignatureInfo/SignatureStatus and rejects tampering with distinct errors.
-Real X.509 parsing, PDF ByteRange/signature-field integration, and trust
-anchoring remain follow-on work owned by other tasks; reviewer sign-off and
-integrator snapshot are external orchestration steps.
+Real CMS/PKCS#7 signature over the PDF byte range: SignedData v1, SHA-256
+digest, sha256WithRSAEncryption, contentType/signingTime/messageDigest signed
+attributes, self-signed 2048-bit test identity, /adbe.pkcs7.detached, invisible
+signature widget registered in /Annots and /AcroForm. Verification checks the
+RSA signature and the content digest, reports coverage and appended bytes, and
+returns chain trust as None. No GUI caller yet: the E-signed badge and request
+flow are the T-0245 shell task, so this row stays `library`.
 """
 priority = "P2"
-status = "model"
+status = "library"
 tests = [
-    "cms::tests::build_then_verify_returns_valid_metadata",
-    "cms::tests::output_is_deterministic_for_fixed_inputs",
-    "cms::tests::tampered_content_is_rejected",
-    "cms::tests::tampered_signed_attribute_is_rejected",
-    "cms::tests::bad_signature_is_rejected",
+    "pdf_signature::tests::signs_a_real_pdf_and_verifies_the_cms",
+    "pdf_signature::tests::a_flipped_byte_inside_the_signed_range_is_reported_as_tampering",
+    "pdf_signature::tests::appending_bytes_after_the_signature_is_reported_without_losing_validity",
+    "pdf_signature::tests::a_corrupted_signature_value_is_rejected",
+    "pdf_signature::tests::a_certificate_that_does_not_match_the_signature_is_rejected",
+    "pdf_signature::tests::pem_loading_rejects_bad_and_undersized_keys",
+    "pdf_signature::tests::a_pdf_without_a_signature_is_a_typed_error",
+    "pdf_signature::tests::reserved_space_that_is_too_small_is_a_typed_error",
 ]
 title = "Sign and certify documents"
 
@@ -2459,75 +2323,29 @@ tests = [
 title = "Policy-based protection replacement"
 
 [[feature]]
-docs = "crates/pdfxi-edit/src/pdf/mod.rs"
+docs = [
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "docs/evidence/hardening/T-0230.md",
+]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): exit 0, 30 passed, 0 failed, 0 ignored; 0 doc tests. cargo fmt -p pdfxi-edit -- --check: exit 0. cargo clippy -p pdfxi-edit --all-targets --all-features -- -D warnings: exit 0, no warnings. Toolchain note: with rustc 1.100 merged doctests, any compiled doctest in this crate fails (even a trivial assert_eq); the module example is therefore a non-compiled text code fence, leaving `cargo test -p pdfxi-edit` green with 0 doctests. Reviewer sign-off and integrator snapshot remain external orchestration steps."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 309 unit + 5 integration passed, 0 failed; fmt/clippy/doc EXIT=0. Real Excel 2019 fixture annotated, full save, reopened with pdfxi-core; artifact target/lanes/author/t0230-out/annotated.pdf. Full output in docs/evidence/hardening/T-0230.md."
 id = "REVIEW-001"
 notes = """
-Added a dependency-free `pdf` submodule to pdfxi-edit that maps the existing
-annotation model to and from a small intermediate dictionary (BTreeMap of
-string keys to scalar/array Value objects). It stays independent of the
-pdfxi-core object model, as required by the crate boundary.
-
-`serialize` covers the common entries /Subtype, /Rect, /Contents, /T, /NM, /M,
-/C, /F, /CA, and /AP normal/rollover/down reference names, plus per-type
-fields for Text, Highlight, Underline, StrikeOut, Squiggly, Square, Circle,
-Line, Ink, FreeText, and Link. Four documented extension keys (XI_Id, XI_Page,
-XI_Alpha, XI_FontSize) make Annotation -> Dict -> Annotation lossless for all
-sixteen existing AnnotationKinds. Unknown subtypes are preserved as
-PdfSubtype::Opaque together with every unmodelled dictionary entry; conversion
-back to the older Annotation model reports PdfError::UnknownSubtype rather than
-dropping data.
-
-Validation is structured via PdfError: rectangle normalization pairs corners
-in any order and rejects non-finite or degenerate extents, colour components
-must be finite and in 0.0..=1.0, Line requires two /L points and Ink requires
-at least one non-empty stroke.
-
-`appearance` derives deterministic border paths (solid and dashed with fixed
-clockwise traversal), centered text-note icon layout, and markup quads sorted
-into a stable reading order (descending y, then ascending x). Repeated calls
-and scrambled quad inputs produce identical geometry; source annotations are
-never mutated. Reading-order interaction is unchanged because this module
-does not depend on pdfxi-accessibility.
-
-Geometry gained infallible Rect::saturating and Rect::inset helpers so no
-non-test code needs unwrap/expect/panic. Public items carry rustdoc, the crate
-keeps #![forbid(unsafe_code)] and #![deny(missing_docs)].
+The note, highlight, underline, strikeout and squiggly model (pdf/) is joined by
+real PDF writes for Text and Highlight. Notes and highlights get /Annots
+entries, /Subtype, /Rect, /Contents, /T, /NM, /M, /C, /CA, /F 4 and an /AP /N
+form XObject; highlights add /QuadPoints and a translucent ExtGState fill.
+There is now a library path from a comment tool click to a saved annotation, on
+the real fixture, that an app shell can call. Underline/strikeout/squiggly/
+ink/shape/stamp writes remain model-only.
 """
 priority = "P0"
-status = "model"
+status = "library"
 tests = [
-    "pdfxi-edit::annotation::tests::annotation_bounds_union_covers_all_rects",
-    "pdfxi-edit::annotation::tests::annotation_clamps_to_page_and_rejects_wrong_page",
-    "pdfxi-edit::annotation::tests::annotation_hit_test_within_and_outside_rect",
-    "pdfxi-edit::annotation::tests::annotation_kinds_cover_full_toolset",
-    "pdfxi-edit::annotation::tests::annotation_rejects_invalid_opacity",
-    "pdfxi-edit::geometry::tests::edge_touching_rects_do_not_intersect",
-    "pdfxi-edit::geometry::tests::invalid_rects_are_rejected",
-    "pdfxi-edit::geometry::tests::page_geometry_clamps_rect_to_visible_bounds",
-    "pdfxi-edit::geometry::tests::page_geometry_validates_crop_box_and_rotation",
-    "pdfxi-edit::geometry::tests::page_index_range_check",
-    "pdfxi-edit::geometry::tests::rect_contains_point_is_inclusive",
-    "pdfxi-edit::geometry::tests::rect_intersection_returns_overlap_and_none_for_disjoint",
-    "pdfxi-edit::geometry::tests::rect_saturating_normalizes_corners_and_non_finite_values",
-    "pdfxi-edit::geometry::tests::rect_union_covers_both_inputs",
-    "pdfxi-edit::pdf::appearance::tests::build_appearance_covers_icon_border_and_marks",
-    "pdfxi-edit::pdf::appearance::tests::dashed_border_path_is_deterministic_and_non_empty",
-    "pdfxi-edit::pdf::appearance::tests::markup_quad_ordering_is_deterministic_and_does_not_mutate_input",
-    "pdfxi-edit::pdf::appearance::tests::markup_strokes_are_deterministic",
-    "pdfxi-edit::pdf::appearance::tests::opacity_is_carried_into_appearance",
-    "pdfxi-edit::pdf::appearance::tests::solid_border_path_is_five_deterministic_commands",
-    "pdfxi-edit::pdf::error::tests::pdf_error_messages_are_descriptive",
-    "pdfxi-edit::pdf::serialize::tests::annotation_round_trip_all_kinds",
-    "pdfxi-edit::pdf::serialize::tests::invalid_color_components_are_rejected",
-    "pdfxi-edit::pdf::serialize::tests::missing_or_insufficient_points_are_rejected",
-    "pdfxi-edit::pdf::serialize::tests::opaque_unknown_subtype_is_preserved",
-    "pdfxi-edit::pdf::serialize::tests::per_type_dictionary_keys_cover_the_full_toolset",
-    "pdfxi-edit::pdf::serialize::tests::pdf_annotation_round_trip_preserves_per_type_fields",
-    "pdfxi-edit::pdf::serialize::tests::rectangle_is_normalized_and_degenerate_rects_rejected",
-    "pdfxi-edit::pdf::value::tests::dictionary_typed_access_reports_structured_errors",
-    "pdfxi-edit::pdf::value::tests::value_accessors_return_typed_views",
+    "note_highlight_reply_and_resolve_survive_a_full_rewrite",
+    "annotations_survive_the_incremental_save_the_session_uses",
+    "document_annotations::tests::quad_points_follow_pdf_order",
 ]
 title = "Sticky note highlight underline strikeout and squiggly"
 
@@ -2584,67 +2402,51 @@ title = "Pencil stamp and file attachment annotations"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/review/thread.rs",
-    "crates/pdfxi-edit/src/review/error.rs",
-    "docs/evidence/author/T-0159.md",
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "docs/evidence/hardening/T-0230.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 3 new T-0159 thread tests (symmetric merge, merge conflicts, structural validate) and all existing thread/workflow tests; fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 5 integration tests pass, including /IRT + /RT /R and /State /Accepted on the Excel 2019 fixture after a full save and reopen. Output in docs/evidence/hardening/T-0230.md."
 id = "REVIEW-004"
 notes = """
-Closes REVIEW-004 at the library level. Creation, (timestamp, id) reply ordering,
-the five-status transition table with actor/timestamp history, and all prior
-validation are unchanged. T-0159 adds CommentThread::merge, a deterministic union
-of two threads sharing a root: replies are unioned by id with conflicting content
-rejected as ReviewError::ConflictingReply, the workflow state with the greatest
-(updated, created, status, assignee) tuple wins, and the lower thread id plus a
-sorted extra-key union make the result argument-order independent. validate()
-now also detects duplicate reply ids and a history whose last entry disagrees
-with the current status (ReviewError::InconsistentHistory). Honest scope: local
-model and views only; shared/email collaboration and a host UI remain future work.
-No unsafe/new deps/panics.
+Comment threads now exist on real annotations: reply_to finds the parent by /NM
+on the same page, writes /IRT as an indirect reference to the parent annotation
+object and /RT /R, and gives the reply its own /Contents, /T, /M, /NM and
+appearance. set_state writes /State (Accepted and the other review values) with
+/StateModel /Review. The existing thread/workflow/share models stay as the
+local review layer; the library now connects them to PDF bytes.
 """
 priority = "P1"
-status = "model"
+status = "library"
 tests = [
-    "review::thread::tests::thread_assembly_orders_replies_by_timestamp_then_id",
-    "review::workflow::tests::allowed_transitions_match_the_documented_table",
-    "review::thread::tests::thread_merge_unions_replies_and_is_symmetric",
-    "review::thread::tests::thread_merge_rejects_foreign_roots_and_conflicting_reply_ids",
-    "review::thread::tests::thread_validate_detects_duplicate_reply_ids_and_inconsistent_history",
+    "note_highlight_reply_and_resolve_survive_a_full_rewrite",
+    "update_and_delete_remove_content_from_a_saved_document",
 ]
 title = "Comment threads replies and status"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/review/report.rs",
-    "crates/pdfxi-edit/src/review/error.rs",
-    "docs/evidence/author/T-0159.md",
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "docs/evidence/hardening/T-0230.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 3 new T-0159 report tests (typed print lines, coverage, version-checked import) and all existing serialize round-trip tests; fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
+evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): XFDF export/import round-trips byte-identically on the real fixture (two annotations, escaped contents, author and date). Output in docs/evidence/hardening/T-0230.md."
 id = "REVIEW-005"
 notes = """
-Closes REVIEW-005 at the library level. export_registry/import_registry and the
-stable text listing are retained. T-0159 adds a typed PrintLine format
-(Header/Thread/ThreadMeta/Reply/History with structured fields),
-registry_to_typed_print_lines and typed_print_lines_to_text; a test proves the
-typed lines render byte-identically to registry_to_print_lines and that the text
-view round-trips. import_registry_checked validates XI_ThreadVersion against
-REVIEW_REGISTRY_VERSION (1) and rejects missing/non-integer/unsupported versions
-with typed ReviewErrors. Honest scope: dictionary intermediate and text/typed
-views; real PDF /Annots import/export and an OS print driver remain outside this
-crate. No unsafe/new deps/panics.
+export_xfdf/import_xfdf operate on real document annotations instead of a
+caller-supplied review registry. Each <annot> carries page, subtype, rect,
+author, date and id, with replyto/state when present; contents is escaped
+element text. Import uses a bounded, quote-aware XML scanner with entity and
+numeric-reference decoding and writes the annotations back through the same
+note/highlight/reply/state API. The Acrobat-standard element names and a print
+driver remain future work.
 """
 priority = "P1"
-status = "model"
+status = "library"
 tests = [
-    "review::report::tests::export_import_round_trip_preserves_every_thread",
-    "review::report::tests::print_lines_are_stable_and_cover_threads_replies_and_history",
-    "review::serialize::tests::registry_round_trip_preserves_threads_replies_and_history",
-    "review::report::tests::typed_print_lines_match_the_stable_text_view",
-    "review::report::tests::typed_print_lines_cover_threads_replies_and_history",
-    "review::report::tests::checked_import_validates_dictionary_version",
+    "xfdf_export_import_round_trips_on_a_real_document",
+    "document_annotations::tests::xml_entities_round_trip",
+    "document_annotations::tests::attributes_are_parsed_with_entities_and_quotes",
 ]
 title = "Import export and print comments"
 

@@ -1,0 +1,18 @@
+{
+  "id": "T-0247",
+  "lane": "author",
+  "title": "Underline, strikeout, ink, shapes and stamps annotations",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0230"
+  ],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/hardening/T-0247.md",
+    "orchestration/feature-updates/T-0247.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit; the new markup types render in PDFium and extract through the annotation model on a real fixture",
+  "notes": "Follow-up split from T-0230, which delivered note, highlight, reply, resolve and XFDF. This task adds underline, strikeout, ink, geometric shapes (line, arrow, rectangle, ellipse, polygon) and stamp annotations, each with its own quads or appearance and its own serialization round-trip, proven on a real document through the pdfxi-document session of ADR 0010. The shell half (T-0242 already owns the Comments UI) is extended separately when these land; feature-matrix rows stay `library` until a shell task exposes the new types.",
+  "evidence": "docs/evidence/hardening/T-0247.md"
+}

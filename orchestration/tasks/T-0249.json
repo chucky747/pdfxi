@@ -1,0 +1,18 @@
+{
+  "id": "T-0249",
+  "lane": "security",
+  "title": "Signature identity sources, timestamps and revocation",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": [
+    "T-0241"
+  ],
+  "owns": [
+    "crates/pdfxi-security/**",
+    "docs/evidence/hardening/T-0249.md",
+    "orchestration/feature-updates/T-0249.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security; a PFX identity signs, an RFC 3161 token validates, and a revoked certificate is reported with a typed reason",
+  "notes": "Follow-up split from T-0241, which signs with a caller-supplied PEM and reports chain trust as None. This task adds PFX/PKCS#12 import, the Windows certificate store as an identity source, RFC 3161 timestamp tokens, revocation through CRL and OCSP with typed results, trust-anchor chain building so certificate_chain_trusted can be Some, and multi-signature/Perms groundwork. Feature-matrix rows stay `library` until the T-0245 shell task exposes verification results; no row is promoted here.",
+  "evidence": "docs/evidence/hardening/T-0249.md"
+}
