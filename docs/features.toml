@@ -4050,16 +4050,17 @@ tests = [
 title = "Font embedding and CID fonts"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
+docs = "crates/pdfxi-core/src/transparency.rs, docs/evidence/core/T-0184.md"
 domain = "Standards"
-evidence = "docs/evidence/core/T-0166.md"
+evidence = "docs/evidence/core/T-0184.md"
 id = "STD-005"
-notes = "Blend-mode names and colour-management requirements are validated with deterministic plans; pixel compositing remains a render-backend responsibility."
+notes = "Blend modes, group isolation/knockout, soft-mask backdrop validation, group colour-space resolution, backend requirements and a deterministic back-to-front compositing plan with typed errors. Host boundary: pixel compositing and colour management stay render-backend responsibilities."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "conformance::tests::transparency_row_validates_blend_modes_and_flags_cmm",
-    "transparency::tests::stack_plans_are_deterministic_across_repeated_builds",
+    "transparency::tests::compositing_plan_is_ordered_back_to_front_and_deterministic",
+    "transparency::tests::group_space_resolution_inherits_backdrop_and_rejects_mismatch",
+    "transparency::tests::soft_masks_round_trip_and_validate_backdrop",
 ]
 title = "Transparency and blend modes"
 
@@ -4210,16 +4211,17 @@ tests = [
 title = "PDF/UA conformance"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/conformance.rs, docs/evidence/core/T-0166.md"
+docs = "crates/pdfxi-core/src/preservation.rs, crates/pdfxi-core/src/incremental.rs, docs/evidence/core/T-0184.md"
 domain = "Standards"
-evidence = "docs/evidence/core/T-0166.md"
+evidence = "docs/evidence/core/T-0184.md"
 id = "STD-010"
-notes = "Preservation facts report deterministically and signing/archival packaging are typed unsupported operations; cryptographic signing and packaging remain with the security lanes."
+notes = "Deterministic incremental-save plans and chain validation (original prefix preserved, /Prev chain, preserved trailer keys, bounded revisions), with typed unsupported signing and archival-packaging operations. Host boundary: cryptographic signing and packaging belong to the security lane."
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "conformance::tests::preservation_row_reports_typed_unsupported_operations",
-    "preservation::tests::operation_checks_are_stable_and_typed_for_every_variant",
+    "preservation::tests::valid_incremental_save_is_accepted",
+    "preservation::tests::broken_prev_chain_is_detected",
+    "preservation::tests::signing_and_packaging_are_honestly_unsupported",
 ]
 title = "Incremental update and digital preservation"
 

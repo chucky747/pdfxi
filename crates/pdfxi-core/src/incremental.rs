@@ -18,6 +18,19 @@
 //! same change set yields byte-identical output. No new dependency is used and
 //! no object body is decoded or re-compressed, keeping memory bounded by the
 //! source length plus the caller's change set.
+//!
+//! # Plan and preservation boundary
+//!
+//! [`IncrementalUpdatePlan`] is a deterministic, inspectable plan — original
+//! bytes plus appended objects and an xref/trailer pointing at `/Prev` — that
+//! [`validate_incremental_plan`] checks and [`PreservationRangeReport`]
+//! summarises as original-byte ranges kept intact. Every failure is a typed
+//! [`IncrementalPlanError`] (overlapping or gapped ranges, wrong `/Prev`,
+//! missing objects, unsupported operations). Bytes are never written to disk.
+//! Cryptographic signing and long-term archival packaging remain with the
+//! security lane: [`IncrementalOperation::check`] reports them as
+//! [`IncrementalPlanError::UnsupportedOperation`] rather than pretending a
+//! plain byte append is a signature or an archive.
 
 use std::collections::BTreeMap;
 
@@ -512,6 +525,572 @@ fn write_xref_stream_section(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// STD-010 closure: deterministic update plans, plan validation and byte-range
+// preservation reports. Cryptographic signing and archival packaging stay with
+// the security lane and are reported as typed unsupported operations.
+// ---------------------------------------------------------------------------
+
+/// A half-open byte range `start..end` within a document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByteRange {
+    /// Inclusive start offset.
+    pub start: usize,
+    /// Exclusive end offset.
+    pub end: usize,
+}
+
+impl ByteRange {
+    /// Create a range, rejecting `end < start` as a typed error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IncrementalPlanError::InvalidRange`] when `end` precedes `start`.
+    pub fn new(start: usize, end: usize) -> std::result::Result<Self, IncrementalPlanError> {
+        if end < start {
+            Err(IncrementalPlanError::InvalidRange { start, end })
+        } else {
+            Ok(Self { start, end })
+        }
+    }
+
+    /// Return the number of bytes in the range.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    /// Return `true` when the range holds no bytes.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    /// Return `true` when the two ranges share at least one byte.
+    #[must_use]
+    pub const fn overlaps(&self, other: &Self) -> bool {
+        self.start < other.end && other.start < self.end
+    }
+
+    /// Return `true` when the two ranges touch without overlapping.
+    #[must_use]
+    pub const fn is_adjacent_to(&self, other: &Self) -> bool {
+        self.end == other.start || other.end == self.start
+    }
+
+    /// Return `true` when `other` lies wholly inside this range.
+    #[must_use]
+    pub const fn contains(&self, other: &Self) -> bool {
+        self.start <= other.start && other.end <= self.end
+    }
+}
+
+/// A typed reason a planned incremental update or preservation range was rejected.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum IncrementalPlanError {
+    /// A byte range ended before it started.
+    #[error("invalid byte range {start}..{end}")]
+    InvalidRange {
+        /// Rejected start offset.
+        start: usize,
+        /// Rejected end offset.
+        end: usize,
+    },
+    /// A byte range extended past the declared document bound.
+    #[error("byte range {start}..{end} exceeds the {limit}-byte bound")]
+    OutOfBounds {
+        /// Range start.
+        start: usize,
+        /// Range end.
+        end: usize,
+        /// Declared bound.
+        limit: usize,
+    },
+    /// Two kept or appended ranges overlapped.
+    #[error("byte ranges {first:?} and {second:?} overlap")]
+    OverlappingRanges {
+        /// First range in sorted order.
+        first: ByteRange,
+        /// Second range in sorted order.
+        second: ByteRange,
+    },
+    /// Two kept ranges left an unaccounted gap between them.
+    #[error("gap of {gap} bytes between {before:?} and {after:?}")]
+    GapInRanges {
+        /// Range ending before the gap.
+        before: ByteRange,
+        /// Range starting after the gap.
+        after: ByteRange,
+        /// Number of unaccounted bytes.
+        gap: usize,
+    },
+    /// The plan's `/Prev` entry did not point at the original `startxref`.
+    #[error("plan /Prev value {found} does not match the original startxref {expected}")]
+    WrongPrev {
+        /// `/Prev` value carried by the plan.
+        found: usize,
+        /// Real `startxref` offset of the original bytes.
+        expected: usize,
+    },
+    /// The original file had no readable `startxref`.
+    #[error("original bytes have no readable startxref")]
+    MissingOriginalStartXref,
+    /// The plan held no original bytes.
+    #[error("incremental plan has no original bytes")]
+    EmptyOriginal,
+    /// The plan held no appended revision.
+    #[error("incremental plan has no appended revision")]
+    EmptyAppended,
+    /// A staged object was missing from the appended revision's byte ranges.
+    #[error("object {number} is missing from the appended byte ranges")]
+    MissingObject {
+        /// Object number with no located byte range.
+        number: u32,
+    },
+    /// A requested operation belongs to another lane.
+    #[error("unsupported incremental operation: {0}")]
+    UnsupportedOperation(&'static str),
+    /// The source could not be serialized into a plan.
+    #[error("cannot build incremental plan: {0}")]
+    BuildFailed(String),
+}
+
+/// An operation a caller may request over an incremental update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncrementalOperation {
+    /// Build a deterministic plan (implemented here).
+    BuildPlan,
+    /// Validate a supplied plan (implemented here).
+    ValidatePlan,
+    /// Enumerate preserved original-byte ranges (implemented here).
+    PreservationRanges,
+    /// Cryptographic signing of a revision (security lane).
+    Sign,
+    /// Long-term archival packaging (security lane).
+    Archive,
+}
+
+impl IncrementalOperation {
+    /// Check whether this crate implements `self`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IncrementalPlanError::UnsupportedOperation`] for signing and
+    /// archival packaging. A plain byte append is neither a signature nor an
+    /// archive; those operations remain with the security lane.
+    pub const fn check(self) -> std::result::Result<(), IncrementalPlanError> {
+        match self {
+            Self::BuildPlan | Self::ValidatePlan | Self::PreservationRanges => Ok(()),
+            Self::Sign => Err(IncrementalPlanError::UnsupportedOperation(
+                "cryptographic signing belongs to the security lane",
+            )),
+            Self::Archive => Err(IncrementalPlanError::UnsupportedOperation(
+                "long-term archival packaging belongs to the security lane",
+            )),
+        }
+    }
+}
+
+/// A deterministic, inspectable incremental-update plan.
+///
+/// The plan holds the exact original bytes, the appended revision bytes (new
+/// object bodies followed by a cross-reference section, trailer, `startxref`
+/// and `%%EOF`), the `/Prev` target, and byte ranges locating every appended
+/// object and the cross-reference section. [`Self::assemble`] reproduces the
+/// saved PDF exactly; [`Self::validate`] checks the plan's own invariants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncrementalUpdatePlan {
+    original: Vec<u8>,
+    appended: Vec<u8>,
+    previous_startxref: usize,
+    object_numbers: Vec<u32>,
+    object_ranges: Vec<(u32, ByteRange)>,
+    xref_range: ByteRange,
+    xref_kind: XrefSectionKind,
+}
+
+impl IncrementalUpdatePlan {
+    /// Return the exact original byte prefix.
+    #[must_use]
+    pub fn original(&self) -> &[u8] {
+        &self.original
+    }
+
+    /// Return the appended revision bytes.
+    #[must_use]
+    pub fn appended(&self) -> &[u8] {
+        &self.appended
+    }
+
+    /// Return the `/Prev` value this plan points at.
+    #[must_use]
+    pub const fn previous_startxref(&self) -> usize {
+        self.previous_startxref
+    }
+
+    /// Return the appended object numbers in ascending order.
+    #[must_use]
+    pub fn object_numbers(&self) -> &[u32] {
+        &self.object_numbers
+    }
+
+    /// Return each appended object's number and byte range in writing order.
+    #[must_use]
+    pub fn object_ranges(&self) -> &[(u32, ByteRange)] {
+        &self.object_ranges
+    }
+
+    /// Return the byte range of the appended cross-reference section and trailer.
+    #[must_use]
+    pub const fn xref_range(&self) -> ByteRange {
+        self.xref_range
+    }
+
+    /// Return the cross-reference representation used by this plan.
+    #[must_use]
+    pub const fn xref_kind(&self) -> XrefSectionKind {
+        self.xref_kind
+    }
+
+    /// Assemble the complete PDF: original bytes followed by the revision.
+    #[must_use]
+    pub fn assemble(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.original.len() + self.appended.len());
+        out.extend_from_slice(&self.original);
+        out.extend_from_slice(&self.appended);
+        out
+    }
+
+    /// Validate the plan's `/Prev` target and appended byte ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed [`IncrementalPlanError`] for empty input, a missing or
+    /// wrong `/Prev`, a staged object with no byte range, or overlapping,
+    /// gapped or out-of-bounds appended ranges.
+    pub fn validate(&self) -> std::result::Result<PlanValidationReport, IncrementalPlanError> {
+        if self.original.is_empty() {
+            return Err(IncrementalPlanError::EmptyOriginal);
+        }
+        if self.appended.is_empty() {
+            return Err(IncrementalPlanError::EmptyAppended);
+        }
+        let expected = parser::startxref_offset(&self.original)
+            .map_err(|_| IncrementalPlanError::MissingOriginalStartXref)?;
+        if self.previous_startxref != expected {
+            return Err(IncrementalPlanError::WrongPrev {
+                found: self.previous_startxref,
+                expected,
+            });
+        }
+        if self.object_numbers.len() != self.object_ranges.len() {
+            let missing = self
+                .object_numbers
+                .iter()
+                .find(|number| !self.object_ranges.iter().any(|(n, _)| n == *number))
+                .copied()
+                .unwrap_or(0);
+            return Err(IncrementalPlanError::MissingObject { number: missing });
+        }
+        let ranges: Vec<ByteRange> = self.object_ranges.iter().map(|(_, range)| *range).collect();
+        validate_ranges(&ranges, self.appended.len())?;
+        if self.xref_range.start > self.xref_range.end || self.xref_range.end > self.appended.len()
+        {
+            return Err(IncrementalPlanError::OutOfBounds {
+                start: self.xref_range.start,
+                end: self.xref_range.end,
+                limit: self.appended.len(),
+            });
+        }
+        Ok(PlanValidationReport {
+            original_len: self.original.len(),
+            appended_len: self.appended.len(),
+            object_count: self.object_numbers.len(),
+            prev: self.previous_startxref,
+            kept_range: ByteRange {
+                start: 0,
+                end: self.original.len(),
+            },
+            appended_range: ByteRange {
+                start: self.original.len(),
+                end: self.original.len() + self.appended.len(),
+            },
+            xref_kind: self.xref_kind,
+        })
+    }
+}
+
+/// Validate that a set of byte ranges is ordered, bounded, non-overlapping and
+/// gap-free, returning the sorted ranges for callers that need a canonical view.
+///
+/// # Errors
+///
+/// Returns a typed [`IncrementalPlanError`] for an invalid, out-of-bounds,
+/// overlapping or gapped set of ranges.
+pub fn validate_ranges(
+    ranges: &[ByteRange],
+    limit: usize,
+) -> std::result::Result<Vec<ByteRange>, IncrementalPlanError> {
+    let mut sorted = ranges.to_vec();
+    sorted.sort_by_key(|range| (range.start, range.end));
+    let mut previous: Option<ByteRange> = None;
+    for range in &sorted {
+        let checked = ByteRange::new(range.start, range.end)?;
+        if checked.end > limit {
+            return Err(IncrementalPlanError::OutOfBounds {
+                start: checked.start,
+                end: checked.end,
+                limit,
+            });
+        }
+        if let Some(before) = previous {
+            if before.overlaps(&checked) {
+                return Err(IncrementalPlanError::OverlappingRanges {
+                    first: before,
+                    second: checked,
+                });
+            }
+            if before.end < checked.start {
+                return Err(IncrementalPlanError::GapInRanges {
+                    before,
+                    after: checked,
+                    gap: checked.start - before.end,
+                });
+            }
+        }
+        previous = Some(checked);
+    }
+    Ok(sorted)
+}
+
+/// Validate that ranges tile the whole `0..limit` span without holes.
+///
+/// # Errors
+///
+/// Returns [`IncrementalPlanError::GapInRanges`] when the first range does not
+/// start at zero or the last does not end at `limit`, after the ordinary range
+/// checks have passed.
+pub fn validate_full_range(
+    ranges: &[ByteRange],
+    limit: usize,
+) -> std::result::Result<(), IncrementalPlanError> {
+    let sorted = validate_ranges(ranges, limit)?;
+    match (sorted.first(), sorted.last()) {
+        (Some(first), Some(last)) if first.start == 0 && last.end == limit => Ok(()),
+        (Some(first), _) if first.start != 0 => Err(IncrementalPlanError::GapInRanges {
+            before: ByteRange { start: 0, end: 0 },
+            after: *first,
+            gap: first.start,
+        }),
+        (_, Some(last)) => Err(IncrementalPlanError::GapInRanges {
+            before: *last,
+            after: ByteRange {
+                start: limit,
+                end: limit,
+            },
+            gap: limit - last.end,
+        }),
+        (None, _) | (Some(_), None) => Err(IncrementalPlanError::EmptyOriginal),
+    }
+}
+
+/// The deterministic result of validating an [`IncrementalUpdatePlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanValidationReport {
+    /// Length of the original byte prefix.
+    pub original_len: usize,
+    /// Number of bytes appended after the original.
+    pub appended_len: usize,
+    /// Number of staged objects located in the revision.
+    pub object_count: usize,
+    /// Verified `/Prev` target.
+    pub prev: usize,
+    /// Original-byte range kept intact.
+    pub kept_range: ByteRange,
+    /// Appended-byte range in the assembled document.
+    pub appended_range: ByteRange,
+    /// Cross-reference representation used by the revision.
+    pub xref_kind: XrefSectionKind,
+}
+
+/// A deterministic enumeration of the original bytes kept intact by an update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreservationRangeReport {
+    /// Length of the original document.
+    pub original_len: usize,
+    /// Original-byte ranges confirmed intact, sorted and gap-free.
+    pub kept_ranges: Vec<ByteRange>,
+    /// Byte range appended after the original prefix.
+    pub appended_range: ByteRange,
+    /// Total number of original bytes confirmed intact.
+    pub preserved_bytes: usize,
+}
+
+impl PreservationRangeReport {
+    /// Derive the preservation ranges of a validated plan.
+    ///
+    /// A clean incremental save keeps the whole original file as one exact
+    /// prefix, so the report contains a single `0..original_len` range. Signing
+    /// and archival packaging are not part of this report.
+    ///
+    /// # Errors
+    ///
+    /// Returns any [`IncrementalPlanError`] from validating the plan.
+    pub fn build(plan: &IncrementalUpdatePlan) -> std::result::Result<Self, IncrementalPlanError> {
+        let validated = plan.validate()?;
+        Ok(Self {
+            original_len: validated.original_len,
+            kept_ranges: vec![validated.kept_range],
+            appended_range: validated.appended_range,
+            preserved_bytes: validated.kept_range.len(),
+        })
+    }
+
+    /// Re-check that the reported ranges tile the original without holes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed overlap, gap or out-of-bounds error.
+    pub fn validate(&self) -> std::result::Result<(), IncrementalPlanError> {
+        validate_full_range(&self.kept_ranges, self.original_len)?;
+        if self.appended_range.start != self.original_len
+            || self.appended_range.end < self.appended_range.start
+        {
+            return Err(IncrementalPlanError::GapInRanges {
+                before: ByteRange {
+                    start: 0,
+                    end: self.original_len,
+                },
+                after: self.appended_range,
+                gap: self.appended_range.start.saturating_sub(self.original_len),
+            });
+        }
+        Ok(())
+    }
+
+    /// Return a deterministic, human-readable summary of kept ranges.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let ranges = self
+            .kept_ranges
+            .iter()
+            .map(|range| format!("{}..{}", range.start, range.end))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "preserved {}/{} original bytes in [{}]; appended {}..{}",
+            self.preserved_bytes,
+            self.original_len,
+            ranges,
+            self.appended_range.start,
+            self.appended_range.end
+        )
+    }
+}
+
+/// Validate a supplied incremental-update plan.
+///
+/// This is a free-function form of [`IncrementalUpdatePlan::validate`] for
+/// callers that receive a plan from another component.
+///
+/// # Errors
+///
+/// Returns any typed [`IncrementalPlanError`] from the plan's validation.
+pub fn validate_incremental_plan(
+    plan: &IncrementalUpdatePlan,
+) -> std::result::Result<PlanValidationReport, IncrementalPlanError> {
+    plan.validate()
+}
+
+/// Find a marker that begins at a line start, searching from `from`.
+fn find_line_start(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    let mut position = from;
+    while position + needle.len() <= haystack.len() {
+        if &haystack[position..position + needle.len()] == needle
+            && (position == 0 || haystack[position - 1] == b'\n')
+        {
+            return Some(position);
+        }
+        position += 1;
+    }
+    None
+}
+
+/// Locate each staged object's byte range inside the appended revision.
+fn object_byte_ranges(appended: &[u8], numbers: &[u32]) -> Vec<(u32, ByteRange)> {
+    let mut ranges = Vec::with_capacity(numbers.len());
+    let mut search_from = 0usize;
+    for &number in numbers {
+        let marker = format!("{number} 0 obj").into_bytes();
+        let Some(start) = find_line_start(appended, &marker, search_from) else {
+            continue;
+        };
+        let after = start + marker.len();
+        let Some(relative_end) = find_line_start(appended, b"endobj", after) else {
+            continue;
+        };
+        let end = relative_end + b"endobj".len();
+        ranges.push((number, ByteRange { start, end }));
+        search_from = end;
+    }
+    ranges
+}
+
+impl Document {
+    /// Build a deterministic incremental-update plan from staged changes.
+    ///
+    /// The plan captures the exact original prefix, the appended object bodies
+    /// and xref/trailer, the `/Prev` target, and byte ranges for the appended
+    /// objects and cross-reference section. No bytes are written to disk. The
+    /// plan is a pure function of the source and change set, so repeating it
+    /// yields an identical plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MalformedPriorXref`] for an unreadable source xref,
+    /// [`Error::EncryptedDocument`] for encrypted input,
+    /// [`Error::UnsupportedState`] for xref-stream sources, and serialization
+    /// errors for staged objects that cannot be encoded.
+    pub fn plan_incremental_update(
+        &self,
+        options: &IncrementalSaveOptions,
+    ) -> Result<IncrementalUpdatePlan> {
+        if self.structure.as_ref().is_err() {
+            return Err(Error::MalformedPriorXref(
+                "source document structure is unreadable".to_owned(),
+            ));
+        }
+        let previous = parser::startxref_offset(&self.bytes)
+            .map_err(|error| Error::MalformedPriorXref(error.to_string()))?;
+        let saved = self.save_incremental_with(options)?;
+        if saved.bytes.len() < self.bytes.len() {
+            return Err(Error::CannotSerialize(
+                "incremental save shortened the original bytes".to_owned(),
+            ));
+        }
+        let appended = saved.bytes[self.bytes.len()..].to_vec();
+        let object_numbers = saved.report.objects_written;
+        let object_ranges = object_byte_ranges(&appended, &object_numbers);
+        let xref_start = object_ranges.last().map_or(0, |(_, range)| range.end);
+        let appended_len = appended.len();
+        Ok(IncrementalUpdatePlan {
+            original: self.bytes.clone(),
+            appended,
+            previous_startxref: previous,
+            object_numbers,
+            object_ranges,
+            xref_range: ByteRange {
+                start: xref_start,
+                end: appended_len,
+            },
+            xref_kind: options.xref_kind,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -960,5 +1539,247 @@ mod tests {
             Object::Array(vec![Object::String(vec![1, 2, 3])]),
         );
         assert_eq!(first_id_element(&trailer), Some(&[1u8, 2, 3][..]));
+    }
+
+    #[test]
+    fn plan_is_deterministic_and_assembles_to_a_valid_pdf() {
+        let source = rich_pdf();
+        let mut first = Document::from_bytes(source.clone()).expect("fixture");
+        first
+            .set_object(ObjectId::new(4, 0), replacement_stream("BT (Plan) Tj ET"))
+            .expect("stage");
+        let mut second = Document::from_bytes(source.clone()).expect("fixture");
+        second
+            .set_object(ObjectId::new(4, 0), replacement_stream("BT (Plan) Tj ET"))
+            .expect("stage");
+        let a = first
+            .plan_incremental_update(&IncrementalSaveOptions::default())
+            .expect("plan a");
+        let b = second
+            .plan_incremental_update(&IncrementalSaveOptions::default())
+            .expect("plan b");
+        assert_eq!(a, b);
+        let assembled = a.assemble();
+        let direct = first
+            .save_incremental_with(&IncrementalSaveOptions::default())
+            .expect("direct")
+            .bytes;
+        assert_eq!(assembled, direct);
+        assert!(assembled.starts_with(&source));
+        let reparsed = Document::from_bytes(assembled).expect("reparse");
+        assert_eq!(reparsed.page_text(0).expect("text"), "Plan");
+    }
+
+    #[test]
+    fn plan_validation_accepts_a_valid_plan() {
+        let source = rich_pdf();
+        let mut doc = Document::from_bytes(source.clone()).expect("fixture");
+        doc.set_object(ObjectId::new(4, 0), replacement_stream("BT (V) Tj ET"))
+            .expect("stage");
+        let plan = doc
+            .plan_incremental_update(&IncrementalSaveOptions::default())
+            .expect("plan");
+        let report = validate_incremental_plan(&plan).expect("valid plan");
+        assert_eq!(report.original_len, source.len());
+        assert_eq!(report.appended_len, plan.appended().len());
+        assert_eq!(
+            report.prev,
+            parser::startxref_offset(&source).expect("startxref")
+        );
+        assert_eq!(
+            report.kept_range,
+            ByteRange {
+                start: 0,
+                end: source.len()
+            }
+        );
+        assert_eq!(
+            report.appended_range,
+            ByteRange {
+                start: source.len(),
+                end: source.len() + plan.appended().len(),
+            }
+        );
+        assert_eq!(report.object_count, 1);
+        assert_eq!(report, plan.validate().expect("repeat"));
+    }
+
+    #[test]
+    fn wrong_prev_is_a_typed_error() {
+        let source = rich_pdf();
+        let mut doc = Document::from_bytes(source).expect("fixture");
+        doc.set_object(ObjectId::new(9, 0), Object::Integer(1))
+            .expect("stage");
+        let mut plan = doc
+            .plan_incremental_update(&IncrementalSaveOptions::default())
+            .expect("plan");
+        let expected = plan.previous_startxref();
+        plan.previous_startxref += 1;
+        assert_eq!(
+            plan.validate().expect_err("wrong prev"),
+            IncrementalPlanError::WrongPrev {
+                found: expected + 1,
+                expected,
+            }
+        );
+    }
+
+    #[test]
+    fn overlapping_and_gapped_ranges_are_typed_errors() {
+        let a = ByteRange { start: 0, end: 10 };
+        let b = ByteRange { start: 5, end: 15 };
+        assert_eq!(
+            validate_ranges(&[a, b], 20).expect_err("overlap"),
+            IncrementalPlanError::OverlappingRanges {
+                first: a,
+                second: b,
+            }
+        );
+        let c = ByteRange { start: 0, end: 5 };
+        let d = ByteRange { start: 7, end: 12 };
+        assert_eq!(
+            validate_ranges(&[c, d], 20).expect_err("gap"),
+            IncrementalPlanError::GapInRanges {
+                before: c,
+                after: d,
+                gap: 2,
+            }
+        );
+        assert_eq!(
+            validate_ranges(&[ByteRange { start: 0, end: 21 }], 20).expect_err("bounds"),
+            IncrementalPlanError::OutOfBounds {
+                start: 0,
+                end: 21,
+                limit: 20,
+            }
+        );
+        assert!(matches!(
+            ByteRange::new(9, 3),
+            Err(IncrementalPlanError::InvalidRange { start: 9, end: 3 })
+        ));
+    }
+
+    #[test]
+    fn full_range_validation_detects_uncovered_edges() {
+        let mid = ByteRange { start: 2, end: 8 };
+        assert_eq!(
+            validate_full_range(&[mid], 10).expect_err("leading gap"),
+            IncrementalPlanError::GapInRanges {
+                before: ByteRange { start: 0, end: 0 },
+                after: mid,
+                gap: 2,
+            }
+        );
+        let tail = ByteRange { start: 0, end: 8 };
+        assert_eq!(
+            validate_full_range(&[tail], 10).expect_err("trailing gap"),
+            IncrementalPlanError::GapInRanges {
+                before: tail,
+                after: ByteRange { start: 10, end: 10 },
+                gap: 2,
+            }
+        );
+        assert!(validate_full_range(&[ByteRange { start: 0, end: 10 }], 10).is_ok());
+    }
+
+    #[test]
+    fn preservation_range_report_enumerates_and_validates() {
+        let source = rich_pdf();
+        let mut doc = Document::from_bytes(source.clone()).expect("fixture");
+        doc.set_object(ObjectId::new(4, 0), replacement_stream("BT (R) Tj ET"))
+            .expect("stage");
+        let plan = doc
+            .plan_incremental_update(&IncrementalSaveOptions::default())
+            .expect("plan");
+        let report = PreservationRangeReport::build(&plan).expect("report");
+        assert_eq!(
+            report.kept_ranges,
+            vec![ByteRange {
+                start: 0,
+                end: source.len()
+            }]
+        );
+        assert_eq!(report.preserved_bytes, source.len());
+        assert_eq!(report.appended_range.start, source.len());
+        assert!(report.validate().is_ok());
+        let summary = report.summary();
+        assert_eq!(
+            summary,
+            PreservationRangeReport::build(&plan)
+                .expect("again")
+                .summary()
+        );
+        let mut broken = report;
+        broken.kept_ranges = vec![
+            ByteRange { start: 0, end: 5 },
+            ByteRange {
+                start: 7,
+                end: source.len(),
+            },
+        ];
+        assert!(matches!(
+            broken.validate(),
+            Err(IncrementalPlanError::GapInRanges { .. })
+        ));
+    }
+
+    #[test]
+    fn unsupported_incremental_operations_are_typed() {
+        for operation in [
+            IncrementalOperation::BuildPlan,
+            IncrementalOperation::ValidatePlan,
+            IncrementalOperation::PreservationRanges,
+        ] {
+            assert!(operation.check().is_ok());
+        }
+        assert_eq!(
+            IncrementalOperation::Sign.check().expect_err("no signing"),
+            IncrementalPlanError::UnsupportedOperation(
+                "cryptographic signing belongs to the security lane"
+            )
+        );
+        assert_eq!(
+            IncrementalOperation::Archive
+                .check()
+                .expect_err("no archive"),
+            IncrementalPlanError::UnsupportedOperation(
+                "long-term archival packaging belongs to the security lane"
+            )
+        );
+    }
+
+    #[test]
+    fn byte_range_helpers_are_consistent() {
+        let a = ByteRange { start: 0, end: 5 };
+        let b = ByteRange { start: 5, end: 9 };
+        assert_eq!(a.len(), 5);
+        assert!(!a.is_empty());
+        assert!(a.is_adjacent_to(&b));
+        assert!(!a.overlaps(&b));
+        assert!(a.contains(&ByteRange { start: 1, end: 3 }));
+        assert!(ByteRange { start: 3, end: 3 }.is_empty());
+    }
+
+    #[test]
+    fn empty_plan_is_rejected_with_a_typed_error() {
+        let plan = IncrementalUpdatePlan {
+            original: Vec::new(),
+            appended: Vec::new(),
+            previous_startxref: 0,
+            object_numbers: Vec::new(),
+            object_ranges: Vec::new(),
+            xref_range: ByteRange { start: 0, end: 0 },
+            xref_kind: XrefSectionKind::Classic,
+        };
+        assert_eq!(
+            plan.validate().expect_err("empty original"),
+            IncrementalPlanError::EmptyOriginal
+        );
+        let mut no_append = plan;
+        no_append.original = b"%PDF-1.7\n%%EOF\n".to_vec();
+        assert_eq!(
+            no_append.validate().expect_err("empty appended"),
+            IncrementalPlanError::EmptyAppended
+        );
     }
 }

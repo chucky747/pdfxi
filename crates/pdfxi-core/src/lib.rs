@@ -82,7 +82,11 @@ pub use font::{
     MAX_TOUNICODE_ENTRIES, ToUnicodeEntry, build_cid_font, decide_embedding, generate_tounicode,
     is_standard14, stage_cid_font, validate_metrics,
 };
-pub use incremental::{IncrementalSaveOptions, IncrementalSaveResult, PreservationReport};
+pub use incremental::{
+    ByteRange, IncrementalOperation, IncrementalPlanError, IncrementalSaveOptions,
+    IncrementalSaveResult, IncrementalUpdatePlan, PlanValidationReport, PreservationRangeReport,
+    PreservationReport, validate_full_range, validate_incremental_plan, validate_ranges,
+};
 pub use launch::{
     DpiAwareness, LaunchAction, LaunchConfig, LaunchError, MAX_ARG_BYTES, MAX_LAUNCH_FILES,
     MAX_WINDOW_DIMENSION, SessionWindowState, SingleInstanceMode, StartupPlan, WindowPreference,
@@ -132,9 +136,11 @@ pub use structure::{
     ParentTreeEntry, StructureError, StructureNode, StructureRole, StructureTree,
 };
 pub use transparency::{
-    BackendRequirement, BlendBackend, BlendCategory, BlendMode, BlendPlan, BlendSpec,
-    GroupIsolation, GroupKnockout, MAX_ALPHA, MAX_STACK_DEPTH, MAX_TOKEN_LEN, NoBackend,
-    TransparencyError, TransparencyGroup, TransparencyStack,
+    BackendRequirement, BlendBackend, BlendCategory, BlendLayer, BlendMode, BlendPlan, BlendSpec,
+    CompositingPlan, CompositingStep, GroupColorSpace, GroupIsolation, GroupKnockout, MAX_ALPHA,
+    MAX_BACKDROP_COMPONENTS, MAX_COLOUR_COMPONENTS, MAX_COMPOSITING_LAYERS, MAX_STACK_DEPTH,
+    MAX_TOKEN_LEN, NoBackend, SoftMask, SoftMaskSubtype, TransparencyError, TransparencyGroup,
+    TransparencyStack, resolve_group_colour_space,
 };
 pub use unicode::{
     BidiRun, Direction, FallbackPlan, FallbackStep, FontCandidate, MAX_FONT_CANDIDATES,

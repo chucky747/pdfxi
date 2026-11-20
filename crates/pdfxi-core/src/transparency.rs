@@ -12,6 +12,26 @@
 //! maximum depth. Unsupported backend features are reported honestly through
 //! [`BlendPlan::check_support`] as [`TransparencyError::UnsupportedBackend`]
 //! rather than being silently dropped.
+//!
+//! # Render-backend contract (pixel compositing stays outside this crate)
+//!
+//! This module supplies *plans*, never pixels. A renderer consumes a
+//! [`CompositingPlan`] by iterating [`CompositingPlan::steps`] in back-to-front
+//! order, honouring each step's [`BlendSpec`], resolved [`GroupColorSpace`],
+//! optional [`SoftMask`] and [`BackendRequirement`] set. The renderer must
+//! refuse a plan whose [`CompositingPlan::check_support`] reports an unmet
+//! [`BackendRequirement`], and must perform colour-space conversion and
+//! source-over rasterization itself. This crate performs no colour conversion
+//! and touches no pixel buffer.
+//!
+//! `pdfxi-render` already provides the raster/colour boundary through its
+//! `color` and `blend` modules (`BlendMode`, `BlendPlan`, `DeviceColorSpace`,
+//! `DeviceColor`). That crate is intentionally **not** modified here: the core
+//! plan is a backend-agnostic intermediate whose requirements a renderer maps
+//! onto those helpers. Non-separable modes require a colour-management
+//! transform (`BackendRequirement::ColorManagement`), partial alpha and
+//! isolated/knockout groups declare their own requirements, and applying soft
+//! masks to pixels is likewise a renderer concern.
 
 use std::fmt;
 
@@ -23,7 +43,10 @@ pub const MAX_TOKEN_LEN: usize = 64;
 pub const MAX_STACK_DEPTH: u8 = 8;
 
 /// A typed reason a transparency descriptor or plan was rejected.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// This error intentionally derives only `PartialEq`: the invalid-backdrop
+/// variant carries an `f32`, for which exact `Eq` is not meaningful.
+#[derive(Debug, Clone, PartialEq)]
 pub enum TransparencyError {
     /// The blend-mode token is not an ISO 32000 standard mode.
     UnknownBlendMode(String),
@@ -54,6 +77,47 @@ pub enum TransparencyError {
     MalformedDescriptor(String),
     /// The backend cannot honour a required compositing feature.
     UnsupportedBackend(BackendRequirement),
+    /// The transparency-group colour space is not recognised.
+    UnknownColourSpace(String),
+    /// An ICC-based group colour space declared an out-of-range component count.
+    InvalidColourSpaceComponents {
+        /// The rejected component count.
+        value: u8,
+    },
+    /// A soft-mask subtype token is not one of the ISO 32000 subtypes.
+    UnknownSoftMaskSubtype(String),
+    /// A soft-mask backdrop component was non-finite or outside `0.0..=1.0`.
+    InvalidBackdropComponent {
+        /// Zero-based component index.
+        index: usize,
+        /// The rejected component value.
+        value: f32,
+    },
+    /// A soft-mask backdrop had more components than the colour space allows.
+    TooManyBackdropComponents {
+        /// Components supplied.
+        count: usize,
+        /// Maximum accepted components.
+        limit: usize,
+    },
+    /// The group colour space is incompatible with the backdrop colour space.
+    ColourSpaceMismatch {
+        /// Zero-based compositing layer whose space was rejected.
+        layer: usize,
+        /// Component count of the backdrop space.
+        backdrop: u8,
+        /// Component count of the resolved group space.
+        group: u8,
+    },
+    /// A compositing plan was built with no layers.
+    EmptyCompositingPlan,
+    /// A compositing plan contained more layers than the bound allows.
+    TooManyLayers {
+        /// Layers supplied.
+        count: usize,
+        /// Maximum accepted layers.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for TransparencyError {
@@ -74,6 +138,40 @@ impl fmt::Display for TransparencyError {
             Self::MalformedDescriptor(reason) => write!(f, "malformed descriptor: {reason}"),
             Self::UnsupportedBackend(requirement) => {
                 write!(f, "backend does not support {requirement}")
+            }
+            Self::UnknownColourSpace(token) => write!(f, "unknown colour space '{token}'"),
+            Self::InvalidColourSpaceComponents { value } => {
+                write!(f, "colour space component count {value} is outside 1..=15")
+            }
+            Self::UnknownSoftMaskSubtype(token) => {
+                write!(f, "unknown soft-mask subtype '{token}'")
+            }
+            Self::InvalidBackdropComponent { index, value } => {
+                write!(
+                    f,
+                    "soft-mask backdrop component {index} is out of range: {value}"
+                )
+            }
+            Self::TooManyBackdropComponents { count, limit } => {
+                write!(
+                    f,
+                    "soft-mask backdrop has {count} components, above the {limit} limit"
+                )
+            }
+            Self::ColourSpaceMismatch {
+                layer,
+                backdrop,
+                group,
+            } => write!(
+                f,
+                "layer {layer} group space has {group} components but backdrop has {backdrop}"
+            ),
+            Self::EmptyCompositingPlan => f.write_str("compositing plan has no layers"),
+            Self::TooManyLayers { count, limit } => {
+                write!(
+                    f,
+                    "compositing plan has {count} layers, above the {limit} limit"
+                )
             }
         }
     }
@@ -835,6 +933,582 @@ impl TransparencyStack {
     }
 }
 
+// ---------------------------------------------------------------------------
+// STD-005 closure: colour spaces, soft masks and an ordered compositing plan.
+// ---------------------------------------------------------------------------
+
+/// Maximum number of components a soft-mask backdrop colour may hold.
+pub const MAX_BACKDROP_COMPONENTS: usize = 4;
+/// Maximum number of layers in one compositing plan.
+pub const MAX_COMPOSITING_LAYERS: usize = 64;
+/// Highest component count accepted for an ICC-based group colour space.
+pub const MAX_COLOUR_COMPONENTS: u8 = 15;
+
+/// The colour space in which a transparency group composites.
+///
+/// This resolves the group `/CS` entry of ISO 32000. Device spaces carry a
+/// fixed component count; an ICC-based space is identified by a bounded name
+/// and its explicit component count. Pixel conversion between spaces belongs
+/// to the render backend, not to this crate.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GroupColorSpace {
+    /// The `/DeviceGray` space (one component).
+    DeviceGray,
+    /// The `/DeviceRGB` space (three components).
+    DeviceRgb,
+    /// The `/DeviceCMYK` space (four components).
+    DeviceCmyk,
+    /// An ICC-based space with a bounded name and explicit component count.
+    IccBased {
+        /// Bounded name identifying the ICC profile.
+        name: String,
+        /// Number of colour components declared by the profile.
+        components: u8,
+    },
+}
+
+impl GroupColorSpace {
+    /// Parse a colour-space token, ignoring case and an optional leading slash.
+    ///
+    /// Accepted forms are `DeviceGray`, `DeviceRGB`, `DeviceCMYK`, and
+    /// `ICCBased:<components>:<name>` where the component count is in
+    /// `1..=15` and the name is bounded by [`MAX_TOKEN_LEN`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransparencyError::UnknownColourSpace`] for an unrecognised
+    /// token, [`TransparencyError::InvalidColourSpaceComponents`] for an
+    /// out-of-range component count, and [`TransparencyError::TokenTooLong`]
+    /// for an over-long token or name.
+    pub fn parse(token: &str) -> Result<Self, TransparencyError> {
+        check_token("colour space", token)?;
+        let trimmed = token.strip_prefix('/').unwrap_or(token);
+        if trimmed.eq_ignore_ascii_case("DeviceGray") || trimmed.eq_ignore_ascii_case("G") {
+            return Ok(Self::DeviceGray);
+        }
+        if trimmed.eq_ignore_ascii_case("DeviceRGB") {
+            return Ok(Self::DeviceRgb);
+        }
+        if trimmed.eq_ignore_ascii_case("DeviceCMYK") {
+            return Ok(Self::DeviceCmyk);
+        }
+        if let Some(rest) = trimmed.strip_prefix("ICCBased:") {
+            let mut parts = rest.splitn(2, ':');
+            let count = parts.next().unwrap_or("");
+            let name = parts.next().unwrap_or("");
+            if let Ok(components) = count.parse::<u8>() {
+                if components == 0 || components > MAX_COLOUR_COMPONENTS {
+                    return Err(TransparencyError::InvalidColourSpaceComponents {
+                        value: components,
+                    });
+                }
+                if name.is_empty() {
+                    return Err(TransparencyError::UnknownColourSpace(token.to_owned()));
+                }
+                check_token("colour space name", name)?;
+                return Ok(Self::IccBased {
+                    name: name.to_owned(),
+                    components,
+                });
+            }
+        }
+        Err(TransparencyError::UnknownColourSpace(token.to_owned()))
+    }
+
+    /// Return the number of colour components in this space.
+    #[must_use]
+    pub fn component_count(&self) -> u8 {
+        match self {
+            Self::DeviceGray => 1,
+            Self::DeviceRgb => 3,
+            Self::DeviceCmyk => 4,
+            Self::IccBased { components, .. } => *components,
+        }
+    }
+
+    /// Serialise to the canonical token accepted by [`Self::parse`].
+    #[must_use]
+    pub fn to_token(&self) -> String {
+        match self {
+            Self::DeviceGray => "DeviceGray".to_owned(),
+            Self::DeviceRgb => "DeviceRGB".to_owned(),
+            Self::DeviceCmyk => "DeviceCMYK".to_owned(),
+            Self::IccBased { name, components } => format!("ICCBased:{components}:{name}"),
+        }
+    }
+}
+
+impl fmt::Display for GroupColorSpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_token())
+    }
+}
+
+/// Resolve a layer's group colour space against its backdrop space.
+///
+/// A layer without an explicit `/CS` inherits the backdrop space. When a group
+/// space is present its component count must equal the backdrop's, otherwise
+/// the layer cannot composite and a typed [`TransparencyError::ColourSpaceMismatch`]
+/// is returned. No colour conversion is performed here.
+///
+/// # Errors
+///
+/// Returns a typed colour-space mismatch when the component counts differ.
+pub fn resolve_group_colour_space(
+    group: Option<GroupColorSpace>,
+    backdrop: GroupColorSpace,
+    layer: usize,
+) -> Result<GroupColorSpace, TransparencyError> {
+    match group {
+        None => Ok(backdrop),
+        Some(space) => {
+            if space.component_count() != backdrop.component_count() {
+                Err(TransparencyError::ColourSpaceMismatch {
+                    layer,
+                    backdrop: backdrop.component_count(),
+                    group: space.component_count(),
+                })
+            } else {
+                Ok(space)
+            }
+        }
+    }
+}
+
+/// The subtype of an ISO 32000 soft mask (`/SMask`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SoftMaskSubtype {
+    /// Alpha soft mask: the mask alpha is taken directly.
+    Alpha,
+    /// Luminosity soft mask: the mask luminance becomes alpha.
+    Luminosity,
+}
+
+impl SoftMaskSubtype {
+    /// Parse a soft-mask subtype token, ignoring case and a leading slash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransparencyError::UnknownSoftMaskSubtype`] for an unrecognised
+    /// token and [`TransparencyError::TokenTooLong`] for an over-long token.
+    pub fn parse(token: &str) -> Result<Self, TransparencyError> {
+        check_token("soft-mask subtype", token)?;
+        let trimmed = token.strip_prefix('/').unwrap_or(token);
+        if trimmed.eq_ignore_ascii_case("Alpha") {
+            Ok(Self::Alpha)
+        } else if trimmed.eq_ignore_ascii_case("Luminosity") {
+            Ok(Self::Luminosity)
+        } else {
+            Err(TransparencyError::UnknownSoftMaskSubtype(token.to_owned()))
+        }
+    }
+
+    /// Return the canonical token.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Alpha => "Alpha",
+            Self::Luminosity => "Luminosity",
+        }
+    }
+
+    /// Return a stable one-bit encoding used in compositing-plan summaries.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        match self {
+            Self::Alpha => 0,
+            Self::Luminosity => 1,
+        }
+    }
+}
+
+impl fmt::Display for SoftMaskSubtype {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.token())
+    }
+}
+
+/// A validated soft-mask descriptor for one compositing layer.
+///
+/// The backdrop colour (`/BC`) is bounded to [`MAX_BACKDROP_COMPONENTS`]
+/// components, each finite and in `0.0..=1.0`. An optional transparency group
+/// describes the mask's own compositing behaviour. Applying the mask to pixels
+/// is a render-backend operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoftMask {
+    subtype: SoftMaskSubtype,
+    backdrop: Vec<f32>,
+    group: Option<TransparencyGroup>,
+}
+
+impl SoftMask {
+    /// Create a soft mask with a subtype and backdrop colour.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the backdrop has too many components or a
+    /// component is non-finite or outside `0.0..=1.0`.
+    pub fn new(subtype: SoftMaskSubtype, backdrop: Vec<f32>) -> Result<Self, TransparencyError> {
+        let mask = Self {
+            subtype,
+            backdrop,
+            group: None,
+        };
+        mask.validate()?;
+        Ok(mask)
+    }
+
+    /// Attach a transparency group that describes the mask's compositing.
+    #[must_use]
+    pub const fn with_group(mut self, group: TransparencyGroup) -> Self {
+        self.group = Some(group);
+        self
+    }
+
+    /// Return the soft-mask subtype.
+    #[must_use]
+    pub const fn subtype(&self) -> SoftMaskSubtype {
+        self.subtype
+    }
+
+    /// Return the backdrop colour components.
+    #[must_use]
+    pub fn backdrop(&self) -> &[f32] {
+        &self.backdrop
+    }
+
+    /// Return the attached transparency group, if any.
+    #[must_use]
+    pub const fn group(&self) -> Option<TransparencyGroup> {
+        self.group
+    }
+
+    /// Re-check bounds and component ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed [`TransparencyError`] for an out-of-range backdrop.
+    pub fn validate(&self) -> Result<(), TransparencyError> {
+        if self.backdrop.len() > MAX_BACKDROP_COMPONENTS {
+            return Err(TransparencyError::TooManyBackdropComponents {
+                count: self.backdrop.len(),
+                limit: MAX_BACKDROP_COMPONENTS,
+            });
+        }
+        for (index, &value) in self.backdrop.iter().enumerate() {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(TransparencyError::InvalidBackdropComponent { index, value });
+            }
+        }
+        Ok(())
+    }
+
+    /// Serialise to a canonical descriptor for round-trip callers.
+    #[must_use]
+    pub fn to_descriptor(&self) -> String {
+        let components = self
+            .backdrop
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let group = match self.group {
+            Some(group) => group.to_token(),
+            None => "-".to_owned(),
+        };
+        format!("SMask:{}:[{components}]:{group}", self.subtype.token())
+    }
+
+    /// Parse a canonical descriptor produced by [`Self::to_descriptor`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed [`TransparencyError`] for a malformed descriptor, an
+    /// unknown subtype, an out-of-range backdrop or an invalid group token.
+    pub fn from_descriptor(text: &str) -> Result<Self, TransparencyError> {
+        check_token("soft mask", text)?;
+        let fields: Vec<&str> = text.split(':').collect();
+        if fields.len() != 4 || fields[0] != "SMask" {
+            return Err(TransparencyError::MalformedDescriptor(
+                "expected SMask:<subtype>:[components]:<group>".to_owned(),
+            ));
+        }
+        let subtype = SoftMaskSubtype::parse(fields[1])?;
+        let inner = fields[2]
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .ok_or_else(|| {
+                TransparencyError::MalformedDescriptor("backdrop must be bracketed".to_owned())
+            })?;
+        let mut backdrop = Vec::new();
+        if !inner.is_empty() {
+            for value in inner.split(',') {
+                let parsed = value.parse::<f32>().map_err(|_| {
+                    TransparencyError::MalformedDescriptor(
+                        "backdrop component is not a number".to_owned(),
+                    )
+                })?;
+                backdrop.push(parsed);
+            }
+        }
+        let group = if fields[3] == "-" {
+            None
+        } else {
+            Some(TransparencyGroup::from_token(fields[3])?)
+        };
+        Self::new(subtype, backdrop).map(|mask| match group {
+            Some(group) => mask.with_group(group),
+            None => mask,
+        })
+    }
+}
+
+/// One layer to be composited, with optional soft mask and group colour space.
+///
+/// Layers are supplied to [`CompositingPlan::build`] in painting order: the
+/// backmost layer first, the frontmost layer last. That is exactly the order a
+/// render backend executes source-over compositing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlendLayer {
+    spec: BlendSpec,
+    soft_mask: Option<SoftMask>,
+    group_space: Option<GroupColorSpace>,
+}
+
+impl BlendLayer {
+    /// Create a layer from a validated blend spec with no mask or explicit space.
+    #[must_use]
+    pub const fn new(spec: BlendSpec) -> Self {
+        Self {
+            spec,
+            soft_mask: None,
+            group_space: None,
+        }
+    }
+
+    /// Attach a soft mask to this layer.
+    #[must_use]
+    pub fn with_soft_mask(mut self, mask: SoftMask) -> Self {
+        self.soft_mask = Some(mask);
+        self
+    }
+
+    /// Attach an explicit group colour space (`/CS`) to this layer.
+    #[must_use]
+    pub fn with_group_space(mut self, space: GroupColorSpace) -> Self {
+        self.group_space = Some(space);
+        self
+    }
+
+    /// Return the layer's blend spec.
+    #[must_use]
+    pub const fn spec(&self) -> BlendSpec {
+        self.spec
+    }
+
+    /// Return the attached soft mask, if any.
+    #[must_use]
+    pub fn soft_mask(&self) -> Option<&SoftMask> {
+        self.soft_mask.as_ref()
+    }
+
+    /// Return the explicit group colour space, if any.
+    #[must_use]
+    pub fn group_space(&self) -> Option<&GroupColorSpace> {
+        self.group_space.as_ref()
+    }
+}
+
+/// One executed step of a [`CompositingPlan`], in back-to-front order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositingStep {
+    index: usize,
+    spec: BlendSpec,
+    soft_mask: Option<SoftMask>,
+    resolved_space: GroupColorSpace,
+    plan: BlendPlan,
+}
+
+impl CompositingStep {
+    /// Zero-based position of this step in painting order (zero is backmost).
+    #[must_use]
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Return the validated blend spec for this step.
+    #[must_use]
+    pub const fn spec(&self) -> BlendSpec {
+        self.spec
+    }
+
+    /// Return the soft mask applied at this step, if any.
+    #[must_use]
+    pub fn soft_mask(&self) -> Option<&SoftMask> {
+        self.soft_mask.as_ref()
+    }
+
+    /// Return the colour space resolved for this step's transparency group.
+    #[must_use]
+    pub fn resolved_space(&self) -> &GroupColorSpace {
+        &self.resolved_space
+    }
+
+    /// Return the underlying deterministic blend plan.
+    #[must_use]
+    pub const fn plan(&self) -> &BlendPlan {
+        &self.plan
+    }
+}
+
+/// A deterministic, back-to-front compositing plan a render backend can execute.
+///
+/// Steps are stored in painting order (index 0 is the backmost layer). Both the
+/// encoded [`Self::bits`] and the human-readable [`Self::summary`] are pure
+/// functions of the layers, backdrop space and backend, so repeated builds are
+/// byte-identical. Missing backend features are recorded in each step's
+/// [`BlendPlan`] and surfaced by [`Self::check_support`]; no pixel is blended.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositingPlan {
+    backdrop_space: GroupColorSpace,
+    steps: Vec<CompositingStep>,
+    bits: u64,
+}
+
+impl CompositingPlan {
+    /// Build an ordered compositing plan from layers in painting order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransparencyError::EmptyCompositingPlan`] for no layers, a
+    /// typed limit error for more than [`MAX_COMPOSITING_LAYERS`] layers, and
+    /// any spec, mask, colour-space or backend-planning error. Backend gaps
+    /// remain recorded in the steps rather than aborting the build.
+    pub fn build<B: BlendBackend>(
+        layers: &[BlendLayer],
+        backdrop_space: GroupColorSpace,
+        backend: &B,
+    ) -> Result<Self, TransparencyError> {
+        if layers.is_empty() {
+            return Err(TransparencyError::EmptyCompositingPlan);
+        }
+        if layers.len() > MAX_COMPOSITING_LAYERS {
+            return Err(TransparencyError::TooManyLayers {
+                count: layers.len(),
+                limit: MAX_COMPOSITING_LAYERS,
+            });
+        }
+        let mut steps = Vec::with_capacity(layers.len());
+        let mut bits = 0xcbf2_9ce4_8422_2325u64;
+        const PRIME: u64 = 0x1000_0000_01b3;
+        for (index, layer) in layers.iter().enumerate() {
+            layer.spec.validate()?;
+            if let Some(mask) = &layer.soft_mask {
+                mask.validate()?;
+            }
+            let resolved = resolve_group_colour_space(
+                layer.group_space.clone(),
+                backdrop_space.clone(),
+                index,
+            )?;
+            let plan = BlendPlan::build(layer.spec, backend)?;
+            bits = (bits ^ plan.bits()).wrapping_mul(PRIME);
+            bits = (bits ^ u64::from(resolved.component_count())).wrapping_mul(PRIME);
+            if let Some(mask) = &layer.soft_mask {
+                bits = (bits ^ u64::from(mask.subtype().bits())).wrapping_mul(PRIME);
+            }
+            steps.push(CompositingStep {
+                index,
+                spec: layer.spec,
+                soft_mask: layer.soft_mask.clone(),
+                resolved_space: resolved,
+                plan,
+            });
+        }
+        Ok(Self {
+            backdrop_space,
+            steps,
+            bits,
+        })
+    }
+
+    /// Return the steps in back-to-front painting order.
+    #[must_use]
+    pub fn steps(&self) -> &[CompositingStep] {
+        &self.steps
+    }
+
+    /// Return the number of compositing steps.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Return `true` when the plan has no steps (only possible for a default).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    /// Return the backdrop colour space this plan composites onto.
+    #[must_use]
+    pub fn backdrop_space(&self) -> &GroupColorSpace {
+        &self.backdrop_space
+    }
+
+    /// Return the stable bit encoding of the whole plan.
+    #[must_use]
+    pub const fn bits(&self) -> u64 {
+        self.bits
+    }
+
+    /// Return a deterministic, human-readable back-to-front summary.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let mut out = format!(
+            "compositing[{}] back-to-front onto {}",
+            self.steps.len(),
+            self.backdrop_space.to_token()
+        );
+        for step in &self.steps {
+            out.push_str(&format!(
+                " | {}:{}/{}",
+                step.index,
+                step.spec.mode().name(),
+                step.resolved_space.to_token()
+            ));
+        }
+        out
+    }
+
+    /// Reject the plan when any step's backend requirements are unmet.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`TransparencyError::UnsupportedBackend`] in step and
+    /// requirement order.
+    pub fn check_support(&self) -> Result<(), TransparencyError> {
+        for step in &self.steps {
+            step.plan.check_support()?;
+        }
+        Ok(())
+    }
+
+    /// Return all backend requirements that are blocked, in deterministic order.
+    #[must_use]
+    pub fn blocked_requirements(&self) -> Vec<BackendRequirement> {
+        let mut out = Vec::new();
+        for step in &self.steps {
+            for &requirement in step.plan.blocked() {
+                if !out.contains(&requirement) {
+                    out.push(requirement);
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1160,5 +1834,225 @@ mod tests {
             BlendSpec::from_descriptor("Normal group=A|B|C")
                 .is_err_and(|error| matches!(error, TransparencyError::UnknownBlendMode(_)))
         );
+    }
+
+    #[test]
+    fn colour_space_tokens_round_trip_with_component_counts() {
+        for (token, space, components) in [
+            ("DeviceGray", GroupColorSpace::DeviceGray, 1),
+            ("/devicergb", GroupColorSpace::DeviceRgb, 3),
+            ("DeviceCMYK", GroupColorSpace::DeviceCmyk, 4),
+            (
+                "ICCBased:3:MyRGB",
+                GroupColorSpace::IccBased {
+                    name: "MyRGB".to_owned(),
+                    components: 3,
+                },
+                3,
+            ),
+        ] {
+            let parsed = GroupColorSpace::parse(token).expect("parse");
+            assert_eq!(parsed, space);
+            assert_eq!(parsed.component_count(), components);
+            assert_eq!(
+                GroupColorSpace::parse(&space.to_token()).expect("canonical round trip"),
+                space
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_colour_spaces_are_typed_errors() {
+        assert_eq!(
+            GroupColorSpace::parse("Lab").expect_err("unknown"),
+            TransparencyError::UnknownColourSpace("Lab".to_owned())
+        );
+        assert!(matches!(
+            GroupColorSpace::parse("ICCBased:0:x"),
+            Err(TransparencyError::InvalidColourSpaceComponents { value: 0 })
+        ));
+        assert!(matches!(
+            GroupColorSpace::parse("ICCBased:16:x"),
+            Err(TransparencyError::InvalidColourSpaceComponents { value: 16 })
+        ));
+        assert!(matches!(
+            GroupColorSpace::parse(&"x".repeat(MAX_TOKEN_LEN + 1)),
+            Err(TransparencyError::TokenTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn group_space_resolution_inherits_backdrop_and_rejects_mismatch() {
+        let backdrop = GroupColorSpace::DeviceRgb;
+        assert_eq!(
+            resolve_group_colour_space(None, backdrop.clone(), 0).expect("inherit"),
+            backdrop
+        );
+        let same = GroupColorSpace::IccBased {
+            name: "sRGB".to_owned(),
+            components: 3,
+        };
+        assert_eq!(
+            resolve_group_colour_space(Some(same.clone()), backdrop.clone(), 0).expect("resolve"),
+            same
+        );
+        assert_eq!(
+            resolve_group_colour_space(Some(GroupColorSpace::DeviceCmyk), backdrop, 2)
+                .expect_err("mismatch"),
+            TransparencyError::ColourSpaceMismatch {
+                layer: 2,
+                backdrop: 3,
+                group: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn soft_masks_round_trip_and_validate_backdrop() {
+        let group = TransparencyGroup::new(
+            GroupIsolation::Isolated,
+            GroupKnockout::NonKnockout,
+            BlendMode::Multiply,
+        );
+        let mask = SoftMask::new(SoftMaskSubtype::Luminosity, vec![0.0, 0.5, 1.0])
+            .expect("mask")
+            .with_group(group);
+        assert_eq!(
+            SoftMask::from_descriptor(&mask.to_descriptor()).expect("round trip"),
+            mask
+        );
+        let plain = SoftMask::new(SoftMaskSubtype::Alpha, vec![]).expect("empty backdrop");
+        assert_eq!(
+            SoftMask::from_descriptor(&plain.to_descriptor()).expect("round trip"),
+            plain
+        );
+        assert_eq!(
+            SoftMaskSubtype::parse("/alpha").expect("alpha"),
+            SoftMaskSubtype::Alpha
+        );
+        assert_eq!(
+            SoftMaskSubtype::parse("bogus").expect_err("bad subtype"),
+            TransparencyError::UnknownSoftMaskSubtype("bogus".to_owned())
+        );
+    }
+
+    #[test]
+    fn soft_mask_out_of_range_backdrop_is_typed() {
+        assert_eq!(
+            SoftMask::new(SoftMaskSubtype::Alpha, vec![1.5]).expect_err("over one"),
+            TransparencyError::InvalidBackdropComponent {
+                index: 0,
+                value: 1.5
+            }
+        );
+        assert!(matches!(
+            SoftMask::new(SoftMaskSubtype::Alpha, vec![f32::NAN]),
+            Err(TransparencyError::InvalidBackdropComponent { index: 0, .. })
+        ));
+        assert_eq!(
+            SoftMask::new(
+                SoftMaskSubtype::Alpha,
+                vec![0.0; MAX_BACKDROP_COMPONENTS + 1]
+            )
+            .expect_err("too many"),
+            TransparencyError::TooManyBackdropComponents { count: 5, limit: 4 }
+        );
+    }
+
+    #[test]
+    fn compositing_plan_is_ordered_back_to_front_and_deterministic() {
+        let layers = vec![
+            BlendLayer::new(BlendSpec::new(BlendMode::Normal, MAX_ALPHA, MAX_ALPHA).expect("back")),
+            BlendLayer::new(BlendSpec::new(BlendMode::Multiply, 128, MAX_ALPHA).expect("mid"))
+                .with_soft_mask(SoftMask::new(SoftMaskSubtype::Alpha, vec![1.0]).expect("mask"))
+                .with_group_space(GroupColorSpace::DeviceRgb),
+            BlendLayer::new(BlendSpec::new(BlendMode::Hue, MAX_ALPHA, MAX_ALPHA).expect("front")),
+        ];
+        let a =
+            CompositingPlan::build(&layers, GroupColorSpace::DeviceRgb, &FullBackend).expect("a");
+        let b =
+            CompositingPlan::build(&layers, GroupColorSpace::DeviceRgb, &FullBackend).expect("b");
+        assert_eq!(a, b);
+        assert_eq!(a.bits(), b.bits());
+        assert_eq!(a.summary(), b.summary());
+        assert_eq!(a.len(), 3);
+        assert_eq!(a.steps()[0].index(), 0);
+        assert_eq!(a.steps()[0].spec().mode(), BlendMode::Normal);
+        assert_eq!(a.steps()[2].spec().mode(), BlendMode::Hue);
+        assert!(a.steps()[1].soft_mask().is_some());
+        assert!(
+            a.summary()
+                .starts_with("compositing[3] back-to-front onto DeviceRGB")
+        );
+        assert!(a.check_support().is_ok());
+    }
+
+    #[test]
+    fn compositing_plan_summary_reflects_painting_order() {
+        let back =
+            BlendLayer::new(BlendSpec::new(BlendMode::Normal, MAX_ALPHA, MAX_ALPHA).expect("a"));
+        let front =
+            BlendLayer::new(BlendSpec::new(BlendMode::Screen, MAX_ALPHA, MAX_ALPHA).expect("b"));
+        let forward = CompositingPlan::build(
+            &[back.clone(), front.clone()],
+            GroupColorSpace::DeviceRgb,
+            &FullBackend,
+        )
+        .expect("forward");
+        let reversed =
+            CompositingPlan::build(&[front, back], GroupColorSpace::DeviceRgb, &FullBackend)
+                .expect("reversed");
+        assert_ne!(
+            forward.summary(),
+            reversed.summary(),
+            "painting order must be observable in the summary"
+        );
+        let summary = forward.summary();
+        let at_normal = summary.find("0:Normal").expect("back step first");
+        let at_screen = summary.find("1:Screen").expect("front step second");
+        assert!(at_normal < at_screen);
+    }
+
+    #[test]
+    fn compositing_plan_rejects_empty_and_bound_violations() {
+        assert_eq!(
+            CompositingPlan::build(&[], GroupColorSpace::DeviceRgb, &FullBackend)
+                .expect_err("empty"),
+            TransparencyError::EmptyCompositingPlan
+        );
+        let layer = BlendLayer::new(
+            BlendSpec::new(BlendMode::Normal, MAX_ALPHA, MAX_ALPHA).expect("layer"),
+        );
+        let many = vec![layer; MAX_COMPOSITING_LAYERS + 1];
+        assert!(matches!(
+            CompositingPlan::build(&many, GroupColorSpace::DeviceRgb, &FullBackend),
+            Err(TransparencyError::TooManyLayers { .. })
+        ));
+    }
+
+    #[test]
+    fn compositing_plan_reports_backend_gaps_and_space_mismatch() {
+        let hue =
+            BlendLayer::new(BlendSpec::new(BlendMode::Hue, MAX_ALPHA, MAX_ALPHA).expect("hue"));
+        let plan = CompositingPlan::build(&[hue], GroupColorSpace::DeviceRgb, &NoCmmBackend)
+            .expect("gaps");
+        assert!(
+            plan.blocked_requirements()
+                .contains(&BackendRequirement::ColorManagement)
+        );
+        assert!(matches!(
+            plan.check_support(),
+            Err(TransparencyError::UnsupportedBackend(
+                BackendRequirement::ColorManagement
+            ))
+        ));
+        let cmyk_layer = BlendLayer::new(
+            BlendSpec::new(BlendMode::Normal, MAX_ALPHA, MAX_ALPHA).expect("normal"),
+        )
+        .with_group_space(GroupColorSpace::DeviceCmyk);
+        assert!(matches!(
+            CompositingPlan::build(&[cmyk_layer], GroupColorSpace::DeviceRgb, &FullBackend),
+            Err(TransparencyError::ColourSpaceMismatch { layer: 0, .. })
+        ));
     }
 }

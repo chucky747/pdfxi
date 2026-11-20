@@ -3,7 +3,7 @@
   "lane": "core",
   "title": "Transparency and preservation closure",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0181"],
   "owns": [
     "crates/pdfxi-core/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0184.toml"
   ],
   "acceptance": "cargo test -p pdfxi-core",
-  "evidence": ""
+  "evidence": "docs/evidence/core/T-0184.md"
 }
