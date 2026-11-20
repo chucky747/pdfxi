@@ -23,10 +23,14 @@
 //!   The `pdfium` feature adds `export_pdf_bytes` and `export_pdf_file`,
 //!   which construct a `PdfiumRenderer` for convenience; the core API stays
 //!   renderer-agnostic.
-//! - [`export_text`], [`TextExportPlan`], [`TextPageSelection`], and
-//!   [`TextEncoding`] turn pre-extracted `(page, text)` pairs into deterministic
-//!   plain text with documented separators, headers, and trailing-newline
-//!   rules.
+//! - [`export_text`], [`PdfTextOptions`], [`PdfPageSeparator`], and
+//!   [`export_docx`] are the end-to-end export path from a parsed
+//!   `pdfxi_core::Document`: page text is read through `Document::page_text`
+//!   (including `/ToUnicode`), and the same pages are mapped into a real
+//!   WordprocessingML `.docx` package. [`export_page_text`],
+//!   [`TextExportPlan`], [`TextPageSelection`], and [`TextEncoding`] remain the
+//!   low-level writers for callers that already hold extracted `(page, text)`
+//!   pairs.
 //! - [`DocumentJson`], [`DocumentMetadata`], [`JsonPage`], and [`JsonSpan`]
 //!   model a versioned structured snapshot serialized by a hand-written,
 //!   dependency-free JSON writer with stable key order and correct escaping.
@@ -207,6 +211,7 @@ pub mod office_integration;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
+pub mod pdf_export;
 pub mod portfolio;
 pub mod portfolio_builder;
 pub mod portfolio_package;
@@ -312,6 +317,10 @@ pub use page_export::{
 };
 #[cfg(feature = "pdfium")]
 pub use page_export::{export_pdf_bytes, export_pdf_file};
+pub use pdf_export::{
+    DEFAULT_DOCX_TITLE, PdfDocxOptions, PdfExportError, PdfPageSeparator, PdfTextOptions,
+    build_office_document, export_docx, export_text,
+};
 pub use portfolio::{
     PORTFOLIO_MAX_DESCRIPTION_BYTES, PORTFOLIO_MAX_ENTRIES, PORTFOLIO_MAX_NAME_BYTES,
     PORTFOLIO_MAX_TITLE_BYTES, PortfolioEntry, PortfolioError, PortfolioManifest,
@@ -364,7 +373,7 @@ pub use tagged_text::{
 };
 pub use text::{
     DEFAULT_PAGE_SEPARATOR, PAGE_HEADER_PATTERN, TextEncoding, TextExportPlan, TextPageSelection,
-    export_text,
+    export_text as export_page_text,
 };
 pub use text_converter::TextConverter;
 pub use watched_contract::{

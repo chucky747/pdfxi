@@ -487,7 +487,7 @@ impl ExtractedDocument {
         lines.join("\n")
     }
 
-    /// Convert to `(zero-based page, text)` pairs for `crate::export_text`.
+    /// Convert to `(zero-based page, text)` pairs for `crate::export_page_text`.
     #[must_use]
     pub fn to_text_pages(&self) -> Vec<(usize, String)> {
         self.sorted_pages()

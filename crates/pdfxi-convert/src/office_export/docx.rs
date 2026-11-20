@@ -41,13 +41,22 @@ impl DocxExporter {
         let first = validated.pages[0];
         let width_twips = (f64::from(first.width) * 20.0) as i64;
         let height_twips = (f64::from(first.height) * 20.0) as i64;
+        // Word needs the orientation flag in addition to swapped dimensions,
+        // otherwise a wide page can be shown as a portrait page with a wide
+        // media box in some viewers.
+        let orientation = if width_twips > height_twips {
+            " w:orient=\"landscape\""
+        } else {
+            ""
+        };
         let document = format!(
             "{decl}<w:document xmlns:w=\"{w}\"><w:body>{body}\
-             <w:sectPr><w:pgSz w:w=\"{width}\" w:h=\"{height}\"/></w:sectPr></w:body></w:document>",
+             <w:sectPr><w:pgSz w:w=\"{width}\" w:h=\"{height}\"{orientation}/></w:sectPr></w:body></w:document>",
             decl = xml::declaration(),
             w = W_NS,
             width = width_twips,
             height = height_twips,
+            orientation = orientation,
         );
 
         let parts = [
@@ -172,7 +181,7 @@ fn numbering() -> String {
         ));
         for level in 0..=8_u8 {
             let marker = if format == "bullet" {
-                "\\u2022".to_owned()
+                "\u{2022}".to_owned()
             } else {
                 format!("%{}.", level + 1)
             };
@@ -363,11 +372,27 @@ mod tests {
             ],
         )
         .expect("required parts");
-        assert!(part(&export, "word/document.xml").contains("<w:sectPr>"));
+        let xml = part(&export, "word/document.xml");
+        assert!(xml.contains("<w:sectPr>"));
+        assert!(!xml.contains("w:orient=\"landscape\""));
         assert!(
             part(&export, "[Content_Types].xml").contains("wordprocessingml.document.main+xml")
         );
         assert!(export.report.part_count >= 7);
+    }
+
+    #[test]
+    fn docx_wide_page_declares_landscape_orientation() {
+        let doc = OfficeDocument::new(
+            "Wide",
+            vec![
+                OfficePage::new(0, 720.0, 405.0).with_blocks(vec![OfficeBlock::paragraph("slide")]),
+            ],
+        );
+        let export = DocxExporter.write(&doc).expect("write");
+        let xml = part(&export, "word/document.xml");
+        assert!(xml.contains("w:orient=\"landscape\""));
+        assert!(xml.contains("<w:pgSz w:w=\"14400\" w:h=\"8100\""));
     }
 
     #[test]

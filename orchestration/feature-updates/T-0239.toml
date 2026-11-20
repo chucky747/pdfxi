@@ -1,0 +1,55 @@
+# T-0239 - Office and image export writers (round A: text + DOCX)
+#
+# Library task from ADR 0012's export pair. Round A wires text and DOCX export
+# from a parsed document; XLSX, PPTX, image, HTML and RTF remain for round B.
+# This fragment proposes NO feature-row status change: EXPORT-001/EXPORT-005
+# stay `library` until round B and the serialised shell task (T-0244) land, and
+# the task itself stays `in_progress` with its claim held.
+
+task = "T-0239"
+lane = "convert"
+status = "in_progress"
+evidence = "docs/evidence/hardening/T-0239.md"
+docs = [
+    "crates/pdfxi-convert/src/pdf_export.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "crates/pdfxi-convert/src/office_export/docx.rs",
+    "crates/pdfxi-convert/src/office_export/mod.rs",
+    "crates/pdfxi-convert/tests/export_adapters.rs",
+    "docs/evidence/hardening/T-0239.md",
+]
+notes = """
+Round A adds crates/pdfxi-convert/src/pdf_export.rs, the end-to-end bridge from
+a parsed pdfxi_core::Document to the existing writers: export_text with the
+shared zero-based page selection and LineFeed/BlankLine/FormFeed separators,
+build_office_document mapping pages to OfficePage with the real media-box size,
+and export_docx producing a validated WordprocessingML package. Two writer fixes
+came from opening the output: wide pages declare w:orient="landscape", and the
+bullet marker is a real U+2022. Package validation was independent of the
+writer: Windows OPC System.IO.Packaging listed all six required parts, and
+System.Xml.XmlDocument parsed /word/document.xml for both fixtures with the
+expected page breaks (Excel 2 pages/1 break, PowerPoint 3 pages/2 breaks) and
+the fixture markers present in the text runs. Fidelity limits are declared in
+code and here: DOCX contains text only, with no images, vector art,
+annotations or backgrounds, and paragraphs are one per extracted line because
+page_text exposes no glyph coordinates (a geometry extractor is round B option
+5). XLSX, PPTX, image, HTML and RTF end-to-end export are round B. No new
+dependency and no manifest change: the crate already had a deterministic
+stored-ZIP writer/reader and already depended on pdfxi-core. Gates on the
+lane target dir: fmt, clippy --all-features -D warnings, rustdoc -D warnings and
+cargo test all clean (407 unit + 46 integration tests). Matrix promotion of
+EXPORT-001/EXPORT-005 waits for round B and the T-0244 shell task; this
+fragment changes no row.
+"""
+tests = [
+    "pdf_export::tests::text_export_from_excel_fixture_has_markers_and_page_separator",
+    "pdf_export::tests::text_export_from_powerpoint_fixture_has_three_pages_and_markers",
+    "pdf_export::tests::docx_export_from_real_fixtures_has_required_parts_and_page_breaks",
+    "pdf_export::tests::docx_export_contains_markers_for_both_fixtures",
+    "pdf_export::tests::docx_text_is_xml_escaped_and_control_characters_are_replaced",
+    "pdf_export::tests::text_selection_extracts_only_the_requested_pages",
+    "pdf_export::tests::options_and_separators_are_stable",
+    "pdf_export::tests::empty_title_and_invalid_geometry_are_typed_errors",
+    "pdf_export::tests::text_lines_normalizes_and_drops_empty_lines",
+    "office_export::docx::tests::docx_wide_page_declares_landscape_orientation",
+]

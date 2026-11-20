@@ -33,7 +33,7 @@ mod xlsx;
 // Crate-visible so the portfolio manifest serializer can reuse the same
 // deterministic XML declaration/escaping helpers (T-0157).
 pub(crate) mod xml;
-mod zip;
+pub(crate) mod zip;
 
 use std::collections::HashSet;
 

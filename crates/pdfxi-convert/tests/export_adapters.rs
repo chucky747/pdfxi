@@ -11,7 +11,7 @@ use pdfxi_convert::{
     ImageFormat, JsonPage, JsonSpan, ModelError, OfficeBlock, OfficeDocument, OfficeExportError,
     OfficeExporter, OfficePage, PptxExporter, PsContent, PsDocument, PsExportError, PsPage, PsText,
     RtfOptions, RtfPage, TextExportPlan, XlsxExporter, encode, export_html, export_html_string,
-    export_postscript, export_rtf, export_rtf_string, export_text,
+    export_page_text, export_postscript, export_rtf, export_rtf_string,
 };
 
 /// Returns true when `needle` occurs anywhere in `haystack`.
@@ -269,11 +269,11 @@ fn postscript_export_rejects_empty_and_malformed_documents() {
 #[test]
 fn text_and_json_export_are_structured_and_deterministic() {
     let pages = vec![(1usize, "second".to_owned()), (0usize, "first".to_owned())];
-    let text = export_text(pages.into_iter(), &TextExportPlan::new());
+    let text = export_page_text(pages.into_iter(), &TextExportPlan::new());
     assert_eq!(text, "first\nsecond");
     assert_eq!(
         text,
-        export_text(
+        export_page_text(
             vec![(0usize, "first".to_owned()), (1usize, "second".to_owned())].into_iter(),
             &TextExportPlan::new()
         ),
