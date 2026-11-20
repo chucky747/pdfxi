@@ -1,0 +1,19 @@
+{
+  "id": "T-0216",
+  "lane": "core",
+  "title": "Apply ToUnicode CMaps in page_text for subset fonts",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": [
+    "T-0213"
+  ],
+  "owns": [
+    "crates/pdfxi-core/src/**",
+    "crates/pdfxi-core/tests/**",
+    "docs/evidence/hardening/T-0216.md",
+    "orchestration/feature-updates/T-0216.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-testkit --test realworld_corpus",
+  "notes": "fixtures/realworld/browser-print.pdf (headless Edge) extracts glyph indices instead of Unicode through Document::page_text; the corpus manifest records this as known_failure and crates/pdfxi-testkit/tests/realworld_corpus.rs asserts the marker words stay absent, so that test flips red when the ToUnicode path is fixed and the manifest entry must be updated in the same change. Encrypted PDFs also currently return Error::UnexpectedToken from page_text (the encrypted stream is parsed as plaintext); the decrypt and typed-error layer belongs to T-0214, so T-0216 must not model password or decrypt errors. Owns overlap T-0213 (same core globs and claim), so this task is serialised after T-0213 is verified and its claim released.",
+  "evidence": "docs/evidence/hardening/T-0216.md"
+}
