@@ -30,10 +30,11 @@ $ cargo test --workspace
 $ cargo doc --workspace --no-deps
 FEATURES OK: 140 rows, 137 verified
 VERIFY OK
-GOAL VERIFIED: 0d73706deb1afe58e7a2508c0ae07683eeb91d67 unix=1795144564
+GOAL VERIFIED: d842263cb821b495fee793ac452baffeb178234f unix=1795144702
 ```
 
-The full 486 KB transcript is committed at `docs/evidence/goal-verify.log`.
+The full transcript (both clean-worktree runs, ~973 KB) is committed at
+`docs/evidence/goal-verify.log`.
 
 ## Rule
 
