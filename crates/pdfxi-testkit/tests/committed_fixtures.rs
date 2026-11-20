@@ -392,3 +392,42 @@ fn fuzz_seed_manifest_hashes_are_valid() {
         "every manifest row was verified"
     );
 }
+
+/// The hostile-input corpus (T-0183) is part of the smoke audit. Its manifest
+/// records a lowercase SHA-256 and the expected structure for every generated
+/// adversarial file; this test keeps `cargo xtask corpus smoke` honest about
+/// the additive corpus without changing the valid 50-fixture count above.
+#[test]
+fn hostile_corpus_manifest_hashes_and_structure_are_valid() {
+    use pdfxi_testkit::hostile::{HOSTILE_COUNT, all, committed_manifest, emit_manifest};
+
+    let on_disk = committed_manifest();
+    assert_eq!(on_disk.len(), HOSTILE_COUNT);
+    assert_eq!(on_disk, parse_seed_hostile(&emit_manifest(&all())));
+    for entry in &on_disk {
+        assert_eq!(entry.sha256.len(), 64, "hash length for {}", entry.name);
+        assert!(
+            entry
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+            "hash must be lowercase hex for {}",
+            entry.name
+        );
+        let path = workspace_root()
+            .join("fixtures")
+            .join("hostile")
+            .join(&entry.name);
+        let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        assert_eq!(
+            sha256_hex(&bytes),
+            entry.sha256,
+            "SHA-256 mismatch for {}",
+            entry.name
+        );
+    }
+}
+
+fn parse_seed_hostile(source: &str) -> Vec<pdfxi_testkit::hostile::HostileFixture> {
+    pdfxi_testkit::hostile::parse_manifest(source)
+}

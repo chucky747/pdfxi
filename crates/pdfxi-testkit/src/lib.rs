@@ -59,6 +59,7 @@ pub mod fixtures;
 pub mod fuzz;
 pub mod golden;
 pub mod hash;
+pub mod hostile;
 pub mod malformed;
 pub mod perf;
 pub mod seed_corpus;
