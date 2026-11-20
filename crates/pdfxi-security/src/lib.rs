@@ -12,6 +12,9 @@
 //!   user/owner states, reports the handler and key length a document would
 //!   use, and resolves open credentials without widening user permissions
 //!   (SEC-001).
+//! - [`authorization`] — explicit, deterministic `can_print`/`can_copy`/
+//!   `can_modify`/`can_annotate` decisions derived from the user- or
+//!   owner-password path, plus `/P` derivation and validation (SEC-001).
 //! - [`SecurityError`] — actionable, specific error variants for wrong
 //!   passwords, invalid keys, tampering, expiry, and revocation.
 //! - [`SignatureInfo`] / [`SignatureStatus`] — a side-effect-free signature
@@ -86,6 +89,8 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+/// Explicit, deterministic authorization decisions for an unlocked session (SEC-001).
+pub mod authorization;
 /// Certificate-based enveloped encryption (SEC-003).
 pub mod certificate_encryption;
 pub mod cms;
@@ -118,6 +123,7 @@ pub mod x509;
 /// Minimal XMP namespace/property removal with post-scrub verification (SEC-009).
 pub mod xmp_scrub;
 
+pub use authorization::{Authorization, AuthorizationPath, Operation};
 pub use certificate_encryption::{
     AesKwKeyWrapProvider, ContentCipher, EnvelopedData, InMemoryKeyWrapProvider, KeyWrapProvider,
     OpenedEnvelope, Recipient, RecipientEnvelopeKey, RecipientList, RecipientSelector,

@@ -28,6 +28,18 @@ pub enum SecurityError {
     /// The static label names the invariant that was violated; no password
     /// bytes are ever carried in an error value.
     PasswordConflict(&'static str),
+    /// A permission mask contained mutually contradictory grants.
+    ///
+    /// For example, annotation or page assembly without modification, or
+    /// high-quality printing without printing, describes an impossible state.
+    /// The static label names the violated dependency; no document contents
+    /// are carried in the error.
+    PermissionConflict(&'static str),
+    /// The caller was denied a named operation by the active authorization.
+    ///
+    /// The static label names the operation (see
+    /// [`crate::authorization::Operation`]); no secrets are carried.
+    PermissionDenied(&'static str),
     /// A request would widen permissions granted to a user/open session.
     ///
     /// In particular, an empty user password must never elevate a session to
@@ -301,6 +313,12 @@ impl fmt::Display for SecurityError {
             }
             Self::PasswordConflict(reason) => {
                 write!(f, "conflicting password configuration: {reason}")
+            }
+            Self::PermissionConflict(reason) => {
+                write!(f, "conflicting permission grants: {reason}")
+            }
+            Self::PermissionDenied(operation) => {
+                write!(f, "permission denied for operation: {operation}")
             }
             Self::PermissionWideningRejected(reason) => {
                 write!(f, "permission widening rejected: {reason}")

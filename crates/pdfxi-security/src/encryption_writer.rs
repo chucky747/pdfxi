@@ -175,9 +175,9 @@ fn core_error(error: pdfxi_core::Error) -> SecurityError {
     SecurityError::EncryptedDocumentInvalid(error.to_string())
 }
 
-/// PDF reserves bits 7-8 (always 1) and bits 13-32 (always 1) of `/P`.
+/// Derive the canonical `/P` word (reserved bits set, low bits clear).
 fn permissions_mask(permissions: Permission) -> u32 {
-    0xFFFF_F0C0 | permissions.bits()
+    permissions.to_p_word()
 }
 
 fn default_revision(method: EncryptionMethod) -> u8 {
@@ -850,6 +850,7 @@ fn parameters_from_encrypt(
     let key_length_bits = u16::try_from(int_field(dictionary, "Length")?)
         .map_err(|_| SecurityError::EncryptedDocumentInvalid("/Length out of range".to_owned()))?;
     let p = (int_field(dictionary, "P")? as i32) as u32;
+    Permission::from_p_word(p)?;
     let encrypt_metadata = dictionary
         .get("EncryptMetadata")
         .and_then(|value| match value {
@@ -1364,6 +1365,26 @@ mod tests {
         );
         let (opened, _) = open(&encrypted, b"user-secret");
         assert_eq!(opened.page_text(0).expect("text"), "Secret payload");
+    }
+
+    #[test]
+    fn written_p_word_validates_and_matches_the_report() {
+        let granted = Permission::MODIFY.union(Permission::ANNOTATE);
+        let opts = EncryptOptions::new(
+            EncryptionMethod::Aes256,
+            b"user-secret",
+            b"owner-secret",
+            granted,
+        )
+        .expect("valid options")
+        .with_id_seed(b"pdfxi-fixed-seed".to_vec());
+        let source = Document::from_bytes(fixture(true)).expect("fixture parses");
+        let (bytes, report) = encrypt_document(&source, &opts).expect("encrypt");
+        assert_eq!(report.raw_permissions, granted.to_p_word());
+        assert_eq!(Permission::from_p_word(report.raw_permissions), Ok(granted));
+        let (_, opened) = open(&bytes, b"user-secret");
+        assert_eq!(opened.permissions.bits(), granted);
+        assert_eq!(opened.permissions.role(), PasswordRole::User);
     }
 
     #[test]

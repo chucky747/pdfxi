@@ -98,6 +98,77 @@ impl Permission {
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
+
+    /// Bits of a raw `/P` word that the PDF specification reserves as always 1.
+    ///
+    /// Bits 7 and 8 (values `0x40` and `0x80`) and bits 13 through 32 of the
+    /// `/P` entry must be set in a well-formed encryption dictionary. They are
+    /// not user-grantable permissions, so they are absent from [`Self::ALL`].
+    pub const RESERVED_ALWAYS_SET: u32 = 0xFFFF_F0C0;
+
+    /// The two low-order bits of `/P`, which are always 0.
+    const ALWAYS_CLEAR: u32 = 0x0000_0003;
+
+    /// Derive the canonical raw `/P` word for this permission mask.
+    ///
+    /// The result sets every reserved-always-1 bit and leaves the low two bits
+    /// clear, matching the value an encrypting writer places in `/Encrypt`.
+    pub const fn to_p_word(self) -> u32 {
+        Self::RESERVED_ALWAYS_SET | self.0
+    }
+
+    /// Parse and validate a raw `/P` word from an untrusted document.
+    ///
+    /// This checks both structural validity (reserved bits set, low bits
+    /// clear) and mutually dependent grants (see [`Self::validate_consistent`]).
+    /// Reserved bits are stripped from the returned mask so it can be compared
+    /// directly with [`Self::ALL`] and the named permission constants.
+    ///
+    /// # Errors
+    ///
+    /// - [`SecurityError::InvalidPermissionBits`] when reserved bits are clear,
+    ///   low bits are set, or unknown permission bits are present.
+    /// - [`SecurityError::PermissionConflict`] when grants contradict each other.
+    pub fn from_p_word(raw: u32) -> Result<Self> {
+        if raw & Self::RESERVED_ALWAYS_SET != Self::RESERVED_ALWAYS_SET
+            || raw & Self::ALWAYS_CLEAR != 0
+        {
+            return Err(SecurityError::InvalidPermissionBits(raw));
+        }
+        let bits = Self(raw & Self::ALL.0);
+        Self::validate_consistent(bits)?;
+        Ok(bits)
+    }
+
+    /// Check a mask for mutually dependent grants.
+    ///
+    /// The PDF specification makes annotation and page assembly meaningless
+    /// when modification is denied, and high-quality printing meaningless when
+    /// printing is denied. This crate treats those combinations as typed
+    /// conflicts rather than silently ignoring the dependent bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityError::PermissionConflict`] naming the violated
+    /// dependency.
+    pub fn validate_consistent(bits: Self) -> Result<()> {
+        if bits.contains(Self::ANNOTATE) && !bits.contains(Self::MODIFY) {
+            return Err(SecurityError::PermissionConflict(
+                "annotation requires modification permission",
+            ));
+        }
+        if bits.contains(Self::ASSEMBLE) && !bits.contains(Self::MODIFY) {
+            return Err(SecurityError::PermissionConflict(
+                "page assembly requires modification permission",
+            ));
+        }
+        if bits.contains(Self::PRINT_HIGH_QUALITY) && !bits.contains(Self::PRINT) {
+            return Err(SecurityError::PermissionConflict(
+                "high-quality printing requires printing permission",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Display for Permission {
@@ -128,6 +199,119 @@ impl PasswordRole {
 impl fmt::Display for PasswordRole {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.label())
+    }
+}
+
+#[cfg(test)]
+mod bit_tests {
+    use super::*;
+
+    #[test]
+    fn p_word_round_trips_every_named_permission() {
+        let cases = [
+            Permission::NONE,
+            Permission::PRINT,
+            Permission::MODIFY,
+            Permission::COPY,
+            Permission::FILL_FORMS,
+            Permission::ACCESSIBILITY,
+            Permission::ALL,
+            Permission::PRINT.union(Permission::COPY),
+            Permission::MODIFY.union(Permission::ANNOTATE),
+            Permission::MODIFY.union(Permission::ASSEMBLE),
+            Permission::PRINT.union(Permission::PRINT_HIGH_QUALITY),
+        ];
+        for mask in cases {
+            let raw = mask.to_p_word();
+            assert_eq!(
+                raw & Permission::RESERVED_ALWAYS_SET,
+                Permission::RESERVED_ALWAYS_SET
+            );
+            assert_eq!(raw & 0x3, 0);
+            assert_eq!(Permission::from_p_word(raw), Ok(mask));
+        }
+        assert_eq!(Permission::ALL.to_p_word(), 0xFFFF_FFFC);
+        assert_eq!(Permission::from_p_word(0xFFFF_FFFC), Ok(Permission::ALL));
+    }
+
+    #[test]
+    fn from_p_word_rejects_cleared_reserved_bits() {
+        let raw = Permission::ALL.to_p_word() & !(1 << 20);
+        assert_eq!(
+            Permission::from_p_word(raw),
+            Err(SecurityError::InvalidPermissionBits(raw))
+        );
+        let raw = Permission::ALL.to_p_word() & !(1 << 6);
+        assert_eq!(
+            Permission::from_p_word(raw),
+            Err(SecurityError::InvalidPermissionBits(raw))
+        );
+    }
+
+    #[test]
+    fn from_p_word_rejects_low_and_unknown_bits() {
+        let raw = Permission::ALL.to_p_word() | 0x1;
+        assert_eq!(
+            Permission::from_p_word(raw),
+            Err(SecurityError::InvalidPermissionBits(raw))
+        );
+    }
+
+    #[test]
+    fn from_p_word_rejects_conflicting_dependent_grants() {
+        let annotate_only = Permission::ANNOTATE.to_p_word();
+        assert_eq!(
+            Permission::from_p_word(annotate_only),
+            Err(SecurityError::PermissionConflict(
+                "annotation requires modification permission"
+            ))
+        );
+        let assemble_only = Permission::ASSEMBLE.to_p_word();
+        assert_eq!(
+            Permission::from_p_word(assemble_only),
+            Err(SecurityError::PermissionConflict(
+                "page assembly requires modification permission"
+            ))
+        );
+        let high_quality_only = Permission::PRINT_HIGH_QUALITY.to_p_word();
+        assert_eq!(
+            Permission::from_p_word(high_quality_only),
+            Err(SecurityError::PermissionConflict(
+                "high-quality printing requires printing permission"
+            ))
+        );
+    }
+
+    #[test]
+    fn validate_consistent_accepts_independent_grants() {
+        let okay = [
+            Permission::NONE,
+            Permission::PRINT,
+            Permission::MODIFY.union(Permission::ANNOTATE),
+            Permission::MODIFY.union(Permission::ASSEMBLE),
+            Permission::PRINT.union(Permission::PRINT_HIGH_QUALITY),
+            Permission::ALL,
+        ];
+        for mask in okay {
+            assert_eq!(Permission::validate_consistent(mask), Ok(()));
+        }
+    }
+
+    #[test]
+    fn permissions_decisions_follow_role_and_mask() {
+        let user = Permissions::new(Permission::PRINT, PasswordRole::User);
+        assert!(user.allows(Permission::PRINT));
+        assert!(!user.allows(Permission::MODIFY));
+        let owner = Permissions::new(Permission::NONE, PasswordRole::Owner);
+        for bit in [
+            Permission::PRINT,
+            Permission::MODIFY,
+            Permission::COPY,
+            Permission::ANNOTATE,
+            Permission::ASSEMBLE,
+        ] {
+            assert!(owner.allows(bit));
+        }
     }
 }
 

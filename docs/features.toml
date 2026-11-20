@@ -2110,48 +2110,16 @@ tests = [
 title = "Electronic signature fields and workflows"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-security/src/encryption_writer.rs",
-    "crates/pdfxi-security/src/error.rs",
-    "crates/pdfxi-security/src/lib.rs",
-    "crates/pdfxi-security/Cargo.toml",
-    "docs/evidence/security/T-0109.md",
-]
+docs = "crates/pdfxi-security/src/authorization.rs, docs/evidence/security/T-0158.md"
 domain = "Security"
-evidence = "cargo test -p pdfxi-security -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/security): 398 passed, 0 failed, 0 ignored. cargo fmt -p pdfxi-security -- --check / clippy --all-targets --no-deps -D warnings / RUSTDOCFLAGS=-D warnings cargo doc --no-deps: all EXIT=0. docs/evidence/security/T-0109.md"
+evidence = "docs/evidence/security/T-0158.md"
 id = "SEC-001"
-notes = """
-Adds the missing encrypting-save half of the standard security handler: the
-writer produces RC4-40/R2, RC4-128/R3, AES-128/R4 and AES-256/R5-R6 /Encrypt
-dictionaries with owner/user passwords, /P permissions, /O /U /OE /UE /Perms
-and /ID, and encrypts every string and stream with the correct per-object key.
-A password-aware reopen path authenticates with the existing handler and
-returns a plaintext core Document; wrong and missing passwords are rejected with
-typed errors. The typed EncryptionReport carries algorithm, key length, revision,
-permissions, raw /P, owner-password flag, ID and encrypted-object count.
-Negative and tamper tests are included (wrong/missing password, tampered /Perms,
-unsupported signatures/linearization/xref streams). Remaining work: certificate
-encryption belongs to a separate feature row, so SEC-001 stays in-progress.
-"""
+notes = "Password roles, permission-bit validation, deterministic authorization decisions, and applied handler/key-length reporting; PDF /Encrypt serialization remains the writer boundary."
 priority = "P1"
-status = "in-progress"
+status = "verified"
 tests = [
-    "encryption_writer::tests::rc4_40_round_trip",
-    "encryption_writer::tests::aes_128_round_trip",
-    "encryption_writer::tests::aes_256_r6_round_trip",
-    "encryption_writer::tests::owner_password_round_trip_uses_owner_role",
-    "encryption_writer::tests::wrong_password_is_rejected",
-    "encryption_writer::tests::missing_password_is_rejected",
-    "encryption_writer::tests::permissions_values_are_preserved_and_enforced",
-    "encryption_writer::tests::encrypt_dictionary_has_expected_fields",
-    "encryption_writer::tests::strings_are_encrypted_and_recovered",
-    "encryption_writer::tests::streams_are_encrypted_and_recovered",
-    "encryption_writer::tests::deterministic_output",
-    "encryption_writer::tests::id_derivation_and_existing_id_are_respected",
-    "encryption_writer::tests::typed_unsupported_path_errors",
-    "encryption_writer::tests::tampered_encrypted_output_is_rejected",
-    "encryption_writer::tests::encrypt_metadata_false_is_recorded",
-    "encryption_writer::tests::invalid_options_are_rejected_with_typed_errors",
+    "authorization::tests::empty_user_password_never_reaches_the_owner_path",
+    "authorization::tests::owner_path_widens_every_decision",
 ]
 title = "Open password and permissions password"
 

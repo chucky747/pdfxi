@@ -270,12 +270,14 @@ fn handler_for(method: EncryptionMethod) -> (SecurityHandler, u16) {
 /// # Errors
 ///
 /// - [`SecurityError::InvalidPermissionBits`] when the mask has unknown bits.
+/// - [`SecurityError::PermissionConflict`] when grants contradict each other.
 /// - [`SecurityError::PasswordConflict`] for any contradictory password state.
 pub fn plan_encryption(input: &PasswordPlanInput) -> Result<EncryptionPlan> {
     let bits = input.permissions.bits();
     if bits & !Permission::ALL.bits() != 0 {
         return Err(SecurityError::InvalidPermissionBits(bits));
     }
+    Permission::validate_consistent(input.permissions)?;
 
     let (handler, key_length_bits) = handler_for(input.method);
     let user_empty = input.credentials.user_is_empty();
@@ -594,6 +596,76 @@ mod tests {
         assert_eq!(applied.plan.key_length_bits(), 256);
         assert!(applied.resolution.is_owner);
         assert!(applied.resolution.permissions.allows(Permission::ASSEMBLE));
+    }
+
+    #[test]
+    fn conflicting_permission_grants_are_typed_during_planning() {
+        let input = PasswordPlanInput::new(
+            EncryptionMethod::Aes256,
+            PasswordCredentials::from_strings("user", "owner"),
+            Permission::ANNOTATE,
+        );
+        assert_eq!(
+            plan_encryption(&input),
+            Err(SecurityError::PermissionConflict(
+                "annotation requires modification permission"
+            ))
+        );
+        let input = PasswordPlanInput::new(
+            EncryptionMethod::Aes256,
+            PasswordCredentials::from_strings("user", "owner"),
+            Permission::PRINT_HIGH_QUALITY,
+        );
+        assert!(matches!(
+            apply_password_plan(&input, b"owner"),
+            Err(SecurityError::PermissionConflict(_))
+        ));
+    }
+
+    #[test]
+    fn password_consistency_matrix_is_deterministic() {
+        let cases: [(EncryptionMethod, &str, &str, bool); 7] = [
+            (EncryptionMethod::None, "", "", true),
+            (EncryptionMethod::None, "", "owner", false),
+            (EncryptionMethod::Aes256, "", "", false),
+            (EncryptionMethod::Aes256, "", "owner", true),
+            (EncryptionMethod::Aes256, "user", "", true),
+            (EncryptionMethod::Aes256, "same", "same", false),
+            (EncryptionMethod::Aes256, "user", "owner", true),
+        ];
+        for (method, user, owner, valid) in cases {
+            let input = PasswordPlanInput::unrestricted(
+                method,
+                PasswordCredentials::from_strings(user, owner),
+            );
+            let first = plan_encryption(&input);
+            let second = plan_encryption(&input);
+            assert_eq!(
+                first.is_ok(),
+                valid,
+                "{method} user={user:?} owner={owner:?}"
+            );
+            assert_eq!(first, second, "planning must be deterministic");
+        }
+    }
+
+    #[test]
+    fn handler_and_key_length_are_reported_by_applied_plan() {
+        for method in EncryptionMethod::ALL {
+            let credentials = if method.is_encrypted() {
+                PasswordCredentials::from_strings("user", "owner")
+            } else {
+                PasswordCredentials::from_strings("", "")
+            };
+            let input = PasswordPlanInput::unrestricted(method, credentials);
+            let password: &[u8] = if method.is_encrypted() { b"owner" } else { b"" };
+            let applied = apply_password_plan(&input, password).expect("valid configuration");
+            assert_eq!(applied.plan.handler().revision(), applied.plan.revision());
+            assert_eq!(applied.plan.key_length_bits(), method.key_length_bits());
+            method
+                .accepts_key_length(applied.plan.key_length_bits())
+                .expect("key length matches method");
+        }
     }
 
     #[test]

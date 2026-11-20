@@ -3,7 +3,7 @@
   "lane": "security",
   "title": "Open password and permissions model closure",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0148"],
   "owns": [
     "crates/pdfxi-security/**",
@@ -11,5 +11,5 @@
     "orchestration/feature-updates/T-0158.toml"
   ],
   "acceptance": "cargo test -p pdfxi-security",
-  "evidence": ""
+  "evidence": "docs/evidence/security/T-0158.md"
 }
