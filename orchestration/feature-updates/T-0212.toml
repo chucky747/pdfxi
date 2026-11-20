@@ -1,9 +1,9 @@
 # T-0212 - UI interaction harness and no-dead-controls gate
 #
-# Second follow-up hardening: display name, document title and save are now
-# proven, so the source-derived guard reports 92 variants, 77 covered, 15
-# pending with reasons, and the allowlist stays at exactly two entries. No
-# production code changed; no feature row status changes.
+# Third follow-up: form commands are proven through new public form observables,
+# the source-derived guard now finds 94 variants with 79 covered, and the
+# `.checkbox(` scanner is tightened. No production code changed in this commit;
+# no feature row status changes.
 
 task = "T-0212"
 lane = "qa"
@@ -14,27 +14,27 @@ docs = [
     "docs/evidence/hardening/T-0212.md",
 ]
 notes = """
-Integration-test gate in crates/pdfxi-app/tests/ui_controls.rs (22 tests). The
+Integration-test gate in crates/pdfxi-app/tests/ui_controls.rs (23 tests). The
 source-derived variant guard parses the AppCommand enum out of
-src/shell/commands.rs and finds 92 variants; `all_commands()` covers 77 of them
+src/shell/commands.rs and finds 94 variants; `all_commands()` covers 79 of them
 and enumerates 15 as pending with a written reason. The guard fails when a
 variant is missing from both lists (source_guard_reports_a_missing_variant
 proves the failure path) and when a listed variant no longer exists. The
-allowlist is exactly two entries (open-dialog, copy-selection), each with its
-reason, and the guard asserts len() == 2. New in this round:
-set_display_name_and_document_title_act proves SetDisplayName and
-SetDocumentTitle change observable state, and save_writes_a_temp_copy_and_clears_dirty
-proves Save writes a real temp copy and clears the dirty flag; the earlier
+allowlist is exactly two entries (open-dialog, copy-selection) with reasons, and
+the guard asserts len() == 2. Form commands are proven through public
+observables added for this harness: form_field_count, form_field_values,
+forms_panel_open, forms_banner, forms_hint, active_form_field, form_draft and
+forms_editable; dispatched_form_commands_act exercises fill, focus, reset, apply
+and panel toggles against them. The static scanner over src/shell/**.rs and
+src/ui.rs now treats `.checkbox(` as a control (so an unchecked checkbox is a
+dead control) in addition to buttons, menus, selectables and icon-button
+factories, with positive/negative synthetic snippets. Earlier proofs remain:
+set_display_name_and_document_title_act, save_writes_a_temp_copy_and_clears_dirty,
 save_note_draft_commits_and_cancels_the_public_draft and
-undo_redo_and_help_commands_act remain. A Snapshot of every public accessor is
-taken before/after dispatch; viewport-only commands are proven through
-egui::Context::run. The static scanner over src/shell/**.rs and src/ui.rs still
-fails on a dead control with positive/negative synthetic snippets. Gates:
-`cargo fmt -p pdfxi-app -- --check` clean; `cargo test -p pdfxi-app --features
-ui,pdfium` = 473 lib + 22 integration passed; `clippy --no-deps` clean. The
-full-dependency clippy run is red only on
-crates/pdfxi-security/src/pkcs12/decrypt.rs, an in-flight T-0249 lint, not on
-app code.
+undo_redo_and_help_commands_act. Gates: `cargo fmt -p pdfxi-app -- --check`
+clean; `cargo test -p pdfxi-app --features ui,pdfium` = 481 lib + 23 integration
+passed; `cargo clippy -p pdfxi-app --all-targets --features ui,pdfium --
+-D warnings` clean.
 """
 tests = [
     "command_labels_are_stable_unique_and_non_empty",
@@ -49,6 +49,7 @@ tests = [
     "undo_redo_and_help_commands_act",
     "set_display_name_and_document_title_act",
     "save_writes_a_temp_copy_and_clears_dirty",
+    "dispatched_form_commands_act",
     "dispatched_shell_and_settings_commands_act",
     "dispatched_capability_commands_report_unavailable",
     "viewport_commands_reach_the_egui_context",

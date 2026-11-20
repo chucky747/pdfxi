@@ -142,6 +142,14 @@ struct Snapshot {
     can_redo: bool,
     comments_hint: Option<String>,
     comments_error: Option<String>,
+    form_field_count: usize,
+    form_field_values: Vec<(String, String)>,
+    forms_panel_open: bool,
+    forms_banner: Option<String>,
+    forms_hint: Option<String>,
+    active_form_field: Option<String>,
+    form_draft: Option<String>,
+    forms_editable: bool,
 }
 
 fn snapshot(app: &PdfxiApp) -> Snapshot {
@@ -201,6 +209,14 @@ fn snapshot(app: &PdfxiApp) -> Snapshot {
         can_redo: app.can_redo(),
         comments_hint: app.comments_hint().map(str::to_owned),
         comments_error: app.comments_error().map(str::to_owned),
+        form_field_count: app.form_field_count(),
+        form_field_values: app.form_field_values(),
+        forms_panel_open: app.forms_panel_open(),
+        forms_banner: app.forms_banner().map(str::to_owned),
+        forms_hint: app.forms_hint().map(str::to_owned),
+        active_form_field: app.active_form_field().map(str::to_owned),
+        form_draft: app.form_draft().map(str::to_owned),
+        forms_editable: app.forms_editable(),
     }
 }
 
@@ -402,6 +418,20 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
                 id: "pdfxi-note-1".to_owned(),
             },
         ),
+        // T-0243 AcroForm commands.
+        (
+            "SetFormText",
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "QA value".to_owned(),
+            },
+        ),
+        (
+            "ToggleFormCheckbox",
+            AppCommand::ToggleFormCheckbox {
+                name: "checkbox-field".to_owned(),
+            },
+        ),
     ]
 }
 
@@ -482,6 +512,8 @@ const PROVEN_LABELS: &[&str] = &[
     "set-display-name",
     "set-document-title",
     "save",
+    "set-form-text",
+    "toggle-form-checkbox",
 ];
 
 /// Enum variants that exist but are deliberately not covered by this harness
@@ -658,6 +690,8 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("set-annotation-resolved", "set-annotation-resolved"),
         ("update-annotation", "update-annotation"),
         ("delete-annotation", "delete-annotation"),
+        ("set-form-text", "set-form-text"),
+        ("toggle-form-checkbox", "toggle-form-checkbox"),
     ];
 
     let commands = all_commands();
@@ -1083,6 +1117,14 @@ fn open_temp_copy(path: &Path) -> PdfxiApp {
     app
 }
 
+/// The display value of one form field, if present.
+fn form_value(values: &[(String, String)], name: &str) -> Option<String> {
+    values
+        .iter()
+        .find(|(field, _)| field == name)
+        .map(|(_, value)| value.clone())
+}
+
 /// Open the real-world Excel fixture used for annotation proofs.
 ///
 /// It has no pre-existing `/Annots`, so annotation counts start at zero and a
@@ -1407,6 +1449,87 @@ fn save_writes_a_temp_copy_and_clears_dirty() {
 }
 
 #[test]
+fn dispatched_form_commands_act() {
+    let path = fixture("fixtures/realworld/pdfxi-forms-selfmade.pdf");
+    let mut app = PdfxiApp::new();
+    assert!(
+        app.open_path_text(path.to_string_lossy().as_ref()),
+        "form fixture {} did not open",
+        path.display()
+    );
+    app.refresh_forms();
+    assert_eq!(app.form_field_count(), 3);
+    assert!(app.has_acroform());
+    assert!(app.forms_editable());
+
+    let initial = app.form_field_values();
+    assert_eq!(
+        form_value(&initial, "text-field").as_deref(),
+        Some("typed value")
+    );
+    let checkbox_initial =
+        form_value(&initial, "checkbox-field").expect("the fixture has a checkbox field");
+
+    assert_dispatch_acts(
+        "set-form-text",
+        &mut app,
+        AppCommand::SetFormText {
+            name: "text-field".to_owned(),
+            value: "QA value".to_owned(),
+        },
+    );
+    assert_eq!(
+        form_value(&app.form_field_values(), "text-field").as_deref(),
+        Some("QA value")
+    );
+    assert!(
+        app.state().active_tab().is_some_and(|tab| tab.is_dirty()),
+        "a committed form edit must mark the tab dirty"
+    );
+
+    assert_dispatch_acts(
+        "toggle-form-checkbox",
+        &mut app,
+        AppCommand::ToggleFormCheckbox {
+            name: "checkbox-field".to_owned(),
+        },
+    );
+    let checkbox_toggled = form_value(&app.form_field_values(), "checkbox-field")
+        .expect("the checkbox is still listed");
+    assert_ne!(checkbox_toggled, checkbox_initial);
+
+    // Undo/redo restore the session; `refresh_forms` is the public hook the
+    // shell uses to rebuild the cached model after a revision change.
+    app.dispatch(AppCommand::Undo, None);
+    app.refresh_forms();
+    assert_eq!(
+        form_value(&app.form_field_values(), "checkbox-field").as_deref(),
+        Some(checkbox_initial.as_str())
+    );
+
+    app.dispatch(AppCommand::Undo, None);
+    app.refresh_forms();
+    assert_eq!(
+        form_value(&app.form_field_values(), "text-field").as_deref(),
+        Some("typed value")
+    );
+
+    app.dispatch(AppCommand::Redo, None);
+    app.refresh_forms();
+    assert_eq!(
+        form_value(&app.form_field_values(), "text-field").as_deref(),
+        Some("QA value")
+    );
+
+    app.dispatch(AppCommand::Redo, None);
+    app.refresh_forms();
+    assert_eq!(
+        form_value(&app.form_field_values(), "checkbox-field").as_deref(),
+        Some(checkbox_toggled.as_str())
+    );
+}
+
+#[test]
 fn dispatched_shell_and_settings_commands_act() {
     let mut app = with_three_page_document();
 
@@ -1587,7 +1710,7 @@ const CONTROL_PATTERNS: &[&str] = &[
     "menu_button(",
     "selectable_label(",
     "selectable_value(",
-    "checkbox(",
+    ".checkbox(",
     "add(Button",
     "shell_tool_button(",
     "shell_icon_button(",
