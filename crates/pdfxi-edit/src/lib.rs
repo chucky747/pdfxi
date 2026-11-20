@@ -33,7 +33,11 @@
 //! filename tokens and alternate page selection. [`watermark`] models text,
 //! vector, and image watermarks and backgrounds with placement, rotation,
 //! opacity, page selection, page-set application, and copy-on-write composition
-//! helpers. [`redaction`] applies a
+//! helpers. [`bates`] models Bates numbering as a deterministic, host-consumed
+//! plan of ordered stamps (number, text, and validated position) with zero
+//! padding, prefix/suffix, per-page increment, a nine-position anchor grid,
+//! page-set selection, and caller-time date stamps; it never mutates PDF bytes.
+//! [`redaction`] applies a
 //! plan of rectangles and text patterns to content streams, removing the
 //! affected operators (not merely covering them), stripping annotations and
 //! metadata, and verifying removal with a typed report. It also exposes a
@@ -54,6 +58,7 @@
 #![forbid(unsafe_code)]
 
 pub mod annotation;
+pub mod bates;
 pub mod compare;
 pub mod find_replace;
 pub mod flatten;
@@ -72,6 +77,11 @@ pub mod watermark;
 
 pub use annotation::{
     Annotation, AnnotationError, AnnotationId, AnnotationKind, Color, bounds_union,
+};
+pub use bates::{
+    BatesAnchor, BatesColor, BatesColumn, BatesConfig, BatesDateFormat, BatesDateStamp, BatesError,
+    BatesMargins, BatesPageBounds, BatesPageSet, BatesPlan, BatesRow, BatesStamp, BatesStyle,
+    MAX_DIGIT_WIDTH, MAX_FONT_SIZE, bates_text_extent, build as build_bates_plan,
 };
 pub use compare::{
     CompareError, CompareOptions, CompareResult, CompareSummary, Hunk, HunkKind, TextDocument,

@@ -1,0 +1,15 @@
+{
+  "id": "T-0163",
+  "lane": "convert",
+  "title": "HTML PostScript and conformance export closure",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0157"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "docs/evidence/convert/T-0163.md",
+    "orchestration/feature-updates/T-0163.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert",
+  "evidence": ""
+}

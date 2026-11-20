@@ -1,0 +1,15 @@
+{
+  "id": "T-0164",
+  "lane": "author",
+  "title": "Bates numbering model",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0159"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/author/T-0164.md",
+    "orchestration/feature-updates/T-0164.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "evidence": "docs/evidence/author/T-0164.md"
+}

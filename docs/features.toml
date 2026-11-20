@@ -1287,14 +1287,17 @@ tests = [
 title = "Watermarks and backgrounds"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = "crates/pdfxi-edit/src/bates.rs, docs/evidence/author/T-0164.md"
 domain = "Edit"
-evidence = ""
+evidence = "docs/evidence/author/T-0164.md"
 id = "EDIT-010"
-notes = ""
+notes = "Library-level Bates plan with numbering math, anchored positions, date stamping and typed validation; host serialization applies stamps to page content."
 priority = "P2"
-status = "planned"
-tests = []
+status = "verified"
+tests = [
+    "bates::tests::zero_padding_and_prefix_suffix_are_applied",
+    "bates::tests::plan_is_deterministic_and_ordered",
+]
 title = "Bates numbering"
 
 [[feature]]
