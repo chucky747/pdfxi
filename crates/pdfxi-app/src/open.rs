@@ -163,6 +163,144 @@ impl OpenResult {
     }
 }
 
+/// The lifecycle phase of one tab's document-open request.
+///
+/// A request is `Loading` from the moment it is dispatched until its typed
+/// result arrives, then becomes `Ready` or `Failed`. Keeping the intermediate
+/// phase explicit lets a host show progress while I/O runs on a worker without
+/// ever blocking the UI thread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OpenPhase {
+    /// The load has been dispatched and no result has been recorded yet.
+    #[default]
+    Loading,
+    /// The document opened successfully and is ready for viewing.
+    Ready,
+    /// The load failed with a typed [`OpenError`].
+    Failed,
+}
+
+impl OpenPhase {
+    /// Stable human-readable label for this phase.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Loading => "loading",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Recorded open-request state for one tab.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenPhaseState {
+    /// The tab this state belongs to.
+    pub tab: TabId,
+    /// Current lifecycle phase.
+    pub phase: OpenPhase,
+    /// Number of open attempts started for this tab.
+    pub attempts: usize,
+    /// Typed outcome of the most recent attempt, if it has completed.
+    pub last_result: Option<OpenResult>,
+}
+
+/// Per-tab open lifecycle tracker; phases move `Loading -> Ready | Failed`.
+///
+/// Tabs are stored in a `BTreeMap`, so reports and iteration are deterministic
+/// regardless of the order in which requests are started.
+#[derive(Clone, Debug, Default)]
+pub struct OpenPhases {
+    states: BTreeMap<TabId, OpenPhaseState>,
+}
+
+impl OpenPhases {
+    /// Create an empty tracker.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Begin an attempt for `tab`, setting it to [`OpenPhase::Loading`].
+    ///
+    /// A repeat call while a load is in flight counts as a new attempt and
+    /// clears the previous result, so the newest request always wins.
+    pub fn begin(&mut self, tab: TabId) -> OpenPhase {
+        let state = self.states.entry(tab).or_insert_with(|| OpenPhaseState {
+            tab,
+            phase: OpenPhase::Loading,
+            attempts: 0,
+            last_result: None,
+        });
+        state.attempts += 1;
+        state.phase = OpenPhase::Loading;
+        state.last_result = None;
+        OpenPhase::Loading
+    }
+
+    /// Complete `tab`'s in-flight attempt with a typed `result`.
+    ///
+    /// Returns the resulting [`OpenPhase`]. Beginning a tab that was never
+    /// started still records the outcome, so hosts may skip [`Self::begin`]
+    /// for synchronous opens.
+    pub fn finish(&mut self, tab: TabId, result: OpenResult) -> OpenPhase {
+        let phase = if result.is_success() {
+            OpenPhase::Ready
+        } else {
+            OpenPhase::Failed
+        };
+        let state = self.states.entry(tab).or_insert_with(|| OpenPhaseState {
+            tab,
+            phase,
+            attempts: 1,
+            last_result: None,
+        });
+        state.phase = phase;
+        state.last_result = Some(result);
+        phase
+    }
+
+    /// Borrow the recorded state for `tab`, if any.
+    pub fn state(&self, tab: TabId) -> Option<&OpenPhaseState> {
+        self.states.get(&tab)
+    }
+
+    /// Current phase for `tab`, if any attempt has been started.
+    pub fn phase(&self, tab: TabId) -> Option<OpenPhase> {
+        self.state(tab).map(|state| state.phase)
+    }
+
+    /// Number of tabs with recorded phase state.
+    pub fn len(&self) -> usize {
+        self.states.len()
+    }
+
+    /// Return `true` when no tab has recorded phase state.
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty()
+    }
+}
+
+/// One line in a deterministic [`OpenReport`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenReportEntry {
+    /// Tab whose open request this line describes.
+    pub tab: TabId,
+    /// Current lifecycle phase of the request.
+    pub phase: OpenPhase,
+    /// Stable label of the source (document title/label or an error marker).
+    pub label: String,
+    /// Deterministic description of the recorded outcome.
+    pub outcome: String,
+}
+
+/// A deterministic report of all open activity tracked by a pipeline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenReport {
+    /// Entries ordered by ascending [`TabId`].
+    pub entries: Vec<OpenReportEntry>,
+    /// Stable summary of the whole report.
+    pub summary: String,
+}
+
 /// A backend capable of loading a document and reporting its metadata.
 ///
 /// Implementations must check `cancellation` before doing work, never panic on
@@ -513,6 +651,7 @@ pub struct DocumentOpenPipeline<B: DocumentOpener> {
     backend: B,
     recent: RecentFiles,
     tab_states: OpenTabStates,
+    phases: OpenPhases,
 }
 
 impl<B: DocumentOpener> DocumentOpenPipeline<B> {
@@ -522,6 +661,7 @@ impl<B: DocumentOpener> DocumentOpenPipeline<B> {
             backend,
             recent: RecentFiles::new(recent_capacity),
             tab_states: OpenTabStates::default(),
+            phases: OpenPhases::new(),
         }
     }
 
@@ -550,6 +690,95 @@ impl<B: DocumentOpener> DocumentOpenPipeline<B> {
         &mut self.tab_states
     }
 
+    /// Borrow the per-tab open lifecycle tracker.
+    pub fn phases(&self) -> &OpenPhases {
+        &self.phases
+    }
+
+    /// Mark `tab` as loading before dispatching a background open.
+    ///
+    /// This is the async-friendly entry point: a host calls it on the UI thread,
+    /// runs I/O on a worker, then calls [`Self::complete_open`] with the result.
+    pub fn begin_open(&mut self, tab: TabId) -> OpenPhase {
+        self.phases.begin(tab)
+    }
+
+    /// Record a completed open for `tab` from a background job.
+    ///
+    /// A successful result with a path is added to the recent list; byte-backed
+    /// documents have no path identity and are never added. Returns the phase
+    /// the tab moved to.
+    pub fn complete_open(&mut self, tab: TabId, result: OpenResult) -> OpenPhase {
+        let path_for_recent = result
+            .document()
+            .and_then(|document| document.path.as_deref())
+            .map(Path::to_path_buf);
+        self.finish_open(tab, result, path_for_recent.as_deref())
+    }
+
+    fn finish_open(
+        &mut self,
+        tab: TabId,
+        result: OpenResult,
+        path_for_recent: Option<&Path>,
+    ) -> OpenPhase {
+        let phase = self.phases.finish(tab, result.clone());
+        if result.is_success()
+            && let Some(path) = path_for_recent
+        {
+            self.recent.record(path);
+        }
+        self.tab_states.record(tab, result);
+        phase
+    }
+
+    /// Build a deterministic report of all recorded open activity.
+    ///
+    /// Entries are ordered by ascending [`TabId`] because both trackers use
+    /// ordered maps; repeated calls on unchanged state return identical reports.
+    pub fn report(&self) -> OpenReport {
+        let mut entries = Vec::with_capacity(self.phases.len());
+        let mut ready = 0usize;
+        let mut failed = 0usize;
+        let mut loading = 0usize;
+        for (tab, state) in &self.phases.states {
+            match state.phase {
+                OpenPhase::Loading => loading += 1,
+                OpenPhase::Ready => ready += 1,
+                OpenPhase::Failed => failed += 1,
+            }
+            let (label, outcome) = match &state.last_result {
+                Some(OpenResult::Success(document)) => (
+                    document.label.clone(),
+                    format!(
+                        "ready: {} page(s), '{}'",
+                        document.page_count,
+                        document.effective_title()
+                    ),
+                ),
+                Some(OpenResult::Failure(error)) => {
+                    ("<failed>".to_owned(), format!("failed: {error}"))
+                }
+                None => ("<pending>".to_owned(), "loading".to_owned()),
+            };
+            entries.push(OpenReportEntry {
+                tab: *tab,
+                phase: state.phase,
+                label,
+                outcome,
+            });
+        }
+        let summary = format!(
+            "open report: {} tab(s), {} loading, {} ready, {} failed, {} recent file(s)",
+            entries.len(),
+            loading,
+            ready,
+            failed,
+            self.recent.len()
+        );
+        OpenReport { entries, summary }
+    }
+
     /// Open `path` for `tab`, recording the typed outcome against that tab.
     ///
     /// Cancellation is checked before delegating to the backend and again
@@ -560,6 +789,7 @@ impl<B: DocumentOpener> DocumentOpenPipeline<B> {
         path: &Path,
         cancellation: &CancellationToken,
     ) -> OpenResult {
+        self.phases.begin(tab);
         let result = if cancellation.is_cancelled() {
             OpenResult::Failure(OpenError::Cancelled)
         } else {
@@ -570,14 +800,11 @@ impl<B: DocumentOpener> DocumentOpenPipeline<B> {
                 Ok(document) if document.page_count == 0 => {
                     OpenResult::Failure(OpenError::EmptyDocument)
                 }
-                Ok(document) => {
-                    self.recent.record(path);
-                    OpenResult::Success(document)
-                }
+                Ok(document) => OpenResult::Success(document),
                 Err(error) => OpenResult::Failure(error),
             }
         };
-        self.tab_states.record(tab, result.clone());
+        self.finish_open(tab, result.clone(), Some(path));
         result
     }
 
@@ -591,6 +818,7 @@ impl<B: DocumentOpener> DocumentOpenPipeline<B> {
         bytes: &[u8],
         cancellation: &CancellationToken,
     ) -> OpenResult {
+        self.phases.begin(tab);
         let result = if cancellation.is_cancelled() {
             OpenResult::Failure(OpenError::Cancelled)
         } else {
@@ -605,7 +833,7 @@ impl<B: DocumentOpener> DocumentOpenPipeline<B> {
                 Err(error) => OpenResult::Failure(error),
             }
         };
-        self.tab_states.record(tab, result.clone());
+        self.finish_open(tab, result.clone(), None);
         result
     }
 }
@@ -838,6 +1066,146 @@ mod tests {
                 .is_success()
         );
         assert!(pipeline.recent().is_empty());
+    }
+
+    // ---- T-0167: open lifecycle states and deterministic reports ----------
+
+    #[test]
+    fn open_phase_transitions_loading_ready_failed() {
+        let mut phases = OpenPhases::new();
+        assert!(phases.is_empty());
+        assert_eq!(phases.begin(tab(1)), OpenPhase::Loading);
+        assert_eq!(phases.phase(tab(1)), Some(OpenPhase::Loading));
+        let state = phases.state(tab(1)).expect("started");
+        assert_eq!(state.attempts, 1);
+        assert!(state.last_result.is_none());
+
+        assert_eq!(
+            phases.finish(
+                tab(1),
+                OpenResult::Success(OpenedDocument {
+                    label: "doc".into(),
+                    path: None,
+                    page_count: 2,
+                    title: None,
+                    encryption: EncryptionState::Unencrypted,
+                    backend: OpenBackendKind::Mock,
+                })
+            ),
+            OpenPhase::Ready
+        );
+        assert_eq!(phases.phase(tab(1)), Some(OpenPhase::Ready));
+
+        // A second attempt returns to Loading, then lands in Failed.
+        assert_eq!(phases.begin(tab(1)), OpenPhase::Loading);
+        assert_eq!(
+            phases.finish(tab(1), OpenResult::Failure(OpenError::Io("boom".into()))),
+            OpenPhase::Failed
+        );
+        let state = phases.state(tab(1)).expect("started");
+        assert_eq!(state.attempts, 2);
+        assert_eq!(state.phase, OpenPhase::Failed);
+        assert_eq!(
+            state.last_result.as_ref().and_then(OpenResult::error),
+            Some(&OpenError::Io("boom".into()))
+        );
+        assert_eq!(phases.len(), 1);
+        assert_eq!(OpenPhase::Loading.label(), "loading");
+        assert_eq!(OpenPhase::Ready.label(), "ready");
+        assert_eq!(OpenPhase::Failed.label(), "failed");
+    }
+
+    #[test]
+    fn failed_open_phase_and_typed_error_are_recorded() {
+        let backend = MockDocumentOpener::new(MockResponse::Error(OpenError::Encrypted));
+        let mut pipeline = DocumentOpenPipeline::new(backend, 5);
+        let result = pipeline.open_path(
+            tab(7),
+            Path::new("C:/secret.pdf"),
+            &CancellationToken::new(),
+        );
+        assert_eq!(result, OpenResult::Failure(OpenError::Encrypted));
+        assert_eq!(pipeline.phases().phase(tab(7)), Some(OpenPhase::Failed));
+        assert_eq!(pipeline.phases().state(tab(7)).map(|s| s.attempts), Some(1));
+        assert!(pipeline.recent().is_empty());
+
+        let report = pipeline.report();
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].phase, OpenPhase::Failed);
+        assert_eq!(report.entries[0].label, "<failed>");
+        assert_eq!(
+            report.entries[0].outcome,
+            "failed: document is encrypted or password protected"
+        );
+        assert_eq!(
+            report.summary,
+            "open report: 1 tab(s), 0 loading, 0 ready, 1 failed, 0 recent file(s)"
+        );
+    }
+
+    #[test]
+    fn recent_files_ordering_dedup_and_report_are_deterministic() {
+        let mut pipeline = DocumentOpenPipeline::new(MockDocumentOpener::default(), 3);
+        for name in ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "b.pdf"] {
+            let path = PathBuf::from(format!("C:/{name}"));
+            pipeline.open_path(tab(1), &path, &CancellationToken::new());
+        }
+        let entries: Vec<&PathBuf> = pipeline.recent().entries().iter().collect();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0], &PathBuf::from("C:/b.pdf"), "re-open promotes");
+        assert_eq!(entries[1], &PathBuf::from("C:/d.pdf"));
+        assert_eq!(entries[2], &PathBuf::from("C:/c.pdf"));
+        assert!(pipeline.recent().contains(Path::new("C:/b.pdf")));
+        assert!(
+            !pipeline.recent().contains(Path::new("C:/a.pdf")),
+            "evicted"
+        );
+        assert_eq!(pipeline.phases().state(tab(1)).map(|s| s.attempts), Some(5));
+
+        let first = pipeline.report();
+        assert_eq!(first, pipeline.report(), "report is stable across calls");
+        assert_eq!(
+            first.summary,
+            "open report: 1 tab(s), 0 loading, 1 ready, 0 failed, 3 recent file(s)"
+        );
+    }
+
+    #[test]
+    fn open_report_is_sorted_by_tab_and_asynchronous_handoff_is_typed() {
+        let mut pipeline = DocumentOpenPipeline::new(MockDocumentOpener::default(), 5);
+        // Start tab 9 first; the report must still order entries by tab id.
+        pipeline.begin_open(tab(9));
+        pipeline.begin_open(tab(2));
+        assert_eq!(pipeline.phases().phase(tab(9)), Some(OpenPhase::Loading));
+        let report = pipeline.report();
+        assert_eq!(report.entries.len(), 2);
+        assert_eq!(report.entries[0].tab, tab(2));
+        assert_eq!(report.entries[0].phase, OpenPhase::Loading);
+        assert_eq!(report.entries[0].outcome, "loading");
+        assert_eq!(report.entries[1].tab, tab(9));
+        assert_eq!(
+            report.summary,
+            "open report: 2 tab(s), 2 loading, 0 ready, 0 failed, 0 recent file(s)"
+        );
+
+        // Complete tab 9 from a simulated background job with a path.
+        let document = OpenedDocument {
+            label: "async.pdf".into(),
+            path: Some(PathBuf::from("C:/async.pdf")),
+            page_count: 4,
+            title: Some("Async".into()),
+            encryption: EncryptionState::Unencrypted,
+            backend: OpenBackendKind::Mock,
+        };
+        assert_eq!(
+            pipeline.complete_open(tab(9), OpenResult::Success(document)),
+            OpenPhase::Ready
+        );
+        assert!(pipeline.recent().contains(Path::new("C:/async.pdf")));
+        let report = pipeline.report();
+        assert_eq!(report.entries[1].phase, OpenPhase::Ready);
+        assert_eq!(report.entries[1].label, "async.pdf");
+        assert_eq!(report.entries[1].outcome, "ready: 4 page(s), 'Async'");
     }
 
     #[cfg(feature = "pdfium")]

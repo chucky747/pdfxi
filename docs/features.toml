@@ -2,63 +2,32 @@
 docs = [
     "crates/pdfxi-app/src/open.rs",
     "crates/pdfxi-app/src/print.rs",
-    "crates/pdfxi-app/src/ui.rs",
     "crates/pdfxi-app/src/lib.rs",
-    "crates/pdfxi-render/src/pdfium_backend.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/app/T-0106.md",
+    "docs/evidence/app/T-0167.md",
 ]
 domain = "View & Navigate"
-evidence = """
-CARGO_TARGET_DIR=target/lanes/app, PDFIUM_PATH set by scripts/env.ps1 -Lane app.
-cargo test -p pdfxi-app: 130 passed, 0 failed, EXIT=0.
-cargo test -p pdfxi-app --features ui: 179 passed, 0 failed, EXIT=0.
-cargo test -p pdfxi-app --features ui,pdfium: 182 passed, 0 failed, EXIT=0 (includes open::tests::pdfium_opener_reads_the_real_fixture).
-cargo fmt -p pdfxi-app -p pdfxi-render -- --check: EXIT=0.
-cargo clippy -p pdfxi-app -p pdfxi-render --all-targets --all-features -- -D warnings: EXIT=0.
-cargo doc -p pdfxi-app -p pdfxi-render --no-deps --all-features with RUSTDOCFLAGS=-D warnings: EXIT=0.
-29 new tests. Full output in docs/evidence/app/T-0106.md.
-"""
+evidence = "docs/evidence/app/T-0167.md"
 id = "VIEW-001"
 notes = """
-T-0106 adds pdfxi_app::open, a window-free document-open pipeline. DocumentOpenPipeline checks a CancellationToken before and after the load, records a typed OpenResult against a TabId in per-tab OpenTabStates, captures page count, metadata title, and EncryptionState in a plain OpenedDocument, and keeps a bounded most-recent-first RecentFiles list. Failures use typed OpenError variants. MockDocumentOpener is deterministic and available by default; PdfiumDocumentOpener (feature pdfium) opens real PDFs with PDFium and reads metadata through PdfiumRenderer::document_meta, added to pdfxi-render as DocumentMeta with page count, title, and security revision.
-
-T-0106 adds pdfxi_app::print, an app-level front end to pdfxi_render::print. PrintModel covers all/current/selection/custom page ranges (custom expressions parsed by pdfxi-render), copies, orientation, fit/actual/custom-percent scale, duplex, and Letter/A4/Legal/custom paper. It validates with typed PrintModelError variants and resolves a deterministic PrintPlan (zero-based expanded pages, full PrintSettings, stable summary) through pdfxi_render::print::PrintJob. PrintDialogState holds window-free dialog state; submitting only resolves data.
-
-The ui feature wires a Print dialog and an open-errors window into PdfxiApp with window-free helper methods and tests (no GUI or printer needed). Host boundary: this task produces plan and raster data only; sending pdfxi-render::print rasters to a platform printer driver remains a later adapter, so VIEW-001 stays in-progress. All public items have rustdoc; both crates deny missing docs and forbid unsafe; non-test code uses no unwrap/expect/panic.
+Model-level closure. The open pipeline now records explicit Loading -> Ready | Failed phases
+with typed OpenError variants, bounded most-recent-first recent-file tracking, an async-friendly
+begin_open/complete_open handoff, and a deterministic tab-sorted OpenReport. A typed
+document -> print handoff (PrintDispatchSource, PrintDispatchError, PrintDispatchPlan,
+PrintDispatchReport, print_handoff/print_handoff_from_option) uses the opened document's page
+count as the authoritative source and emits a byte-stable report. Host UI boundary: no platform
+printer/spooler driver is contacted; a host feeds PrintDispatchPlan to pdfxi_render::print. This
+row is verified for the workflow/data model only, not for native print output.
 """
 priority = "P0"
-status = "in-progress"
+status = "verified"
 tests = [
-    "open::tests::open_success_records_page_count_and_title",
-    "open::tests::open_error_is_typed_and_recorded",
-    "open::tests::encrypted_document_state_is_recorded",
-    "open::tests::unsupported_renderer_error_is_typed",
-    "open::tests::open_bytes_uses_lowercased_label_key",
-    "open::tests::recent_files_are_bounded_and_most_recent_first",
-    "open::tests::zero_capacity_recent_list_drops_everything",
-    "open::tests::per_tab_open_state_is_isolated",
-    "open::tests::attempts_counter_tracks_reopen_on_same_tab",
-    "open::tests::cancellation_before_open_does_not_touch_backend_or_recent",
-    "open::tests::cancellation_after_backend_result_is_honoured",
-    "open::tests::opening_bytes_never_touches_recent_files",
-    "open::tests::pdfium_opener_reads_the_real_fixture",
-    "print::tests::range_all_resolves_every_page",
-    "print::tests::range_current_uses_current_page",
-    "print::tests::range_selection_uses_selected_pages",
-    "print::tests::range_custom_parses_and_rejects_invalid",
-    "print::tests::copies_duplex_and_scale_are_recorded_in_plan",
-    "print::tests::plan_is_deterministic",
-    "print::tests::invalid_copies_and_scale_are_rejected",
-    "print::tests::current_and_selection_out_of_range_are_typed_errors",
-    "print::tests::empty_selection_is_a_typed_error",
-    "print::tests::paper_size_maps_to_render_paper",
-    "print::tests::print_dialog_state_submits_without_a_printer",
-    "ui::open_print_tests::print_context_is_derived_from_the_active_tab",
-    "ui::open_print_tests::print_dialog_open_close_and_submit_never_contact_a_printer",
-    "ui::open_print_tests::print_dialog_setters_update_the_model",
-    "ui::open_print_tests::open_errors_are_recorded_and_cleared",
-    "ui::open_print_tests::invalid_print_range_is_reported_through_the_shell",
+    "open::tests::open_phase_transitions_loading_ready_failed",
+    "open::tests::failed_open_phase_and_typed_error_are_recorded",
+    "open::tests::recent_files_ordering_dedup_and_report_are_deterministic",
+    "open::tests::open_report_is_sorted_by_tab_and_asynchronous_handoff_is_typed",
+    "print::tests::print_handoff_from_opened_document_resolves_plan_and_report",
+    "print::tests::print_handoff_rejects_missing_empty_and_invalid_inputs",
+    "print::tests::print_handoff_report_is_deterministic_and_honors_current_and_selection",
 ]
 title = "Open and print PDF documents"
 
@@ -334,31 +303,34 @@ title = "Attachments and embedded files"
 [[feature]]
 docs = [
     "crates/pdfxi-app/src/layers.rs",
-    "crates/pdfxi-app/src/ui.rs",
     "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0089.md",
-    "docs/evidence/app/T-0119.md",
+    "docs/evidence/app/T-0167.md",
 ]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0119.md"
+evidence = "docs/evidence/app/T-0167.md"
 id = "VIEW-010"
-notes = "T-0119 reviewer fix: radio-group exclusivity enforced at construction (deterministic winner: first declared locked-visible, else first declared visible, else first member) and preserved by show_all/set_visible with locked members. Three negative tests added; default 257 passed, ui 320 passed; fmt/clippy/doc clean. VIEW-010 remains in-progress because actual optional-content rasterization needs a renderer backend with an OC API; see docs/evidence/app/T-0119.md."
+notes = """
+Model-level closure. Fixed the real display-order vs declaration-index bug: LayerModel::position
+now returns the display index into `layers` (the index LayerState uses), while a separate
+declaration_index map preserves deterministic "first declared" radio tie-breaking, so a reordered
+/Order can no longer alias viewing-state slots. Added ordered_ids(), deterministic OcGroupPlan /
+OcGroupEntry output, and a validated copy-on-write, all-or-nothing LayerPropertyEdit model for
+name/visibility/lock edits (LayerRegistry::apply_property_edits). Radio exclusivity is preserved
+after reorder; three tests fail on the old indexing code. Host UI boundary: actual per-group
+rasterization still needs a renderer optional-content API; OcGroupPlan/VisibilityPlan are the
+data a host passes to such a backend. Verified for the model/plan only.
+"""
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "layers::tests::default_states_are_applied_from_summary",
-    "layers::tests::toggle_flips_visibility_and_returns_the_new_value",
-    "layers::tests::radio_group_enforces_exclusivity",
-    "layers::tests::locked_ocg_rejects_user_changes",
-    "layers::tests::layer_order_is_deterministic_and_appends_unlisted_ids",
-    "layers::tests::per_tab_layer_state_is_isolated",
-    "layers::tests::show_all_and_hide_all_respect_locked_and_radio_groups",
-    "layers::tests::unknown_ocg_returns_a_typed_error",
-    "layers::tests::visibility_plan_reflects_state_in_display_order",
-    "layers::tests::visibility_plan_updates_after_state_changes_and_registry_access",
-    "layers::tests::construction_normalizes_multiple_visible_radio_members",
-    "layers::tests::show_all_with_locked_visible_member_keeps_exclusivity",
-    "layers::tests::set_visible_on_second_member_is_blocked_by_locked_member",
+    "layers::tests::position_is_display_index_after_reordered_order",
+    "layers::tests::set_visible_after_reorder_affects_the_correct_layer",
+    "layers::tests::locked_check_after_reorder_uses_the_correct_layer",
+    "layers::tests::radio_exclusivity_survives_a_reordered_order",
+    "layers::tests::property_edits_rename_visibility_and_lock",
+    "layers::tests::property_edits_validate_names_and_locked_layers",
+    "layers::tests::property_edits_are_all_or_nothing",
+    "layers::tests::oc_group_plan_is_deterministic_in_display_order",
 ]
 title = "Optional content layers"
 

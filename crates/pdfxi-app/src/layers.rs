@@ -78,6 +78,9 @@ pub enum LayerError {
     /// A user action tried to change an OCG that is locked.
     #[error("optional content group '{0}' is locked and cannot be changed")]
     Locked(OcgId),
+    /// A property edit supplied a display name longer than the allowed maximum.
+    #[error("optional content group '{0}' name exceeds the {1} byte limit")]
+    NameTooLong(OcgId, usize),
 }
 
 /// Description of one optional content group parsed from `/OCProperties`.
@@ -260,7 +263,13 @@ impl<'a> LayerInfo<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayerModel {
     layers: Vec<LayerDef>,
-    index: HashMap<OcgId, usize>,
+    /// Display position of each id, that is the index into `layers`. This is the
+    /// index `LayerState` uses, so `position` must always agree with `layers`.
+    position: HashMap<OcgId, usize>,
+    /// Declaration index of each id, that is its position in the source
+    /// `/OCProperties /OCGs` array. Used only for stable "first declared"
+    /// tie-breaking, never for indexing viewing state.
+    declaration_index: HashMap<OcgId, usize>,
     radio_group_count: usize,
 }
 
@@ -273,7 +282,7 @@ impl LayerModel {
     /// ordered exactly as the summary's `order` list, with any remaining OCGs
     /// appended in declaration order.
     pub fn from_summary(summary: OcPropertiesSummary) -> Result<Self, LayerError> {
-        let mut index: HashMap<OcgId, usize> = HashMap::new();
+        let mut declaration_index: HashMap<OcgId, usize> = HashMap::new();
         let mut declarations: Vec<(OcgId, bool, bool, String)> = Vec::new();
 
         for group in summary.groups {
@@ -283,10 +292,10 @@ impl LayerModel {
             if group.name.is_empty() {
                 return Err(LayerError::EmptyName(group.id));
             }
-            if index.contains_key(&group.id) {
+            if declaration_index.contains_key(&group.id) {
                 return Err(LayerError::DuplicateId(group.id));
             }
-            index.insert(group.id.clone(), declarations.len());
+            declaration_index.insert(group.id.clone(), declarations.len());
             declarations.push((group.id, group.default_visible, group.locked, group.name));
         }
 
@@ -296,7 +305,7 @@ impl LayerModel {
                 return Err(LayerError::EmptyRadioGroup);
             }
             for member in &group.members {
-                if !index.contains_key(member) {
+                if !declaration_index.contains_key(member) {
                     return Err(LayerError::UnknownRadioMember(member.clone()));
                 }
                 if radio_group_of.insert(member.clone(), group_index).is_some() {
@@ -308,25 +317,25 @@ impl LayerModel {
         let mut ordered_indices: Vec<usize> = Vec::new();
         let mut seen_order: HashMap<OcgId, ()> = HashMap::new();
         for id in summary.order {
-            let position = index
+            let declaration = declaration_index
                 .get(&id)
                 .copied()
                 .ok_or_else(|| LayerError::UnknownOrderId(id.clone()))?;
             if seen_order.insert(id.clone(), ()).is_some() {
                 return Err(LayerError::DuplicateOrderId(id));
             }
-            ordered_indices.push(position);
+            ordered_indices.push(declaration);
         }
-        for position in 0..declarations.len() {
-            if !ordered_indices.contains(&position) {
-                ordered_indices.push(position);
+        for declaration in 0..declarations.len() {
+            if !ordered_indices.contains(&declaration) {
+                ordered_indices.push(declaration);
             }
         }
 
-        let layers = ordered_indices
+        let layers: Vec<LayerDef> = ordered_indices
             .into_iter()
-            .map(|position| {
-                let (id, initial_visible, locked, name) = &declarations[position];
+            .map(|declaration| {
+                let (id, initial_visible, locked, name) = &declarations[declaration];
                 LayerDef {
                     id: id.clone(),
                     name: name.clone(),
@@ -337,9 +346,18 @@ impl LayerModel {
             })
             .collect();
 
+        // `position` is the display index into `layers`, which is the only index
+        // `LayerState` understands. `declaration_index` is retained separately
+        // for deterministic "first declared" tie-breaking.
+        let mut position: HashMap<OcgId, usize> = HashMap::new();
+        for (display, layer) in layers.iter().enumerate() {
+            position.insert(layer.id.clone(), display);
+        }
+
         Ok(Self {
             layers,
-            index,
+            position,
+            declaration_index,
             radio_group_count: summary.radio_groups.len(),
         })
     }
@@ -366,8 +384,31 @@ impl LayerModel {
     }
 
     /// The display position of a layer id, if present.
+    ///
+    /// The returned value is an index into [`Self::layers`] in display order and
+    /// is the same index [`LayerState`] uses for visibility flags. It is stable
+    /// across repeated builds from the same summary, even when the `/Order`
+    /// array reorders the layers relative to their declarations.
     pub fn position(&self, id: &str) -> Option<usize> {
-        self.index.get(id).copied()
+        self.position.get(id).copied()
+    }
+
+    /// The declaration index of a layer id in the source `/OCGs` array.
+    ///
+    /// This is used only for deterministic "first declared" tie-breaking in
+    /// radio groups. It is deliberately distinct from [`Self::position`] so a
+    /// reordered `/Order` cannot alias the viewing-state index.
+    pub fn declaration_index(&self, id: &str) -> Option<usize> {
+        self.declaration_index.get(id).copied()
+    }
+
+    /// Layer ids in deterministic display order.
+    ///
+    /// This is the canonical order used by [`Self::visibility_plan`],
+    /// [`Self::oc_group_plan`], and every per-tab state operation. Rebuilding a
+    /// model from the same summary always yields an identical list.
+    pub fn ordered_ids(&self) -> Vec<OcgId> {
+        self.layers.iter().map(|layer| layer.id.clone()).collect()
     }
 
     /// The number of radio-button groups in this model.
@@ -393,6 +434,41 @@ impl LayerModel {
             }
         }
         VisibilityPlan { visible }
+    }
+
+    /// Build a deterministic OC group plan from a state snapshot.
+    ///
+    /// Every declared group is emitted in display order with its resolved
+    /// name, visibility, lock flag, display position, and radio membership.
+    /// Unlike [`Self::visibility_plan`], which only lists visible ids, this plan
+    /// is a complete, backend-agnostic description a host can log, serialize, or
+    /// forward to a renderer with optional-content support.
+    pub fn oc_group_plan(&self, state: &LayerState) -> OcGroupPlan {
+        let mut groups = Vec::with_capacity(self.layers.len());
+        for (position, layer) in self.layers.iter().enumerate() {
+            groups.push(OcGroupEntry {
+                id: layer.id.clone(),
+                name: layer.name.clone(),
+                visible: state
+                    .visible
+                    .get(position)
+                    .copied()
+                    .unwrap_or(layer.initial_visible),
+                locked: layer.locked,
+                position,
+                radio_group: layer.radio_group,
+            });
+        }
+        let visible_count = groups.iter().filter(|entry| entry.visible).count();
+        let locked_count = groups.iter().filter(|entry| entry.locked).count();
+        let summary = format!(
+            "{} OCG(s) in display order, {} visible, {} locked, {} radio group(s)",
+            groups.len(),
+            visible_count,
+            locked_count,
+            self.radio_group_count
+        );
+        OcGroupPlan { groups, summary }
     }
 }
 
@@ -446,7 +522,7 @@ impl LayerState {
             }
             let declared = |position: usize| {
                 model
-                    .position(&model.layers[position].id)
+                    .declaration_index(&model.layers[position].id)
                     .unwrap_or(position)
             };
             // Priority 1: first declared locked-and-visible member.
@@ -668,6 +744,142 @@ impl VisibilityPlan {
     }
 }
 
+/// Maximum byte length of a layer display name accepted by a property edit.
+pub const MAX_LAYER_NAME_LEN: usize = 256;
+
+/// One property change applied to a layer.
+///
+/// Edits are grouped into a batch and applied in order by
+/// [`apply_layer_property_edits`]. A batch is all-or-nothing: the first invalid
+/// edit rejects the whole batch with a typed [`LayerError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LayerPropertyEdit {
+    /// Rename a layer. The name must be non-empty and at most
+    /// [`MAX_LAYER_NAME_LEN`] bytes; the layer must be unlocked.
+    Rename {
+        /// Stable id of the layer to rename.
+        id: OcgId,
+        /// New display name.
+        name: String,
+    },
+    /// Set a layer's current visibility. Radio-group exclusivity and locked
+    /// layers are enforced by [`LayerState::set_visible`].
+    SetVisible {
+        /// Stable id of the layer to change.
+        id: OcgId,
+        /// Requested visibility.
+        visible: bool,
+    },
+    /// Set a layer's locked flag. Locking and unlocking are always allowed;
+    /// they change the model, not the layer's current visibility.
+    SetLocked {
+        /// Stable id of the layer to change.
+        id: OcgId,
+        /// Requested lock flag.
+        locked: bool,
+    },
+}
+
+/// One layer's resolved properties inside an [`OcGroupPlan`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcGroupEntry {
+    /// Stable OCG id.
+    pub id: OcgId,
+    /// Display name after edits.
+    pub name: String,
+    /// Current visibility after edits.
+    pub visible: bool,
+    /// Locked flag after edits.
+    pub locked: bool,
+    /// Zero-based display position of this layer.
+    pub position: usize,
+    /// Radio group index this layer belongs to, if any.
+    pub radio_group: Option<usize>,
+}
+
+/// A deterministic, backend-agnostic description of every optional content
+/// group in a document, in display order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcGroupPlan {
+    /// One entry per declared layer, in display order.
+    pub groups: Vec<OcGroupEntry>,
+    /// Deterministic, human-readable summary of the plan.
+    pub summary: String,
+}
+
+impl OcGroupPlan {
+    /// Ids of all groups in display order.
+    pub fn ids(&self) -> Vec<OcgId> {
+        self.groups.iter().map(|entry| entry.id.clone()).collect()
+    }
+
+    /// Ids of the currently visible groups in display order.
+    pub fn visible_ids(&self) -> Vec<OcgId> {
+        self.groups
+            .iter()
+            .filter(|entry| entry.visible)
+            .map(|entry| entry.id.clone())
+            .collect()
+    }
+
+    /// Return `true` when the plan contains no groups.
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+}
+
+/// Apply a batch of property edits to a layer model and its viewing state.
+///
+/// Returns the updated (copy-on-write) model and state together with the
+/// resulting [`OcGroupPlan`]. The inputs are never mutated, so a rejected batch
+/// leaves the caller's document untouched. Edits are applied in order; a later
+/// edit may revisit a layer changed by an earlier one.
+///
+/// # Errors
+///
+/// Returns a typed [`LayerError`] for an unknown id, an empty or over-long
+/// rename, or an edit to a locked layer.
+pub fn apply_layer_property_edits(
+    model: &LayerModel,
+    state: &LayerState,
+    edits: &[LayerPropertyEdit],
+) -> Result<(LayerModel, LayerState, OcGroupPlan), LayerError> {
+    let mut next_model = model.clone();
+    let mut next_state = state.clone();
+
+    for edit in edits {
+        match edit {
+            LayerPropertyEdit::Rename { id, name } => {
+                let position = next_model
+                    .position(id)
+                    .ok_or_else(|| LayerError::OcgNotFound(id.clone()))?;
+                if name.is_empty() {
+                    return Err(LayerError::EmptyName(id.clone()));
+                }
+                if name.len() > MAX_LAYER_NAME_LEN {
+                    return Err(LayerError::NameTooLong(id.clone(), MAX_LAYER_NAME_LEN));
+                }
+                if next_model.layers[position].locked {
+                    return Err(LayerError::Locked(id.clone()));
+                }
+                next_model.layers[position].name = name.clone();
+            }
+            LayerPropertyEdit::SetVisible { id, visible } => {
+                next_state.set_visible(&next_model, id, *visible)?;
+            }
+            LayerPropertyEdit::SetLocked { id, locked } => {
+                let position = next_model
+                    .position(id)
+                    .ok_or_else(|| LayerError::OcgNotFound(id.clone()))?;
+                next_model.layers[position].locked = *locked;
+            }
+        }
+    }
+
+    let plan = next_model.oc_group_plan(&next_state);
+    Ok((next_model, next_state, plan))
+}
+
 /// One tab's installed layer model and viewing state.
 #[derive(Clone, Debug)]
 struct LayerDocument {
@@ -774,6 +986,31 @@ impl LayerRegistry {
     pub fn visibility_plan(&self, tab: TabId) -> Option<VisibilityPlan> {
         let document = self.documents.get(&tab)?;
         Some(document.model.visibility_plan(&document.state))
+    }
+
+    /// Apply a batch of property edits to `tab`, replacing its model and state.
+    ///
+    /// Returns the resulting deterministic [`OcGroupPlan`]. A rejected batch
+    /// leaves the tab's previous model and state untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayerError::NoLayersForTab`] when `tab` has no installed layers,
+    /// or any typed error from [`apply_layer_property_edits`].
+    pub fn apply_property_edits(
+        &mut self,
+        tab: TabId,
+        edits: &[LayerPropertyEdit],
+    ) -> Result<OcGroupPlan, LayerError> {
+        let document = self
+            .documents
+            .get_mut(&tab)
+            .ok_or(LayerError::NoLayersForTab(tab))?;
+        let (model, state, plan) =
+            apply_layer_property_edits(&document.model, &document.state, edits)?;
+        document.model = model;
+        document.state = state;
+        Ok(plan)
     }
 }
 
@@ -1138,5 +1375,277 @@ mod tests {
             state.set_visible(&model, "a", false),
             Err(LayerError::Locked("a".into()))
         );
+    }
+
+    // ---- T-0167: display-order vs declaration-index regression -------------
+
+    #[test]
+    fn position_is_display_index_after_reordered_order() {
+        let explicit = summary().with_order(["oc3", "oc1"]);
+        let model = LayerModel::from_summary(explicit).expect("valid summary");
+        // Display order is oc3, oc1, oc2; declaration order is oc1, oc2, oc3.
+        assert_eq!(model.position("oc3"), Some(0));
+        assert_eq!(model.position("oc1"), Some(1));
+        assert_eq!(model.position("oc2"), Some(2));
+        assert_eq!(model.ordered_ids(), vec!["oc3", "oc1", "oc2"]);
+        assert_eq!(model.get("oc3").map(|info| info.name()), Some("Watermark"));
+        // The declaration index is kept distinct for tie-breaking.
+        assert_eq!(model.declaration_index("oc3"), Some(2));
+        assert_eq!(model.declaration_index("oc1"), Some(0));
+    }
+
+    #[test]
+    fn set_visible_after_reorder_affects_the_correct_layer() {
+        let summary = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("oc1", "A", false, false))
+            .add_group(OcgInfo::new("oc2", "B", false, false))
+            .add_group(OcgInfo::new("oc3", "C", false, false))
+            .with_order(["oc3", "oc1", "oc2"]);
+        let model = LayerModel::from_summary(summary).expect("valid summary");
+        let mut state = LayerState::new(&model);
+        // declaration(oc2)=1 but display(oc2)=2. The buggy build wrote flag 1.
+        assert!(state.set_visible(&model, "oc2", true).expect("known ocg"));
+        assert!(state.is_visible(&model, "oc2").expect("known ocg"));
+        assert!(!state.is_visible(&model, "oc1").expect("known ocg"));
+        assert_eq!(
+            model.visibility_plan(&state).visible_ids(),
+            &["oc2"],
+            "only oc2 may become visible"
+        );
+        assert!(!state.toggle(&model, "oc2").expect("known ocg"));
+        assert!(model.visibility_plan(&state).is_empty());
+    }
+
+    #[test]
+    fn locked_check_after_reorder_uses_the_correct_layer() {
+        // declaration(oc1)=0 is locked; declaration(oc2)=1 is unlocked.
+        // Reordered display puts oc2 at 0 and the locked oc1 at 1. The buggy
+        // build indexed `layers[declaration_index]` and wrongly rejected oc2.
+        let summary = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("oc1", "Locked", false, true))
+            .add_group(OcgInfo::new("oc2", "Free", false, false))
+            .with_order(["oc2", "oc1"]);
+        let model = LayerModel::from_summary(summary).expect("valid summary");
+        let mut state = LayerState::new(&model);
+        assert_eq!(
+            state.set_visible(&model, "oc2", true),
+            Ok(true),
+            "the unlocked layer must be editable after reorder"
+        );
+        assert_eq!(
+            state.set_visible(&model, "oc1", true),
+            Err(LayerError::Locked("oc1".into()))
+        );
+        assert_eq!(model.visibility_plan(&state).visible_ids(), &["oc2"]);
+    }
+
+    #[test]
+    fn radio_exclusivity_survives_a_reordered_order() {
+        let summary = OcPropertiesSummary::new()
+            .add_group(OcgInfo::new("en", "English", true, false))
+            .add_group(OcgInfo::new("fr", "French", false, false))
+            .add_group(OcgInfo::new("de", "German", false, false))
+            .with_radio_group(RadioGroup::new(["en", "fr", "de"]))
+            .with_order(["de", "en", "fr"]);
+        let model = LayerModel::from_summary(summary).expect("valid summary");
+        // First declared visible member (en) wins construction normalization.
+        let mut state = LayerState::new(&model);
+        assert_eq!(model.visibility_plan(&state).visible_ids(), &["en"]);
+        assert!(state.set_visible(&model, "de", true).expect("known ocg"));
+        assert!(!state.is_visible(&model, "en").expect("known ocg"));
+        assert_eq!(model.visibility_plan(&state).visible_ids(), &["de"]);
+        assert!(state.set_visible(&model, "fr", true).expect("known ocg"));
+        assert_eq!(model.visibility_plan(&state).visible_ids(), &["fr"]);
+    }
+
+    #[test]
+    fn property_edits_rename_visibility_and_lock() {
+        let model = LayerModel::from_summary(summary()).expect("valid summary");
+        let state = LayerState::new(&model);
+        let (edited_model, edited_state, plan) = apply_layer_property_edits(
+            &model,
+            &state,
+            &[
+                LayerPropertyEdit::Rename {
+                    id: "oc2".into(),
+                    name: "Notes".into(),
+                },
+                LayerPropertyEdit::SetVisible {
+                    id: "oc2".into(),
+                    visible: true,
+                },
+                LayerPropertyEdit::SetLocked {
+                    id: "oc3".into(),
+                    locked: true,
+                },
+            ],
+        )
+        .expect("edits apply");
+
+        assert_eq!(
+            edited_model.get("oc2").map(|info| info.name()),
+            Some("Notes")
+        );
+        assert_eq!(
+            edited_model.get("oc3").map(|info| info.is_locked()),
+            Some(true)
+        );
+        assert_eq!(plan.ids(), vec!["oc1", "oc2", "oc3"]);
+        assert_eq!(plan.visible_ids(), vec!["oc1", "oc2", "oc3"]);
+        let entry = &plan.groups[1];
+        assert_eq!(entry.id, "oc2");
+        assert_eq!(entry.name, "Notes");
+        assert!(entry.visible);
+        assert!(!entry.locked);
+        assert_eq!(entry.position, 1);
+        assert!(plan.groups[2].locked);
+        // Originals are untouched (copy-on-write).
+        assert_eq!(
+            model.get("oc2").map(|info| info.name()),
+            Some("Annotations")
+        );
+        assert!(!state.is_visible(&model, "oc2").expect("original unchanged"));
+        assert!(
+            edited_state
+                .is_visible(&edited_model, "oc2")
+                .expect("edited")
+        );
+    }
+
+    #[test]
+    fn property_edits_validate_names_and_locked_layers() {
+        let model = LayerModel::from_summary(
+            summary().add_group(OcgInfo::new("oc9", "Pinned", true, true)),
+        )
+        .expect("valid summary");
+        let state = LayerState::new(&model);
+
+        assert_eq!(
+            apply_layer_property_edits(
+                &model,
+                &state,
+                &[LayerPropertyEdit::Rename {
+                    id: "oc1".into(),
+                    name: String::new(),
+                }]
+            ),
+            Err(LayerError::EmptyName("oc1".into()))
+        );
+        let long = "x".repeat(MAX_LAYER_NAME_LEN + 1);
+        assert_eq!(
+            apply_layer_property_edits(
+                &model,
+                &state,
+                &[LayerPropertyEdit::Rename {
+                    id: "oc1".into(),
+                    name: long,
+                }]
+            ),
+            Err(LayerError::NameTooLong("oc1".into(), MAX_LAYER_NAME_LEN))
+        );
+        assert_eq!(
+            apply_layer_property_edits(
+                &model,
+                &state,
+                &[LayerPropertyEdit::Rename {
+                    id: "oc9".into(),
+                    name: "Nope".into(),
+                }]
+            ),
+            Err(LayerError::Locked("oc9".into()))
+        );
+        assert_eq!(
+            apply_layer_property_edits(
+                &model,
+                &state,
+                &[LayerPropertyEdit::SetVisible {
+                    id: "oc9".into(),
+                    visible: false,
+                }]
+            ),
+            Err(LayerError::Locked("oc9".into()))
+        );
+        assert_eq!(
+            apply_layer_property_edits(
+                &model,
+                &state,
+                &[LayerPropertyEdit::SetLocked {
+                    id: "ghost".into(),
+                    locked: true,
+                }]
+            ),
+            Err(LayerError::OcgNotFound("ghost".into()))
+        );
+    }
+
+    #[test]
+    fn property_edits_are_all_or_nothing() {
+        let model = LayerModel::from_summary(summary()).expect("valid summary");
+        let state = LayerState::new(&model);
+        let batch = [
+            LayerPropertyEdit::SetVisible {
+                id: "oc2".into(),
+                visible: true,
+            },
+            LayerPropertyEdit::Rename {
+                id: "oc1".into(),
+                name: String::new(),
+            },
+        ];
+        assert!(apply_layer_property_edits(&model, &state, &batch).is_err());
+        // No partial visibility leaked into the original state.
+        assert!(!state.is_visible(&model, "oc2").expect("unchanged"));
+
+        let mut registry = LayerRegistry::new();
+        registry.install(tab(1), summary()).expect("valid summary");
+        assert!(registry.apply_property_edits(tab(1), &batch).is_err());
+        assert!(
+            !registry
+                .state(tab(1))
+                .expect("installed")
+                .is_visible(registry.model(tab(1)).expect("model"), "oc2")
+                .expect("known")
+        );
+        assert_eq!(
+            registry.apply_property_edits(tab(99), &[]),
+            Err(LayerError::NoLayersForTab(tab(99)))
+        );
+    }
+
+    #[test]
+    fn oc_group_plan_is_deterministic_in_display_order() {
+        let summary = summary()
+            .with_order(["oc2", "oc3", "oc1"])
+            .add_group(OcgInfo::new("oc4", "Extra", true, false));
+        let model = LayerModel::from_summary(summary).expect("valid summary");
+        let state = LayerState::new(&model);
+        let first = model.oc_group_plan(&state);
+        let second = model.oc_group_plan(&state);
+        assert_eq!(first, second);
+        assert_eq!(first.ids(), vec!["oc2", "oc3", "oc1", "oc4"]);
+        assert_eq!(
+            first.visible_ids(),
+            vec!["oc3", "oc1", "oc4"],
+            "plan follows display order, not toggle order"
+        );
+        assert_eq!(first.groups[0].position, 0);
+        assert_eq!(first.groups[3].position, 3);
+        assert_eq!(
+            first.summary,
+            "4 OCG(s) in display order, 3 visible, 0 locked, 0 radio group(s)"
+        );
+
+        // Rebuilding from an equivalent summary yields the same ordered ids.
+        let rebuilt = LayerModel::from_summary(
+            OcPropertiesSummary::new()
+                .add_group(OcgInfo::new("oc1", "Background", true, false))
+                .add_group(OcgInfo::new("oc2", "Annotations", false, false))
+                .add_group(OcgInfo::new("oc3", "Watermark", true, false))
+                .add_group(OcgInfo::new("oc4", "Extra", true, false))
+                .with_order(["oc2", "oc3", "oc1"]),
+        )
+        .expect("valid summary");
+        assert_eq!(rebuilt.ordered_ids(), first.ids());
+        assert_eq!(rebuilt.oc_group_plan(&LayerState::new(&rebuilt)), first);
     }
 }

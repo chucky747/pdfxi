@@ -23,6 +23,8 @@ use pdfxi_render::{
     PrintSettings, parse_page_ranges,
 };
 
+use crate::open::OpenedDocument;
+
 /// Default raster resolution used by generated print plans (dots per inch).
 pub const DEFAULT_PRINT_DPI: u32 = 300;
 
@@ -1947,6 +1949,142 @@ impl ProductionPlan {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Document -> print handoff (T-0167).
+//
+// An opened document is the only source of truth for the page count used by a
+// print job. This section turns an `OpenedDocument` plus a `PrintModel` into a
+// deterministic `PrintDispatchPlan` and a stable report, without any window,
+// printer, or I/O. The host consumes the inner `PrintPlan` at the existing
+// backend boundary.
+// ---------------------------------------------------------------------------
+
+/// The identity of an opened document handed to the print subsystem.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrintDispatchSource {
+    /// Effective title (or label) captured at open time.
+    pub label: String,
+    /// Page count captured at open time.
+    pub page_count: usize,
+    /// Whether the opened document reported encryption.
+    pub encrypted: bool,
+}
+
+impl From<&OpenedDocument> for PrintDispatchSource {
+    fn from(document: &OpenedDocument) -> Self {
+        Self {
+            label: document.effective_title().to_owned(),
+            page_count: document.page_count,
+            encrypted: document.is_encrypted(),
+        }
+    }
+}
+
+/// Typed errors produced during the document -> print handoff.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum PrintDispatchError {
+    /// No opened document was ready, so nothing can be dispatched.
+    #[error("no opened document is ready to print")]
+    NoReadyDocument,
+    /// The opened document had no pages.
+    #[error("opened document has no pages")]
+    EmptyDocument,
+    /// The print model could not be resolved against the document.
+    #[error("print handoff failed: {0}")]
+    Plan(PrintModelError),
+}
+
+/// A deterministic report describing one print dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrintDispatchReport {
+    /// Effective label of the source document.
+    pub source_label: String,
+    /// Number of pages in the source document.
+    pub source_pages: usize,
+    /// Number of rasters the dispatch will produce (copies included).
+    pub raster_count: usize,
+    /// One-based source page numbers in emission order.
+    pub page_numbers: Vec<u32>,
+    /// Whether the source document was encrypted.
+    pub source_encrypted: bool,
+    /// Deterministic, human-readable summary of the handoff.
+    pub summary: String,
+}
+
+/// A fully resolved, deterministic document-to-print handoff plan.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrintDispatchPlan {
+    /// Source document identity captured at open time.
+    pub source: PrintDispatchSource,
+    /// The resolved print plan the host executes.
+    pub plan: PrintPlan,
+    /// Deterministic handoff report.
+    pub report: PrintDispatchReport,
+}
+
+/// Build a print dispatch plan from an opened document.
+///
+/// The document's captured [`OpenedDocument::page_count`] is the authoritative
+/// page count; the caller supplies only the current page and selection used by
+/// [`PrintPageRange::Current`] and [`PrintPageRange::Selection`]. All settings
+/// are sourced from `model`, so repeated calls on unchanged inputs produce
+/// byte-identical reports.
+///
+/// # Errors
+///
+/// Returns [`PrintDispatchError::EmptyDocument`] for a zero-page document and
+/// [`PrintDispatchError::Plan`] for any typed [`PrintModelError`].
+pub fn print_handoff(
+    document: &OpenedDocument,
+    model: &PrintModel,
+    current_page: usize,
+    selected_pages: &[usize],
+) -> Result<PrintDispatchPlan, PrintDispatchError> {
+    if document.page_count == 0 {
+        return Err(PrintDispatchError::EmptyDocument);
+    }
+    let context = PrintContext::new(document.page_count, current_page, selected_pages);
+    let plan = model
+        .build_plan(&context)
+        .map_err(PrintDispatchError::Plan)?;
+    let source = PrintDispatchSource::from(document);
+    let report = PrintDispatchReport {
+        source_label: source.label.clone(),
+        source_pages: source.page_count,
+        raster_count: plan.raster_count(),
+        page_numbers: plan.page_numbers(),
+        source_encrypted: source.encrypted,
+        summary: format!(
+            "print '{}': {} source page(s), {} raster(s), {}",
+            source.label,
+            source.page_count,
+            plan.raster_count(),
+            plan.summary
+        ),
+    };
+    Ok(PrintDispatchPlan {
+        source,
+        plan,
+        report,
+    })
+}
+
+/// Handoff variant for hosts whose open pipeline may not have a ready document.
+///
+/// # Errors
+///
+/// Returns [`PrintDispatchError::NoReadyDocument`] when `ready` is `None`,
+/// otherwise delegates to [`print_handoff`].
+pub fn print_handoff_from_option(
+    ready: Option<&OpenedDocument>,
+    model: &PrintModel,
+    current_page: usize,
+    selected_pages: &[usize],
+) -> Result<PrintDispatchPlan, PrintDispatchError> {
+    let document = ready.ok_or(PrintDispatchError::NoReadyDocument)?;
+    print_handoff(document, model, current_page, selected_pages)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2144,6 +2282,119 @@ mod tests {
         assert!(dialog.last_plan().is_none());
         dialog.hide();
         assert!(!dialog.is_open());
+    }
+
+    // ---- T-0167: document -> print handoff --------------------------------
+
+    fn opened(label: &str, pages: usize, encrypted: bool) -> OpenedDocument {
+        OpenedDocument {
+            label: label.into(),
+            path: Some(std::path::PathBuf::from(format!("C:/{label}.pdf"))),
+            page_count: pages,
+            title: Some(label.into()),
+            encryption: if encrypted {
+                crate::open::EncryptionState::Encrypted { revision: 4 }
+            } else {
+                crate::open::EncryptionState::Unencrypted
+            },
+            backend: crate::open::OpenBackendKind::Mock,
+        }
+    }
+
+    #[test]
+    fn print_handoff_from_opened_document_resolves_plan_and_report() {
+        let document = opened("Report", 6, true);
+        let plan = print_handoff(&document, &PrintModel::default(), 0, &[]).expect("handoff");
+        assert_eq!(
+            plan.source,
+            PrintDispatchSource {
+                label: "Report".into(),
+                page_count: 6,
+                encrypted: true,
+            }
+        );
+        assert_eq!(plan.plan.pages, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(plan.report.raster_count, 6);
+        assert_eq!(plan.report.page_numbers, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(plan.report.source_label, "Report");
+        assert_eq!(plan.report.source_pages, 6);
+        assert!(plan.report.source_encrypted);
+        assert_eq!(
+            plan.report.summary,
+            format!(
+                "print 'Report': 6 source page(s), 6 raster(s), {}",
+                plan.plan.summary
+            )
+        );
+    }
+
+    #[test]
+    fn print_handoff_rejects_missing_empty_and_invalid_inputs() {
+        let model = PrintModel::default();
+        assert_eq!(
+            print_handoff_from_option(None, &model, 0, &[]),
+            Err(PrintDispatchError::NoReadyDocument)
+        );
+        let empty = opened("Empty", 0, false);
+        assert_eq!(
+            print_handoff(&empty, &model, 0, &[]),
+            Err(PrintDispatchError::EmptyDocument)
+        );
+        let document = opened("Doc", 4, false);
+        let invalid = PrintModel {
+            range: PrintPageRange::Custom("not-a-range".into()),
+            ..PrintModel::default()
+        };
+        assert!(matches!(
+            print_handoff(&document, &invalid, 0, &[]),
+            Err(PrintDispatchError::Plan(PrintModelError::InvalidRange(_)))
+        ));
+        let bad_current = PrintModel {
+            range: PrintPageRange::Current,
+            ..PrintModel::default()
+        };
+        assert_eq!(
+            print_handoff(&document, &bad_current, 9, &[]),
+            Err(PrintDispatchError::Plan(
+                PrintModelError::CurrentPageOutOfRange(9, 4)
+            ))
+        );
+    }
+
+    #[test]
+    fn print_handoff_report_is_deterministic_and_honors_current_and_selection() {
+        let document = opened("Deck", 5, false);
+        let current = PrintModel {
+            range: PrintPageRange::Current,
+            ..PrintModel::default()
+        };
+        let first = print_handoff(&document, &current, 2, &[]).expect("current handoff");
+        assert_eq!(first.plan.pages, vec![2]);
+        assert_eq!(first.report.page_numbers, vec![3]);
+        assert_eq!(
+            first,
+            print_handoff(&document, &current, 2, &[]).expect("repeat")
+        );
+
+        let selection = PrintModel {
+            range: PrintPageRange::Selection,
+            copies: 2,
+            ..PrintModel::default()
+        };
+        let selected =
+            print_handoff(&document, &selection, 0, &[4, 1, 1]).expect("selection handoff");
+        assert_eq!(
+            selected.plan.pages,
+            vec![1, 1, 4, 4],
+            "sorted, deduped, then copies page-major"
+        );
+        assert_eq!(selected.report.raster_count, 4);
+        assert_eq!(selected.report.page_numbers, vec![2, 2, 5, 5]);
+        assert_eq!(
+            selected,
+            print_handoff(&document, &selection, 0, &[4, 1, 1]).expect("repeat")
+        );
+        assert!(!selected.report.source_encrypted);
     }
 }
 

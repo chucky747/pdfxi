@@ -14,7 +14,18 @@
 //! supplied `/OCProperties` summary: deterministic layer ordering, per-tab
 //! visibility state with radio-group exclusivity and locked layers, and a
 //! backend-agnostic visibility plan the canvas can consume. It has no GUI or
-//! renderer dependency.
+//! renderer dependency. It also emits deterministic OC group plans and applies
+//! validated name/visibility/lock property edits, and keeps each layer's display
+//! [`position`] distinct from its declaration index so a reordered `/Order`
+//! array can never alias viewing-state slots.
+//!
+//! The [`open`] module records the document-open lifecycle as explicit
+//! loading/ready/failed phases with typed errors, bounded recent-file tracking,
+//! and deterministic reports, without a GUI or blocking I/O. The [`mod@print`]
+//! module additionally hands an opened document to a deterministic print
+//! dispatch plan and report through [`print::print_handoff`].
+//!
+//! [`position`]: layers::LayerModel::position
 //! The [`thumbs`] module adds the window-free state and math for a page-thumbnail
 //! navigation pane: visible-row ranges, page/row mapping, active-page tracking,
 //! and a bounded prefetch request queue backed by `pdfxi-render`'s cache.
@@ -163,8 +174,9 @@ pub use home::{
     MAX_SERIALIZED_LINES, MAX_TITLE_LEN, RecentEntry, escape_field,
 };
 pub use layers::{
-    LayerError, LayerInfo, LayerModel, LayerRegistry, LayerState, OcPropertiesSummary, OcgId,
-    OcgInfo, RadioGroup, VisibilityPlan,
+    LayerError, LayerInfo, LayerModel, LayerPropertyEdit, LayerRegistry, LayerState,
+    MAX_LAYER_NAME_LEN, OcGroupEntry, OcGroupPlan, OcPropertiesSummary, OcgId, OcgInfo, RadioGroup,
+    VisibilityPlan, apply_layer_property_edits,
 };
 pub use links::{
     Link, LinkError, LinkId, LinkInfo, LinkModel, LinkPoint, LinkRect, LinkRegistry, LinkSummary,
@@ -181,8 +193,8 @@ pub use nav::{
 };
 pub use open::{
     DocumentOpenPipeline, DocumentOpener, EncryptionState, MockDocumentOpener, MockResponse,
-    OpenBackendKind, OpenError, OpenResult, OpenTabStates, OpenedDocument, RecentFiles,
-    TabOpenState,
+    OpenBackendKind, OpenError, OpenPhase, OpenPhaseState, OpenPhases, OpenReport, OpenReportEntry,
+    OpenResult, OpenTabStates, OpenedDocument, RecentFiles, TabOpenState,
 };
 pub use page_text::PageText;
 pub use portfolio::{
@@ -204,9 +216,11 @@ pub use print::{
     MAX_GRID_EXTENT, MAX_IMPOSE_CELLS, MAX_IMPOSE_PAGES, MAX_PRINT_NAME_LEN, MAX_SEPARATIONS, Mark,
     MarkKind, MarkRect, MarksPlan, NUpLayout, NUpOrder, OutputIntent, OutputIntentReport,
     OutputIntentSubtype, PageTransform, PaperSize, PaperSource, PosterPlan, PosterTile,
-    PrintContext, PrintDialogState, PrintModel, PrintModelError, PrintPageRange, PrintPlan,
-    PrinterMarks, ProductionOptions, ProductionPlan, Separation, SeparationInput, SeparationsPlan,
-    SheetEntry, SheetSide, SizePt, booklet_imposition, n_up_imposition, poster_tiles, resolve_fit,
+    PrintContext, PrintDialogState, PrintDispatchError, PrintDispatchPlan, PrintDispatchReport,
+    PrintDispatchSource, PrintModel, PrintModelError, PrintPageRange, PrintPlan, PrinterMarks,
+    ProductionOptions, ProductionPlan, Separation, SeparationInput, SeparationsPlan, SheetEntry,
+    SheetSide, SizePt, booklet_imposition, n_up_imposition, poster_tiles, print_handoff,
+    print_handoff_from_option, resolve_fit,
 };
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use read_aloud::{
