@@ -48,6 +48,19 @@ placeholder pages and the CLI still works.
 - The thumbnail pane, fit/zoom, rotation, find bar, text selection/copy, print
   dialog, layers, bookmarks and attachments are all available.
 
+### Product shell
+
+The desktop viewer uses a modern Acrobat-style shell: a custom title bar with
+document tabs, a compact icon rail, a pages panel with thumbnails, a rich
+document canvas, a tools panel with AI Assistant and Export cards, and a
+page/zoom bar. Light and dark themes are built in.
+
+![PDFXI viewer, light](docs/evidence/ui/light-v8.png)
+![PDFXI viewer, dark](docs/evidence/ui/dark-v8.png)
+
+The visual review checklist and findings are in
+[`docs/design/UI_REVIEW.md`](docs/design/UI_REVIEW.md).
+
 ### CLI
 
 ```powershell

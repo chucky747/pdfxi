@@ -94,6 +94,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::design::{self, Icon, Palette, PaperPalette, ThemeMode, icon, metrics};
 use crate::{
     OpenError, PaperSize, PrintContext, PrintDialogState, PrintModelError, PrintPageRange,
     PrintPlan,
@@ -116,7 +117,7 @@ use crate::{
 #[cfg(feature = "pdfium")]
 use crate::Rotation;
 #[cfg(feature = "pdfium")]
-use crate::raster::{RasterCache, RasterKey, demo_fixture_path};
+use crate::raster::{RasterCache, RasterKey};
 #[cfg(feature = "pdfium")]
 use crate::uv_quad_for_rotation;
 #[cfg(feature = "pdfium")]
@@ -137,22 +138,27 @@ struct LiveTexture {
 const ZOOM_STEP: f32 = 0.25;
 
 /// Height of one row in the thumbnail side panel, in UI points.
+#[allow(dead_code)]
 const THUMB_ROW_HEIGHT: f32 = 140.0;
 
 /// Maximum side (width and height) of a generated thumbnail, in pixels.
 #[cfg(feature = "pdfium")]
+#[allow(dead_code)]
 const THUMB_MAX_SIDE: u32 = 120;
 
 /// Width of a thumbnail tile in the side panel, in UI points.
+#[allow(dead_code)]
 const THUMB_TILE_WIDTH: f32 = 96.0;
 
 /// Height of a thumbnail tile in the side panel, in UI points.
+#[allow(dead_code)]
 const THUMB_TILE_HEIGHT: f32 = 124.0;
 
 /// Maximum number of thumbnails generated in a single frame.
 ///
 /// Bounding per-frame work keeps scrolling responsive even for long documents.
 #[cfg(feature = "pdfium")]
+#[allow(dead_code)]
 const THUMBS_PER_FRAME: usize = 4;
 
 /// Maximum page rasters rendered synchronously in one frame.
@@ -161,6 +167,70 @@ const THUMBS_PER_FRAME: usize = 4;
 /// would freeze the window. The rest render on later frames.
 #[cfg(feature = "pdfium")]
 const RASTERS_PER_FRAME: usize = 2;
+
+/// Left-rail sections in the product shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RailTab {
+    /// Document overview.
+    Home,
+    /// Open tabs and recent files.
+    Files,
+    /// Recently opened documents.
+    Recent,
+    /// Favourites.
+    Starred,
+    /// Shared workspace descriptors.
+    Shared,
+    /// Page thumbnails.
+    #[default]
+    Pages,
+    /// Comment list.
+    Comments,
+    /// Local assistant card.
+    Assistant,
+}
+
+impl RailTab {
+    /// Every rail entry, in display order.
+    pub const ALL: [Self; 8] = [
+        Self::Home,
+        Self::Files,
+        Self::Recent,
+        Self::Starred,
+        Self::Shared,
+        Self::Pages,
+        Self::Comments,
+        Self::Assistant,
+    ];
+
+    /// Label under the icon.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Home => "Home",
+            Self::Files => "Files",
+            Self::Recent => "Recent",
+            Self::Starred => "Starred",
+            Self::Shared => "Shared",
+            Self::Pages => "Pages",
+            Self::Comments => "Comments",
+            Self::Assistant => "AI Assistant",
+        }
+    }
+
+    /// Icon glyph.
+    pub fn icon(self) -> Icon {
+        match self {
+            Self::Home => Icon::Home,
+            Self::Files => Icon::File,
+            Self::Recent => Icon::Recent,
+            Self::Starred => Icon::Star,
+            Self::Shared => Icon::Shared,
+            Self::Pages => Icon::Pages,
+            Self::Comments => Icon::Comment,
+            Self::Assistant => Icon::Sparkle,
+        }
+    }
+}
 
 /// Placeholder page count assigned to a demo tab (no real document is loaded).
 pub const DEMO_PAGE_COUNT: usize = 3;
@@ -614,6 +684,35 @@ pub fn active_page_from_canvas_scroll(layout: &CanvasLayout, scroll_y: f32) -> u
     best_page
 }
 
+/// Build the application icon shown by the OS window switcher.
+fn app_icon() -> egui::IconData {
+    let size = 32u32;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let index = ((y * size + x) * 4) as usize;
+            if x >= 2 && x + 2 < size && y >= 2 && y + 2 < size {
+                rgba[index] = 0xc8;
+                rgba[index + 1] = 0x34;
+                rgba[index + 2] = 0x2b;
+                rgba[index + 3] = 0xff;
+                let dx = (x as i32 - 16).abs();
+                let dy = (y as i32 - 16).abs();
+                if (dx - dy).abs() <= 2 && dx <= 9 {
+                    rgba[index] = 0xff;
+                    rgba[index + 1] = 0xff;
+                    rgba[index + 2] = 0xff;
+                }
+            }
+        }
+    }
+    egui::IconData {
+        rgba,
+        width: size,
+        height: size,
+    }
+}
+
 /// Launch the native PDFXI viewer window.
 ///
 /// This is the entry point used by the `pdfxi-ui` binary. It builds a
@@ -625,7 +724,10 @@ pub fn run() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(app_name())
-            .with_inner_size([1280.0, 800.0]),
+            .with_inner_size([1280.0, 800.0])
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_icon(std::sync::Arc::new(app_icon())),
         ..eframe::NativeOptions::default()
     };
 
@@ -633,8 +735,15 @@ pub fn run() {
         app_name(),
         options,
         Box::new(|_creation_context| {
-            let mut app = PdfxiApp::new();
+            let mut app = PdfxiApp::new_for_window();
             let arguments: Vec<String> = std::env::args().skip(1).collect();
+            for argument in &arguments {
+                match argument.as_str() {
+                    "--dark" => app.theme = ThemeMode::Dark,
+                    "--light" => app.theme = ThemeMode::Light,
+                    _ => {}
+                }
+            }
             app.open_startup_argument(arguments);
             Ok(Box::new(app))
         }),
@@ -697,6 +806,23 @@ pub struct PdfxiApp {
     open_dialog_open: bool,
     /// Path typed into the "Open PDF" dialog.
     open_dialog_path: String,
+    /// Active shell appearance.
+    theme: ThemeMode,
+    /// Selected left-rail section.
+    rail: RailTab,
+    /// AI assistant question text.
+    assistant_query: String,
+    /// Latest local assistant answer.
+    assistant_answer: String,
+    /// Query typed into the command-bar tool search.
+    tool_search: String,
+    /// Selected export format index in the export card.
+    export_format: usize,
+    /// Path currently bound to the PDFium renderer.
+    #[cfg(feature = "pdfium")]
+    renderer_path: Option<PathBuf>,
+    /// Theme last installed on the egui context.
+    applied_theme: Option<ThemeMode>,
     /// Zero-based pages used by the Selection print range.
     print_selection: Vec<usize>,
     scroll_x: f32,
@@ -755,35 +881,19 @@ pub struct PdfxiApp {
 
 impl PdfxiApp {
     /// Create a viewer with no open documents.
-    ///
-    /// With the `pdfium` feature this also opens the demo fixture from
-    /// `fixtures/minimal.pdf`. A load failure is reported through [`Self::status`]
-    /// and leaves the placeholder canvas in place rather than panicking.
     pub fn new() -> Self {
-        #[cfg(feature = "pdfium")]
-        {
-            let mut app = Self::default();
-            match demo_fixture_path("minimal.pdf") {
-                Some(path) => match PdfiumRenderer::from_file(&path) {
-                    Ok(renderer) => {
-                        app.status = format!("Loaded demo fixture {}", path.display());
-                        app.pdfium_renderer = Some(renderer);
-                    }
-                    Err(error) => {
-                        app.status = format!("Could not open demo fixture: {error}");
-                    }
-                },
-                None => {
-                    app.status =
-                        "No demo fixture in this layout; use Open… or drop a PDF".to_owned();
-                }
-            }
-            app
-        }
-        #[cfg(not(feature = "pdfium"))]
-        {
-            Self::default()
-        }
+        Self::default()
+    }
+
+    /// Create the viewer used by the native window, with a demo document open.
+    ///
+    /// The demo tab shows the built-in business-proposal preview, so the shell
+    /// never starts on an empty gray canvas. Tests use [`Self::new`] and drive
+    /// tabs explicitly.
+    pub fn new_for_window() -> Self {
+        let mut app = Self::new();
+        app.open_demo_tab();
+        app
     }
 
     /// Borrow the underlying UI-agnostic application state.
@@ -806,7 +916,7 @@ impl PdfxiApp {
         let name = format!("Demo Document {}", self.state.tab_count() + 1);
         let id = self.state.open_tab(name);
         self.finish_new_tab(id);
-        self.status = format!("Opened demo tab {id}");
+        self.status = format!("Demo proposal · {DEMO_PAGE_COUNT} pages · local preview");
         id
     }
 
@@ -987,6 +1097,7 @@ impl PdfxiApp {
         match outcome {
             OpenOutcome::Opened { id } => {
                 self.finish_new_tab(id);
+                self.refresh_renderer_for_active_tab();
                 self.status = format!("Opened {}", path.display());
             }
             OpenOutcome::Focused { id } => {
@@ -1213,7 +1324,61 @@ impl PdfxiApp {
         self.restore_scroll_from_active();
         self.pending_scroll = false;
         self.pending_page_scroll = None;
-        self.reset_raster_state();
+        self.refresh_renderer_for_active_tab();
+    }
+
+    /// Bind the PDFium renderer to the active tab's document.
+    ///
+    /// Rasters and GPU textures are keyed by page, scale and rotation only, so
+    /// they are invalidated whenever the document changes. Demo tabs have no
+    /// path: they use the built-in design preview and release the renderer.
+    #[cfg(feature = "pdfium")]
+    fn refresh_renderer_for_active_tab(&mut self) {
+        let path = self
+            .state
+            .active_tab()
+            .and_then(|tab| tab.path())
+            .map(Path::to_path_buf);
+        if path == self.renderer_path {
+            return;
+        }
+        self.renderer_path = path.clone();
+        self.raster_cancel.cancel();
+        self.raster_cancel = CancellationToken::new();
+        self.raster_cache.invalidate_all();
+        self.textures.clear();
+        self.pdfium_renderer = None;
+        let Some(path) = path else {
+            return;
+        };
+        match PdfiumRenderer::from_file(&path) {
+            Ok(renderer) => {
+                let count = renderer.page_count().unwrap_or(DEMO_PAGE_COUNT);
+                self.pdfium_renderer = Some(renderer);
+                if let Some(tab) = self.state.active_tab_mut() {
+                    tab.set_page_count(count);
+                }
+                self.demo_text = demo_text_pages(count);
+                self.find.set_pages(demo_find_pages(&self.demo_text));
+                self.thumbs.reset(count);
+                self.selection.clear();
+                self.thumb_textures.clear();
+            }
+            Err(error) => {
+                self.status = format!("Could not render {}: {error}", path.display());
+            }
+        }
+    }
+
+    /// No-op without the `pdfium` feature.
+    #[cfg(not(feature = "pdfium"))]
+    fn refresh_renderer_for_active_tab(&mut self) {}
+
+    /// Whether the active tab is the built-in design preview.
+    fn active_is_demo(&self) -> bool {
+        self.state
+            .active_tab()
+            .is_some_and(|tab| tab.path().is_none())
     }
 
     /// Drop per-document raster state and cancel outstanding work.
@@ -1224,6 +1389,7 @@ impl PdfxiApp {
     /// page pixels. The cancellation token is cancelled first so any render in
     /// flight for the old document stops.
     #[cfg(feature = "pdfium")]
+    #[allow(dead_code)]
     fn reset_raster_state(&mut self) {
         self.raster_cancel.cancel();
         self.raster_cancel = CancellationToken::new();
@@ -1233,6 +1399,7 @@ impl PdfxiApp {
 
     /// No-op without the `pdfium` feature, which has no raster state.
     #[cfg(not(feature = "pdfium"))]
+    #[allow(dead_code)]
     fn reset_raster_state(&mut self) {}
 
     /// Increase the active tab's custom zoom by one `ZOOM_STEP`.
@@ -1515,6 +1682,7 @@ impl PdfxiApp {
     /// The texture handle is reused across frames and re-uploaded only when the
     /// cached thumbnail changes, avoiding a new GPU allocation every frame.
     #[cfg(feature = "pdfium")]
+    #[allow(dead_code)]
     fn thumbnail_texture(
         &mut self,
         ctx: &egui::Context,
@@ -1552,6 +1720,7 @@ impl PdfxiApp {
     /// is drawn as a placeholder. Clicking a tile calls
     /// [`Self::select_thumbnail_page`]; scrolling updates the pane's visible
     /// range so the next frame requests the right thumbnails.
+    #[allow(dead_code)]
     fn thumbnails_ui(&mut self, ui: &mut egui::Ui) {
         let page_count = self.state.active_tab().map_or(0, |tab| tab.page_count());
         if self.thumbs.page_count() != page_count {
@@ -2304,6 +2473,7 @@ impl PdfxiApp {
     }
 
     /// Render the toolbar panel.
+    #[allow(dead_code)]
     fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(app_name());
@@ -2453,6 +2623,7 @@ impl PdfxiApp {
     /// close requests are deferred until after the `egui` closure so the
     /// workspace is never mutated while the UI borrows it. With no open tab the
     /// strip shows a fixed placeholder.
+    #[allow(dead_code)]
     fn tabs_ui(&mut self, ui: &mut egui::Ui) {
         let snapshot = self.tab_strip_snapshot();
         if snapshot.is_empty() {
@@ -2481,26 +2652,15 @@ impl PdfxiApp {
 
     /// Render the status header and the placeholder canvas area.
     fn canvas_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some(tab) = self.state.active_tab() {
-            ui.heading(tab.title());
-        } else {
-            ui.heading("PDFXI Viewer");
-        }
-        ui.label(active_tab_status(&self.state));
-        if !self.status.is_empty() {
-            ui.label(&self.status);
-        }
-        let selected = self.selection.selected_text(&self.demo_text);
-        if !selected.is_empty() {
-            ui.label(format!("Selected: {selected}"));
-        }
-        ui.separator();
-
+        let palette = Palette::for_mode(self.theme);
         egui::Frame::new()
-            .fill(ui.visuals().extreme_bg_color)
-            .stroke(ui.visuals().widgets.inactive.fg_stroke)
-            .inner_margin(egui::Margin::same(8))
+            .fill(palette.canvas)
+            .inner_margin(egui::Margin::same(18))
             .show(ui, |ui| {
+                if self.active_is_demo() {
+                    self.demo_canvas_ui(ui, palette);
+                    return;
+                }
                 let viewport = CanvasSize::new(ui.available_width(), ui.available_height());
                 let Some(layout) = layout_for_state(&self.state, viewport) else {
                     ui.vertical_centered(|ui| {
@@ -2962,6 +3122,7 @@ impl PdfxiApp {
 }
 impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.window_resize_handles(ctx);
         self.handle_keyboard(ctx);
 
         let dropped: Vec<PathBuf> = ctx.input(|input| {
@@ -2976,33 +3137,7 @@ impl eframe::App for PdfxiApp {
             self.open_dropped(&dropped);
         }
         self.open_dialog_ui(ctx);
-
-        egui::SidePanel::left("pdfxi_thumbnails")
-            .resizable(true)
-            .default_width(156.0)
-            .show(ctx, |ui| self.thumbnails_ui(ui));
-        egui::SidePanel::right("pdfxi_layers")
-            .resizable(true)
-            .default_width(168.0)
-            .show(ctx, |ui| self.layers_ui(ui));
-        egui::SidePanel::right("pdfxi_bookmarks")
-            .resizable(true)
-            .default_width(168.0)
-            .show(ctx, |ui| self.bookmarks_ui(ui));
-        egui::SidePanel::right("pdfxi_attachments")
-            .resizable(true)
-            .default_width(168.0)
-            .show(ctx, |ui| self.attachments_ui(ui));
-        egui::SidePanel::right("pdfxi_links")
-            .resizable(true)
-            .default_width(150.0)
-            .show(ctx, |ui| self.links_ui(ui));
-        egui::TopBottomPanel::top("pdfxi_toolbar").show(ctx, |ui| self.toolbar_ui(ui));
-        egui::TopBottomPanel::top("pdfxi_tabs").show(ctx, |ui| self.tabs_ui(ui));
-        if self.find_open {
-            egui::TopBottomPanel::top("pdfxi_find").show(ctx, |ui| self.find_ui(ui));
-        }
-        egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
+        self.shell_ui(ctx);
         if self.print_dialog.is_open() {
             let mut open = true;
             egui::Window::new("Print")
@@ -3024,9 +3159,2554 @@ impl eframe::App for PdfxiApp {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Product shell: Acrobat-style chrome around the existing viewer surface.
+// ---------------------------------------------------------------------------
+
+/// Export formats offered by the export card.
+const EXPORT_FORMATS: [&str; 5] = [
+    "Microsoft Word (.docx)",
+    "Microsoft Excel (.xlsx)",
+    "PowerPoint (.pptx)",
+    "Plain text (.txt)",
+    "Images (.png)",
+];
+
+/// Panel background frame with horizontal padding.
+fn shell_panel_frame(palette: Palette, horizontal: i8) -> egui::Frame {
+    egui::Frame::new()
+        .fill(palette.panel)
+        .inner_margin(egui::Margin {
+            left: horizontal,
+            right: horizontal,
+            top: 0,
+            bottom: 0,
+        })
+}
+
+/// A borderless icon button used across the shell.
+fn shell_icon_button(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    glyph: Icon,
+    size: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 7.0, palette.surface);
+    }
+    let color = if response.hovered() {
+        palette.text
+    } else {
+        palette.text_muted
+    };
+    icon(ui.painter(), rect.shrink(size * 0.27), glyph, color);
+    response
+}
+
+/// A window control in the custom title bar.
+///
+/// The close button turns accent red on hover; the others use the normal
+/// surface hover. All three are 30 pt squares so the control cluster reads as
+/// one unit.
+fn window_button(ui: &mut egui::Ui, palette: Palette, glyph: Icon, close: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+    if response.hovered() {
+        let fill = if close {
+            palette.accent
+        } else {
+            palette.surface
+        };
+        ui.painter().rect_filled(rect, 6.0, fill);
+    }
+    let color = if response.hovered() && close {
+        egui::Color32::WHITE
+    } else {
+        palette.text_muted
+    };
+    icon(ui.painter(), rect.shrink(8.0), glyph, color);
+    response
+}
+
+/// Toolbar button with an icon and label.
+fn shell_tool_button(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    glyph: Icon,
+    label: &str,
+    active: bool,
+) -> egui::Response {
+    let font = egui::FontId::proportional(12.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), palette.text);
+    let width = galley.size().x + 40.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+    let background = if active {
+        palette.accent_soft
+    } else if response.hovered() {
+        palette.surface
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 8.0, background);
+    let color = if active { palette.accent } else { palette.text };
+    icon(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 15.0, rect.center().y),
+            egui::Vec2::splat(14.0),
+        ),
+        glyph,
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 27.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        color,
+    );
+    response
+}
+
+/// A rounded, outlined button used in the title bar.
+fn shell_pill_button(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    glyph: Icon,
+    label: &str,
+) -> egui::Response {
+    let font = egui::FontId::proportional(11.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), palette.text);
+    let width = galley.size().x + 38.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
+    let background = if response.hovered() {
+        palette.surface
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 15.0, background);
+    ui.painter().rect_stroke(
+        rect,
+        15.0,
+        egui::Stroke::new(1.0_f32, palette.border),
+        egui::StrokeKind::Inside,
+    );
+    icon(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 16.0, rect.center().y),
+            egui::Vec2::splat(13.0),
+        ),
+        glyph,
+        palette.text_muted,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 26.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        palette.text,
+    );
+    response
+}
+
+/// One tool row in the right panel.
+fn tool_row(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    glyph: Icon,
+    label: &str,
+    highlighted: bool,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 29.0), egui::Sense::click());
+    let background = if highlighted {
+        palette.accent_soft
+    } else if response.hovered() {
+        palette.surface
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 8.0, background);
+    let color = if highlighted {
+        palette.accent
+    } else {
+        palette.text_muted
+    };
+    icon(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 18.0, rect.center().y),
+            egui::Vec2::splat(15.0),
+        ),
+        glyph,
+        color,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 34.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(11.5),
+        palette.text,
+    );
+    icon(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 14.0, rect.center().y),
+            egui::Vec2::splat(10.0),
+        ),
+        Icon::ChevronRight,
+        palette.text_muted,
+    );
+    response
+}
+
+/// Thin vertical separator.
+fn shell_divider(ui: &mut egui::Ui, palette: Palette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(9.0, 22.0), egui::Sense::hover());
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.center().x, rect.top()),
+            egui::pos2(rect.center().x, rect.bottom()),
+        ],
+        egui::Stroke::new(1.0_f32, palette.border),
+    );
+}
+
+/// Small muted section heading.
+fn shell_section_label(ui: &mut egui::Ui, palette: Palette, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(9.5)
+            .color(palette.text_muted),
+    );
+}
+
+/// What a click on a title-bar tab means.
+enum TabAction {
+    /// Nothing was clicked.
+    None,
+    /// Activate this tab.
+    Activate,
+    /// Close this tab.
+    Close,
+}
+
+impl PdfxiApp {
+    /// Resize the undecorated window when the pointer is near an edge.
+    ///
+    /// The window has no native frame, so the shell owns the edge hit zones.
+    /// The zones are deliberately thin (6 pt) and only react to the primary
+    /// button, matching the behaviour of a normal Windows frame.
+    fn window_resize_handles(&self, ctx: &egui::Context) {
+        let Some(pointer) = ctx.input(|input| input.pointer.hover_pos()) else {
+            return;
+        };
+        let rect = ctx.content_rect();
+        let edge = 6.0;
+        let left = pointer.x <= rect.left() + edge;
+        let right = pointer.x >= rect.right() - edge;
+        let top = pointer.y <= rect.top() + edge;
+        let bottom = pointer.y >= rect.bottom() - edge;
+        use egui::viewport::ResizeDirection;
+        let direction = if left && top {
+            Some(ResizeDirection::NorthWest)
+        } else if right && top {
+            Some(ResizeDirection::NorthEast)
+        } else if left && bottom {
+            Some(ResizeDirection::SouthWest)
+        } else if right && bottom {
+            Some(ResizeDirection::SouthEast)
+        } else if left {
+            Some(ResizeDirection::West)
+        } else if right {
+            Some(ResizeDirection::East)
+        } else if top {
+            Some(ResizeDirection::North)
+        } else if bottom {
+            Some(ResizeDirection::South)
+        } else {
+            None
+        };
+        let Some(direction) = direction else {
+            return;
+        };
+        ctx.set_cursor_icon(match direction {
+            ResizeDirection::NorthWest | ResizeDirection::SouthEast => egui::CursorIcon::ResizeNwSe,
+            ResizeDirection::NorthEast | ResizeDirection::SouthWest => egui::CursorIcon::ResizeNeSw,
+            ResizeDirection::North | ResizeDirection::South => egui::CursorIcon::ResizeVertical,
+            ResizeDirection::East | ResizeDirection::West => egui::CursorIcon::ResizeHorizontal,
+        });
+        if ctx.input(|input| input.pointer.primary_pressed()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+        }
+    }
+
+    /// Draw the complete product shell.
+    fn shell_ui(&mut self, ctx: &egui::Context) {
+        if self.applied_theme != Some(self.theme) {
+            design::apply(ctx, self.theme);
+            self.applied_theme = Some(self.theme);
+        }
+        let palette = Palette::for_mode(self.theme);
+
+        egui::TopBottomPanel::top("shell_title")
+            .exact_height(metrics::TITLE_BAR)
+            .frame(shell_panel_frame(palette, 12))
+            .show(ctx, |ui| self.title_bar_ui(ui, palette));
+
+        egui::TopBottomPanel::top("shell_command")
+            .exact_height(metrics::TOOL_BAR)
+            .frame(shell_panel_frame(palette, 14))
+            .show(ctx, |ui| self.command_bar_ui(ui, palette));
+
+        if self.find_open {
+            egui::TopBottomPanel::top("shell_find")
+                .frame(shell_panel_frame(palette, 14))
+                .show(ctx, |ui| self.find_ui(ui));
+        }
+
+        egui::TopBottomPanel::bottom("shell_status")
+            .exact_height(metrics::STATUS_BAR)
+            .frame(shell_panel_frame(palette, 16))
+            .show(ctx, |ui| self.status_bar_ui(ui, palette));
+
+        egui::SidePanel::left("shell_rail")
+            .exact_width(metrics::RAIL)
+            .resizable(false)
+            .frame(shell_panel_frame(palette, 6))
+            .show(ctx, |ui| self.rail_ui(ui, palette));
+
+        egui::SidePanel::left("shell_side")
+            .exact_width(metrics::PAGES)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.panel)
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 12,
+                        top: 12,
+                        bottom: 10,
+                    }),
+            )
+            .show(ctx, |ui| self.side_panel_ui(ui, palette));
+
+        egui::SidePanel::right("shell_tools")
+            .exact_width(metrics::TOOLS)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.panel)
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 14,
+                        top: 12,
+                        bottom: 10,
+                    }),
+            )
+            .show(ctx, |ui| self.tools_panel_ui(ui, palette));
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(palette.canvas))
+            .show(ctx, |ui| self.canvas_ui(ui));
+    }
+
+    fn title_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let panel = ui.max_rect();
+        ui.painter().line_segment(
+            [
+                egui::pos2(panel.left(), panel.bottom()),
+                egui::pos2(panel.right(), panel.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, palette.border),
+        );
+
+        // The title bar is the window drag handle. Tabs and buttons are added
+        // afterwards, so they win the pointer over this background interaction.
+        let drag = ui.interact(
+            panel,
+            egui::Id::new("shell-title-drag"),
+            egui::Sense::click_and_drag(),
+        );
+        let pointer_y = ui
+            .ctx()
+            .input(|input| input.pointer.hover_pos())
+            .map_or(f32::MAX, |position| position.y);
+        if drag.drag_started() && pointer_y > panel.top() + 6.0 {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+
+        ui.horizontal_centered(|ui| {
+            let (logo, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+            ui.painter().rect_filled(logo, 8.0, palette.accent);
+            icon(
+                ui.painter(),
+                logo.shrink(7.0),
+                Icon::File,
+                egui::Color32::WHITE,
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("PDFXI")
+                    .size(15.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            ui.add_space(12.0);
+            shell_divider(ui, palette);
+            ui.add_space(4.0);
+
+            let tabs = self.tab_strip_snapshot();
+            let mut activate = None;
+            let mut close = None;
+            for (index, (id, title, active)) in tabs.iter().enumerate() {
+                match self.title_tab(ui, palette, index, *id, title, *active) {
+                    TabAction::None => {}
+                    TabAction::Activate => activate = Some(*id),
+                    TabAction::Close => close = Some(*id),
+                }
+            }
+            if shell_icon_button(ui, palette, Icon::Plus, 28.0)
+                .on_hover_text("New demo document")
+                .clicked()
+            {
+                self.open_demo_tab();
+            }
+            if let Some(id) = activate {
+                self.activate_tab(id);
+            }
+            if let Some(id) = close {
+                self.close_tab_by_id(id);
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if window_button(ui, palette, Icon::Close, true)
+                    .on_hover_text("Close")
+                    .clicked()
+                {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                let maximized = ui
+                    .ctx()
+                    .input(|input| input.viewport().maximized.unwrap_or(false));
+                if window_button(ui, palette, Icon::Maximize, false)
+                    .on_hover_text(if maximized { "Restore" } else { "Maximize" })
+                    .clicked()
+                {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+                if window_button(ui, palette, Icon::Minimize, false)
+                    .on_hover_text("Minimize")
+                    .clicked()
+                {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+                shell_divider(ui, palette);
+                let (avatar, _) =
+                    ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                ui.painter()
+                    .circle_filled(avatar.center(), 14.0, palette.accent_soft);
+                ui.painter().text(
+                    avatar.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "A",
+                    egui::FontId::proportional(12.0),
+                    palette.accent,
+                );
+                if shell_icon_button(ui, palette, Icon::Help, 28.0)
+                    .on_hover_text("Help")
+                    .clicked()
+                {
+                    self.status =
+                        "Open a PDF, press Ctrl+F to find, and use the rail for pages and tools."
+                            .to_owned();
+                }
+                if shell_icon_button(ui, palette, Icon::Bell, 28.0)
+                    .on_hover_text("Notifications")
+                    .clicked()
+                {
+                    self.status = "No new notifications".to_owned();
+                }
+                let theme_glyph = match self.theme {
+                    ThemeMode::Light => Icon::Moon,
+                    ThemeMode::Dark => Icon::Sun,
+                };
+                if shell_icon_button(ui, palette, theme_glyph, 28.0)
+                    .on_hover_text("Switch light/dark")
+                    .clicked()
+                {
+                    self.theme = self.theme.toggled();
+                }
+                if shell_pill_button(ui, palette, Icon::Share, "Share").clicked() {
+                    self.status =
+                        "Sharing is local-only in this build; export or print to hand off a copy."
+                            .to_owned();
+                }
+                ui.label(
+                    egui::RichText::new("Saved")
+                        .size(9.5)
+                        .color(palette.text_muted),
+                );
+                let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+                ui.painter()
+                    .circle_filled(dot.center(), 3.0, palette.success);
+            });
+        });
+    }
+
+    fn title_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: Palette,
+        index: usize,
+        _id: TabId,
+        title: &str,
+        active: bool,
+    ) -> TabAction {
+        let mut label: String = title.chars().take(22).collect();
+        if title.chars().count() > 22 {
+            label.push('…');
+        }
+        let font = egui::FontId::proportional(12.0);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(label.clone(), font.clone(), palette.text);
+        let width = (galley.size().x + 56.0).clamp(126.0, 220.0);
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+        if active {
+            ui.painter().rect_filled(rect, 8.0, palette.surface);
+            ui.painter().rect_stroke(
+                rect,
+                8.0,
+                egui::Stroke::new(1.0_f32, palette.border),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + 12.0, rect.top() + 1.0),
+                    egui::vec2(rect.width() - 24.0, 2.0),
+                ),
+                1.0,
+                palette.accent,
+            );
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, 8.0, palette.surface);
+        }
+        icon(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                egui::pos2(rect.left() + 16.0, rect.center().y),
+                egui::Vec2::splat(13.0),
+            ),
+            Icon::File,
+            if active {
+                palette.accent
+            } else {
+                palette.text_muted
+            },
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 27.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font,
+            if active {
+                palette.text
+            } else {
+                palette.text_muted
+            },
+        );
+        let close_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 14.0, rect.center().y),
+            egui::Vec2::splat(16.0),
+        );
+        let close_response = ui.interact(
+            close_rect,
+            egui::Id::new(("tab-close", index)),
+            egui::Sense::click(),
+        );
+        if close_response.hovered() {
+            ui.painter()
+                .circle_filled(close_rect.center(), 7.0, palette.surface_hover);
+        }
+        icon(
+            ui.painter(),
+            close_rect.shrink(4.0),
+            Icon::Close,
+            palette.text_muted,
+        );
+        if close_response.clicked() {
+            return TabAction::Close;
+        }
+        if response.clicked() {
+            return TabAction::Activate;
+        }
+        TabAction::None
+    }
+
+    fn command_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let panel = ui.max_rect();
+        ui.painter().line_segment(
+            [
+                egui::pos2(panel.left(), panel.bottom()),
+                egui::pos2(panel.right(), panel.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, palette.border),
+        );
+
+        ui.horizontal_centered(|ui| {
+            if shell_icon_button(ui, palette, Icon::ArrowLeft, 30.0)
+                .on_hover_text("Previous page")
+                .clicked()
+            {
+                self.step_page(-1);
+            }
+            if shell_icon_button(ui, palette, Icon::ArrowRight, 30.0)
+                .on_hover_text("Next page")
+                .clicked()
+            {
+                self.step_page(1);
+            }
+            shell_divider(ui, palette);
+            let tool = self.state.active_tool();
+            if shell_tool_button(
+                ui,
+                palette,
+                Icon::Edit,
+                "Edit",
+                tool == Toolset::TextSelection,
+            )
+            .clicked()
+            {
+                self.select_tool(Toolset::TextSelection);
+            }
+            if shell_tool_button(
+                ui,
+                palette,
+                Icon::Comment,
+                "Comment",
+                tool == Toolset::Highlight,
+            )
+            .clicked()
+            {
+                self.select_tool(Toolset::Highlight);
+            }
+            if shell_tool_button(
+                ui,
+                palette,
+                Icon::Sign,
+                "Fill & Sign",
+                tool == Toolset::FormFill,
+            )
+            .clicked()
+            {
+                self.select_tool(Toolset::FormFill);
+            }
+            if shell_tool_button(
+                ui,
+                palette,
+                Icon::Organize,
+                "Organize",
+                tool == Toolset::Measure,
+            )
+            .clicked()
+            {
+                self.rail = RailTab::Pages;
+                self.select_tool(Toolset::Measure);
+            }
+            ui.menu_button(
+                egui::RichText::new("Export").size(12.0).color(palette.text),
+                |ui| {
+                    for (index, format) in EXPORT_FORMATS.iter().enumerate() {
+                        if ui
+                            .selectable_label(self.export_format == index, *format)
+                            .clicked()
+                        {
+                            self.export_format = index;
+                            self.status = format!("Export format set to {format}");
+                            ui.close();
+                        }
+                    }
+                },
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (pill, pill_response) =
+                    ui.allocate_exact_size(egui::vec2(158.0, 32.0), egui::Sense::click());
+                ui.painter().rect_filled(pill, 16.0, palette.accent);
+                icon(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(pill.left() + 20.0, pill.center().y),
+                        egui::Vec2::splat(14.0),
+                    ),
+                    Icon::Sparkle,
+                    egui::Color32::WHITE,
+                );
+                ui.painter().text(
+                    egui::pos2(pill.left() + 32.0, pill.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    "AI Assistant",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::WHITE,
+                );
+                if pill_response.clicked() {
+                    self.rail = RailTab::Assistant;
+                }
+                let search_response = egui::Frame::new()
+                    .fill(palette.surface)
+                    .corner_radius(15.0)
+                    .inner_margin(egui::Margin {
+                        left: 9,
+                        right: 6,
+                        top: 2,
+                        bottom: 2,
+                    })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (icon_rect, _) = ui
+                                .allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                            icon(ui.painter(), icon_rect, Icon::Search, palette.text_muted);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.tool_search)
+                                    .frame(false)
+                                    .hint_text("Search tools")
+                                    .desired_width(150.0),
+                            )
+                        })
+                        .inner
+                    })
+                    .inner;
+                if search_response.lost_focus()
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                {
+                    self.status = format!("Search tools: {}", self.tool_search);
+                }
+                if shell_icon_button(ui, palette, Icon::Search, 30.0)
+                    .on_hover_text("Find (Ctrl+F)")
+                    .clicked()
+                {
+                    self.open_find();
+                }
+                if shell_icon_button(ui, palette, Icon::Print, 30.0)
+                    .on_hover_text("Print")
+                    .clicked()
+                {
+                    self.open_print_dialog();
+                }
+            });
+        });
+    }
+
+    fn rail_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let panel = ui.max_rect();
+        ui.painter().line_segment(
+            [
+                egui::pos2(panel.right(), panel.top()),
+                egui::pos2(panel.right(), panel.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, palette.border),
+        );
+        ui.vertical_centered(|ui| {
+            ui.add_space(6.0);
+            for tab in RailTab::ALL {
+                let selected = self.rail == tab;
+                let (item, response) =
+                    ui.allocate_exact_size(egui::vec2(54.0, 52.0), egui::Sense::click());
+                if selected {
+                    ui.painter().rect_filled(item, 10.0, palette.accent_soft);
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(item.left() + 3.0, item.center().y - 11.0),
+                            egui::vec2(3.0, 22.0),
+                        ),
+                        2.0,
+                        palette.accent,
+                    );
+                } else if response.hovered() {
+                    ui.painter().rect_filled(item, 10.0, palette.surface);
+                }
+                let color = if selected {
+                    palette.accent
+                } else {
+                    palette.text_muted
+                };
+                icon(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(item.center().x, item.top() + 17.0),
+                        egui::Vec2::splat(20.0),
+                    ),
+                    tab.icon(),
+                    color,
+                );
+                let label = if tab == RailTab::Assistant {
+                    "AI"
+                } else {
+                    tab.label()
+                };
+                ui.painter().text(
+                    egui::pos2(item.center().x, item.top() + 37.0),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(9.5),
+                    color,
+                );
+                if tab == RailTab::Comments {
+                    let badge = egui::Rect::from_center_size(
+                        egui::pos2(item.right() - 9.0, item.top() + 9.0),
+                        egui::vec2(14.0, 14.0),
+                    );
+                    ui.painter()
+                        .circle_filled(badge.center(), 7.0, palette.accent);
+                    ui.painter().text(
+                        badge.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "1",
+                        egui::FontId::proportional(7.5),
+                        egui::Color32::WHITE,
+                    );
+                }
+                if response.clicked() {
+                    self.rail = tab;
+                }
+                ui.add_space(3.0);
+            }
+        });
+    }
+
+    fn side_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let panel = ui.max_rect();
+        ui.painter().line_segment(
+            [
+                egui::pos2(panel.right(), panel.top()),
+                egui::pos2(panel.right(), panel.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, palette.border),
+        );
+        match self.rail {
+            RailTab::Pages => self.pages_panel_ui(ui, palette),
+            RailTab::Home => self.home_panel_ui(ui, palette),
+            RailTab::Comments => self.comments_panel_ui(ui, palette),
+            RailTab::Assistant => self.assistant_panel_ui(ui, palette),
+            RailTab::Files => self.files_panel_ui(ui, palette),
+            RailTab::Recent | RailTab::Starred | RailTab::Shared => {
+                self.empty_panel_ui(ui, palette, self.rail)
+            }
+        }
+    }
+
+    fn pages_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let (count, current, zoom) = self
+            .state
+            .active_tab()
+            .map(|tab| {
+                (
+                    tab.page_count(),
+                    tab.current_page(),
+                    match tab.zoom().scale() {
+                        Some(scale) => format!("{:.0}%", scale * 100.0),
+                        None => "Fit".to_owned(),
+                    },
+                )
+            })
+            .unwrap_or((0, 0, "—".to_owned()));
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Pages")
+                    .size(14.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            let badge = format!("{count}");
+            let badge_font = egui::FontId::proportional(9.0);
+            let galley =
+                ui.painter()
+                    .layout_no_wrap(badge.clone(), badge_font.clone(), palette.text_muted);
+            let (badge_rect, _) = ui.allocate_exact_size(
+                egui::vec2(galley.size().x + 14.0, 18.0),
+                egui::Sense::hover(),
+            );
+            ui.painter().rect_filled(badge_rect, 9.0, palette.surface);
+            ui.painter().text(
+                badge_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                badge,
+                badge_font,
+                palette.text_muted,
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let _ = shell_icon_button(ui, palette, Icon::More, 22.0);
+                if shell_icon_button(ui, palette, Icon::Plus, 22.0)
+                    .on_hover_text("Add page")
+                    .clicked()
+                {
+                    self.status =
+                        "Page insertion is available through the pdfxi page plan".to_owned();
+                }
+            });
+        });
+        ui.label(
+            egui::RichText::new(format!("{count} pages · {zoom}"))
+                .size(10.0)
+                .color(palette.text_muted),
+        );
+        ui.add_space(6.0);
+
+        let footer_height = 46.0;
+        let scroll_height = (ui.available_height() - footer_height).max(150.0);
+        egui::ScrollArea::vertical()
+            .max_height(scroll_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for page in 0..count {
+                    let width = ui.available_width();
+                    let (slot, response) =
+                        ui.allocate_exact_size(egui::vec2(width, 172.0), egui::Sense::click());
+                    if page == current {
+                        ui.painter().rect_filled(slot, 10.0, palette.accent_soft);
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(slot, 10.0, palette.surface);
+                    }
+                    let paper = egui::Rect::from_center_size(
+                        egui::pos2(slot.center().x, slot.top() + 74.0),
+                        egui::vec2(118.0, 152.0),
+                    );
+                    ui.painter().rect_filled(
+                        paper.translate(egui::vec2(0.0, 3.0)).expand(1.5),
+                        4.0,
+                        palette.shadow,
+                    );
+                    ui.painter().rect_filled(paper, 4.0, palette.paper);
+                    if page == current {
+                        ui.painter().rect_stroke(
+                            paper,
+                            4.0,
+                            egui::Stroke::new(2.0_f32, palette.accent),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                    if self.active_is_demo() {
+                        self.paint_demo_thumb(ui.painter(), paper.shrink(6.0), palette, page);
+                    } else {
+                        self.paint_generic_thumb(ui.painter(), paper.shrink(6.0), palette);
+                    }
+                    ui.painter().text(
+                        egui::pos2(slot.center().x, slot.bottom() - 10.0),
+                        egui::Align2::CENTER_CENTER,
+                        format!("{}", page + 1),
+                        egui::FontId::proportional(9.5),
+                        if page == current {
+                            palette.accent
+                        } else {
+                            palette.text_muted
+                        },
+                    );
+                    if response.clicked() {
+                        self.select_thumbnail_page(page);
+                    }
+                }
+                if count == 0 {
+                    ui.add_space(24.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("No pages")
+                                .size(11.0)
+                                .color(palette.text_muted),
+                        );
+                    });
+                }
+            });
+
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .fill(palette.surface)
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (lock, _) =
+                        ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                    icon(ui.painter(), lock, Icon::Lock, palette.text_muted);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("Local document")
+                                .size(10.0)
+                                .strong()
+                                .color(palette.text),
+                        );
+                        ui.label(
+                            egui::RichText::new("Nothing leaves this device")
+                                .size(9.0)
+                                .color(palette.text_muted),
+                        );
+                    });
+                });
+            });
+    }
+
+    fn home_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(
+            egui::RichText::new("Home")
+                .size(14.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.label(
+            egui::RichText::new("Your PDF workspace")
+                .size(10.0)
+                .color(palette.text_muted),
+        );
+        ui.add_space(8.0);
+        egui::Frame::new()
+            .fill(palette.accent_soft)
+            .corner_radius(12.0)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Welcome back")
+                        .size(16.0)
+                        .strong()
+                        .color(palette.text),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Open, review, sign and export documents locally. Nothing leaves this machine.",
+                    )
+                    .size(10.0)
+                    .color(palette.text_muted),
+                );
+                ui.add_space(8.0);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("Open PDF…")
+                                .size(11.5)
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(palette.accent)
+                        .corner_radius(8.0)
+                        .min_size(egui::vec2(ui.available_width(), 32.0)),
+                    )
+                    .clicked()
+                {
+                    self.open_dialog_open = true;
+                }
+                ui.add_space(4.0);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("Open demo proposal")
+                                .size(11.5)
+                                .color(palette.text),
+                        )
+                        .fill(palette.panel)
+                        .corner_radius(8.0)
+                        .min_size(egui::vec2(ui.available_width(), 32.0)),
+                    )
+                    .clicked()
+                {
+                    self.open_demo_tab();
+                }
+            });
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new("Recent")
+                .size(11.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.add_space(2.0);
+        let (recent, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+        if response.hovered() {
+            ui.painter().rect_filled(recent, 8.0, palette.surface);
+        }
+        icon(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                egui::pos2(recent.left() + 16.0, recent.center().y),
+                egui::Vec2::splat(16.0),
+            ),
+            Icon::File,
+            palette.accent,
+        );
+        ui.painter().text(
+            egui::pos2(recent.left() + 32.0, recent.center().y - 7.0),
+            egui::Align2::LEFT_CENTER,
+            "Demo Document 1",
+            egui::FontId::proportional(11.0),
+            palette.text,
+        );
+        ui.painter().text(
+            egui::pos2(recent.left() + 32.0, recent.center().y + 8.0),
+            egui::Align2::LEFT_CENTER,
+            "3 pages · demo preview",
+            egui::FontId::proportional(9.0),
+            palette.text_muted,
+        );
+        if response.clicked() {
+            self.open_demo_tab();
+        }
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new("Quick actions")
+                .size(11.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.add_space(2.0);
+        for (glyph, label) in [
+            (Icon::Combine, "Combine files"),
+            (Icon::Export, "Export PDF"),
+            (Icon::Protect, "Protect PDF"),
+            (Icon::Organize, "Organize pages"),
+        ] {
+            if tool_row(ui, palette, glyph, label, false).clicked() {
+                self.status = format!("{label}: available from the Tools panel and CLI");
+            }
+        }
+    }
+
+    fn files_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(
+            egui::RichText::new("Files")
+                .size(14.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.label(
+            egui::RichText::new("Open documents")
+                .size(10.0)
+                .color(palette.text_muted),
+        );
+        ui.add_space(8.0);
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new("Open PDF…")
+                        .size(11.5)
+                        .color(egui::Color32::WHITE),
+                )
+                .fill(palette.accent)
+                .corner_radius(8.0)
+                .min_size(egui::vec2(ui.available_width(), 32.0)),
+            )
+            .clicked()
+        {
+            self.open_dialog_open = true;
+        }
+        ui.add_space(8.0);
+        let tabs: Vec<(TabId, String, Option<PathBuf>)> = self
+            .tab_strip_snapshot()
+            .into_iter()
+            .map(|(id, title, _)| {
+                (
+                    id,
+                    title,
+                    self.state
+                        .tab(id)
+                        .and_then(|tab| tab.path().map(Path::to_path_buf)),
+                )
+            })
+            .collect();
+        if tabs.is_empty() {
+            ui.label(
+                egui::RichText::new("No documents open.")
+                    .size(10.5)
+                    .color(palette.text_muted),
+            );
+            return;
+        }
+        for (id, title, path) in tabs {
+            let (rect, response) = ui
+                .allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+            if response.hovered() || self.state.active_tab_id() == Some(id) {
+                ui.painter().rect_filled(rect, 8.0, palette.surface);
+            }
+            icon(
+                ui.painter(),
+                egui::Rect::from_center_size(
+                    egui::pos2(rect.left() + 16.0, rect.center().y),
+                    egui::Vec2::splat(15.0),
+                ),
+                Icon::File,
+                palette.accent,
+            );
+            ui.painter().text(
+                egui::pos2(rect.left() + 31.0, rect.center().y - 7.0),
+                egui::Align2::LEFT_CENTER,
+                title.chars().take(24).collect::<String>(),
+                egui::FontId::proportional(11.0),
+                palette.text,
+            );
+            ui.painter().text(
+                egui::pos2(rect.left() + 31.0, rect.center().y + 8.0),
+                egui::Align2::LEFT_CENTER,
+                path.map_or("demo preview".to_owned(), |path| {
+                    path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    )
+                }),
+                egui::FontId::proportional(9.0),
+                palette.text_muted,
+            );
+            if response.clicked() {
+                self.activate_tab(id);
+            }
+        }
+    }
+
+    fn comments_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(
+            egui::RichText::new("Comments")
+                .size(14.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.label(
+            egui::RichText::new("Review activity")
+                .size(10.0)
+                .color(palette.text_muted),
+        );
+        ui.add_space(8.0);
+        if self.active_is_demo() {
+            egui::Frame::new()
+                .fill(palette.surface)
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::same(10))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (avatar, _) =
+                            ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                        ui.painter()
+                            .circle_filled(avatar.center(), 12.0, palette.accent_soft);
+                        ui.painter().text(
+                            avatar.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "JK",
+                            egui::FontId::proportional(8.5),
+                            palette.accent,
+                        );
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Jordan K.")
+                                    .size(10.5)
+                                    .strong()
+                                    .color(palette.text),
+                            );
+                            ui.label(
+                                egui::RichText::new("2m ago · Page 1")
+                                    .size(9.0)
+                                    .color(palette.text_muted),
+                            );
+                        });
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("@Alex Can we add a specific ROI number here?")
+                            .size(10.0)
+                            .color(palette.text),
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Reply").size(9.5).color(palette.accent));
+                        ui.label(
+                            egui::RichText::new("Resolve")
+                                .size(9.5)
+                                .color(palette.text_muted),
+                        );
+                    });
+                });
+        } else {
+            ui.label(
+                egui::RichText::new("No comments in this document.")
+                    .size(10.5)
+                    .color(palette.text_muted),
+            );
+        }
+        ui.add_space(10.0);
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new("Add comment")
+                        .size(10.5)
+                        .color(palette.text),
+                )
+                .fill(palette.surface)
+                .corner_radius(8.0)
+                .min_size(egui::vec2(ui.available_width(), 30.0)),
+            )
+            .clicked()
+        {
+            self.select_tool(Toolset::Highlight);
+            self.status = "Comment tool active: drag over text to add a note".to_owned();
+        }
+    }
+
+    fn assistant_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(
+            egui::RichText::new("AI Assistant")
+                .size(14.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.label(
+            egui::RichText::new("Answers stay on this device")
+                .size(10.0)
+                .color(palette.text_muted),
+        );
+        ui.add_space(8.0);
+        self.assistant_card_ui(ui, palette);
+        ui.add_space(12.0);
+        shell_section_label(ui, palette, "SUGGESTED PROMPTS");
+        for prompt in [
+            "Summarize this document",
+            "Find the ROI number",
+            "List the key benefits",
+        ] {
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new(prompt).size(10.0).color(palette.text))
+                        .fill(palette.surface)
+                        .corner_radius(8.0)
+                        .min_size(egui::vec2(ui.available_width(), 28.0)),
+                )
+                .clicked()
+            {
+                self.assistant_query = prompt.to_owned();
+                self.ask_assistant();
+            }
+            ui.add_space(3.0);
+        }
+    }
+
+    fn empty_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette, tab: RailTab) {
+        ui.label(
+            egui::RichText::new(tab.label())
+                .size(14.0)
+                .strong()
+                .color(palette.text),
+        );
+        ui.add_space(20.0);
+        ui.vertical_centered(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
+            ui.painter()
+                .circle_filled(rect.center(), 26.0, palette.surface);
+            icon(
+                ui.painter(),
+                rect.shrink(15.0),
+                tab.icon(),
+                palette.text_muted,
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("Nothing here yet")
+                    .size(12.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            ui.label(
+                egui::RichText::new(match tab {
+                    RailTab::Recent => "Recently opened documents will appear here.",
+                    RailTab::Starred => "Star a document to keep it close.",
+                    RailTab::Shared => {
+                        "Local shared folders are configured in deployment preferences."
+                    }
+                    _ => "This section is part of the shell layout.",
+                })
+                .size(10.0)
+                .color(palette.text_muted),
+            );
+        });
+    }
+
+    fn tools_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let panel = ui.max_rect();
+        ui.painter().line_segment(
+            [
+                egui::pos2(panel.left(), panel.top()),
+                egui::pos2(panel.left(), panel.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, palette.border),
+        );
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Tools")
+                    .size(15.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let _ = shell_icon_button(ui, palette, Icon::Search, 22.0);
+            });
+        });
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                shell_section_label(ui, palette, "ALL TOOLS");
+                ui.add_space(2.0);
+                if tool_row(ui, palette, Icon::Edit, "Edit PDF", true).clicked() {
+                    self.select_tool(Toolset::TextSelection);
+                }
+                if tool_row(ui, palette, Icon::Comment, "Comment", false).clicked() {
+                    self.select_tool(Toolset::Highlight);
+                }
+                if tool_row(ui, palette, Icon::Sign, "Fill & Sign", false).clicked() {
+                    self.select_tool(Toolset::FormFill);
+                }
+                if tool_row(ui, palette, Icon::Organize, "Organize Pages", false).clicked() {
+                    self.rail = RailTab::Pages;
+                    self.select_tool(Toolset::Measure);
+                }
+                if tool_row(ui, palette, Icon::Export, "Export PDF", false).clicked() {
+                    self.status = "Choose an export format in the Export card below".to_owned();
+                }
+                if tool_row(ui, palette, Icon::Convert, "Convert to PDF", false).clicked() {
+                    self.status =
+                        "Create a PDF from images, text or HTML with the pdfxi CLI".to_owned();
+                }
+                if tool_row(ui, palette, Icon::Combine, "Combine Files", false).clicked() {
+                    self.status =
+                        "Combine Files: merge pages with the pdfxi page plan in a follow-on"
+                            .to_owned();
+                }
+                if tool_row(ui, palette, Icon::Protect, "Protect PDF", false).clicked() {
+                    self.status =
+                        "Protect PDF: encryption and permissions live in pdfxi-security".to_owned();
+                }
+                ui.add_space(10.0);
+                self.assistant_card_ui(ui, palette);
+                ui.add_space(10.0);
+                self.export_card_ui(ui, palette);
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new(
+                    egui::RichText::new("Document panels")
+                        .size(10.5)
+                        .color(palette.text_muted),
+                )
+                .default_open(false)
+                .show(ui, |ui| {
+                    egui::CollapsingHeader::new("Layers").show(ui, |ui| self.layers_ui(ui));
+                    egui::CollapsingHeader::new("Bookmarks").show(ui, |ui| self.bookmarks_ui(ui));
+                    egui::CollapsingHeader::new("Attachments")
+                        .show(ui, |ui| self.attachments_ui(ui));
+                    egui::CollapsingHeader::new("Links").show(ui, |ui| self.links_ui(ui));
+                });
+                ui.add_space(8.0);
+            });
+    }
+
+    fn step_page(&mut self, delta: isize) {
+        let Some(tab) = self.state.active_tab() else {
+            self.status = "No document open".to_owned();
+            return;
+        };
+        let count = tab.page_count();
+        if count == 0 {
+            return;
+        }
+        let current = tab.current_page() as isize;
+        let target = (current + delta).clamp(0, count as isize - 1) as usize;
+        self.select_thumbnail_page(target);
+    }
+
+    fn status_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let panel = ui.max_rect();
+        ui.painter().line_segment(
+            [
+                egui::pos2(panel.left(), panel.top()),
+                egui::pos2(panel.right(), panel.top()),
+            ],
+            egui::Stroke::new(1.0_f32, palette.border),
+        );
+
+        ui.horizontal_centered(|ui| {
+            if shell_icon_button(ui, palette, Icon::ChevronLeft, 26.0)
+                .on_hover_text("Previous page")
+                .clicked()
+            {
+                self.step_page(-1);
+            }
+            let (current, count) = self
+                .state
+                .active_tab()
+                .map(|tab| (tab.current_page(), tab.page_count()))
+                .unwrap_or((0, 0));
+            let (page_pill, _) =
+                ui.allocate_exact_size(egui::vec2(58.0, 24.0), egui::Sense::hover());
+            ui.painter().rect_filled(page_pill, 6.0, palette.surface);
+            ui.painter().text(
+                page_pill.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("{} / {}", current + 1, count.max(1)),
+                egui::FontId::proportional(10.0),
+                palette.text,
+            );
+            if shell_icon_button(ui, palette, Icon::ChevronRight, 26.0)
+                .on_hover_text("Next page")
+                .clicked()
+            {
+                self.step_page(1);
+            }
+            shell_divider(ui, palette);
+            if shell_icon_button(ui, palette, Icon::ZoomOut, 26.0)
+                .on_hover_text("Zoom out")
+                .clicked()
+            {
+                self.zoom_out();
+            }
+            let zoom_label = self
+                .state
+                .active_tab()
+                .map(|tab| match tab.zoom().scale() {
+                    Some(scale) => format!("{:.0}%", scale * 100.0),
+                    None => "Fit".to_owned(),
+                })
+                .unwrap_or_else(|| "—".to_owned());
+            let (zoom_pill, _) =
+                ui.allocate_exact_size(egui::vec2(54.0, 24.0), egui::Sense::hover());
+            ui.painter().rect_filled(zoom_pill, 6.0, palette.surface);
+            ui.painter().text(
+                zoom_pill.center(),
+                egui::Align2::CENTER_CENTER,
+                zoom_label,
+                egui::FontId::proportional(10.0),
+                palette.text,
+            );
+            if shell_icon_button(ui, palette, Icon::ZoomIn, 26.0)
+                .on_hover_text("Zoom in")
+                .clicked()
+            {
+                self.zoom_in();
+            }
+            if shell_icon_button(ui, palette, Icon::FitPage, 26.0)
+                .on_hover_text("Fit page")
+                .clicked()
+            {
+                self.fit_page();
+            }
+            if shell_icon_button(ui, palette, Icon::Fullscreen, 26.0)
+                .on_hover_text("Full screen")
+                .clicked()
+            {
+                let full = ui
+                    .ctx()
+                    .input(|input| input.viewport().fullscreen.unwrap_or(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if shell_icon_button(ui, palette, Icon::Sparkle, 24.0)
+                    .on_hover_text("AI Assistant")
+                    .clicked()
+                {
+                    self.rail = RailTab::Assistant;
+                }
+                let status = if self.status.is_empty() {
+                    active_tab_status(&self.state).to_owned()
+                } else {
+                    self.status.clone()
+                };
+                let shortened: String = status.chars().take(80).collect();
+                ui.label(
+                    egui::RichText::new(shortened)
+                        .size(9.5)
+                        .color(palette.text_muted),
+                );
+                let (lock, _) =
+                    ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                icon(ui.painter(), lock, Icon::Lock, palette.text_muted);
+                ui.label(
+                    egui::RichText::new("On-device")
+                        .size(9.0)
+                        .color(palette.text_muted),
+                );
+            });
+        });
+    }
+
+    #[allow(dead_code)]
+    fn cache_usage(&self) -> (usize, usize) {
+        #[cfg(feature = "pdfium")]
+        {
+            (self.raster_cache.bytes(), self.raster_cache.max_bytes())
+        }
+        #[cfg(not(feature = "pdfium"))]
+        {
+            (0, 256 * 1024 * 1024)
+        }
+    }
+
+    fn ask_assistant(&mut self) {
+        let question = self.assistant_query.trim().to_lowercase();
+        if question.is_empty() {
+            self.assistant_answer = "Type a question about this document.".to_owned();
+            return;
+        }
+        if question.contains("summar") {
+            self.assistant_answer =
+                "Summary (local): A modern business proposal for a faster, more secure document workflow. It highlights executive goals, key benefits, a three-phase delivery timeline, and a fixed project fee.".to_owned();
+            return;
+        }
+        if question.contains("benefit") {
+            self.assistant_answer =
+                "Key benefits: faster and more secure document workflows, seamless collaboration across teams, and higher productivity with cost savings.".to_owned();
+            return;
+        }
+        if question.contains("roi") || question.contains("cost") || question.contains("price") {
+            self.assistant_answer =
+                "The proposal cites a 38% faster document turnaround and a fixed project fee of $24,500.".to_owned();
+            return;
+        }
+        let pages = demo_find_pages(&self.demo_text);
+        let hits: Vec<String> = pages
+            .iter()
+            .filter(|(_, text)| text.to_lowercase().contains(&question))
+            .map(|(page, text)| {
+                let snippet: String = text.chars().take(140).collect();
+                format!("Page {}: {snippet}", page + 1)
+            })
+            .take(3)
+            .collect();
+        self.assistant_answer = if hits.is_empty() {
+            format!(
+                "No text matching \"{}\". Press Ctrl+F for exact search.",
+                self.assistant_query.trim()
+            )
+        } else {
+            hits.join("\n\n")
+        };
+    }
+
+    fn assistant_card_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        egui::Frame::new()
+            .fill(palette.accent_soft)
+            .stroke(egui::Stroke::new(1.0_f32, palette.accent_border))
+            .corner_radius(12.0)
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (spark, _) =
+                        ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                    icon(ui.painter(), spark, Icon::Sparkle, palette.accent);
+                    ui.label(
+                        egui::RichText::new("AI Assistant")
+                            .size(12.0)
+                            .strong()
+                            .color(palette.text),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (dot, _) =
+                            ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+                        ui.painter()
+                            .circle_filled(dot.center(), 3.0, palette.success);
+                        ui.label(
+                            egui::RichText::new("On-device")
+                                .size(8.5)
+                                .color(palette.text_muted),
+                        );
+                    });
+                });
+                ui.label(
+                    egui::RichText::new("Ask about this document, summarize, or get key insights.")
+                        .size(9.5)
+                        .color(palette.text_muted),
+                );
+                ui.add_space(4.0);
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.assistant_query)
+                        .hint_text("Ask a question…")
+                        .desired_width(f32::INFINITY),
+                );
+                let submit =
+                    response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    let send = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Ask")
+                                .size(10.5)
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(palette.accent)
+                        .corner_radius(7.0),
+                    );
+                    if send.clicked() || submit {
+                        self.ask_assistant();
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Summarize")
+                                    .size(10.0)
+                                    .color(palette.accent),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .corner_radius(7.0),
+                        )
+                        .clicked()
+                    {
+                        self.assistant_query = "Summarize this document".to_owned();
+                        self.ask_assistant();
+                    }
+                });
+                if !self.assistant_answer.is_empty() {
+                    ui.add_space(4.0);
+                    egui::Frame::new()
+                        .fill(palette.panel)
+                        .corner_radius(8.0)
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(&self.assistant_answer)
+                                    .size(9.0)
+                                    .color(palette.text),
+                            );
+                        });
+                }
+            });
+    }
+
+    fn export_card_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        egui::Frame::new()
+            .fill(palette.surface)
+            .stroke(egui::Stroke::new(1.0_f32, palette.border))
+            .corner_radius(12.0)
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Export")
+                            .size(12.0)
+                            .strong()
+                            .color(palette.text),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (badge, _) =
+                            ui.allocate_exact_size(egui::vec2(30.0, 16.0), egui::Sense::hover());
+                        ui.painter().rect_filled(badge, 4.0, palette.accent_soft);
+                        ui.painter().text(
+                            badge.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "PDF",
+                            egui::FontId::proportional(7.5),
+                            palette.accent,
+                        );
+                    });
+                });
+                ui.label(
+                    egui::RichText::new("Convert this PDF to")
+                        .size(9.5)
+                        .color(palette.text_muted),
+                );
+                ui.add_space(2.0);
+                egui::ComboBox::from_id_salt("export_format")
+                    .width(ui.available_width())
+                    .selected_text(EXPORT_FORMATS[self.export_format])
+                    .show_ui(ui, |ui| {
+                        for (index, format) in EXPORT_FORMATS.iter().enumerate() {
+                            ui.selectable_value(&mut self.export_format, index, *format);
+                        }
+                    });
+                ui.add_space(6.0);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("Export")
+                                .size(11.5)
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(palette.accent)
+                        .corner_radius(8.0)
+                        .min_size(egui::vec2(ui.available_width(), 30.0)),
+                    )
+                    .clicked()
+                {
+                    self.status = format!(
+                        "Export to {}: runs from the pdfxi CLI in this build",
+                        EXPORT_FORMATS[self.export_format]
+                    );
+                }
+                ui.label(
+                    egui::RichText::new("Runs locally · no upload")
+                        .size(8.5)
+                        .color(palette.text_muted),
+                );
+            });
+    }
+
+    fn demo_canvas_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let available = ui.available_rect_before_wrap();
+        let painter = ui.painter().clone();
+        let paper = PaperPalette::for_mode(self.theme);
+
+        let mut mesh = egui::Mesh::default();
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(available.left_top(), palette.canvas);
+        mesh.colored_vertex(available.right_top(), palette.canvas);
+        mesh.colored_vertex(available.right_bottom(), palette.app_bg);
+        mesh.colored_vertex(available.left_bottom(), palette.app_bg);
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base, base + 2, base + 3);
+        painter.add(egui::Shape::mesh(mesh));
+
+        let margin = 26.0_f32;
+        let ratio = 0.7727_f32;
+        let max_w = (available.width() - margin * 2.0).max(160.0);
+        let max_h = (available.height() - margin * 2.0).max(220.0);
+        let mut width = max_w;
+        let mut height = width / ratio;
+        if height > max_h {
+            height = max_h;
+            width = height * ratio;
+        }
+        let page = egui::Rect::from_center_size(
+            egui::pos2(available.center().x, available.center().y - 6.0),
+            egui::vec2(width, height),
+        );
+        let shadow_scale: u8 = if self.theme == ThemeMode::Dark { 2 } else { 1 };
+        for (expand, alpha) in [(18.0_f32, 8_u8), (10.0, 14), (4.0, 22)] {
+            painter.rect_filled(
+                page.expand(expand).translate(egui::vec2(0.0, 7.0)),
+                12.0,
+                egui::Color32::from_black_alpha(alpha * shadow_scale),
+            );
+        }
+        painter.rect_filled(page, 8.0, paper.paper);
+        painter.rect_stroke(
+            page,
+            8.0,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(20)),
+            egui::StrokeKind::Inside,
+        );
+        let clipped = painter.with_clip_rect(page);
+        self.paint_demo_page(&clipped, page, palette);
+
+        let (current, count) = self
+            .state
+            .active_tab()
+            .map(|tab| (tab.current_page(), tab.page_count()))
+            .unwrap_or((0, 1));
+        let pill = egui::Rect::from_center_size(
+            egui::pos2(
+                page.center().x,
+                (available.bottom() - 22.0).min(page.bottom() + 26.0),
+            ),
+            egui::vec2(150.0, 30.0),
+        );
+        painter.rect_filled(pill.translate(egui::vec2(0.0, 2.0)), 15.0, palette.shadow);
+        painter.rect_filled(pill, 15.0, palette.panel);
+        painter.rect_stroke(
+            pill,
+            15.0,
+            egui::Stroke::new(1.0_f32, palette.border),
+            egui::StrokeKind::Inside,
+        );
+        let left_rect = egui::Rect::from_center_size(
+            egui::pos2(pill.left() + 18.0, pill.center().y),
+            egui::Vec2::splat(16.0),
+        );
+        let right_rect = egui::Rect::from_center_size(
+            egui::pos2(pill.right() - 18.0, pill.center().y),
+            egui::Vec2::splat(16.0),
+        );
+        icon(&painter, left_rect, Icon::ChevronLeft, palette.text_muted);
+        icon(&painter, right_rect, Icon::ChevronRight, palette.text_muted);
+        painter.text(
+            pill.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("{} / {}", current + 1, count.max(1)),
+            egui::FontId::proportional(10.5),
+            palette.text,
+        );
+        let left_response =
+            ui.interact(left_rect, egui::Id::new("demo-prev"), egui::Sense::click());
+        let right_response =
+            ui.interact(right_rect, egui::Id::new("demo-next"), egui::Sense::click());
+        if left_response.clicked() {
+            self.step_page(-1);
+        }
+        if right_response.clicked() {
+            self.step_page(1);
+        }
+    }
+
+    fn paint_demo_thumb(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        _palette: Palette,
+        page: usize,
+    ) {
+        let paper = PaperPalette::for_mode(self.theme);
+        let w = rect.width();
+        let h = rect.height();
+        let x = |t: f32| rect.min.x + t * w;
+        let y = |t: f32| rect.min.y + t * h;
+        let ink = paper.ink;
+        let muted = paper.muted;
+
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.05)), egui::pos2(x(0.20), y(0.10))),
+            1.5,
+            paper.accent,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.13)), egui::pos2(x(0.50), y(0.155))),
+            1.0,
+            ink,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.17)), egui::pos2(x(0.40), y(0.19))),
+            1.0,
+            ink,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.22)), egui::pos2(x(0.46), y(0.232))),
+            0.8,
+            muted,
+        );
+        if page == 0 {
+            let cover = egui::Rect::from_min_max(
+                egui::pos2(x(0.56), y(0.08)),
+                egui::pos2(x(0.92), y(0.33)),
+            );
+            let mut mesh = egui::Mesh::default();
+            let base = mesh.vertices.len() as u32;
+            mesh.colored_vertex(cover.left_top(), paper.cover_top);
+            mesh.colored_vertex(cover.right_top(), paper.cover_top);
+            mesh.colored_vertex(cover.right_bottom(), paper.cover_bottom);
+            mesh.colored_vertex(cover.left_bottom(), paper.cover_bottom);
+            mesh.add_triangle(base, base + 1, base + 2);
+            mesh.add_triangle(base, base + 2, base + 3);
+            painter.add(egui::Shape::mesh(mesh));
+            painter.text(
+                egui::pos2(cover.left() + 4.0, cover.top() + 6.0),
+                egui::Align2::LEFT_TOP,
+                "MODERN\nBUSINESS",
+                egui::FontId::proportional(3.8),
+                egui::Color32::from_white_alpha(220),
+            );
+        } else if page == 1 {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x(0.56), y(0.08)),
+                    egui::pos2(x(0.92), y(0.14)),
+                ),
+                2.0,
+                paper.highlight,
+            );
+            for index in 0..3 {
+                let top = 0.20 + index as f32 * 0.06;
+                painter.circle_filled(egui::pos2(x(0.62), y(top)), 1.5, paper.accent);
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(x(0.66), y(top - 0.01)),
+                        egui::pos2(x(0.90), y(top + 0.01)),
+                    ),
+                    0.8,
+                    muted,
+                );
+            }
+        } else {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x(0.56), y(0.08)),
+                    egui::pos2(x(0.92), y(0.14)),
+                ),
+                2.0,
+                paper.success_bg,
+            );
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x(0.56), y(0.20)),
+                    egui::pos2(x(0.92), y(0.34)),
+                ),
+                2.0,
+                paper.highlight,
+            );
+        }
+        for index in 0..4 {
+            let top = 0.38 + index as f32 * 0.05;
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x(0.08), y(top)),
+                    egui::pos2(x(0.88), y(top + 0.018)),
+                ),
+                0.8,
+                paper.rule,
+            );
+        }
+        for index in 0..3 {
+            let top = 0.58 + index as f32 * 0.05;
+            painter.circle_filled(egui::pos2(x(0.10), y(top + 0.01)), 1.6, paper.success);
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x(0.14), y(top)),
+                    egui::pos2(x(0.52), y(top + 0.018)),
+                ),
+                0.8,
+                paper.rule,
+            );
+        }
+        painter.rect_stroke(
+            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.78)), egui::pos2(x(0.50), y(0.92))),
+            1.5,
+            egui::Stroke::new(0.6_f32, paper.card_border),
+            egui::StrokeKind::Inside,
+        );
+        let mut points = Vec::new();
+        for step in 0..=16 {
+            let t = step as f32 / 16.0;
+            points.push(egui::pos2(
+                x(0.12 + t * 0.28),
+                y(0.86 - (t * 6.0).sin() * 0.018),
+            ));
+        }
+        painter.add(egui::Shape::line(
+            points,
+            egui::Stroke::new(0.9_f32, paper.ink),
+        ));
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x(0.08), y(0.945)), egui::pos2(x(0.92), y(0.947))),
+            0.5,
+            paper.rule,
+        );
+    }
+
+    fn paint_generic_thumb(&self, painter: &egui::Painter, rect: egui::Rect, _palette: Palette) {
+        let paper = PaperPalette::for_mode(self.theme);
+        let w = rect.width();
+        let h = rect.height();
+        for index in 0..8 {
+            let top = 0.10 + index as f32 * 0.10;
+            let right = if index % 3 == 0 { 0.70 } else { 0.90 };
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x + 0.10 * w, rect.min.y + top * h),
+                    egui::pos2(rect.min.x + right * w, rect.min.y + (top + 0.04) * h),
+                ),
+                1.0,
+                paper.rule,
+            );
+        }
+    }
+
+    /// Paint the built-in business-proposal preview.
+    fn paint_demo_page(&self, painter: &egui::Painter, page: egui::Rect, _palette: Palette) {
+        use egui::{Align2, Color32, FontId, pos2};
+
+        let paper = PaperPalette::for_mode(self.theme);
+        let w = page.width();
+        let h = page.height();
+        let k = (h / 900.0).clamp(0.45, 1.8);
+        let x = |t: f32| page.min.x + t * w;
+        let y = |t: f32| page.min.y + t * h;
+        let ink = paper.ink;
+        let muted = paper.muted;
+        let rule = paper.rule;
+        let body_font = FontId::proportional(10.0 * k);
+        let small = FontId::proportional(7.5 * k);
+        let heading = FontId::proportional(15.0 * k);
+        let title_font = FontId::proportional(30.0 * k);
+
+        // Brand row.
+        painter.rect_filled(
+            egui::Rect::from_min_size(pos2(x(0.07), y(0.045)), egui::vec2(16.0 * k, 16.0 * k)),
+            4.0 * k,
+            paper.accent,
+        );
+        icon(
+            painter,
+            egui::Rect::from_min_size(
+                pos2(x(0.07) + 3.5 * k, y(0.045) + 3.5 * k),
+                egui::vec2(9.0 * k, 9.0 * k),
+            ),
+            Icon::File,
+            Color32::WHITE,
+        );
+        painter.text(
+            pos2(x(0.07) + 21.0 * k, y(0.045) + 8.0 * k),
+            Align2::LEFT_CENTER,
+            "PDFXI",
+            FontId::proportional(8.5 * k),
+            ink,
+        );
+        painter.text(
+            pos2(x(0.93), y(0.052)),
+            Align2::RIGHT_CENTER,
+            "BUSINESS PROPOSAL · 2025",
+            FontId::proportional(6.5 * k),
+            muted,
+        );
+        painter.line_segment(
+            [pos2(x(0.07), y(0.075)), pos2(x(0.93), y(0.075))],
+            egui::Stroke::new(0.6_f32, rule),
+        );
+
+        // Title block.
+        painter.text(
+            pos2(x(0.07), y(0.105)),
+            Align2::LEFT_TOP,
+            "Modern Business",
+            title_font.clone(),
+            ink,
+        );
+        painter.text(
+            pos2(x(0.07), y(0.155)),
+            Align2::LEFT_TOP,
+            "Proposal",
+            title_font,
+            ink,
+        );
+        let tag =
+            egui::Rect::from_min_size(pos2(x(0.07), y(0.205)), egui::vec2(64.0 * k, 14.0 * k));
+        painter.rect_filled(tag, 7.0 * k, paper.highlight);
+        painter.text(
+            tag.center(),
+            Align2::CENTER_CENTER,
+            "CONFIDENTIAL",
+            FontId::proportional(6.2 * k),
+            paper.accent,
+        );
+        let subtitle = painter.layout(
+            "A strategic proposal for a more efficient, collaborative, and digital workflow."
+                .to_owned(),
+            body_font.clone(),
+            muted,
+            w * 0.40,
+        );
+        painter.galley(pos2(x(0.07), y(0.235)), subtitle, muted);
+        painter.text(
+            pos2(x(0.07), y(0.305)),
+            Align2::LEFT_CENTER,
+            "Prepared for Northwind Labs · January 2025",
+            FontId::proportional(7.0 * k),
+            muted,
+        );
+
+        // Cover art.
+        let cover = egui::Rect::from_min_max(pos2(x(0.55), y(0.09)), pos2(x(0.93), y(0.33)));
+        let mut mesh = egui::Mesh::default();
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(cover.left_top(), paper.cover_top);
+        mesh.colored_vertex(cover.right_top(), paper.cover_top);
+        mesh.colored_vertex(cover.right_bottom(), paper.cover_bottom);
+        mesh.colored_vertex(cover.left_bottom(), paper.cover_bottom);
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base, base + 2, base + 3);
+        painter.add(egui::Shape::mesh(mesh));
+        painter.circle_filled(
+            pos2(
+                cover.left() + cover.width() * 0.70,
+                cover.top() + cover.height() * 0.52,
+            ),
+            cover.width() * 0.20,
+            Color32::from_white_alpha(28),
+        );
+        painter.circle_stroke(
+            pos2(
+                cover.left() + cover.width() * 0.70,
+                cover.top() + cover.height() * 0.52,
+            ),
+            cover.width() * 0.28,
+            egui::Stroke::new(0.8_f32, Color32::from_white_alpha(80)),
+        );
+        painter.text(
+            pos2(cover.left() + 14.0 * k, cover.top() + 14.0 * k),
+            Align2::LEFT_TOP,
+            "MODERN\nBUSINESS",
+            FontId::proportional(8.0 * k),
+            Color32::from_white_alpha(220),
+        );
+        painter.text(
+            pos2(cover.left() + 14.0 * k, cover.bottom() - 30.0 * k),
+            Align2::LEFT_TOP,
+            "2025",
+            FontId::proportional(18.0 * k),
+            Color32::from_white_alpha(230),
+        );
+        painter.text(
+            pos2(cover.left() + 14.0 * k, cover.bottom() - 12.0 * k),
+            Align2::LEFT_CENTER,
+            "STRATEGY & DELIVERY",
+            FontId::proportional(6.0 * k),
+            Color32::from_white_alpha(200),
+        );
+
+        // Executive summary.
+        painter.text(
+            pos2(x(0.07), y(0.355)),
+            Align2::LEFT_TOP,
+            "Executive Summary",
+            heading.clone(),
+            ink,
+        );
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = w * 0.40;
+        let base = egui::TextFormat {
+            font_id: body_font.clone(),
+            color: ink,
+            ..Default::default()
+        };
+        let highlighted = egui::TextFormat {
+            font_id: body_font.clone(),
+            color: ink,
+            background: paper.highlight,
+            ..Default::default()
+        };
+        job.append(
+            "This proposal outlines a modern solution to streamline document workflows, improve team collaboration, and ",
+            0.0,
+            base.clone(),
+        );
+        job.append("drive measurable productivity.", 0.0, highlighted);
+        job.append(
+            " Our approach combines secure local processing with an interface your team already understands.",
+            0.0,
+            base,
+        );
+        let summary = painter.layout_job(job);
+        painter.galley(pos2(x(0.07), y(0.385)), summary, ink);
+
+        // Comment card.
+        let card = egui::Rect::from_min_max(pos2(x(0.53), y(0.355)), pos2(x(0.93), y(0.48)));
+        painter.rect_filled(
+            card.translate(egui::vec2(2.0 * k, 4.0 * k)),
+            9.0 * k,
+            paper.shadow,
+        );
+        painter.rect_filled(card, 9.0 * k, Color32::WHITE);
+        painter.rect_stroke(
+            card,
+            9.0 * k,
+            egui::Stroke::new(1.0_f32, paper.card_border),
+            egui::StrokeKind::Inside,
+        );
+        painter.circle_filled(
+            pos2(card.left() + 18.0 * k, card.top() + 18.0 * k),
+            9.0 * k,
+            paper.highlight,
+        );
+        painter.text(
+            pos2(card.left() + 18.0 * k, card.top() + 18.0 * k),
+            Align2::CENTER_CENTER,
+            "JK",
+            FontId::proportional(7.0 * k),
+            paper.accent,
+        );
+        painter.text(
+            pos2(card.left() + 32.0 * k, card.top() + 14.0 * k),
+            Align2::LEFT_CENTER,
+            "Jordan K.",
+            FontId::proportional(8.5 * k),
+            ink,
+        );
+        painter.text(
+            pos2(card.right() - 12.0 * k, card.top() + 14.0 * k),
+            Align2::RIGHT_CENTER,
+            "2m ago",
+            FontId::proportional(7.0 * k),
+            muted,
+        );
+        let comment = painter.layout(
+            "@Alex Can we add a specific ROI number here?".to_owned(),
+            FontId::proportional(8.5 * k),
+            ink,
+            card.width() - 44.0 * k,
+        );
+        painter.galley(
+            pos2(card.left() + 32.0 * k, card.top() + 26.0 * k),
+            comment,
+            ink,
+        );
+        painter.text(
+            pos2(card.left() + 32.0 * k, card.bottom() - 12.0 * k),
+            Align2::LEFT_CENTER,
+            "Reply",
+            FontId::proportional(7.5 * k),
+            paper.accent,
+        );
+        painter.text(
+            pos2(card.left() + 64.0 * k, card.bottom() - 12.0 * k),
+            Align2::LEFT_CENTER,
+            "Resolve",
+            FontId::proportional(7.5 * k),
+            muted,
+        );
+        painter.text(
+            pos2(card.right() - 12.0 * k, card.bottom() - 12.0 * k),
+            Align2::RIGHT_CENTER,
+            "1 reply",
+            FontId::proportional(7.0 * k),
+            muted,
+        );
+
+        // Key benefits.
+        painter.text(
+            pos2(x(0.07), y(0.525)),
+            Align2::LEFT_TOP,
+            "Key Benefits",
+            heading.clone(),
+            ink,
+        );
+        for (index, benefit) in [
+            "Faster, more secure document workflows",
+            "Seamless collaboration across teams",
+            "Higher productivity and cost savings",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let top = y(0.565 + index as f32 * 0.038);
+            painter.circle_filled(pos2(x(0.085), top + 4.0 * k), 5.0 * k, paper.success_bg);
+            icon(
+                painter,
+                egui::Rect::from_center_size(
+                    pos2(x(0.085), top + 4.0 * k),
+                    egui::vec2(6.5 * k, 6.5 * k),
+                ),
+                Icon::Check,
+                paper.success,
+            );
+            painter.text(
+                pos2(x(0.103), top + 4.0 * k),
+                Align2::LEFT_CENTER,
+                *benefit,
+                FontId::proportional(8.5 * k),
+                ink,
+            );
+        }
+
+        // Stat card.
+        let stat = egui::Rect::from_min_max(pos2(x(0.60), y(0.525)), pos2(x(0.93), y(0.65)));
+        painter.rect_filled(stat, 8.0 * k, Color32::from_rgb(0xfb, 0xf7, 0xf3));
+        painter.rect_stroke(
+            stat,
+            8.0 * k,
+            egui::Stroke::new(0.8_f32, paper.card_border),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            pos2(stat.left() + 12.0 * k, stat.top() + 10.0 * k),
+            Align2::LEFT_TOP,
+            "38%",
+            FontId::proportional(21.0 * k),
+            paper.accent,
+        );
+        painter.text(
+            pos2(stat.left() + 12.0 * k, stat.top() + 36.0 * k),
+            Align2::LEFT_TOP,
+            "faster document turnaround",
+            FontId::proportional(7.5 * k),
+            muted,
+        );
+        painter.text(
+            pos2(stat.left() + 12.0 * k, stat.bottom() - 12.0 * k),
+            Align2::LEFT_CENTER,
+            "Based on pilot teams",
+            FontId::proportional(6.2 * k),
+            muted,
+        );
+
+        // Timeline.
+        painter.text(
+            pos2(x(0.07), y(0.69)),
+            Align2::LEFT_TOP,
+            "Proposed Timeline",
+            heading,
+            ink,
+        );
+        painter.line_segment(
+            [pos2(x(0.08), y(0.745)), pos2(x(0.92), y(0.745))],
+            egui::Stroke::new(0.8_f32, rule),
+        );
+        for (index, (phase, date, description)) in [
+            (
+                "Discover",
+                "Week 1–2",
+                "Audit workflows and align on success metrics",
+            ),
+            (
+                "Design",
+                "Week 3–5",
+                "Prototype the new review and signature flow",
+            ),
+            (
+                "Deliver",
+                "Week 6–8",
+                "Roll out to pilot teams with training",
+            ),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let cx = x(0.12 + index as f32 * 0.28);
+            painter.circle_filled(pos2(cx, y(0.745)), 3.5 * k, paper.accent);
+            painter.text(
+                pos2(cx, y(0.715)),
+                Align2::CENTER_CENTER,
+                *phase,
+                FontId::proportional(8.0 * k),
+                ink,
+            );
+            painter.text(
+                pos2(cx, y(0.765)),
+                Align2::CENTER_CENTER,
+                *date,
+                FontId::proportional(6.5 * k),
+                paper.accent,
+            );
+            let galley = painter.layout(
+                (*description).to_owned(),
+                FontId::proportional(6.5 * k),
+                muted,
+                w * 0.22,
+            );
+            painter.galley(pos2(cx - w * 0.11, y(0.782)), galley, muted);
+        }
+
+        // Signature card.
+        let sign = egui::Rect::from_min_max(pos2(x(0.07), y(0.825)), pos2(x(0.51), y(0.925)));
+        painter.rect_filled(sign, 7.0 * k, Color32::WHITE);
+        painter.rect_stroke(
+            sign,
+            7.0 * k,
+            egui::Stroke::new(0.8_f32, paper.card_border),
+            egui::StrokeKind::Inside,
+        );
+        let badge = egui::Rect::from_min_size(
+            pos2(sign.left() + 10.0 * k, sign.top() + 8.0 * k),
+            egui::vec2(58.0 * k, 15.0 * k),
+        );
+        painter.rect_filled(badge, 7.0 * k, paper.success_bg);
+        icon(
+            painter,
+            egui::Rect::from_center_size(
+                pos2(badge.left() + 8.0 * k, badge.center().y),
+                egui::vec2(6.5 * k, 6.5 * k),
+            ),
+            Icon::Check,
+            paper.success,
+        );
+        painter.text(
+            pos2(badge.left() + 15.0 * k, badge.center().y),
+            Align2::LEFT_CENTER,
+            "E-signed",
+            FontId::proportional(6.5 * k),
+            paper.success,
+        );
+        let mut points = Vec::new();
+        for step in 0..=40 {
+            let t = step as f32 / 40.0;
+            let px = x(0.10) + t * w * 0.26;
+            let py = y(0.865) - (t * 7.0).sin() * h * 0.020 + t * h * 0.010;
+            points.push(pos2(px, py));
+        }
+        painter.add(egui::Shape::line(
+            points,
+            egui::Stroke::new(1.6 * k, Color32::from_rgb(0x16, 0x2b, 0x4a)),
+        ));
+        painter.text(
+            pos2(x(0.10), y(0.888)),
+            Align2::LEFT_CENTER,
+            "Amelia Park",
+            FontId::proportional(7.5 * k),
+            ink,
+        );
+        painter.text(
+            pos2(x(0.10), y(0.905)),
+            Align2::LEFT_CENTER,
+            "Head of Operations",
+            FontId::proportional(6.5 * k),
+            muted,
+        );
+        painter.text(
+            pos2(x(0.49), y(0.905)),
+            Align2::RIGHT_CENTER,
+            "Jan 28, 2025",
+            FontId::proportional(6.5 * k),
+            muted,
+        );
+
+        // Investment card.
+        let invest = egui::Rect::from_min_max(pos2(x(0.56), y(0.835)), pos2(x(0.93), y(0.915)));
+        painter.rect_filled(invest, 7.0 * k, Color32::WHITE);
+        painter.rect_stroke(
+            invest,
+            7.0 * k,
+            egui::Stroke::new(0.8_f32, paper.card_border),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            pos2(invest.left() + 12.0 * k, invest.top() + 10.0 * k),
+            Align2::LEFT_TOP,
+            "Investment",
+            FontId::proportional(7.0 * k),
+            muted,
+        );
+        painter.text(
+            pos2(invest.left() + 12.0 * k, invest.top() + 22.0 * k),
+            Align2::LEFT_TOP,
+            "$24,500",
+            FontId::proportional(15.0 * k),
+            paper.accent,
+        );
+        painter.text(
+            pos2(invest.right() - 12.0 * k, invest.top() + 36.0 * k),
+            Align2::RIGHT_CENTER,
+            "fixed project fee",
+            FontId::proportional(6.2 * k),
+            muted,
+        );
+
+        // Footer.
+        painter.line_segment(
+            [pos2(x(0.07), y(0.95)), pos2(x(0.93), y(0.95))],
+            egui::Stroke::new(0.6_f32, rule),
+        );
+        painter.text(
+            pos2(x(0.07), y(0.965)),
+            Align2::LEFT_CENTER,
+            "PDFXI · confidential draft",
+            small,
+            muted,
+        );
+        let page_number = self
+            .state
+            .active_tab()
+            .map(|tab| tab.current_page() + 1)
+            .unwrap_or(1);
+        painter.text(
+            pos2(x(0.93), y(0.965)),
+            Align2::RIGHT_CENTER,
+            format!("{page_number}"),
+            FontId::proportional(6.5 * k),
+            muted,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_rail_is_pages() {
+        assert_eq!(RailTab::default(), RailTab::Pages);
+    }
     use crate::{Rotation, TextAnchor};
 
     #[test]
@@ -3686,10 +6366,12 @@ mod tests {
 
     #[cfg(feature = "pdfium")]
     #[test]
-    fn demo_fixture_fills_the_cache_without_a_window() {
+    fn opening_the_fixture_binds_the_renderer_and_fills_the_cache() {
+        let fixture = crate::raster::demo_fixture_path("minimal.pdf").expect("pdfium fixture");
         let mut app = PdfxiApp::new();
+        assert!(app.open_path_text(&fixture.display().to_string()));
         assert!(app.pdfium_renderer.is_some(), "{}", app.status());
-        let id = app.open_demo_tab();
+        let id = app.state().active_tab_id().expect("active tab");
         // Minimal.pdf has exactly one page.
         assert_eq!(app.state().tab(id).map(|tab| tab.page_count()), Some(1));
 

@@ -33,6 +33,25 @@ Installed payload: `%LOCALAPPDATA%\Programs\PDFXI` (`pdfxi-ui.exe`,
 `pdfxi.exe`, manifest, notices). Desktop shortcut `PDFXI.lnk` targets the
 installed viewer and survives `cargo clean`.
 
+## Product shell (UI) — 2026-11-20
+
+The default egui shell was replaced with a modern Acrobat-style product shell:
+custom title bar with tabs and window controls, compact icon rail, pages panel
+with thumbnails, rich document page, right tools panel with AI Assistant and
+Export cards, and a bottom page/zoom bar. Both themes are captured and the
+review is recorded.
+
+| Evidence | Path |
+|---|---|
+| Light acceptance screenshot | `docs/evidence/ui/light-v8.png` |
+| Dark acceptance screenshot | `docs/evidence/ui/dark-v8.png` |
+| Review process, checklist, findings, sign-off | `docs/design/UI_REVIEW.md` |
+| App tests | `cargo test -p pdfxi-app --features ui,pdfium` -> 490 passed |
+| Lint/format | `cargo clippy ... -D warnings`, `cargo fmt --all --check` -> clean |
+
+The shell is the product surface for the verified library/CLI features; it is
+not an additional feature-matrix row.
+
 ## End condition
 
 ```text

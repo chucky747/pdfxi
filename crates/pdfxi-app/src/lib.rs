@@ -116,6 +116,8 @@ pub mod commands;
 pub mod compare;
 pub mod compare_view;
 pub mod cross_file;
+#[cfg(feature = "ui")]
+pub mod design;
 pub mod find;
 pub mod home;
 pub mod layers;
