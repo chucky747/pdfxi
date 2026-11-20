@@ -1,0 +1,52 @@
+# T-0221 Round A - home, library, recents, stars, identity, storage, help
+#
+# Local equivalents of the Home/Files/Recent/Starred surfaces: a persisted
+# library model, recents and stars in `%APPDATA%\PDFXI\library.toml`, a local
+# display name, a real storage meter and a help window. Shared-folder browsing
+# and notifications are Round B. No account or server is involved.
+
+task = "T-0221"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0221.md"
+docs = [
+    "crates/pdfxi-app/src/settings.rs",
+    "crates/pdfxi-app/src/library.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/shell/empty_state.rs",
+    "crates/pdfxi-app/src/shell/title_bar.rs",
+    "crates/pdfxi-app/src/shell/help.rs",
+    "docs/evidence/ui/T-0221.md",
+    "docs/evidence/ui/t0221-home-light-windows.png",
+    "docs/evidence/ui/t0221-recent-light-macos.png",
+    "docs/evidence/ui/t0221-files-dark-windows.png",
+]
+notes = """
+Adds the local library model: non-recursive PDF listing, persisted recents
+(dedupe, move-to-front, cap 20, missing detection, removable) and persisted
+stars in library.toml, with corrupt files falling back to empty. Settings gain
+display_name, library_root and shared_folder; paths are strings, `~` and
+environment variables are expanded, and relative paths are rejected. The title
+bar shows initials with an editable name, the side panel shows Files, Recent and
+Starred, Home shows up to six recent cards, and the storage meter sums the
+library and optional shared folder with a real 1 GB reference scale (not a
+quota). A help window lists genuine local guide sections and opens the bundled
+docs folder when present. New commands: OpenHelp, CloseHelp, SetDisplayName,
+ToggleStar, RemoveRecent, OpenStorageFolder, RevealInExplorer, OpenDocsFolder,
+RefreshLibrary. The T-0212 harness still passes all 15 tests. Library listing is
+synchronous on first load/refresh; a background refresh is Round B work.
+"""
+tests = [
+    "ui::library::tests::recents_dedupe_move_to_front_and_cap",
+    "ui::library::tests::missing_recent_entry_is_marked",
+    "ui::library::tests::stars_round_trip_through_the_file",
+    "ui::library::tests::corrupt_library_falls_back_to_empty",
+    "ui::library::tests::storage_sum_adds_file_sizes",
+    "ui::library::tests::rfc3339_timestamp_is_well_formed",
+    "ui::tests::rail_entries_follow_their_capabilities",
+    "ui::tests::avatar_initials_use_up_to_two_words",
+    "ui::tests::help_window_opens_through_a_command",
+]

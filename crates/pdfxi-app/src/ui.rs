@@ -65,7 +65,7 @@ use std::path::{Path, PathBuf};
 
 use crate::OpenError;
 use crate::design::{self, Palette, ThemeMode, TitlePalette, metrics};
-use crate::settings::{self, LaunchOptions, ThemePreference, WindowControlStyle};
+use crate::settings::{self, LaunchOptions, LaunchPanel, ThemePreference, WindowControlStyle};
 use egui::Key;
 
 use crate::{
@@ -84,6 +84,9 @@ use pdfxi_text::TextExtractor;
 
 #[path = "shell/mod.rs"]
 mod shell;
+
+#[path = "library.rs"]
+pub mod library;
 
 pub use shell::capabilities::{Capabilities, Capability, RailItem};
 pub use shell::commands::AppCommand;
@@ -393,6 +396,22 @@ pub fn active_page_from_canvas_scroll(layout: &CanvasLayout, scroll_y: f32) -> u
     best_page
 }
 
+/// Locate the bundled user-guide folder, if the build includes one.
+fn bundled_docs_dir() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+    {
+        candidates.push(directory.join("docs"));
+        candidates.push(directory.join("docs").join("book"));
+        if let Some(parent) = directory.parent() {
+            candidates.push(parent.join("docs"));
+        }
+    }
+    candidates.push(PathBuf::from("docs"));
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
 /// Build the application icon shown by the OS window switcher.
 fn app_icon() -> egui::IconData {
     let size = 32u32;
@@ -450,6 +469,7 @@ pub fn run() -> Result<(), String> {
             let mut app = PdfxiApp::new_for_window();
             app.apply_launch_options(&launch);
             app.open_startup_argument(arguments);
+            app.apply_launch_panel(launch.panel);
             Ok(Box::new(app))
         }),
     )
@@ -508,6 +528,20 @@ pub struct PdfxiApp {
     shell_prefs: ShellPreferences,
     /// Where shell preferences are saved; `None` for headless viewers.
     shell_prefs_path: Option<PathBuf>,
+    /// Local library, recents and stars.
+    library: library::Library,
+    /// PDFs found in the library folder on the last refresh.
+    library_entries: Vec<library::LibraryEntry>,
+    /// Whether the library folder has been read this run.
+    library_loaded: bool,
+    /// Cached storage total for the meter.
+    storage_bytes: u64,
+    /// Whether the help window is open.
+    help_open: bool,
+    /// Editable display name in the identity popover.
+    identity_name: String,
+    /// Whether the identity popover is open.
+    identity_open: bool,
     /// Path currently bound to the PDFium renderer.
     #[cfg(feature = "pdfium")]
     renderer_path: Option<PathBuf>,
@@ -557,9 +591,12 @@ pub struct PdfxiApp {
 impl PdfxiApp {
     /// Create a viewer with no open documents.
     pub fn new() -> Self {
+        let defaults = Self::default();
+        let identity_name = defaults.settings.display_name.clone();
         Self {
             page_box: "1".to_owned(),
-            ..Self::default()
+            identity_name,
+            ..defaults
         }
     }
 
@@ -591,6 +628,14 @@ impl PdfxiApp {
             self.shell_prefs = shell_preferences::load(prefs_path);
             self.tools_open = self.shell_prefs.tools_open;
         }
+        self.identity_name = self.settings.display_name.clone();
+        self.capabilities = if self.settings.shared_folder.is_some() {
+            Capabilities::available().with(Capability::Shared)
+        } else {
+            Capabilities::available()
+        };
+        self.library = library::Library::new(library::Library::default_path());
+        self.refresh_library();
     }
 
     /// Apply one run's launch flags on top of the saved settings.
@@ -601,6 +646,23 @@ impl PdfxiApp {
         let effective = self.settings.with_overrides(options);
         self.theme_preference = effective.theme;
         self.window_controls = effective.window_controls;
+    }
+
+    /// Apply a `--rail=`/`--panel=` deep link after startup documents open.
+    fn apply_launch_panel(&mut self, panel: Option<LaunchPanel>) {
+        let Some(panel) = panel else {
+            return;
+        };
+        self.active_rail = match panel {
+            LaunchPanel::Home => RailItem::Home,
+            LaunchPanel::Files => RailItem::Files,
+            LaunchPanel::Recent => RailItem::Recent,
+            LaunchPanel::Starred => RailItem::Starred,
+            LaunchPanel::Pages => RailItem::Pages,
+            LaunchPanel::Shared => RailItem::Shared,
+            LaunchPanel::Comments => RailItem::Comments,
+            LaunchPanel::AiAssistant => RailItem::AiAssistant,
+        };
     }
 
     /// The theme preference currently in effect.
@@ -665,6 +727,48 @@ impl PdfxiApp {
     #[must_use]
     pub fn active_rail(&self) -> RailItem {
         self.active_rail
+    }
+
+    /// The local display name used for comment authors and signers.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        &self.settings.display_name
+    }
+
+    /// Avatar initials derived from the display name.
+    #[must_use]
+    pub fn initials(&self) -> String {
+        library::initials(&self.settings.display_name)
+    }
+
+    /// Borrow the local library, recents and stars.
+    #[must_use]
+    pub fn library(&self) -> &library::Library {
+        &self.library
+    }
+
+    /// PDFs found in the library folder on the last refresh.
+    #[must_use]
+    pub fn library_entries(&self) -> &[library::LibraryEntry] {
+        &self.library_entries
+    }
+
+    /// Cached storage total for the meter, in bytes.
+    #[must_use]
+    pub fn storage_bytes(&self) -> u64 {
+        self.storage_bytes
+    }
+
+    /// Whether the help window is open.
+    #[must_use]
+    pub fn help_open(&self) -> bool {
+        self.help_open
+    }
+
+    /// Whether `path` is starred.
+    #[must_use]
+    pub fn is_starred(&self, path: &Path) -> bool {
+        self.library.is_starred(path)
     }
 
     /// Initialize per-tab shell state for a newly opened document.
@@ -807,10 +911,14 @@ impl PdfxiApp {
             OpenOutcome::Opened { id } => {
                 self.finish_new_tab(id);
                 self.refresh_renderer_for_active_tab();
+                let title = self.state.tab_title(id).unwrap_or_default();
+                self.library.record_open(path, &title, 0);
                 self.status = format!("Opened {}", path.display());
             }
             OpenOutcome::Focused { id } => {
                 self.on_active_tab_changed();
+                let title = self.state.tab_title(id).unwrap_or_default();
+                self.library.record_open(path, &title, 0);
                 self.status = format!("Focused existing tab {id}");
             }
         }
@@ -852,13 +960,16 @@ impl PdfxiApp {
     /// as the first argument. Flags are skipped, and a bad path reports a status
     /// instead of failing startup. Returns `true` when a tab was opened.
     pub fn open_startup_argument(&mut self, args: impl IntoIterator<Item = String>) -> bool {
+        let mut opened = false;
         for argument in args {
             if argument.starts_with('-') {
                 continue;
             }
-            return self.open_path_text(&argument);
+            if self.open_path_text(&argument) {
+                opened = true;
+            }
         }
-        false
+        opened
     }
 
     /// Whether a path carries a `.pdf` extension (case-insensitive).
@@ -1454,6 +1565,8 @@ impl eframe::App for PdfxiApp {
         }
         self.open_dialog_ui(ctx);
         self.shell_ui(ctx);
+        self.identity_window_ui(ctx);
+        self.help_window_ui(ctx);
         if !self.open_errors.is_empty() {
             let mut open = true;
             egui::Window::new("Open errors")
@@ -1678,6 +1791,82 @@ impl PdfxiApp {
         match self.state.set_zoom(zoom) {
             Ok(()) => self.status = format!("Zoom: {zoom}"),
             Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Read the library folder, recompute storage, and cache the listing.
+    fn refresh_library(&mut self) {
+        self.library_entries.clear();
+        self.storage_bytes = 0;
+        let Some(root) = self.settings.library_root_or_default() else {
+            self.library_loaded = true;
+            return;
+        };
+        let _ = std::fs::create_dir_all(&root);
+        if let Ok(entries) = library::list_pdfs(&root) {
+            self.library_entries = entries;
+        }
+        self.library_loaded = true;
+        self.storage_bytes = library::storage_used(&root);
+        if let Some(shared) = &self.settings.shared_folder {
+            self.storage_bytes = self
+                .storage_bytes
+                .saturating_add(library::storage_used(shared));
+        }
+    }
+
+    /// Persist a new local display name.
+    fn set_display_name(&mut self, name: String) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            self.status = "Enter a display name".to_owned();
+            return;
+        }
+        self.settings.display_name = trimmed.to_owned();
+        self.identity_name = trimmed.to_owned();
+        self.persist_settings();
+        self.status = "Display name updated".to_owned();
+    }
+
+    /// Open the library folder in the platform file manager.
+    fn open_storage_folder(&mut self) {
+        if let Some(root) = self.settings.library_root_or_default() {
+            self.open_in_file_manager(&root);
+        }
+    }
+
+    /// Reveal a path in the platform file manager.
+    fn reveal_path(&mut self, path: &Path) {
+        let target = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| path.to_path_buf())
+        };
+        self.open_in_file_manager(&target);
+    }
+
+    /// Open the bundled user-guide folder when it exists.
+    fn open_docs_folder(&mut self) {
+        if let Some(directory) = bundled_docs_dir() {
+            self.open_in_file_manager(&directory);
+        }
+    }
+
+    /// Spawn the platform file manager for `path`.
+    fn open_in_file_manager(&mut self, path: &Path) {
+        #[cfg(windows)]
+        let command = "explorer";
+        #[cfg(target_os = "macos")]
+        let command = "open";
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        let command = "xdg-open";
+        match std::process::Command::new(command).arg(path).spawn() {
+            Ok(_) => {}
+            Err(error) => {
+                self.status = format!("Could not open {}: {error}", path.display());
+            }
         }
     }
 
@@ -2161,5 +2350,33 @@ mod tests {
         assert_eq!(saved.tools_open, app.tools_open);
         assert!(shell::preferences::ShellPreferences::default().tools_open);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rail_entries_follow_their_capabilities() {
+        let available = shell::capabilities::rail_items(Capabilities::available());
+        assert!(available.contains(&RailItem::Files));
+        assert!(available.contains(&RailItem::Starred));
+        assert!(!available.contains(&RailItem::Shared));
+        let with_shared =
+            shell::capabilities::rail_items(Capabilities::available().with(Capability::Shared));
+        assert!(with_shared.contains(&RailItem::Shared));
+    }
+
+    #[test]
+    fn avatar_initials_use_up_to_two_words() {
+        assert_eq!(library::initials("Ada Lovelace"), "AL");
+        assert_eq!(library::initials("prince"), "P");
+        assert_eq!(library::initials("   "), "P");
+    }
+
+    #[test]
+    fn help_window_opens_through_a_command() {
+        let mut app = PdfxiApp::new();
+        assert!(!app.help_open());
+        app.dispatch(AppCommand::OpenHelp, None);
+        assert!(app.help_open());
+        app.dispatch(AppCommand::CloseHelp, None);
+        assert!(!app.help_open());
     }
 }

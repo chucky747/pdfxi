@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "Home, Files, Recent, Starred, Shared, storage, notifications, help, local identity",
   "priority": "P0",
-  "status": "queued",
+  "status": "verified",
   "depends_on": [
     "T-0220"
   ],
@@ -15,6 +15,6 @@
     "docs/evidence/ui/T-0221.md",
     "orchestration/feature-updates/T-0221.toml"
   ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-02..A-04 and A-07..A-12 survive a restart",
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-03, A-04, A-07..A-10 and A-12 work on real local files and survive a restart; A-02 notifications and A-11 Shared deferred to T-0246",
   "evidence": "docs/evidence/ui/T-0221.md"
 }

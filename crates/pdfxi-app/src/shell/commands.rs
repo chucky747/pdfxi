@@ -152,6 +152,24 @@ pub enum AppCommand {
     AddPage,
     /// Open the page menu (capability-gated).
     PageMenu,
+    /// Open the help window.
+    OpenHelp,
+    /// Close the help window.
+    CloseHelp,
+    /// Persist a new local display name.
+    SetDisplayName(String),
+    /// Star or unstar a document path.
+    ToggleStar(PathBuf),
+    /// Remove a recent entry by path.
+    RemoveRecent(PathBuf),
+    /// Open the library folder in the file manager.
+    OpenStorageFolder,
+    /// Reveal a path in the file manager.
+    RevealInExplorer(PathBuf),
+    /// Open the bundled user-guide folder.
+    OpenDocsFolder,
+    /// Re-read the library folder and storage total.
+    RefreshLibrary,
 }
 
 impl AppCommand {
@@ -223,6 +241,15 @@ impl AppCommand {
             Self::ShowRail(_) => "show-rail",
             Self::AddPage => "add-page",
             Self::PageMenu => "page-menu",
+            Self::OpenHelp => "open-help",
+            Self::CloseHelp => "close-help",
+            Self::SetDisplayName(_) => "set-display-name",
+            Self::ToggleStar(_) => "toggle-star",
+            Self::RemoveRecent(_) => "remove-recent",
+            Self::OpenStorageFolder => "open-storage-folder",
+            Self::RevealInExplorer(_) => "reveal-in-explorer",
+            Self::OpenDocsFolder => "open-docs-folder",
+            Self::RefreshLibrary => "refresh-library",
         }
     }
 }
@@ -359,6 +386,25 @@ impl crate::ui::PdfxiApp {
             }
             AppCommand::AddPage => self.not_available("Add page"),
             AppCommand::PageMenu => self.not_available("Page menu"),
+            AppCommand::OpenHelp => self.help_open = true,
+            AppCommand::CloseHelp => self.help_open = false,
+            AppCommand::SetDisplayName(name) => self.set_display_name(name),
+            AppCommand::ToggleStar(path) => {
+                let starred = self.library.toggle_star(&path);
+                self.status = if starred {
+                    format!("Starred {}", path.display())
+                } else {
+                    format!("Unstarred {}", path.display())
+                };
+            }
+            AppCommand::RemoveRecent(path) => {
+                self.library.remove_recent(&path);
+                self.status = format!("Removed {} from recent files", path.display());
+            }
+            AppCommand::OpenStorageFolder => self.open_storage_folder(),
+            AppCommand::RevealInExplorer(path) => self.reveal_path(&path),
+            AppCommand::OpenDocsFolder => self.open_docs_folder(),
+            AppCommand::RefreshLibrary => self.refresh_library(),
         }
     }
 }

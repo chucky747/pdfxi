@@ -116,14 +116,33 @@ impl WindowControlStyle {
 /// The complete persisted settings document.
 ///
 /// Missing fields use their defaults, so an older or hand-edited file still
-/// loads. Unknown keys are ignored by the TOML deserializer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// loads. Unknown keys are ignored by the TOML deserializer. Paths are stored
+/// as strings and expanded on load; relative paths are rejected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Theme preference (`light`, `dark`, or `system`).
     pub theme: ThemePreference,
     /// Window control style (`windows` or `macos`).
     pub window_controls: WindowControlStyle,
+    /// Local display name used for comment authors and signers.
+    pub display_name: String,
+    /// Local library folder; `None` uses the default Documents/PDFXI folder.
+    pub library_root: Option<PathBuf>,
+    /// Optional shared folder; when set, the Shared rail entry appears.
+    pub shared_folder: Option<PathBuf>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: ThemePreference::default(),
+            window_controls: WindowControlStyle::default(),
+            display_name: default_display_name(),
+            library_root: None,
+            shared_folder: None,
+        }
+    }
 }
 
 impl Settings {
@@ -132,10 +151,173 @@ impl Settings {
     /// The receiver is left untouched, so a flag can never be written back to
     /// disk by accident: only an explicit settings change persists a value.
     #[must_use]
-    pub fn with_overrides(self, options: &LaunchOptions) -> Self {
+    pub fn with_overrides(&self, options: &LaunchOptions) -> Self {
         Self {
             theme: options.theme.unwrap_or(self.theme),
             window_controls: options.window_controls.unwrap_or(self.window_controls),
+            ..self.clone()
+        }
+    }
+
+    /// The configured library folder, or the local Documents/PDFXI default.
+    #[must_use]
+    pub fn library_root_or_default(&self) -> Option<PathBuf> {
+        self.library_root.clone().or_else(default_library_root)
+    }
+}
+
+/// The platform account name, or `Reader` when the environment exposes none.
+#[must_use]
+pub fn default_display_name() -> String {
+    for key in ["USERNAME", "USER", "LOGNAME"] {
+        if let Some(value) = std::env::var_os(key) {
+            let value = value.to_string_lossy();
+            let value = value.trim();
+            if !value.is_empty() {
+                return value.to_owned();
+            }
+        }
+    }
+    "Reader".to_owned()
+}
+
+/// The per-user home directory, or `None` when the environment exposes none.
+#[must_use]
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+}
+
+/// Default local library folder: `Documents/PDFXI` under the home directory.
+#[must_use]
+pub fn default_library_root() -> Option<PathBuf> {
+    home_dir().map(|home| home.join("Documents").join("PDFXI"))
+}
+
+/// Expand `~`, `%VAR%` and `$VAR` in a stored path and require it to be absolute.
+///
+/// Relative paths and paths whose home directory cannot be resolved are
+/// rejected, so a hand-edited settings file cannot point the library elsewhere
+/// by accident.
+#[must_use]
+pub fn expand_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let replaced = if trimmed == "~" {
+        home_dir()?.to_string_lossy().into_owned()
+    } else if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
+        let mut base = home_dir()?.to_string_lossy().into_owned();
+        base.push(std::path::MAIN_SEPARATOR);
+        base.push_str(rest);
+        base
+    } else {
+        trimmed.to_owned()
+    };
+    let path = PathBuf::from(expand_env_vars(&replaced));
+    path.is_absolute().then_some(path)
+}
+
+/// Expand `%NAME%`, `$NAME` and `${NAME}` references in `input`.
+fn expand_env_vars(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < chars.len() {
+        let current = chars[index];
+        if current == '%'
+            && let Some(end) = chars[index + 1..].iter().position(|ch| *ch == '%')
+        {
+            let name: String = chars[index + 1..index + 1 + end].iter().collect();
+            if let Some(value) = std::env::var_os(&name) {
+                output.push_str(&value.to_string_lossy());
+                index += end + 2;
+                continue;
+            }
+        } else if current == '$' && index + 1 < chars.len() {
+            if chars[index + 1] == '{'
+                && let Some(end) = chars[index + 2..].iter().position(|ch| *ch == '}')
+            {
+                let name: String = chars[index + 2..index + 2 + end].iter().collect();
+                if let Some(value) = std::env::var_os(&name) {
+                    output.push_str(&value.to_string_lossy());
+                    index += end + 3;
+                    continue;
+                }
+            } else {
+                let mut end = index + 1;
+                while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
+                {
+                    end += 1;
+                }
+                if end > index + 1 {
+                    let name: String = chars[index + 1..end].iter().collect();
+                    if let Some(value) = std::env::var_os(&name) {
+                        output.push_str(&value.to_string_lossy());
+                        index = end;
+                        continue;
+                    }
+                }
+            }
+        }
+        output.push(current);
+        index += 1;
+    }
+    output
+}
+
+/// Resolve a path read from the settings file.
+fn resolve_stored_path(path: &Path) -> Option<PathBuf> {
+    expand_path(path.to_string_lossy().as_ref())
+}
+
+/// Settings overrides parsed from the command line.///
+/// Every field is optional: `None` means "use the saved setting".
+/// A rail/panel selected by a launch flag for captures and deep links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchPanel {
+    /// Home side panel.
+    Home,
+    /// Library folder.
+    Files,
+    /// Recent documents.
+    Recent,
+    /// Starred documents.
+    Starred,
+    /// Page thumbnails.
+    Pages,
+    /// Shared folder.
+    Shared,
+    /// Comments panel.
+    Comments,
+    /// AI assistant panel.
+    AiAssistant,
+}
+
+impl LaunchPanel {
+    /// Parse a user-facing rail name, ignoring ASCII case.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "home" => Some(Self::Home),
+            "files" => Some(Self::Files),
+            "recent" => Some(Self::Recent),
+            "starred" => Some(Self::Starred),
+            "pages" => Some(Self::Pages),
+            "shared" => Some(Self::Shared),
+            "comments" => Some(Self::Comments),
+            "ai" | "assistant" => Some(Self::AiAssistant),
+            _ => None,
         }
     }
 }
@@ -149,13 +331,15 @@ pub struct LaunchOptions {
     pub theme: Option<ThemePreference>,
     /// Window controls requested with `--controls=windows|macos`.
     pub window_controls: Option<WindowControlStyle>,
+    /// Rail requested with `--rail=...` or `--panel=...`.
+    pub panel: Option<LaunchPanel>,
 }
 
 impl LaunchOptions {
     /// Whether no override was requested.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.theme.is_none() && self.window_controls.is_none()
+        self.theme.is_none() && self.window_controls.is_none() && self.panel.is_none()
     }
 }
 
@@ -178,6 +362,13 @@ pub fn parse_launch_arguments(arguments: &[String]) -> LaunchOptions {
                     && let Some(style) = WindowControlStyle::parse(value)
                 {
                     options.window_controls = Some(style);
+                }
+                if let Some(value) = other
+                    .strip_prefix("--rail=")
+                    .or_else(|| other.strip_prefix("--panel="))
+                    && let Some(panel) = LaunchPanel::parse(value)
+                {
+                    options.panel = Some(panel);
                 }
             }
         }
@@ -222,7 +413,18 @@ pub fn default_path() -> Option<PathBuf> {
 #[must_use]
 pub fn load(path: &Path) -> Settings {
     match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).unwrap_or_default(),
+        Ok(text) => {
+            let mut settings: Settings = toml::from_str(&text).unwrap_or_default();
+            settings.library_root = settings
+                .library_root
+                .as_deref()
+                .and_then(resolve_stored_path);
+            settings.shared_folder = settings
+                .shared_folder
+                .as_deref()
+                .and_then(resolve_stored_path);
+            settings
+        }
         Err(_) => Settings::default(),
     }
 }
@@ -312,6 +514,7 @@ mod tests {
         let settings = Settings {
             theme: ThemePreference::Dark,
             window_controls: WindowControlStyle::MacOs,
+            ..Settings::default()
         };
         save(&path, &settings).expect("save settings");
         assert!(path.is_file(), "save creates the directory and the file");
@@ -320,6 +523,7 @@ mod tests {
         let light = Settings {
             theme: ThemePreference::Light,
             window_controls: WindowControlStyle::Windows,
+            ..Settings::default()
         };
         save(&path, &light).expect("overwrite settings");
         assert_eq!(load(&path), light, "the second save replaces the file");
@@ -362,6 +566,7 @@ mod tests {
             Settings {
                 theme: ThemePreference::Light,
                 window_controls: WindowControlStyle::MacOs,
+                ..Settings::default()
             },
             "unknown keys are ignored"
         );
@@ -374,6 +579,7 @@ mod tests {
         let saved = Settings {
             theme: ThemePreference::Dark,
             window_controls: WindowControlStyle::Windows,
+            ..Settings::default()
         };
 
         let flags = parse_launch_arguments(&["--light".to_owned(), "--controls=macos".to_owned()]);

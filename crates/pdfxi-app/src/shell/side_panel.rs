@@ -11,28 +11,23 @@ use super::widgets::shell_icon_button;
 impl PdfxiApp {
     /// Draw the side panel selected by the rail.
     pub(crate) fn side_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        egui::TopBottomPanel::bottom("shell_storage")
+            .exact_height(56.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 0,
+                right: 0,
+                top: 6,
+                bottom: 4,
+            }))
+            .show_inside(ui, |ui| self.storage_meter_ui(ui, palette));
+
         match self.active_rail {
             RailItem::Pages => self.pages_panel_ui(ui, palette),
             RailItem::Recent => self.recent_panel_ui(ui, palette),
             RailItem::Home => self.home_panel_ui(ui, palette),
-            RailItem::Files => self.future_panel(
-                ui,
-                palette,
-                "Files",
-                "The local library appears when Files is enabled",
-            ),
-            RailItem::Starred => self.future_panel(
-                ui,
-                palette,
-                "Starred",
-                "Starred documents appear when Starred is enabled",
-            ),
-            RailItem::Shared => self.future_panel(
-                ui,
-                palette,
-                "Shared",
-                "The shared folder appears when Shared is enabled",
-            ),
+            RailItem::Files => self.files_panel_ui(ui, palette),
+            RailItem::Starred => self.starred_panel_ui(ui, palette),
+            RailItem::Shared => self.shared_panel_ui(ui, palette),
             RailItem::Comments => self.future_panel(
                 ui,
                 palette,
@@ -46,6 +41,189 @@ impl PdfxiApp {
                 "The assistant appears when it is connected",
             ),
         }
+    }
+
+    /// Storage total and a bar scaled to the larger of used and 1 GB.
+    fn storage_meter_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let root = self.settings.library_root_or_default();
+        let folder = root
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("library");
+        let text = format!(
+            "{} used in {folder}",
+            crate::ui::library::format_bytes(self.storage_bytes)
+        );
+        let label = ui.add(
+            egui::Label::new(
+                egui::RichText::new(text)
+                    .size(10.0)
+                    .color(palette.text_muted),
+            )
+            .wrap_mode(egui::TextWrapMode::Extend)
+            .sense(egui::Sense::click()),
+        );
+        let (rect, bar) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::click());
+        let used = self.storage_bytes as f32;
+        let scale = used.max(1024.0 * 1024.0 * 1024.0);
+        let fraction = (used / scale).clamp(0.0, 1.0);
+        ui.painter().rect_filled(rect, 3.0, palette.surface);
+        let fill =
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction, rect.height()));
+        ui.painter().rect_filled(fill, 3.0, palette.accent);
+        if label.clicked() || bar.clicked() {
+            self.dispatch(AppCommand::OpenStorageFolder, Some(ui.ctx()));
+        }
+    }
+
+    /// Library folder listing with open and reveal actions.
+    fn files_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Files")
+                    .size(13.0)
+                    .color(palette.text_muted),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if shell_icon_button(ui, palette, Icon::Recent, 22.0)
+                    .on_hover_text("Refresh the library")
+                    .clicked()
+                {
+                    self.dispatch(AppCommand::RefreshLibrary, Some(ui.ctx()));
+                }
+            });
+        });
+        if !self.library_loaded {
+            self.refresh_library();
+        }
+        if self.library_entries.is_empty() {
+            ui.label(egui::RichText::new("No PDFs in this folder yet").color(palette.text_muted));
+            if ui.button("Open a PDF").clicked() {
+                self.dispatch(AppCommand::OpenDialog, Some(ui.ctx()));
+            }
+            return;
+        }
+        for entry in self.library_entries.clone() {
+            let title = short_title(&entry.title, 18);
+            ui.horizontal(|ui| {
+                if ui.selectable_label(false, title).clicked() {
+                    self.dispatch(
+                        AppCommand::OpenPath(entry.path.to_string_lossy().into_owned()),
+                        Some(ui.ctx()),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Reveal").clicked() {
+                        self.dispatch(
+                            AppCommand::RevealInExplorer(entry.path.clone()),
+                            Some(ui.ctx()),
+                        );
+                    }
+                });
+            });
+        }
+    }
+
+    /// Recent documents, with missing entries marked and removable.
+    fn recent_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(
+            egui::RichText::new("Recent")
+                .size(13.0)
+                .color(palette.text_muted),
+        );
+        if self.library.recent().is_empty() {
+            ui.label(
+                egui::RichText::new("Recent files appear after you open documents")
+                    .color(palette.text_muted),
+            );
+            return;
+        }
+        for entry in self.library.recent().to_vec() {
+            ui.horizontal(|ui| {
+                let title = if entry.is_missing() {
+                    format!("{} (missing)", entry.title)
+                } else {
+                    entry.title.clone()
+                };
+                let title = short_title(&title, 20);
+                if ui.selectable_label(false, title).clicked() && !entry.is_missing() {
+                    self.dispatch(
+                        AppCommand::OpenPath(entry.path.to_string_lossy().into_owned()),
+                        Some(ui.ctx()),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if entry.is_missing() {
+                        if ui.small_button("Remove").clicked() {
+                            self.dispatch(
+                                AppCommand::RemoveRecent(entry.path.clone()),
+                                Some(ui.ctx()),
+                            );
+                        }
+                    } else if ui.small_button("Star").clicked() {
+                        self.dispatch(AppCommand::ToggleStar(entry.path.clone()), Some(ui.ctx()));
+                    }
+                });
+            });
+        }
+    }
+
+    /// Starred documents.
+    fn starred_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(
+            egui::RichText::new("Starred")
+                .size(13.0)
+                .color(palette.text_muted),
+        );
+        let starred: Vec<std::path::PathBuf> = self.library.starred().iter().cloned().collect();
+        if starred.is_empty() {
+            ui.label(
+                egui::RichText::new("Star a document to keep it here").color(palette.text_muted),
+            );
+            return;
+        }
+        for path in starred {
+            let title = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Untitled");
+            let title = short_title(title, 18);
+            ui.horizontal(|ui| {
+                if ui.selectable_label(false, title).clicked() {
+                    self.dispatch(
+                        AppCommand::OpenPath(path.to_string_lossy().into_owned()),
+                        Some(ui.ctx()),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Unstar").clicked() {
+                        self.dispatch(AppCommand::ToggleStar(path.clone()), Some(ui.ctx()));
+                    }
+                });
+            });
+        }
+    }
+
+    /// Shared folder placeholder until round B implements browsing.
+    fn shared_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(
+            egui::RichText::new("Shared")
+                .size(13.0)
+                .color(palette.text_muted),
+        );
+        if let Some(folder) = &self.settings.shared_folder {
+            let name = folder
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("shared folder");
+            ui.label(egui::RichText::new(format!("Folder: {name}")).color(palette.text_muted));
+        }
+        ui.label(
+            egui::RichText::new("Shared review browsing arrives in round B")
+                .color(palette.text_muted),
+        );
     }
 
     /// Pages panel: header, grid/list toggle, optional organise actions.
@@ -93,24 +271,17 @@ impl PdfxiApp {
         self.thumbnails_ui(ui);
     }
 
-    /// Recent panel; the persisted list arrives with T-0221.
-    fn recent_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.label(egui::RichText::new("Recent").strong().size(13.0));
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new("Recent files appear after you open documents")
-                .color(palette.text_muted),
-        );
-    }
-
     /// Home panel: a short recent hint, no second open action.
     fn home_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         ui.label(egui::RichText::new("Home").strong().size(13.0));
         ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new("Recent files appear after you open documents")
-                .color(palette.text_muted),
-        );
+        let count = self.library.recent().len();
+        let message = match count {
+            0 => "Recent files appear after you open documents".to_owned(),
+            1 => "1 recent document".to_owned(),
+            _ => format!("{count} recent documents"),
+        };
+        ui.label(egui::RichText::new(message).color(palette.text_muted));
     }
 
     /// Placeholder for a rail entry whose feature has not landed yet.
@@ -334,4 +505,14 @@ impl PdfxiApp {
         }
         self.thumb_textures.get(&page).cloned()
     }
+}
+
+/// Shorten a title for a narrow panel row, adding an ellipsis when clipped.
+fn short_title(title: &str, max_chars: usize) -> String {
+    let mut chars = title.chars();
+    let mut shortened: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        shortened.push('…');
+    }
+    shortened
 }

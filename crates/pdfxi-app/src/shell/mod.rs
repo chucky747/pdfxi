@@ -15,6 +15,7 @@ pub mod dialogs;
 pub mod document_view;
 pub mod empty_state;
 pub mod find_bar;
+pub mod help;
 pub mod preferences;
 pub mod rail;
 pub mod side_panel;

@@ -181,6 +181,16 @@ impl PdfxiApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let avatar = avatar_button(ui, palette, &self.initials());
+                    if avatar.clicked() {
+                        self.identity_open = !self.identity_open;
+                    }
+                    if title_icon_button(ui, palette, Icon::Help, 26.0)
+                        .on_hover_text("Help")
+                        .clicked()
+                    {
+                        self.dispatch(AppCommand::OpenHelp, Some(ui.ctx()));
+                    }
                     let theme_glyph = match self.theme {
                         ThemeMode::Light => Icon::Moon,
                         ThemeMode::Dark => Icon::Sun,
@@ -382,4 +392,45 @@ impl PdfxiApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
         }
     }
+}
+
+impl PdfxiApp {
+    /// Draw the local display-name popover while it is open.
+    pub(crate) fn identity_window_ui(&mut self, ctx: &egui::Context) {
+        if !self.identity_open {
+            return;
+        }
+        let mut open = self.identity_open;
+        egui::Window::new("Your name")
+            .open(&mut open)
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.label("Shown on comments and signatures. It stays on this machine.");
+                ui.add(egui::TextEdit::singleline(&mut self.identity_name).desired_width(220.0));
+                if ui.button("Save").clicked() {
+                    self.dispatch(
+                        AppCommand::SetDisplayName(self.identity_name.clone()),
+                        Some(ui.ctx()),
+                    );
+                    self.identity_open = false;
+                }
+            });
+        self.identity_open = open && self.identity_open;
+    }
+}
+
+/// Small circular avatar showing the local initials.
+fn avatar_button(ui: &mut egui::Ui, palette: TitlePalette, initials: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    ui.painter()
+        .circle_filled(rect.center(), 13.0, palette.surface);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initials,
+        egui::FontId::proportional(10.0),
+        palette.text,
+    );
+    response.on_hover_text("Local display name")
 }

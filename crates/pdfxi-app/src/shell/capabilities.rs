@@ -61,15 +61,18 @@ impl Default for Capabilities {
 impl Capabilities {
     /// Capabilities that are enabled today.
     ///
-    /// Only the document workspace, the recent-file rail entry and bookmark
-    /// navigation exist. Every other entry is flipped on by the task that
-    /// implements it; the shell hides those controls until then.
+    /// The document workspace, recent files, bookmarks navigation, the local
+    /// Files library and starring exist. Shared is added by the shell when a
+    /// shared folder is configured; authoring, export, print, protect and AI
+    /// remain off until their task lands.
     #[must_use]
     pub fn available() -> Self {
         Self::none()
             .with(Capability::Documents)
             .with(Capability::Recent)
             .with(Capability::Bookmarks)
+            .with(Capability::Files)
+            .with(Capability::Starred)
     }
 
     /// No capabilities at all, for tests and for a deliberately bare shell.
