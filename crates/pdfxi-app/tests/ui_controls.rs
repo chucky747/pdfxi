@@ -120,6 +120,9 @@ struct Snapshot {
     close_policy: UiClosePolicy,
     selection: String,
     thumbnail_page: usize,
+    tools_open: bool,
+    grid_view: bool,
+    active_rail: RailItem,
 }
 
 fn snapshot(app: &PdfxiApp) -> Snapshot {
@@ -150,6 +153,9 @@ fn snapshot(app: &PdfxiApp) -> Snapshot {
         close_policy: app.close_policy(),
         selection: app.selected_text(),
         thumbnail_page: app.thumbnail_state().active_page(),
+        tools_open: app.tools_open(),
+        grid_view: app.grid_view(),
+        active_rail: app.active_rail(),
     }
 }
 
@@ -318,13 +324,18 @@ const PROVEN_LABELS: &[&str] = &[
     "submit-page-number",
     "add-page",
     "page-menu",
+    "toggle-tools",
+    "toggle-grid",
+    "show-rail",
 ];
 
 /// Commands that cannot change observable state in a window-free process.
 ///
 /// Each entry needs a concrete reason; "it is just a view command" is not
 /// accepted here, because view commands are proven through egui's viewport
-/// command queue instead.
+/// command queue instead. The reviewed list is exactly two entries
+/// (`open-dialog`, `copy-selection`); adding a third is a deliberate decision,
+/// enforced by `allowlisted_commands_have_a_reason`.
 const UNOBSERVABLE_ALLOWLIST: &[(&str, &str)] = &[
     (
         "open-dialog",
@@ -339,25 +350,6 @@ const UNOBSERVABLE_ALLOWLIST: &[(&str, &str)] = &[
          line only when a selection exists; the public shell has no selection \
          setter (selection is created by a canvas drag), so a headless dispatch \
          is the documented no-op for an empty selection",
-    ),
-    (
-        "toggle-tools",
-        "flips the private `tools_open` flag and persists it to shell \
-         preferences; the shell exposes no getter and a headless viewer has no \
-         preferences path, so no public state changes (T-0220 follow-up: add a \
-         `tools_open()` accessor and move this to PROVEN_LABELS)",
-    ),
-    (
-        "toggle-grid",
-        "flips the private `grid_view` flag used only while painting the \
-         thumbnail pane; no public getter exists (T-0220 follow-up: add a \
-         `grid_view()` accessor and move this to PROVEN_LABELS)",
-    ),
-    (
-        "show-rail",
-        "assigns the private `active_rail` after a capability check; no public \
-         getter exists and the default headless capability set may reject the \
-         item (T-0220 follow-up: add an `active_rail()` accessor and prove it)",
     ),
 ];
 
@@ -691,6 +683,20 @@ fn dispatched_shell_and_settings_commands_act() {
     );
     assert_eq!(app.window_controls(), WindowControlStyle::MacOs);
 
+    // T-0220 exposed accessors, so the three shell toggles are now provable.
+    let tools_before = app.tools_open();
+    assert_dispatch_acts("toggle-tools", &mut app, AppCommand::ToggleTools);
+    assert_eq!(app.tools_open(), !tools_before);
+
+    let grid_before = app.grid_view();
+    assert_dispatch_acts("toggle-grid", &mut app, AppCommand::ToggleGrid);
+    assert_eq!(app.grid_view(), !grid_before);
+
+    // Opening a document parks the rail on Pages; Home is enabled by default.
+    assert_eq!(app.active_rail(), RailItem::Pages);
+    assert_dispatch_acts("show-rail", &mut app, AppCommand::ShowRail(RailItem::Home));
+    assert_eq!(app.active_rail(), RailItem::Home);
+
     assert_dispatch_acts(
         "set-zoom-percent",
         &mut app,
@@ -785,6 +791,12 @@ fn viewport_commands_reach_the_egui_context() {
 
 #[test]
 fn allowlisted_commands_have_a_reason() {
+    assert_eq!(
+        UNOBSERVABLE_ALLOWLIST.len(),
+        2,
+        "the allowlist is reviewed at exactly two entries (open-dialog, \
+         copy-selection); adding one needs a deliberate decision and evidence"
+    );
     for (label, reason) in UNOBSERVABLE_ALLOWLIST {
         assert!(
             !reason.trim().is_empty(),
