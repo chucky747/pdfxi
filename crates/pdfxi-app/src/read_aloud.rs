@@ -476,6 +476,379 @@ impl SpeechSink for NullSpeechSink {
     fn stop(&mut self) {}
 }
 
+// ---------------------------------------------------------------------------
+// Deterministic cadence and reading-order utterance queue
+// ---------------------------------------------------------------------------
+
+/// Typed errors produced by the deterministic read-aloud queue.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ReadAloudError {
+    /// A queue was built from no speech chunks.
+    #[error("read-aloud utterance queue is empty")]
+    EmptyQueue,
+    /// An utterance index was outside the queue.
+    #[error("utterance index {index} out of range (length {len})")]
+    UtteranceOutOfRange {
+        /// Requested index.
+        index: usize,
+        /// Number of utterances in the queue.
+        len: usize,
+    },
+    /// A seek time was outside the plan duration.
+    #[error("seek time {ms} ms out of range (duration {duration_ms} ms)")]
+    TimeOutOfRange {
+        /// Requested time in milliseconds.
+        ms: u64,
+        /// Total plan duration in milliseconds.
+        duration_ms: u64,
+    },
+    /// A cadence field was zero where a positive value is required.
+    #[error("invalid cadence field: {field}")]
+    InvalidCadence {
+        /// Name of the offending field.
+        field: &'static str,
+    },
+}
+
+/// Fixed-point millisecond timing used to turn chunks into timed utterances.
+///
+/// All fields are integer milliseconds, so every duration and cumulative time
+/// is byte-for-byte reproducible. [`Self::from_voice`] derives a cadence from a
+/// voice's speaking rate using integer division only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cadence {
+    /// Milliseconds spent speaking one word. Must be non-zero.
+    pub word_ms: u32,
+    /// Extra milliseconds after a sentence boundary.
+    pub sentence_pause_ms: u32,
+    /// Extra milliseconds after a page break.
+    pub page_pause_ms: u32,
+}
+
+impl Cadence {
+    /// Validate a cadence. Only `word_ms` must be non-zero; pauses may be zero.
+    pub fn new(
+        word_ms: u32,
+        sentence_pause_ms: u32,
+        page_pause_ms: u32,
+    ) -> Result<Self, ReadAloudError> {
+        if word_ms == 0 {
+            return Err(ReadAloudError::InvalidCadence { field: "word_ms" });
+        }
+        Ok(Self {
+            word_ms,
+            sentence_pause_ms,
+            page_pause_ms,
+        })
+    }
+
+    /// Derive a deterministic cadence from voice settings.
+    ///
+    /// `word_ms` is `60_000 / rate_wpm`; a sentence pause is half a word and a
+    /// page pause is two words. Because [`VoiceSettings`] fields are public, the
+    /// rate is clamped with `max(1)` so a hostile struct literal cannot divide
+    /// by zero.
+    pub fn from_voice(voice: &VoiceSettings) -> Self {
+        let word_ms = 60_000u32 / u32::from(voice.rate_wpm.max(1));
+        Self {
+            word_ms,
+            sentence_pause_ms: word_ms / 2,
+            page_pause_ms: word_ms * 2,
+        }
+    }
+}
+
+impl Default for Cadence {
+    fn default() -> Self {
+        Self::from_voice(&VoiceSettings::default())
+    }
+}
+
+/// One timed unit of the reading-order utterance queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Utterance {
+    /// Speech chunk to be spoken.
+    pub chunk: SpeechChunk,
+    /// Time spent speaking the chunk's words, in milliseconds.
+    pub duration_ms: u32,
+    /// Trailing pause after the chunk, in milliseconds.
+    pub pause_ms: u32,
+    /// Cumulative start time in the plan, in milliseconds.
+    pub start_ms: u64,
+    /// Cumulative end time (including the trailing pause), in milliseconds.
+    pub end_ms: u64,
+}
+
+impl Utterance {
+    fn span_ms(&self) -> u64 {
+        u64::from(self.duration_ms) + u64::from(self.pause_ms)
+    }
+}
+
+/// The result of one deterministic playback tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TickOutcome {
+    /// Number of utterances completed by this tick.
+    pub completed: usize,
+    /// Cursor position after the tick.
+    pub cursor: usize,
+    /// Playback state after the tick.
+    pub state: PlaybackState,
+    /// Milliseconds of the supplied tick that were not consumed.
+    pub remaining_ms: u64,
+}
+
+/// A deterministic, reading-order queue of timed utterances.
+///
+/// The queue is built from the ordered [`SpeechChunk`]s produced by
+/// [`build_chunks`], so its iteration order is the document's reading order.
+/// A host calls [`Self::tick`] with wall-clock deltas; the queue converts them
+/// into chunk transitions using integer arithmetic with remainder carry, so a
+/// tick split into several smaller ticks produces exactly the same outcome as
+/// one large tick. No thread, timer, audio device, or sleep is used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UtteranceQueue {
+    utterances: Vec<Utterance>,
+    cursor: usize,
+    elapsed_ms: u64,
+    state: PlaybackState,
+    cadence: Cadence,
+}
+
+impl UtteranceQueue {
+    /// Build a queue from ordered speech chunks and a cadence.
+    ///
+    /// An empty chunk list is a typed [`ReadAloudError::EmptyQueue`] rather than
+    /// a silent no-op: a read-aloud session with no utterances has no meaningful
+    /// duration, cursor, or seek target.
+    pub fn new(chunks: Vec<SpeechChunk>, cadence: Cadence) -> Result<Self, ReadAloudError> {
+        if chunks.is_empty() {
+            return Err(ReadAloudError::EmptyQueue);
+        }
+        let mut queue = Self {
+            utterances: Vec::with_capacity(chunks.len()),
+            cursor: 0,
+            elapsed_ms: 0,
+            state: PlaybackState::Stopped,
+            cadence,
+        };
+        queue.rebuild(chunks);
+        Ok(queue)
+    }
+
+    /// Build a queue by chunking pages of spans in reading order.
+    pub fn from_pages(
+        pages: &[(usize, &[OwnedSpan])],
+        mode: ChunkMode,
+        cadence: Cadence,
+    ) -> Result<Self, ReadAloudError> {
+        Self::new(build_chunks(pages, mode), cadence)
+    }
+
+    /// Recompute all durations and cumulative times from chunks and cadence.
+    fn rebuild(&mut self, chunks: Vec<SpeechChunk>) {
+        self.utterances.clear();
+        let mut start_ms = 0u64;
+        for chunk in chunks {
+            let words = chunk.text.split_whitespace().count().max(1) as u32;
+            let duration_ms = words.saturating_mul(self.cadence.word_ms);
+            let pause_ms = match chunk.boundary {
+                ChunkBoundary::Word => 0,
+                ChunkBoundary::Sentence => self.cadence.sentence_pause_ms,
+                ChunkBoundary::PageBreak => self.cadence.page_pause_ms,
+                ChunkBoundary::End => 0,
+            };
+            let end_ms = start_ms.saturating_add(u64::from(duration_ms) + u64::from(pause_ms));
+            self.utterances.push(Utterance {
+                chunk,
+                duration_ms,
+                pause_ms,
+                start_ms,
+                end_ms,
+            });
+            start_ms = end_ms;
+        }
+        self.cursor = self.cursor.min(self.utterances.len().saturating_sub(1));
+        self.elapsed_ms = self
+            .elapsed_ms
+            .min(self.current().map(Utterance::span_ms).unwrap_or(0));
+    }
+
+    /// All utterances in reading order.
+    pub fn utterances(&self) -> &[Utterance] {
+        &self.utterances
+    }
+
+    /// Number of utterances in the queue.
+    pub fn len(&self) -> usize {
+        self.utterances.len()
+    }
+
+    /// Whether the queue has no utterances (cannot happen for a built queue).
+    pub fn is_empty(&self) -> bool {
+        self.utterances.is_empty()
+    }
+
+    /// Current playback state.
+    pub fn state(&self) -> PlaybackState {
+        self.state
+    }
+
+    /// Index of the current utterance.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// The current utterance, if any.
+    pub fn current(&self) -> Option<&Utterance> {
+        self.utterances.get(self.cursor)
+    }
+
+    /// Milliseconds elapsed inside the current utterance.
+    pub fn elapsed_ms(&self) -> u64 {
+        self.elapsed_ms
+    }
+
+    /// Total plan duration including trailing pauses, in milliseconds.
+    pub fn total_duration_ms(&self) -> u64 {
+        self.utterances
+            .last()
+            .map(|utterance| utterance.end_ms)
+            .unwrap_or(0)
+    }
+
+    /// Active cadence.
+    pub fn cadence(&self) -> Cadence {
+        self.cadence
+    }
+
+    /// Start or resume playback. From `Finished`, restart at the first chunk.
+    pub fn play(&mut self) -> PlaybackState {
+        if self.state == PlaybackState::Finished {
+            self.cursor = 0;
+            self.elapsed_ms = 0;
+        }
+        self.state = PlaybackState::Playing;
+        self.state
+    }
+
+    /// Resume a paused queue. Other states are unchanged.
+    pub fn resume(&mut self) -> PlaybackState {
+        if self.state == PlaybackState::Paused {
+            self.state = PlaybackState::Playing;
+        }
+        self.state
+    }
+
+    /// Pause a playing queue. Other states are unchanged.
+    pub fn pause(&mut self) -> PlaybackState {
+        if self.state == PlaybackState::Playing {
+            self.state = PlaybackState::Paused;
+        }
+        self.state
+    }
+
+    /// Stop and rewind to the first utterance.
+    pub fn stop(&mut self) -> PlaybackState {
+        self.cursor = 0;
+        self.elapsed_ms = 0;
+        self.state = PlaybackState::Stopped;
+        self.state
+    }
+
+    /// Advance playback by `delta_ms` using integer remainder carry.
+    ///
+    /// Only a `Playing` queue advances; other states return a zero-progress
+    /// outcome with the whole delta unspent. A tick that finishes the final
+    /// utterance leaves the cursor on it and transitions to `Finished`.
+    pub fn tick(&mut self, delta_ms: u64) -> TickOutcome {
+        if self.state != PlaybackState::Playing || self.utterances.is_empty() {
+            return TickOutcome {
+                completed: 0,
+                cursor: self.cursor,
+                state: self.state,
+                remaining_ms: delta_ms,
+            };
+        }
+        let mut remaining = delta_ms;
+        let mut completed = 0usize;
+        loop {
+            let span = self.current().map(Utterance::span_ms).unwrap_or(0).max(1);
+            let need = span.saturating_sub(self.elapsed_ms);
+            if remaining < need {
+                self.elapsed_ms = self.elapsed_ms.saturating_add(remaining);
+                remaining = 0;
+                break;
+            }
+            remaining -= need;
+            self.elapsed_ms = 0;
+            completed += 1;
+            if self.cursor + 1 < self.utterances.len() {
+                self.cursor += 1;
+            } else {
+                self.state = PlaybackState::Finished;
+                self.elapsed_ms = span;
+                break;
+            }
+        }
+        TickOutcome {
+            completed,
+            cursor: self.cursor,
+            state: self.state,
+            remaining_ms: remaining,
+        }
+    }
+
+    /// Move the cursor to an utterance index, pausing there.
+    pub fn seek_to_utterance(&mut self, index: usize) -> Result<usize, ReadAloudError> {
+        if index >= self.utterances.len() {
+            return Err(ReadAloudError::UtteranceOutOfRange {
+                index,
+                len: self.utterances.len(),
+            });
+        }
+        self.cursor = index;
+        self.elapsed_ms = 0;
+        self.state = PlaybackState::Paused;
+        Ok(index)
+    }
+
+    /// Move the cursor to the utterance active at `ms`, pausing there.
+    ///
+    /// Seeking exactly to the total duration positions at the final utterance
+    /// with its elapsed time fully consumed. Any larger time is a typed error.
+    pub fn seek_to_time(&mut self, ms: u64) -> Result<usize, ReadAloudError> {
+        let total = self.total_duration_ms();
+        if ms > total {
+            return Err(ReadAloudError::TimeOutOfRange {
+                ms,
+                duration_ms: total,
+            });
+        }
+        let index = self
+            .utterances
+            .iter()
+            .position(|utterance| ms < utterance.end_ms)
+            .unwrap_or(self.utterances.len().saturating_sub(1));
+        self.cursor = index;
+        self.elapsed_ms = ms.saturating_sub(self.utterances[index].start_ms);
+        self.state = PlaybackState::Paused;
+        Ok(index)
+    }
+
+    /// Replace the cadence and recompute every duration deterministically.
+    pub fn set_cadence(&mut self, cadence: Cadence) -> Result<(), ReadAloudError> {
+        let chunks = self
+            .utterances
+            .iter()
+            .map(|utterance| utterance.chunk.clone())
+            .collect();
+        self.cadence = cadence;
+        self.rebuild(chunks);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,5 +1051,144 @@ mod tests {
         sink.speak(&request);
         sink.stop();
         assert_eq!(sink, NullSpeechSink);
+    }
+
+    fn cadence() -> Cadence {
+        Cadence::new(100, 25, 200).expect("valid test cadence")
+    }
+
+    #[test]
+    fn utterance_queue_is_deterministic_and_carries_reading_order() {
+        let p0 = [span("alpha beta.")];
+        let p1 = [span("gamma delta.")];
+        let pages = [(0, p0.as_slice()), (1, p1.as_slice())];
+        let queue = UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence())
+            .expect("utterance queue");
+        let texts: Vec<&str> = queue
+            .utterances()
+            .iter()
+            .map(|utterance| utterance.chunk.text.as_str())
+            .collect();
+        assert_eq!(texts, vec!["alpha", "beta.", "gamma", "delta."]);
+        // One word per chunk: 100 ms of speech plus boundary pauses.
+        assert_eq!(queue.utterances()[0].duration_ms, 100);
+        assert_eq!(queue.utterances()[0].pause_ms, 0);
+        assert_eq!(queue.utterances()[1].pause_ms, 200); // last word on page 0
+        assert_eq!(queue.utterances()[3].pause_ms, 0); // final chunk
+        assert_eq!(queue.utterances()[3].end_ms, 100 + 300 + 100 + 100);
+        assert_eq!(queue.total_duration_ms(), 100 + 300 + 100 + 100);
+        assert_eq!(
+            queue,
+            UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("repeat")
+        );
+    }
+
+    #[test]
+    fn tick_remainder_carry_matches_one_large_tick() {
+        let p0 = [span("one two. three four.")];
+        let pages = [(0, p0.as_slice())];
+        let build =
+            || UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("queue");
+        let mut single = build();
+        single.play();
+        let one = single.tick(1_000);
+        let mut chunked = build();
+        chunked.play();
+        let a = chunked.tick(120);
+        let b = chunked.tick(330);
+        let c = chunked.tick(550);
+        assert_eq!(a.completed + b.completed + c.completed, one.completed);
+        assert_eq!(chunked, single);
+        assert_eq!(chunked.cursor(), single.cursor());
+        assert_eq!(chunked.state(), single.state());
+    }
+
+    #[test]
+    fn pause_resume_seek_and_stop_are_deterministic() {
+        let p0 = [span("a b. c d.")];
+        let pages = [(0, p0.as_slice())];
+        let mut queue =
+            UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("queue");
+        assert_eq!(queue.play(), PlaybackState::Playing);
+        assert_eq!(queue.tick(10).completed, 0);
+        assert_eq!(queue.pause(), PlaybackState::Paused);
+        let paused = queue.clone();
+        assert_eq!(queue.tick(10_000).completed, 0);
+        assert_eq!(queue, paused);
+        assert_eq!(queue.resume(), PlaybackState::Playing);
+        assert_eq!(queue.seek_to_utterance(2), Ok(2));
+        assert_eq!(queue.state(), PlaybackState::Paused);
+        assert_eq!(queue.elapsed_ms(), 0);
+        assert_eq!(
+            queue.seek_to_time(queue.utterances()[1].start_ms + 5),
+            Ok(1)
+        );
+        assert_eq!(queue.elapsed_ms(), 5);
+        assert_eq!(queue.stop(), PlaybackState::Stopped);
+        assert_eq!(queue.cursor(), 0);
+        assert_eq!(queue.elapsed_ms(), 0);
+    }
+
+    #[test]
+    fn cadence_change_recomputes_timing_deterministically() {
+        let p0 = [span("one two.")];
+        let pages = [(0, p0.as_slice())];
+        let mut queue =
+            UtteranceQueue::from_pages(&pages, ChunkMode::Word, cadence()).expect("queue");
+        let original = queue.total_duration_ms();
+        let faster = Cadence::new(50, 10, 100).expect("cadence");
+        queue.set_cadence(faster).expect("set cadence");
+        assert_eq!(queue.cadence(), faster);
+        assert!(queue.total_duration_ms() < original);
+        assert_eq!(
+            queue,
+            UtteranceQueue::from_pages(&pages, ChunkMode::Word, faster).expect("rebuilt")
+        );
+    }
+
+    #[test]
+    fn cadence_from_voice_is_deterministic_and_guards_zero_rate() {
+        let settings = VoiceSettings::default();
+        let derived = Cadence::from_voice(&settings);
+        assert_eq!(derived.word_ms, 60_000 / u32::from(settings.rate_wpm));
+        assert_eq!(derived.sentence_pause_ms, derived.word_ms / 2);
+        assert_eq!(derived.page_pause_ms, derived.word_ms * 2);
+        let hostile = VoiceSettings {
+            rate_wpm: 0,
+            pitch: 1.0,
+            voice: "x".to_string(),
+        };
+        assert_eq!(Cadence::from_voice(&hostile).word_ms, 60_000);
+    }
+
+    #[test]
+    fn utterance_queue_rejects_empty_and_invalid_ranges() {
+        let empty: [OwnedSpan; 0] = [];
+        assert_eq!(
+            UtteranceQueue::from_pages(&[(0, empty.as_slice())], ChunkMode::Word, cadence()),
+            Err(ReadAloudError::EmptyQueue)
+        );
+        assert_eq!(
+            Cadence::new(0, 1, 1),
+            Err(ReadAloudError::InvalidCadence { field: "word_ms" })
+        );
+        let spans = [span("a b.")];
+        let mut queue =
+            UtteranceQueue::from_pages(&[(0, spans.as_slice())], ChunkMode::Word, cadence())
+                .expect("queue");
+        let len = queue.len();
+        assert_eq!(
+            queue.seek_to_utterance(len),
+            Err(ReadAloudError::UtteranceOutOfRange { index: len, len })
+        );
+        let total = queue.total_duration_ms();
+        assert_eq!(
+            queue.seek_to_time(total + 1),
+            Err(ReadAloudError::TimeOutOfRange {
+                ms: total + 1,
+                duration_ms: total
+            })
+        );
+        assert_eq!(queue.seek_to_time(total), Ok(len - 1));
     }
 }

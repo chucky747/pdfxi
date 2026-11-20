@@ -70,13 +70,17 @@
 //! deterministic navigation report. The
 //! [`read_aloud`] module builds ordered speech chunks with word/sentence
 //! boundaries and drives them with a window-free play/pause/step state machine
-//! behind an explicit host speech-sink boundary. The [`reflow`] module builds a
-//! deterministic, width-bound column layout from caller-supplied text blocks,
-//! with page navigation, scroll clamping, and a read-aloud cursor that maps
-//! character offsets back to blocks by reusing the shared chunker. The
+//! behind an explicit host speech-sink boundary. It also offers a deterministic
+//! [`read_aloud::UtteranceQueue`]: reading-order utterances with fixed-point
+//! millisecond cadence, remainder-carrying ticks, pause/resume/seek, and typed
+//! range errors. The [`reflow`] module builds a deterministic, width-bound
+//! column layout from caller-supplied text blocks, with page navigation, scroll
+//! clamping, blank-line [`reflow::ReflowParagraph`] segmentation, and a read-
+//! aloud cursor that maps character offsets back to blocks. The
 //! [`compare_view`] module aligns two panes of caller-supplied extracted lines
-//! into a deterministic row plan with match/insert/delete markers and a scroll-
-//! sync mapping between panes. The [`a11y`] module derives a
+//! into a deterministic row plan with match/insert/delete markers, a scroll-
+//! sync mapping between panes, and a page-level [`compare_view::PagePairing`]
+//! with aligned/inserted/deleted classification and typed page errors. The [`a11y`] module derives a
 //! deterministic accessibility node tree, focus announcements, and a screen-
 //! reader host adapter from a caller-supplied state snapshot; with the `ui`
 //! feature it registers that tree through `egui`'s AccessKit re-export.
@@ -84,10 +88,13 @@
 //! embedded-file collection summary: traversal-free internal paths, a
 //! deterministic sorted folder/file tree, and a typed report of unsupported or
 //! duplicate entries. [`portfolio_manage`] adds deterministic add/remove/rename/
-//! move operations with a serializable plan, and [`shared_folder`] supplies the
-//! ADR 0008 local, file-based equivalent of a network/SharePoint library: a
-//! validated shared-folder root and a deterministic enumeration plan. None of
-//! these three modules reads file bytes or touches the network.
+//! move/describe operations with an ordered plan that round-trips through
+//! [`portfolio_manage::ManagePlan::parse`]. [`shared_folder`] supplies the ADR
+//! 0008 local, file-based equivalent of a network/SharePoint library: a
+//! validated shared-folder root, a deterministic enumeration plan, and a
+//! workspace/sync descriptor model with revision-aware conflict detection and
+//! a stable host-applicable sync plan. None of these three modules reads file
+//! bytes or touches the network.
 //! [`AppState`] is the tabbed document workspace: it owns an insertion-ordered
 //! set of stable-id tabs, each with its own path, dirty flag, and per-tab view
 //! state (page, zoom, layout, rotation, and scroll offset). Open, close,
@@ -162,7 +169,8 @@ pub use compare::{
 };
 pub use compare_view::{
     AlignedRow, ComparePage, ComparePaneInput, CompareViewError, CompareViewModel,
-    CompareViewSummary, MAX_ALIGN_CELLS, MAX_COMPARE_LINES, RowCell, RowKind, ScrollSync,
+    CompareViewSummary, MAX_ALIGN_CELLS, MAX_COMPARE_LINES, PagePair, PagePairKind,
+    PagePairSummary, PagePairing, RowCell, RowKind, ScrollSync,
 };
 pub use cross_file::{
     CrossFileError, CrossFileHit, CrossFileQuery, CrossFileReport, CrossFileSearch, CrossMatch,
@@ -228,19 +236,23 @@ pub use print::{
 };
 pub use raster::{DEFAULT_RASTER_LIMIT, RasterCache, RasterError, RasterKey};
 pub use read_aloud::{
-    ChunkBoundary, ChunkMode, NullSpeechSink, PlaybackState, ReadAloudPlan, SpeechChunk,
-    SpeechRequest, SpeechSink, VoiceSettings, build_chunks,
+    Cadence, ChunkBoundary, ChunkMode, NullSpeechSink, PlaybackState, ReadAloudError,
+    ReadAloudPlan, SpeechChunk, SpeechRequest, SpeechSink, TickOutcome, Utterance, UtteranceQueue,
+    VoiceSettings, build_chunks,
 };
 pub use reflow::{
     FontMetric, MAX_REFLOW_BLOCKS, MAX_REFLOW_LINES, MAX_REFLOW_TEXT_LEN, ReadAloudCursor,
-    ReflowBlock, ReflowError, ReflowLayout, ReflowLine, TextBlock,
+    ReflowBlock, ReflowError, ReflowLayout, ReflowLine, ReflowParagraph, TextBlock,
+    segment_paragraphs,
 };
 pub use selection::{
     OwnedSpan, OwnedTextPage, SelectableTextPage, Selection, SelectionModel, SpanView, TextAnchor,
 };
 pub use shared_folder::{
-    DEFAULT_SHARED_FOLDER_MAX_ENTRIES, MAX_SHARED_FOLDER_EXTENSIONS, MAX_SHARED_FOLDER_ROOT_LEN,
-    SharedFolderError, SharedFolderListingPlan, SharedFolderPath, SharedFolderSource,
+    ConflictKind, ConflictReport, DEFAULT_SHARED_FOLDER_MAX_ENTRIES, MAX_REVISION_LEN,
+    MAX_SHARED_FOLDER_EXTENSIONS, MAX_SHARED_FOLDER_ROOT_LEN, MAX_SYNC_ITEMS, SharedFolderError,
+    SharedFolderListingPlan, SharedFolderPath, SharedFolderSource, SyncAction, SyncConflict,
+    SyncItem, SyncPlan, SyncStep, WorkspaceDescriptor, detect_conflicts,
 };
 pub use split::{
     DEFAULT_DIVIDER_THICKNESS, DEFAULT_MINIMUM_PANE, DEFAULT_SPLIT_RATIO, Divider, DividerAxis,

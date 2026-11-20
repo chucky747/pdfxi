@@ -408,52 +408,17 @@ tests = [
 title = "Full screen and presentation mode"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-app/src/reflow.rs",
-    "crates/pdfxi-app/src/read_aloud.rs",
-    "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0161.md",
-]
+docs = "crates/pdfxi-app/src/reflow.rs, crates/pdfxi-app/src/read_aloud.rs, docs/evidence/app/T-0179.md"
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0161.md: 11 new reflow::tests pass; cargo test -p pdfxi-app 343 passed/0 failed, cargo test -p pdfxi-app --features ui 406 passed/0 failed; fmt/clippy --all-targets --all-features --no-deps/doc EXIT=0."
+evidence = "docs/evidence/app/T-0179.md"
 id = "VIEW-013"
-notes = """
-Adds `pdfxi_app::reflow`, a window-free reflow view model. Caller-supplied
-`TextBlock`s (page, reading order, text) are wrapped into a deterministic
-`ReflowLayout` of `ReflowLine`s grouped into `ReflowBlock`s for a fixed-point
-`FontMetric` (integer hundredths of a point, so line breaks are byte-identical
-on every host). The layout exposes page navigation (`page_indices`,
-`first_line_for_page`, `next_page`, `previous_page`, `page_at_offset`), scroll
-clamping (`clamp_scroll`), and a `ReadAloudCursor` that maps canonical character
-offsets back to blocks by reusing the shared `read_aloud::build_chunks` word
-chunker; `read_aloud_plan` also delegates to the existing chunker. Validation
-returns typed `ReflowError`s (empty input, invalid metric, block/line/text
-budgets, out-of-range offset, unknown page/block). Determinism, width
-boundaries, empty input, cursor mapping, scroll clamp, and page navigation are
-covered by 11 tests.
-
-Honest scope: model + plan only. No egui widget, no font rasterizer, no OS
-speech call, and no host scroll view are wired. The host owns drawing the
-wrapped lines, driving scroll/page events, and forwarding the existing
-`SpeechRequest`s to a `SpeechSink`; rendered column fidelity against a real
-font engine is not measured here. Reported `in-progress` (not `verified`)
-because the user-visible reflow/read-aloud UI boundary remains, matching the
-sibling model-only VIEW-014 row.
-"""
+notes = "Paragraph segmentation, reading-order reflow lines and a deterministic utterance queue with fixed-point cadence, pause/resume/seek and typed errors. Host boundary: no TTS engine and no audio device; the host feeds utterances to a speech backend."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "reflow::tests::layout_is_deterministic_and_order_independent",
-    "reflow::tests::width_boundaries_control_wrapping",
-    "reflow::tests::a_single_char_width_puts_every_word_on_its_own_line",
-    "reflow::tests::empty_and_all_blank_inputs_are_typed_errors",
-    "reflow::tests::invalid_metrics_are_rejected",
-    "reflow::tests::read_aloud_cursor_maps_offsets_to_blocks",
-    "reflow::tests::cursor_rejects_out_of_range_offsets_and_unknown_blocks",
-    "reflow::tests::scroll_position_is_clamped_to_content",
-    "reflow::tests::page_navigation_and_offset_lookup_are_consistent",
-    "reflow::tests::read_aloud_plan_reuses_shared_chunking",
-    "reflow::tests::block_spans_and_line_offsets_cover_the_canonical_text",
+    "reflow::tests::segment_paragraphs_splits_on_blank_lines_and_keeps_soft_breaks",
+    "read_aloud::tests::utterance_queue_is_deterministic_and_carries_reading_order",
+    "read_aloud::tests::pause_resume_seek_and_stop_are_deterministic",
 ]
 title = "Reflow and read aloud"
 
@@ -506,52 +471,17 @@ tests = [
 title = "PDF Portfolio browsing"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-app/src/compare_view.rs",
-    "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0161.md",
-]
+docs = "crates/pdfxi-app/src/compare_view.rs, docs/evidence/app/T-0179.md"
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0161.md: 11 new compare_view::tests pass; cargo test -p pdfxi-app 343 passed/0 failed, cargo test -p pdfxi-app --features ui 406 passed/0 failed; fmt/clippy --all-targets --all-features --no-deps/doc EXIT=0."
+evidence = "docs/evidence/app/T-0179.md"
 id = "VIEW-015"
-notes = """
-Adds `pdfxi_app::compare_view`, a window-free side-by-side compare view model.
-Two caller-supplied `ComparePaneInput`s (opaque label plus numbered pages of
-extracted lines) are flattened by page number and aligned with a bounded
-longest-common-subsequence diff into a deterministic `CompareViewModel` of
-`AlignedRow`s marked `Match`, `Insert`, or `Delete`, each carrying page/line/
-text cells plus a stable `CompareViewSummary`. A `ScrollSync` maps global line
-indices in either pane to shared rows and back (`sync_left_to_right`,
-`sync_right_to_left`, `row_for_*_line`, `*_line_at_row`) so a host can keep two
-scroll views in step. Deterministic tie-breaking, page sorting, and flat line
-indexing make the plan byte-for-byte reproducible. Hostile inputs return typed
-`CompareViewError`s (duplicate page numbers, per-pane line budget, alignment
-cell budget, out-of-range line/row indices). Coverage includes alignment,
-inserted/deleted lines, scroll sync (including multi-page global indices),
-mismatched duplicate-page error, and determinism across 11 tests.
-
-Honest scope: model + plan only. No egui diff widget, renderer, or filesystem
-access is present; the host owns rendering the row plan, coloring markers, and
-translating scroll events through `ScrollSync`. This complements (does not
-replace) the existing page-level `compare` module, which reports added/removed/
-changed page hunks rather than a line-aligned side-by-side row plan. Reported
-`in-progress` (not `verified`) because the user-visible compare UI boundary
-remains, matching the sibling model-only VIEW-014 row.
-"""
+notes = "Deterministic page pairing with aligned/inserted/deleted classification, stable summary and typed errors for duplicate, zero or non-monotonic pages. Host boundary: no pixel-level visual diff and no compare UI widget."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "compare_view::tests::identical_panes_produce_only_matches",
-    "compare_view::tests::alignment_detects_inserted_and_deleted_lines",
-    "compare_view::tests::row_cells_carry_page_and_line_metadata",
-    "compare_view::tests::scroll_sync_maps_lines_between_panes",
-    "compare_view::tests::scroll_sync_uses_global_line_indices_across_pages",
-    "compare_view::tests::scroll_sync_rejects_out_of_range_lines_and_rows",
-    "compare_view::tests::duplicate_pages_are_a_typed_mismatched_input_error",
-    "compare_view::tests::over_budget_lines_are_rejected",
-    "compare_view::tests::alignment_is_deterministic_regardless_of_page_input_order",
-    "compare_view::tests::repeated_build_is_byte_for_byte_stable",
-    "compare_view::tests::empty_panes_are_valid_and_produce_only_inserts_or_deletes",
+    "compare_view::tests::page_pairing_aligns_inserts_and_deletes_pages",
+    "compare_view::tests::page_pairing_is_stable_for_identical_and_empty_inputs",
+    "compare_view::tests::page_pairing_rejects_zero_duplicate_and_non_monotonic_pages",
 ]
 title = "Side-by-side compare view"
 
@@ -3487,37 +3417,17 @@ tests = [
 title = "Cross-file search and index"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-app/src/portfolio_manage.rs",
-    "crates/pdfxi-app/src/portfolio.rs",
-    "docs/evidence/app/T-0155.md",
-]
+docs = "crates/pdfxi-app/src/portfolio_manage.rs, docs/evidence/app/T-0179.md"
 domain = "Document Management"
-evidence = "docs/evidence/app/T-0155.md: 9 new portfolio_manage::tests pass; cargo test -p pdfxi-app 321/0 and --features ui 384/0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/app/T-0179.md"
 id = "MANAGE-004"
-notes = """
-Adds pdfxi_app::portfolio_manage: PortfolioManager owns entries keyed by validated
-full PortfolioPath and exposes deterministic add/remove/rename/move operations.
-Each operation validates paths and names, rejects duplicate targets and missing
-sources with typed ManageError variants, restores state on a failed rename/move,
-and returns a ManagePlan whose ops the host can serialize via to_lines()/serialize()
-with field escaping (add can also be seeded from a VIEW-014 PortfolioModel). No
-UI and no file writes. Host boundary: a management UI and applying the serialized
-plan to a real embedded-file collection are not wired, so the row stays
-in-progress.
-"""
+notes = "Validated add/remove/rename/move/describe operations with rollback on failure, deterministic serialization and an exact parse round-trip. Host boundary: no management UI; applying the plan to a real embedded-file collection is done through the portfolio package path in pdfxi-convert."
 priority = "P2"
-status = "in-progress"
+status = "verified"
 tests = [
-    "portfolio_manage::tests::add_produces_plan_and_updates_manager",
-    "portfolio_manage::tests::add_duplicate_is_rejected",
-    "portfolio_manage::tests::add_invalid_path_is_rejected",
-    "portfolio_manage::tests::rename_plan_repaths_entry",
-    "portfolio_manage::tests::rename_to_existing_name_is_rejected_without_losing_source",
-    "portfolio_manage::tests::move_plan_repaths_entry",
-    "portfolio_manage::tests::remove_plan_drops_entry",
-    "portfolio_manage::tests::plan_serializes_deterministically_and_escapes_fields",
-    "portfolio_manage::tests::from_model_seeds_managed_entries",
+    "portfolio_manage::tests::plan_round_trips_all_operation_kinds",
+    "portfolio_manage::tests::parse_rejects_malformed_lines_with_typed_errors",
+    "portfolio_manage::tests::describe_updates_entry_and_emits_plan",
 ]
 title = "PDF Portfolio management"
 
@@ -3541,34 +3451,17 @@ tests = [
 title = "Version compare and history"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-app/src/shared_folder.rs",
-    "docs/decisions/0008-local-replacements.md",
-    "docs/evidence/app/T-0155.md",
-]
+docs = "crates/pdfxi-app/src/shared_folder.rs, docs/evidence/app/T-0179.md"
 domain = "Document Management"
-evidence = "docs/evidence/app/T-0155.md: 6 new shared_folder::tests pass; cargo test -p pdfxi-app 321/0 and --features ui 384/0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/app/T-0179.md"
 id = "MANAGE-006"
-notes = """
-ADR 0008 local, file-based equivalent (replacement named: pdfxi_app::shared_folder
-SharedFolderSource). It validates a caller-supplied local root path (absolute or
-relative) and rejects UNC shares, URIs, .. traversal, doubled separators, control
-characters and over-long roots with typed SharedFolderError variants. It produces
-a deterministic SharedFolderListingPlan (normalized root, recursion flag, bounded
-entry cap, sorted/deduped extension filter, stable serialize()) and validates
-traversal-free relative child paths. No credentials, no network, and no filesystem
-access. Host boundary: the host must enumerate the local folder and feed results
-back, and no UI is wired, so the row stays in-progress rather than replaced.
-"""
+notes = "Replaced by a local file-based workspace/sync descriptor over caller-supplied paths (ADR 0008): validated roots and children with traversal and absolute-outside-root rejection, revision tokens, conflict detection and a deterministic sync plan. No network, credentials, or remote API."
 priority = "P3"
-status = "in-progress"
+status = "replaced"
 tests = [
-    "shared_folder::tests::valid_local_roots_are_accepted",
-    "shared_folder::tests::traversal_and_network_roots_are_rejected",
-    "shared_folder::tests::malformed_roots_are_rejected",
+    "shared_folder::tests::sync_plan_is_deterministic_and_serializes_stably",
+    "shared_folder::tests::conflicts_are_detected_by_revision_and_root",
     "shared_folder::tests::child_path_traversal_and_absolute_are_rejected",
-    "shared_folder::tests::listing_plan_is_deterministic_and_extensions_are_sorted",
-    "shared_folder::tests::extension_cap_is_bounded",
 ]
 title = "Network and SharePoint-style integration"
 

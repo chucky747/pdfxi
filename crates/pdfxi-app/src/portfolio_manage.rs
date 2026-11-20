@@ -11,8 +11,9 @@
 use std::collections::BTreeMap;
 
 use crate::portfolio::{
-    MAX_PORTFOLIO_ENTRIES, MAX_PORTFOLIO_NAME_LEN, PortfolioEntry, PortfolioError, PortfolioModel,
-    PortfolioNode, PortfolioPath, PortfolioPathError, PortfolioSummary,
+    MAX_PORTFOLIO_DESCRIPTION_LEN, MAX_PORTFOLIO_ENTRIES, MAX_PORTFOLIO_NAME_LEN, PortfolioEntry,
+    PortfolioError, PortfolioModel, PortfolioNode, PortfolioPath, PortfolioPathError,
+    PortfolioSummary,
 };
 
 /// Typed error for a portfolio management operation.
@@ -36,6 +37,17 @@ pub enum ManageError {
     /// The portfolio model could not be built.
     #[error(transparent)]
     Model(#[from] PortfolioError),
+    /// A description exceeded the supported length.
+    #[error("invalid portfolio description (maximum {MAX_PORTFOLIO_DESCRIPTION_LEN} characters)")]
+    InvalidDescription,
+    /// A serialized plan could not be parsed back.
+    #[error("invalid management plan at line {line}: {reason}")]
+    InvalidPlan {
+        /// One-based line number in the serialized plan.
+        line: usize,
+        /// Why the line was rejected.
+        reason: &'static str,
+    },
 }
 
 /// One recorded step of a [`ManagePlan`].
@@ -70,6 +82,13 @@ pub enum ManageOp {
         new_path: PortfolioPath,
         /// The destination folder.
         new_folder: PortfolioPath,
+    },
+    /// An entry's description was replaced.
+    Describe {
+        /// Full path of the described entry.
+        path: PortfolioPath,
+        /// The new description.
+        description: String,
     },
 }
 
@@ -108,6 +127,40 @@ impl ManagePlan {
     /// Serialize the plan to a single deterministic string.
     pub fn serialize(&self) -> String {
         self.to_lines().join("\n")
+    }
+
+    /// Parse a serialized plan back into the same ordered operations.
+    ///
+    /// This is the exact inverse of [`Self::serialize`] for plans produced by
+    /// this module: field escaping is undone, paths and numbers are revalidated,
+    /// and redundant fields are checked for consistency. Malformed lines are
+    /// reported as typed [`ManageError::InvalidPlan`] values with a one-based
+    /// line number, so a host can reject a hostile or truncated descriptor
+    /// instead of applying a partially understood plan.
+    pub fn parse(serialized: &str) -> Result<Self, ManageError> {
+        if serialized.is_empty() {
+            return Ok(Self::new());
+        }
+        let mut ops = Vec::new();
+        for (position, raw_line) in serialized.split('\n').enumerate() {
+            let line_number = position + 1;
+            let fields = split_fields(raw_line, line_number)?;
+            let op = match fields.first().map(String::as_str) {
+                Some("ADD") => parse_add(&fields, line_number)?,
+                Some("REMOVE") => parse_remove(&fields, line_number)?,
+                Some("RENAME") => parse_rename(&fields, line_number)?,
+                Some("MOVE") => parse_move(&fields, line_number)?,
+                Some("DESCRIBE") => parse_describe(&fields, line_number)?,
+                _ => {
+                    return Err(ManageError::InvalidPlan {
+                        line: line_number,
+                        reason: "unknown operation",
+                    });
+                }
+            };
+            ops.push(op);
+        }
+        Ok(Self { ops })
     }
 }
 
@@ -173,7 +226,191 @@ fn op_line(op: &ManageOp) -> String {
             path_fields(new_path),
             escape_field(&new_folder.as_str()),
         ),
+        ManageOp::Describe { path, description } => format!(
+            "DESCRIBE|{}|{}",
+            path_fields(path),
+            escape_field(description),
+        ),
     }
+}
+
+/// Split a serialized line on unescaped `|` separators.
+fn split_fields(raw_line: &str, line: usize) -> Result<Vec<String>, ManageError> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut chars = raw_line.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                current.push(ch);
+                let next = chars.next().ok_or(ManageError::InvalidPlan {
+                    line,
+                    reason: "dangling escape",
+                })?;
+                current.push(next);
+            }
+            '|' => {
+                fields.push(unescape_field(&current, line)?);
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    fields.push(unescape_field(&current, line)?);
+    Ok(fields)
+}
+
+/// Undo the escaping performed by [`escape_field`].
+fn unescape_field(value: &str, line: usize) -> Result<String, ManageError> {
+    let invalid = || ManageError::InvalidPlan {
+        line,
+        reason: "invalid field escape",
+    };
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('\\') => out.push('\\'),
+                Some('|') => out.push('|'),
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                _ => return Err(invalid()),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    Ok(out)
+}
+
+/// Rebuild a validated full path from a folder field and a leaf name field.
+fn path_from_fields(folder: &str, name: &str) -> Result<PortfolioPath, ManageError> {
+    Ok(PortfolioPath::parse(folder)?.join(name)?)
+}
+
+/// Read a field by index with a consistent out-of-shape error.
+fn field(fields: &[String], index: usize, line: usize) -> Result<&str, ManageError> {
+    fields
+        .get(index)
+        .map(String::as_str)
+        .ok_or(ManageError::InvalidPlan {
+            line,
+            reason: "wrong field count",
+        })
+}
+
+fn parse_u64_field(value: &str, line: usize, reason: &'static str) -> Result<u64, ManageError> {
+    value
+        .parse::<u64>()
+        .map_err(|_| ManageError::InvalidPlan { line, reason })
+}
+
+fn parse_add(fields: &[String], line: usize) -> Result<ManageOp, ManageError> {
+    if fields.len() != 8 {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "wrong ADD field count",
+        });
+    }
+    let folder = field(fields, 1, line)?;
+    let name = field(fields, 2, line)?;
+    let description = field(fields, 3, line)?;
+    let size = parse_u64_field(field(fields, 4, line)?, line, "invalid size")?;
+    let mime = field(fields, 5, line)?;
+    let modified_raw = field(fields, 6, line)?;
+    let entry_folder = field(fields, 7, line)?;
+    let modified = if modified_raw.is_empty() {
+        None
+    } else {
+        Some(parse_u64_field(
+            modified_raw,
+            line,
+            "invalid modified timestamp",
+        )?)
+    };
+    if folder != entry_folder {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "ADD folder mismatch",
+        });
+    }
+    let path = path_from_fields(folder, name)?;
+    let entry = PortfolioEntry::new(name, description, size, mime, modified, entry_folder);
+    Ok(ManageOp::Add { entry, path })
+}
+
+fn parse_remove(fields: &[String], line: usize) -> Result<ManageOp, ManageError> {
+    if fields.len() != 3 {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "wrong REMOVE field count",
+        });
+    }
+    let path = path_from_fields(field(fields, 1, line)?, field(fields, 2, line)?)?;
+    Ok(ManageOp::Remove { path })
+}
+
+fn parse_rename(fields: &[String], line: usize) -> Result<ManageOp, ManageError> {
+    if fields.len() != 6 {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "wrong RENAME field count",
+        });
+    }
+    let path = path_from_fields(field(fields, 1, line)?, field(fields, 2, line)?)?;
+    let new_path = path_from_fields(field(fields, 3, line)?, field(fields, 4, line)?)?;
+    let new_name = field(fields, 5, line)?.to_owned();
+    if new_path.name() != Some(new_name.as_str()) {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "RENAME name mismatch",
+        });
+    }
+    Ok(ManageOp::Rename {
+        path,
+        new_path,
+        new_name,
+    })
+}
+
+fn parse_move(fields: &[String], line: usize) -> Result<ManageOp, ManageError> {
+    if fields.len() != 6 {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "wrong MOVE field count",
+        });
+    }
+    let path = path_from_fields(field(fields, 1, line)?, field(fields, 2, line)?)?;
+    let folder_field = field(fields, 3, line)?;
+    let new_path = path_from_fields(folder_field, field(fields, 4, line)?)?;
+    let new_folder = PortfolioPath::parse(field(fields, 5, line)?)?;
+    if new_folder.as_str() != folder_field {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "MOVE folder mismatch",
+        });
+    }
+    Ok(ManageOp::Move {
+        path,
+        new_path,
+        new_folder,
+    })
+}
+
+fn parse_describe(fields: &[String], line: usize) -> Result<ManageOp, ManageError> {
+    if fields.len() != 4 {
+        return Err(ManageError::InvalidPlan {
+            line,
+            reason: "wrong DESCRIBE field count",
+        });
+    }
+    let description = field(fields, 3, line)?.to_owned();
+    if description.chars().count() > MAX_PORTFOLIO_DESCRIPTION_LEN {
+        return Err(ManageError::InvalidDescription);
+    }
+    let path = path_from_fields(field(fields, 1, line)?, field(fields, 2, line)?)?;
+    Ok(ManageOp::Describe { path, description })
 }
 
 /// A deterministic, collision-checked portfolio entry set.
@@ -343,6 +580,39 @@ impl PortfolioManager {
             path: path.clone(),
             new_path,
             new_folder: new_folder.clone(),
+        });
+        Ok(plan)
+    }
+
+    /// Replace the description of the entry at `path`, preserving all other
+    /// fields. A missing source or an over-long description is a typed error.
+    pub fn describe(
+        &mut self,
+        path: &PortfolioPath,
+        description: impl Into<String>,
+    ) -> Result<ManagePlan, ManageError> {
+        let description = description.into();
+        if description.chars().count() > MAX_PORTFOLIO_DESCRIPTION_LEN {
+            return Err(ManageError::InvalidDescription);
+        }
+        let entry = self
+            .entries
+            .get(path)
+            .cloned()
+            .ok_or_else(|| ManageError::NotFound(path.clone()))?;
+        let updated = PortfolioEntry::new(
+            entry.name(),
+            description.clone(),
+            entry.size(),
+            entry.mime(),
+            entry.modified(),
+            entry.folder(),
+        );
+        self.entries.insert(path.clone(), updated);
+        let mut plan = ManagePlan::new();
+        plan.ops.push(ManageOp::Describe {
+            path: path.clone(),
+            description,
         });
         Ok(plan)
     }
@@ -522,5 +792,131 @@ mod tests {
         assert_eq!(manager.len(), 2);
         assert!(manager.contains(&path("docs/a.txt")));
         assert!(manager.contains(&path("b.txt")));
+    }
+
+    fn assert_round_trip(plan: &ManagePlan) {
+        let serialized = plan.serialize();
+        let parsed = ManagePlan::parse(&serialized).unwrap_or_else(|_| panic!("parse plan"));
+        assert_eq!(&parsed, plan);
+        assert_eq!(parsed.serialize(), serialized);
+    }
+
+    #[test]
+    fn describe_updates_entry_and_emits_plan() {
+        let mut manager = PortfolioManager::new();
+        manager
+            .add(entry("a.txt", "docs"))
+            .unwrap_or_else(|_| panic!("add"));
+        let plan = manager
+            .describe(&path("docs/a.txt"), "a longer description")
+            .unwrap_or_else(|_| panic!("describe"));
+        assert!(matches!(&plan.ops()[0], ManageOp::Describe { .. }));
+        let described = manager
+            .entries()
+            .get(&path("docs/a.txt"))
+            .unwrap_or_else(|| panic!("described entry"));
+        assert_eq!(described.description(), "a longer description");
+        assert_eq!(described.name(), "a.txt");
+        assert_eq!(described.size(), 7);
+        assert_round_trip(&plan);
+    }
+
+    #[test]
+    fn describe_missing_entry_and_overlong_description_are_typed_errors() {
+        let mut manager = PortfolioManager::new();
+        assert_eq!(
+            manager.describe(&path("missing.txt"), "x"),
+            Err(ManageError::NotFound(path("missing.txt")))
+        );
+        manager
+            .add(entry("a.txt", ""))
+            .unwrap_or_else(|_| panic!("add"));
+        let too_long = "x".repeat(MAX_PORTFOLIO_DESCRIPTION_LEN + 1);
+        assert_eq!(
+            manager.describe(&path("a.txt"), too_long),
+            Err(ManageError::InvalidDescription)
+        );
+    }
+
+    #[test]
+    fn plan_round_trips_all_operation_kinds() {
+        let mut manager = PortfolioManager::new();
+        let add = manager
+            .add(PortfolioEntry::new(
+                "a.txt",
+                "desc|line\nnext\\end",
+                42,
+                "application/pdf",
+                Some(99),
+                "docs",
+            ))
+            .unwrap_or_else(|_| panic!("add"));
+        let describe = manager
+            .describe(&path("docs/a.txt"), "changed|desc\nline")
+            .unwrap_or_else(|_| panic!("describe"));
+        let rename = manager
+            .rename(&path("docs/a.txt"), "b.txt")
+            .unwrap_or_else(|_| panic!("rename"));
+        let move_plan = manager
+            .move_entry(&path("docs/b.txt"), &path("archive"))
+            .unwrap_or_else(|_| panic!("move"));
+        let remove = manager
+            .remove(&path("archive/b.txt"))
+            .unwrap_or_else(|_| panic!("remove"));
+        for plan in [&add, &describe, &rename, &move_plan, &remove] {
+            assert_round_trip(plan);
+        }
+        // A multi-operation plan keeps its application order.
+        let mut combined = ManagePlan::new();
+        combined.ops.extend(add.ops().iter().cloned());
+        combined.ops.extend(describe.ops().iter().cloned());
+        combined.ops.extend(rename.ops().iter().cloned());
+        combined.ops.extend(move_plan.ops().iter().cloned());
+        combined.ops.extend(remove.ops().iter().cloned());
+        assert_eq!(combined.len(), 5);
+        assert_round_trip(&combined);
+    }
+
+    #[test]
+    fn empty_plan_round_trips_as_empty_string() {
+        let plan = ManagePlan::new();
+        assert_eq!(plan.serialize(), "");
+        assert_round_trip(&plan);
+    }
+
+    #[test]
+    fn parse_rejects_malformed_lines_with_typed_errors() {
+        assert_eq!(
+            ManagePlan::parse("UNKNOWN|x"),
+            Err(ManageError::InvalidPlan {
+                line: 1,
+                reason: "unknown operation"
+            })
+        );
+        assert_eq!(
+            ManagePlan::parse("REMOVE|docs"),
+            Err(ManageError::InvalidPlan {
+                line: 1,
+                reason: "wrong REMOVE field count"
+            })
+        );
+        assert_eq!(
+            ManagePlan::parse("REMOVE|docs\\q|a.txt"),
+            Err(ManageError::InvalidPlan {
+                line: 1,
+                reason: "invalid field escape"
+            })
+        );
+        assert_eq!(
+            ManagePlan::parse("REMOVE|docs|a.txt\nREMOVE|docs"),
+            Err(ManageError::InvalidPlan {
+                line: 2,
+                reason: "wrong REMOVE field count"
+            })
+        );
+        assert_eq!(
+            ManagePlan::parse("REMOVE|../escape|a.txt"),
+            Err(ManageError::InvalidPath(PortfolioPathError::Traversal))
+        );
     }
 }

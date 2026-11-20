@@ -175,6 +175,8 @@ impl Default for FontMetric {
 pub struct ReflowLine {
     /// Index of the block this line belongs to.
     pub block_index: usize,
+    /// Index of the paragraph this line belongs to.
+    pub paragraph_index: usize,
     /// Zero-based source page.
     pub page: usize,
     /// Zero-based line index within the block.
@@ -212,6 +214,59 @@ pub struct ReflowBlock {
     pub line_count: usize,
 }
 
+/// One blank-line-delimited paragraph in a reflow layout.
+///
+/// A source [`TextBlock`] may contain several paragraphs separated by blank
+/// lines. Each paragraph is wrapped independently, so its line range and
+/// canonical character span are stable and can be used as a read-aloud
+/// segmentation boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReflowParagraph {
+    /// Index of this paragraph within its block.
+    pub index: usize,
+    /// Index of the block that owns this paragraph.
+    pub block_index: usize,
+    /// Zero-based source page.
+    pub page: usize,
+    /// Start character offset in the canonical reading text.
+    pub char_start: usize,
+    /// End character offset (exclusive) in the canonical reading text.
+    pub char_end: usize,
+    /// Index of the first line of this paragraph in [`ReflowLayout::lines`].
+    pub first_line: usize,
+    /// Number of lines in this paragraph.
+    pub line_count: usize,
+}
+
+/// Split block text into paragraphs on blank lines.
+///
+/// A *blank line* is a line containing only whitespace; a run of consecutive
+/// blank lines acts as a single paragraph break. A single newline between
+/// non-blank lines is a soft break and is kept inside the same paragraph (it is
+/// simply whitespace between words). Each returned paragraph is a trimmed,
+/// single-space-joined string in reading order; all-whitespace input returns an
+/// empty vector. The function is deterministic and allocates only caller-owned
+/// text.
+pub fn segment_paragraphs(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !current.is_empty() {
+                out.push(current.join(" "));
+                current.clear();
+            }
+        } else {
+            current.push(trimmed);
+        }
+    }
+    if !current.is_empty() {
+        out.push(current.join(" "));
+    }
+    out
+}
+
 /// Internal per-word record mapping a word to its block and canonical offsets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WordRecord {
@@ -226,6 +281,7 @@ pub struct ReflowLayout {
     metric: FontMetric,
     blocks: Vec<ReflowBlock>,
     block_ranges: Vec<(usize, usize)>,
+    paragraphs: Vec<ReflowParagraph>,
     lines: Vec<ReflowLine>,
     canonical: String,
     word_records: Vec<WordRecord>,
@@ -292,30 +348,73 @@ impl ReflowLayout {
             });
         }
 
-        // Wrap each block's words into lines.
+        // Wrap each paragraph's words into lines. Paragraph breaks come from
+        // blank lines in the source text; the canonical word stream (and hence
+        // every word record offset) is unchanged by that segmentation.
         let max_chars = metric.max_chars_per_line();
         let mut lines: Vec<ReflowLine> = Vec::new();
         let mut laid_out: Vec<ReflowBlock> = Vec::new();
+        let mut paragraph_out: Vec<ReflowParagraph> = Vec::new();
         for (block_index, block) in accepted.iter().enumerate() {
-            let words: Vec<&str> = block.text.split_whitespace().collect();
             let word_start = word_starts[block_index];
             let (char_start, char_end) = char_ranges[block_index];
             let first_line = lines.len();
             let mut line_no = 0usize;
-            let mut text = String::new();
-            let mut len = 0usize;
-            let mut start = 0usize;
-            let mut end = 0usize;
-            let mut count = 0usize;
-            for (offset, word) in words.iter().enumerate() {
-                let record = word_records[word_start + offset];
-                let wlen = word.chars().count();
-                if count > 0 && len + 1 + wlen > max_chars {
+            let mut cursor = word_start;
+            for (paragraph_index, paragraph) in segment_paragraphs(&block.text).iter().enumerate() {
+                let words: Vec<&str> = paragraph.split_whitespace().collect();
+                if words.is_empty() {
+                    continue;
+                }
+                let para_first_line = lines.len();
+                let para_char_start = word_records[cursor].start;
+                let para_char_end = word_records[cursor + words.len() - 1].end;
+                let mut text = String::new();
+                let mut len = 0usize;
+                let mut start = 0usize;
+                let mut end = 0usize;
+                let mut count = 0usize;
+                for word in &words {
+                    let record = word_records[cursor];
+                    cursor += 1;
+                    let wlen = word.chars().count();
+                    if count > 0 && len + 1 + wlen > max_chars {
+                        push_line(
+                            &mut lines,
+                            &mut text,
+                            LineSpec {
+                                block_index,
+                                paragraph_index,
+                                page: block.page,
+                                line_index: line_no,
+                                start,
+                                end,
+                                line_height_hp: metric.line_height_hp,
+                            },
+                        )?;
+                        line_no += 1;
+                        len = 0;
+                        count = 0;
+                    }
+                    if count > 0 {
+                        text.push(' ');
+                        len += 1;
+                    }
+                    text.push_str(word);
+                    len += wlen;
+                    if count == 0 {
+                        start = record.start;
+                    }
+                    end = record.end;
+                    count += 1;
+                }
+                if count > 0 {
                     push_line(
                         &mut lines,
                         &mut text,
                         LineSpec {
                             block_index,
+                            paragraph_index,
                             page: block.page,
                             line_index: line_no,
                             start,
@@ -323,35 +422,16 @@ impl ReflowLayout {
                             line_height_hp: metric.line_height_hp,
                         },
                     )?;
-                    line_no += 1;
-                    len = 0;
-                    count = 0;
                 }
-                if count > 0 {
-                    text.push(' ');
-                    len += 1;
-                }
-                text.push_str(word);
-                len += wlen;
-                if count == 0 {
-                    start = record.start;
-                }
-                end = record.end;
-                count += 1;
-            }
-            if count > 0 {
-                push_line(
-                    &mut lines,
-                    &mut text,
-                    LineSpec {
-                        block_index,
-                        page: block.page,
-                        line_index: line_no,
-                        start,
-                        end,
-                        line_height_hp: metric.line_height_hp,
-                    },
-                )?;
+                paragraph_out.push(ReflowParagraph {
+                    index: paragraph_index,
+                    block_index,
+                    page: block.page,
+                    char_start: para_char_start,
+                    char_end: para_char_end,
+                    first_line: para_first_line,
+                    line_count: lines.len() - para_first_line,
+                });
             }
             laid_out.push(ReflowBlock {
                 index: block_index,
@@ -393,6 +473,7 @@ impl ReflowLayout {
             metric,
             blocks: laid_out,
             block_ranges,
+            paragraphs: paragraph_out,
             lines,
             canonical,
             word_records,
@@ -414,6 +495,11 @@ impl ReflowLayout {
     /// All lines in reading order.
     pub fn lines(&self) -> &[ReflowLine] {
         &self.lines
+    }
+
+    /// Blank-line-delimited paragraphs in reading order.
+    pub fn paragraphs(&self) -> &[ReflowParagraph] {
+        &self.paragraphs
     }
 
     /// Canonical reading text (words joined by single spaces).
@@ -513,6 +599,7 @@ impl ReflowLayout {
 /// Identity and geometry of a line that is ready to be emitted.
 struct LineSpec {
     block_index: usize,
+    paragraph_index: usize,
     page: usize,
     line_index: usize,
     start: usize,
@@ -535,6 +622,7 @@ fn push_line(
     let bottom_hp = top_hp.saturating_add(spec.line_height_hp);
     lines.push(ReflowLine {
         block_index: spec.block_index,
+        paragraph_index: spec.paragraph_index,
         page: spec.page,
         line_index: spec.line_index,
         text: std::mem::take(text),
@@ -912,5 +1000,62 @@ mod tests {
                 line.text
             );
         }
+    }
+
+    #[test]
+    fn segment_paragraphs_splits_on_blank_lines_and_keeps_soft_breaks() {
+        assert_eq!(segment_paragraphs("  \n\t"), Vec::<String>::new());
+        assert_eq!(segment_paragraphs("one line"), vec!["one line"]);
+        assert_eq!(
+            segment_paragraphs("soft\nbreak\n\nsecond\n\n\nthird"),
+            vec!["soft break", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn paragraph_boundaries_and_line_indices_are_deterministic() {
+        let input = blocks(&[(0, 0, "alpha beta\n\ngamma delta epsilon\n\nzeta")]);
+        let layout = ReflowLayout::new(&input, metric(1_500)).expect("layout");
+        assert_eq!(layout.text(), "alpha beta gamma delta epsilon zeta");
+        let paragraphs = layout.paragraphs();
+        assert_eq!(paragraphs.len(), 3);
+        assert_eq!(paragraphs[0].char_start, 0);
+        assert_eq!(paragraphs[0].char_end, 10); // "alpha beta"
+        assert_eq!(paragraphs[1].char_start, 11);
+        assert_eq!(paragraphs[1].char_end, 30); // "gamma delta epsilon"
+        assert_eq!(paragraphs[2].char_start, 31);
+        assert_eq!(paragraphs[2].char_end, 35); // "zeta"
+        // Each paragraph's first line pointer and line count are contiguous.
+        for (position, paragraph) in paragraphs.iter().enumerate() {
+            assert_eq!(paragraph.index, position);
+            assert_eq!(paragraph.block_index, 0);
+            assert_eq!(paragraph.page, 0);
+            assert_eq!(
+                paragraph.line_count,
+                layout.lines()[paragraph.first_line..]
+                    .iter()
+                    .take_while(|line| line.paragraph_index == position)
+                    .count()
+            );
+            let slice = slice_canonical(layout.text(), paragraph.char_start, paragraph.char_end);
+            assert!(!slice.is_empty());
+        }
+        // The same words in a different source layout produce the same spans.
+        let reordered = blocks(&[(0, 0, "alpha beta\r\n\r\ngamma delta epsilon\r\n\r\nzeta")]);
+        assert_eq!(
+            layout,
+            ReflowLayout::new(&reordered, metric(1_500)).expect("crlf")
+        );
+    }
+
+    #[test]
+    fn paragraph_boundaries_survive_block_reordering() {
+        let first = blocks(&[(1, 0, "b one\n\nb two"), (0, 0, "a one\n\na two")]);
+        let second = blocks(&[(0, 0, "a one\n\na two"), (1, 0, "b one\n\nb two")]);
+        let a = ReflowLayout::new(&first, metric(2_000)).expect("a");
+        let b = ReflowLayout::new(&second, metric(2_000)).expect("b");
+        assert_eq!(a, b);
+        let pages: Vec<usize> = a.paragraphs().iter().map(|p| p.page).collect();
+        assert_eq!(pages, vec![0, 0, 1, 1]);
     }
 }

@@ -61,6 +61,20 @@ pub enum CompareViewError {
         /// Number of rows in the plan.
         len: usize,
     },
+    /// A page number was zero (pages are numbered from one).
+    #[error("compare pane '{pane}' has invalid page number {page}")]
+    InvalidPageNumber {
+        /// Which pane was rejected (`left` or `right`).
+        pane: &'static str,
+        /// The invalid page number.
+        page: usize,
+    },
+    /// Page numbers in a pane were not strictly increasing.
+    #[error("compare pane '{pane}' has non-monotonic page numbers")]
+    NonMonotonicPages {
+        /// Which pane was rejected (`left` or `right`).
+        pane: &'static str,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +229,179 @@ impl CompareViewSummary {
     /// Total number of rows.
     pub fn total(&self) -> usize {
         self.matches + self.inserts + self.deletes
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Page pairing
+// ---------------------------------------------------------------------------
+
+/// How one page in a pairing relates the two panes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PagePairKind {
+    /// The same page number exists in both panes.
+    Aligned,
+    /// The page exists only in the right pane.
+    Inserted,
+    /// The page exists only in the left pane.
+    Deleted,
+}
+
+/// One deterministic page-level pairing entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PagePair {
+    /// Relationship between the panes for this page.
+    pub kind: PagePairKind,
+    /// Left-pane page number, or `None` for an inserted page.
+    pub left: Option<usize>,
+    /// Right-pane page number, or `None` for a deleted page.
+    pub right: Option<usize>,
+}
+
+/// Counts of each page-pair kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PagePairSummary {
+    /// Number of pages present in both panes.
+    pub aligned: usize,
+    /// Number of right-only pages.
+    pub inserted: usize,
+    /// Number of left-only pages.
+    pub deleted: usize,
+}
+
+impl PagePairSummary {
+    /// Total number of page pairs.
+    pub fn total(&self) -> usize {
+        self.aligned + self.inserted + self.deleted
+    }
+}
+
+/// A deterministic, page-level pairing of two paged inputs.
+///
+/// Page numbers are validated (non-zero, strictly increasing) and then paired
+/// with a two-pointer merge. Because both inputs are strictly increasing, the
+/// merge is the unique longest-common-subsequence pairing; ties cannot arise,
+/// so iteration order and classification are stable and reproducible.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PagePairing {
+    pairs: Vec<PagePair>,
+    summary: PagePairSummary,
+}
+
+impl PagePairing {
+    /// Validate and pair two ascending sequences of page numbers.
+    pub fn build(left: &[usize], right: &[usize]) -> Result<Self, CompareViewError> {
+        validate_page_numbers(left, "left")?;
+        validate_page_numbers(right, "right")?;
+        let mut pairs = Vec::with_capacity(left.len() + right.len());
+        let mut summary = PagePairSummary::default();
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < left.len() && j < right.len() {
+            let (kind, left_page, right_page, advance_left, advance_right) = if left[i] == right[j]
+            {
+                (
+                    PagePairKind::Aligned,
+                    Some(left[i]),
+                    Some(right[j]),
+                    true,
+                    true,
+                )
+            } else if left[i] < right[j] {
+                (PagePairKind::Deleted, Some(left[i]), None, true, false)
+            } else {
+                (PagePairKind::Inserted, None, Some(right[j]), false, true)
+            };
+            push_page_pair(&mut pairs, &mut summary, kind, left_page, right_page);
+            if advance_left {
+                i += 1;
+            }
+            if advance_right {
+                j += 1;
+            }
+        }
+        while i < left.len() {
+            push_page_pair(
+                &mut pairs,
+                &mut summary,
+                PagePairKind::Deleted,
+                Some(left[i]),
+                None,
+            );
+            i += 1;
+        }
+        while j < right.len() {
+            push_page_pair(
+                &mut pairs,
+                &mut summary,
+                PagePairKind::Inserted,
+                None,
+                Some(right[j]),
+            );
+            j += 1;
+        }
+        Ok(Self { pairs, summary })
+    }
+
+    /// Page pairs in ascending page order.
+    pub fn pairs(&self) -> &[PagePair] {
+        &self.pairs
+    }
+
+    /// Page-pair counts.
+    pub fn summary(&self) -> PagePairSummary {
+        self.summary
+    }
+
+    /// Whether every page was aligned and no page was inserted or deleted.
+    pub fn is_aligned(&self) -> bool {
+        self.summary.inserted == 0 && self.summary.deleted == 0
+    }
+
+    /// A deterministic, human-readable page summary.
+    pub fn render_summary(&self) -> String {
+        format!(
+            "aligned={} inserted={} deleted={} pages={}",
+            self.summary.aligned,
+            self.summary.inserted,
+            self.summary.deleted,
+            self.summary.total()
+        )
+    }
+}
+
+/// Validate one pane's page-number sequence.
+fn validate_page_numbers(pages: &[usize], pane: &'static str) -> Result<(), CompareViewError> {
+    let mut previous: Option<usize> = None;
+    for &page in pages {
+        if page == 0 {
+            return Err(CompareViewError::InvalidPageNumber { pane, page });
+        }
+        if let Some(earlier) = previous {
+            if page == earlier {
+                return Err(CompareViewError::DuplicatePage { pane, page });
+            }
+            if page < earlier {
+                return Err(CompareViewError::NonMonotonicPages { pane });
+            }
+        }
+        previous = Some(page);
+    }
+    Ok(())
+}
+
+/// Append one page pair and bump its summary counter.
+fn push_page_pair(
+    pairs: &mut Vec<PagePair>,
+    summary: &mut PagePairSummary,
+    kind: PagePairKind,
+    left: Option<usize>,
+    right: Option<usize>,
+) {
+    pairs.push(PagePair { kind, left, right });
+    match kind {
+        PagePairKind::Aligned => summary.aligned += 1,
+        PagePairKind::Inserted => summary.inserted += 1,
+        PagePairKind::Deleted => summary.deleted += 1,
     }
 }
 
@@ -460,6 +647,29 @@ impl CompareViewModel {
             self.summary.deletes,
             self.summary.total()
         )
+    }
+
+    /// Derive the page-level pairing from the row plan.
+    ///
+    /// Rows are emitted in ascending page order, so collecting the first
+    /// occurrence of each left/right page yields validated, strictly increasing
+    /// sequences. Pages with no extracted lines are not represented.
+    pub fn page_pairing(&self) -> Result<PagePairing, CompareViewError> {
+        let mut left_pages = Vec::new();
+        let mut right_pages = Vec::new();
+        for row in &self.rows {
+            if let Some(cell) = &row.left
+                && left_pages.last() != Some(&cell.page)
+            {
+                left_pages.push(cell.page);
+            }
+            if let Some(cell) = &row.right
+                && right_pages.last() != Some(&cell.page)
+            {
+                right_pages.push(cell.page);
+            }
+        }
+        PagePairing::build(&left_pages, &right_pages)
     }
 
     /// Build the scroll-sync mapping for this plan.
@@ -753,5 +963,117 @@ mod tests {
                 deletes: 2
             }
         );
+    }
+
+    fn kinds(pairing: &PagePairing) -> Vec<(PagePairKind, Option<usize>, Option<usize>)> {
+        pairing
+            .pairs()
+            .iter()
+            .map(|pair| (pair.kind, pair.left, pair.right))
+            .collect()
+    }
+
+    #[test]
+    fn page_pairing_aligns_inserts_and_deletes_pages() {
+        let pairing = PagePairing::build(&[1, 2, 4], &[1, 3, 4]).expect("pairing");
+        assert_eq!(
+            kinds(&pairing),
+            vec![
+                (PagePairKind::Aligned, Some(1), Some(1)),
+                (PagePairKind::Deleted, Some(2), None),
+                (PagePairKind::Inserted, None, Some(3)),
+                (PagePairKind::Aligned, Some(4), Some(4)),
+            ]
+        );
+        assert_eq!(
+            pairing.summary(),
+            PagePairSummary {
+                aligned: 2,
+                inserted: 1,
+                deleted: 1
+            }
+        );
+        assert!(!pairing.is_aligned());
+        assert_eq!(
+            pairing.render_summary(),
+            "aligned=2 inserted=1 deleted=1 pages=4"
+        );
+    }
+
+    #[test]
+    fn page_pairing_is_stable_for_identical_and_empty_inputs() {
+        let same = PagePairing::build(&[2, 5], &[2, 5]).expect("pairing");
+        assert!(same.is_aligned());
+        assert_eq!(
+            same.render_summary(),
+            "aligned=2 inserted=0 deleted=0 pages=2"
+        );
+        let empty_left = PagePairing::build(&[], &[7]).expect("pairing");
+        assert_eq!(
+            kinds(&empty_left),
+            vec![(PagePairKind::Inserted, None, Some(7))]
+        );
+        let empty_both = PagePairing::build(&[], &[]).expect("pairing");
+        assert_eq!(empty_both.pairs().len(), 0);
+        assert_eq!(empty_both.summary().total(), 0);
+        assert_eq!(
+            PagePairing::build(&[1, 2, 4], &[1, 3, 4]).expect("repeat"),
+            PagePairing::build(&[1, 2, 4], &[1, 3, 4]).expect("repeat")
+        );
+    }
+
+    #[test]
+    fn page_pairing_rejects_zero_duplicate_and_non_monotonic_pages() {
+        assert_eq!(
+            PagePairing::build(&[0], &[]),
+            Err(CompareViewError::InvalidPageNumber {
+                pane: "left",
+                page: 0
+            })
+        );
+        assert_eq!(
+            PagePairing::build(&[], &[3, 0]),
+            Err(CompareViewError::InvalidPageNumber {
+                pane: "right",
+                page: 0
+            })
+        );
+        assert_eq!(
+            PagePairing::build(&[2, 2], &[]),
+            Err(CompareViewError::DuplicatePage {
+                pane: "left",
+                page: 2
+            })
+        );
+        assert_eq!(
+            PagePairing::build(&[], &[4, 2]),
+            Err(CompareViewError::NonMonotonicPages { pane: "right" })
+        );
+    }
+
+    #[test]
+    fn view_model_page_pairing_matches_pane_page_numbers() {
+        let left = pane(
+            "l",
+            vec![(4, vec!["x"]), (1, vec!["a"]), (2, vec!["b"])],
+            "left",
+        );
+        let right = pane(
+            "r",
+            vec![(3, vec!["y"]), (4, vec!["x"]), (1, vec!["a"])],
+            "right",
+        );
+        let model = CompareViewModel::new(&left, &right).expect("model");
+        let pairing = model.page_pairing().expect("pairing");
+        assert_eq!(
+            kinds(&pairing),
+            vec![
+                (PagePairKind::Aligned, Some(1), Some(1)),
+                (PagePairKind::Deleted, Some(2), None),
+                (PagePairKind::Inserted, None, Some(3)),
+                (PagePairKind::Aligned, Some(4), Some(4)),
+            ]
+        );
+        assert_eq!(pairing.summary().total(), 4);
     }
 }
