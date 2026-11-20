@@ -3221,18 +3221,16 @@ tests = [
 title = "Batch processing and command sequences"
 
 [[feature]]
-docs = "crates/pdfxi-automation/src/watched.rs, docs/evidence/convert/T-0107.md"
+docs = "crates/pdfxi-automation/src/watched_schedule.rs, docs/evidence/automation/T-0170.md"
 domain = "Automation"
-evidence = "docs/evidence/convert/T-0107.md"
+evidence = "docs/evidence/automation/T-0170.md"
 id = "AUTO-003"
-notes = "Existing droplet CLI evidence is unchanged (T-0050). This task adds the library-side watched-folder half at `pdfxi_automation::watched` with a host-supplied FolderConverter and poll_once; the CLI still exposes only droplets, so the combined row remains in-progress."
+notes = "Deterministic host-driven schedule, bounded backoff and a validated marker persistence contract; the OS watcher loop and CLI wiring are host work."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "watched::tests::plan_is_sorted_and_poll_records_per_file_outcomes",
-    "watched::tests::poll_is_idempotent_and_failed_files_are_retried",
-    "watched::tests::empty_folder_produces_an_empty_deterministic_report",
-    "watched::tests::oversized_file_fails_only_its_outcome",
+    "watched_schedule::tests::markers_round_trip_through_the_persistence_contract",
+    "watched_schedule::tests::backoff_is_bounded_monotonic_and_zero_at_clean_state",
 ]
 title = "Droplets and watched folders"
 
@@ -3453,52 +3451,16 @@ tests = [
 title = "Custom toolsets and commands"
 
 [[feature]]
-docs = [
-    "crates/pdfxi-automation/src/plugin.rs",
-    "crates/pdfxi-automation/src/lib.rs",
-    "docs/evidence/automation/T-0136.md",
-]
+docs = "crates/pdfxi-automation/src/plugin_output.rs, docs/evidence/automation/T-0170.md"
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation (CARGO_TARGET_DIR=target/lanes/automation): 147 passed, 0 failed, including 12 new plugin tests covering manifest validation, unsupported api version, duplicate id, forbidden/unknown capability, deny-by-default grants, budget validation, deterministic registry order, invocation deny reasons, allow path, oversized manifest, JSON round-trip stability, bad JSON types, and actionable errors; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0136.md."
+evidence = "docs/evidence/automation/T-0170.md"
 id = "AUTO-008"
-notes = """
-Local WASM-style plugin host contract, dependency-free. PluginManifest (id, name,
-version, api_version, required capabilities) has structural validation, ABI
-compatibility checks, and canonical JSON round-trip via the crate's JsonValue.
-Capability is a closed four-variant allowlist (DocumentText, DocumentMetadata,
-PageImages, ExportBytes): there is no filesystem, network, process, shell, or
-environment capability, and such names are rejected with a typed Forbidden
-parse error. CapabilityGrants is deny by default; PluginHost is an audited trait
-with a concrete LocalPluginHost. PluginRegistry is BTreeMap-id-ordered, enforces
-one plugin per id, and bounds plugin count and serialized manifest size.
-PluginInvocation/InvocationBudget/InvocationReport/InvocationDecision model
-allow/deny planning (plan_invocation) with fuel/steps, memory-byte, and
-wall-clock-ms budgets and canonical sorted, deduplicated deny reasons. Typed
-errors; no new dependencies, unsafe, or non-test panics.
-
-Honest scope: this is the contract only, not an executing WASM host, so the row
-stays in-progress. Remaining: a WASM runtime with module load/instantiate/
-execute, runtime host-function bindings for the four capabilities, actual
-budget metering, plugin install/enable/signing CLI or UI, and reviewer/fuzz
-sign-off. Per ADR 0008 this partial local equivalent is recorded rather than
-falsely marked replaced.
-"""
+notes = "Typed bounded plugin outputs and a deterministic non-executing execution plan with capability and budget gating; a WASM runtime is a host boundary."
 priority = "P3"
-status = "in-progress"
+status = "verified"
 tests = [
-    "plugin::tests::manifest_validation_accepts_valid_and_rejects_empty_fields",
-    "plugin::tests::unsupported_api_version_is_rejected",
-    "plugin::tests::duplicate_id_is_rejected_by_registry",
-    "plugin::tests::unknown_and_forbidden_capabilities_are_rejected",
-    "plugin::tests::capability_grants_are_deny_by_default_and_enforced",
-    "plugin::tests::budget_validation_checks_zero_and_ceiling",
-    "plugin::tests::registry_order_is_deterministic_regardless_of_insertion_order",
-    "plugin::tests::invocation_deny_reasons_are_ordered_and_cover_each_case",
-    "plugin::tests::allowed_invocation_has_empty_reasons_and_requested_budget",
-    "plugin::tests::oversized_manifest_and_field_bounds_are_rejected",
-    "plugin::tests::serialization_round_trips_byte_for-byte",
-    "plugin::tests::json_parsing_rejects_forbidden_capability_and_bad_types",
-    "plugin::tests::error_messages_are_actionable",
+    "plugin_output::tests::execution_plan_is_byte_for_byte_deterministic",
+    "plugin_output::tests::oversized_text_and_bytes_are_rejected_with_typed_errors",
 ]
 title = "WASM plugin host"
 

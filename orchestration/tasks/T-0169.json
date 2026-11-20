@@ -1,0 +1,15 @@
+{
+  "id": "T-0169",
+  "lane": "render",
+  "title": "Media rows closure with host boundaries",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0153"],
+  "owns": [
+    "crates/pdfxi-render/**",
+    "docs/evidence/render/T-0169.md",
+    "orchestration/feature-updates/T-0169.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-render",
+  "evidence": ""
+}

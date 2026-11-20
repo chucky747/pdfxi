@@ -74,6 +74,13 @@
 //!   with typed parameter descriptors. [`OperationRegistry::resolve`] validates
 //!   `name=value` arguments and produces a typed, stable [`CallPlan`] without
 //!   executing the operation.
+//! - [`PollSchedule`] / [`PollInterval`] / [`BackoffPolicy`] / [`MarkerSnapshot`]
+//!   — host-driven watched-folder scheduling and a caller-supplied idempotency
+//!   marker persistence contract. Decisions are tick-based and deterministic;
+//!   no thread, clock, or OS watcher is started.
+//! - [`PluginValue`] / [`PluginOutput`] / [`ExecutionPlan`] — a typed, size-bounded
+//!   plugin output contract and a deterministic, non-executing execution plan
+//!   with capability and budget checks. No WASM runtime is loaded.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -90,9 +97,11 @@ mod json;
 mod library;
 mod operation_registry;
 mod plugin;
+mod plugin_output;
 mod sequence_batch;
 mod toolset;
 mod watched;
+mod watched_schedule;
 
 pub use action::{Action, ActionStep, StepKind};
 pub use action_document::{ACTION_DOCUMENT_VERSION, ActionDocument, ActionDocumentError};
@@ -134,6 +143,12 @@ pub use plugin::{
     PLUGIN_API_VERSION, PluginError, PluginHost, PluginInvocation, PluginManifest, PluginRegistry,
     plan_invocation, validate_manifest_json_size,
 };
+pub use plugin_output::{
+    ExecutionPlan, ExecutionStep, ExecutionStepKind, OUTPUT_ABSOLUTE_MAX_BYTES,
+    OUTPUT_ABSOLUTE_MAX_TEXT_BYTES, OUTPUT_DEFAULT_MAX_BYTES, OUTPUT_DEFAULT_MAX_TEXT_BYTES,
+    OUTPUT_DEFAULT_MAX_TOTAL_BYTES, OutputBudget, OutputType, PluginOutput, PluginOutputError,
+    PluginValue, build_execution_plan,
+};
 pub use sequence_batch::{
     BatchReportEntry, RecordingRunner, SequenceBatchError, SequenceBatchItem, SequenceBatchQueue,
     SequenceBatchReport, SequenceBatchState, SequenceStepRunner,
@@ -143,6 +158,11 @@ pub use watched::{
     FileOutcome, FileOutcomeState, FolderConverter, FolderPlan, PassthroughConverter, PollReport,
     ProcessedMarkers, WATCHED_MAX_DEPTH, WATCHED_MAX_FILE_BYTES, WATCHED_MAX_FILES, WatchedFolder,
     WatchedFolderConfig, WatchedFolderError,
+};
+pub use watched_schedule::{
+    BackoffPolicy, MARKER_PATH_MAX_BYTES, MARKER_SNAPSHOT_MAX_BYTES, MARKER_SNAPSHOT_MAX_PATHS,
+    MARKER_SNAPSHOT_VERSION, MarkerSnapshot, PollInterval, PollSchedule, ScheduleDecision,
+    deserialize_markers, serialize_markers,
 };
 
 /// Return the implementation name for diagnostics.

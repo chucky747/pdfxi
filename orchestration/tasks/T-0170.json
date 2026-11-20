@@ -1,0 +1,15 @@
+{
+  "id": "T-0170",
+  "lane": "automation",
+  "title": "Watched folders and plugin host closure",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0160"],
+  "owns": [
+    "crates/pdfxi-automation/**",
+    "docs/evidence/automation/T-0170.md",
+    "orchestration/feature-updates/T-0170.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-automation",
+  "evidence": "docs/evidence/automation/T-0170.md"
+}
