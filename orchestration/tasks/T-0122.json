@@ -1,0 +1,15 @@
+{
+  "id": "T-0122",
+  "lane": "render",
+  "title": "Fix ICC desc tag layout and Lab conversion honesty",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0095"],
+  "owns": [
+    "crates/pdfxi-render/**",
+    "docs/evidence/render/T-0095.md",
+    "orchestration/feature-updates/T-0122.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-render",
+  "evidence": ""
+}

@@ -59,6 +59,15 @@
 //!   importer: a documented element/CSS subset, typed rejection of active
 //!   content, remote URLs, path traversal and oversized input, local PNG/JPEG
 //!   embedding, and deterministic pagination through the [`create`] engine.
+//! - [`html_export`] writes deterministic, inert HTML from a positioned
+//!   page/text model: absolutely positioned spans (with PDF-to-CSS coordinate
+//!   inversion), page navigation, allow-listed hyperlinks, and local image
+//!   references only when the caller supplies an already-extracted, safe
+//!   filename. It emits no script and fetches nothing.
+//! - [`postscript`] writes a deterministic, DSC-conformant PostScript program
+//!   that draws text, rectangles, and lines with standard fonts and shows every
+//!   page. Unrepresentable glyphs and image content are skipped and recorded in
+//!   an explicit [`PsExportReport`] rather than silently faked.
 //!
 //! The text/JSON modules are always compiled and add no dependencies, so a
 //! `--no-default-features` build stays dependency-free.
@@ -95,11 +104,13 @@ pub mod create;
 mod error;
 mod export;
 mod export_options;
+pub mod html_export;
 pub mod image;
 mod json;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
+pub mod postscript;
 mod rtf;
 mod source;
 mod tagged_text;
@@ -121,6 +132,10 @@ pub use create::{
 pub use error::ConversionError;
 pub use export::ExportKind;
 pub use export_options::{ExportOptionError, ExportPageSelection, LineEnding};
+pub use html_export::{
+    HtmlDocument, HtmlExportError, HtmlLink, HtmlOptions as HtmlExportOptions, HtmlOutputMode,
+    HtmlPage, HtmlSpan, MAX_PAGES as HTML_MAX_PAGES, NamedHtml, export_html, export_html_string,
+};
 pub use image::{ImageFormat, encode, encode_png, encode_ppm};
 pub use json::{DocumentJson, DocumentMetadata, JSON_SCHEMA_VERSION, JsonPage, JsonSpan};
 pub use options::ConversionOptions;
@@ -130,6 +145,11 @@ pub use page_export::{
 };
 #[cfg(feature = "pdfium")]
 pub use page_export::{export_pdf_bytes, export_pdf_file};
+pub use postscript::{
+    MAX_PAGES as POSTSCRIPT_MAX_PAGES, PsContent, PsDocument, PsExportError, PsExportReport,
+    PsFont, PsImageRef, PsLine, PsPage, PsRect, PsText, PsUnsupportedItem, export_postscript,
+    export_postscript_with_report,
+};
 pub use rtf::{RtfOptions, RtfPage, export_rtf, export_rtf_string};
 pub use source::SourceKind;
 pub use tagged_text::{

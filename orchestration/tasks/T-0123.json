@@ -1,0 +1,16 @@
+{
+  "id": "T-0123",
+  "lane": "qa",
+  "title": "Reproducible Windows package and notices",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0120"],
+  "owns": [
+    "scripts/**",
+    "docs/THIRD_PARTY.md",
+    "docs/evidence/qa/T-0123.md",
+    "orchestration/feature-updates/T-0123.toml"
+  ],
+  "acceptance": "powershell -File scripts/package.ps1 -Check",
+  "evidence": ""
+}

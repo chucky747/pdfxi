@@ -1,0 +1,16 @@
+{
+  "id": "T-0125",
+  "lane": "author",
+  "title": "Close headers watermarks and bookmark editing rows",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0096"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "crates/pdfxi-cli/**",
+    "docs/evidence/author/T-0125.md",
+    "orchestration/feature-updates/T-0125.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit -p pdfxi-cli",
+  "evidence": ""
+}

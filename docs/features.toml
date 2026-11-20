@@ -1051,14 +1051,49 @@ tests = []
 title = "Export PDF to editable PowerPoint"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/html_export.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0110.md",
+]
 domain = "Export"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 11/11 new html_export tests pass (162 unit + 12 integration total, 0 failed); fmt --check, clippy --all-targets --no-deps -D warnings, and rustdoc -D warnings all EXIT=0. See docs/evidence/convert/T-0110.md."
 id = "EXPORT-004"
-notes = ""
+notes = """
+T-0110 adds a dependency-free HTML writer in crates/pdfxi-convert/src/html_export.rs.
+It consumes a caller-supplied HtmlDocument (pre-extracted, positioned text) and emits
+inert, deterministic HTML with absolutely positioned spans. PDF bottom-left
+coordinates are inverted to CSS top-left (top = page_height - (y + height); 1 pt = 1 px).
+Text is escaped for element content and attributes; pages and links are sorted; output
+is byte-stable. A navigation index anchors pages in single-file mode, while page-set
+mode yields index.html plus page-NNNN.html files. Links allow only relative, http,
+https, mailto and #anchor targets; javascript: and other active schemes are typed errors.
+Images are only referenced when the caller supplies a bare, already-extracted raster
+filename (png/jpg/jpeg/gif/webp/bmp); traversal, separators, URI/drive schemes and SVG
+are rejected, and no bytes are fetched or embedded. No script elements or event handlers
+are emitted. Typed HtmlExportError variants cover empty/oversized input, duplicate pages,
+bad geometry and non-finite coordinates, unknown link pages, disallowed schemes and
+unsafe image references. Bounded constants prevent unbounded allocation; no new
+dependencies, no unsafe, and no unwrap/expect/panic in non-test code.
+
+Honest caveat: the writer does not extract text from PDF bytes or dispatch through
+ExportKind::Html / the CLI in this task, so EXPORT-004 remains in-progress.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "html_export::tests::escape_text_escapes_all_special_characters",
+    "html_export::tests::single_file_has_doctype_nav_and_pages_in_ascending_order",
+    "html_export::tests::positioned_spans_invert_y_and_escape_text",
+    "html_export::tests::links_emit_anchors_and_reject_script_schemes",
+    "html_export::tests::image_reference_policy_allows_safe_files_and_rejects_unsafe_ones",
+    "html_export::tests::html_output_is_deterministic",
+    "html_export::tests::page_set_output_has_index_and_one_file_per_page",
+    "html_export::tests::non_finite_and_invalid_geometry_are_typed_errors",
+    "html_export::tests::duplicate_pages_and_unknown_link_pages_are_errors",
+    "html_export::tests::no_script_or_event_handlers_are_emitted",
+    "html_export::tests::empty_document_is_rejected",
+]
 title = "Export PDF to HTML"
 
 [[feature]]
@@ -1180,14 +1215,49 @@ tests = [
 title = "Export to PDF/A PDF/X and PDF/E"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/postscript.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0110.md",
+]
 domain = "Export"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 11/11 new postscript tests pass (162 unit + 12 integration total, 0 failed); fmt --check, clippy --all-targets --no-deps -D warnings, and rustdoc -D warnings all EXIT=0. See docs/evidence/convert/T-0110.md."
 id = "EXPORT-009"
-notes = ""
+notes = '''
+T-0110 adds a dependency-free PostScript writer in crates/pdfxi-convert/src/postscript.rs.
+It emits a deterministic, DSC-conformant PostScript program: %!PS-Adobe-3.0 header,
+%%Creator/%%Title/%%BoundingBox (ceiling of max page extent)/%%Pages/%%DocumentFonts,
+comment/prolog/setup sections, one %%Page block with a single showpage per page, and a
+%%Trailer/%%EOF. Text is drawn with standard fonts (Helvetica, Helvetica-Bold, Courier,
+Times-Roman, Times-Bold); rectangles use closed fill/stroke paths and lines use
+moveto/lineto/setlinewidth/stroke. PostScript literal strings escape \, (, ), control
+characters and encode Latin-1 bytes as octal escapes. Code points outside Latin-1 and
+PsContent::Image are skipped and enumerated in PsExportReport (per page, with reasons)
+via export_postscript_with_report, so unsupported content is documented honestly rather
+than silently faked. Typed PsExportError variants cover empty/oversized input, duplicate
+pages, bad geometry, non-finite coordinates and non-positive font sizes. Bounded
+constants prevent unbounded allocation; no new dependencies, no unsafe, and no
+unwrap/expect/panic in non-test code.
+
+Honest caveat: the writer consumes a caller-supplied page/content model; there is no
+ExportKind::PostScript variant or CLI dispatch and no real PDF content pipeline wired
+in this task, so EXPORT-009 remains in-progress.
+'''
 priority = "P3"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "postscript::tests::header_has_dsc_version_boundingbox_pages_and_fonts",
+    "postscript::tests::page_sections_and_showpage_count_match_page_count",
+    "postscript::tests::text_uses_standard_font_and_is_positioned",
+    "postscript::tests::text_string_escaping_handles_backslash_parens_and_controls",
+    "postscript::tests::rect_and_line_emit_path_operators",
+    "postscript::tests::unsupported_image_and_non_latin1_glyphs_are_reported",
+    "postscript::tests::postscript_bytes_are_deterministic",
+    "postscript::tests::boundingbox_uses_ceil_of_max_page_extent",
+    "postscript::tests::non_finite_coordinates_are_typed_errors",
+    "postscript::tests::invalid_geometry_font_size_and_duplicates_are_errors",
+    "postscript::tests::empty_document_is_rejected",
+]
 title = "Export to PostScript"
 
 [[feature]]

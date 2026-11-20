@@ -1,0 +1,16 @@
+{
+  "id": "T-0124",
+  "lane": "convert",
+  "title": "Close image text and tagged export rows",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0110"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "crates/pdfxi-cli/**",
+    "docs/evidence/convert/T-0124.md",
+    "orchestration/feature-updates/T-0124.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-convert -p pdfxi-cli",
+  "evidence": ""
+}
