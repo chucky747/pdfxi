@@ -481,7 +481,22 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
+    /// Parses a unary expression, charging every recursive unary step to the
+    /// shared depth budget.
+    ///
+    /// Unary operators are right-recursive (`!!-x` nests three operands). Without
+    /// the `enter()` guard, a hostile input such as 50,000 `!` characters would
+    /// recurse 50,000 native frames and overflow the stack before any step or
+    /// depth limit could apply. With the guard the parser unwinds with a typed
+    /// [`JsError::AstTooDeep`] at the configured limit.
     fn parse_unary(&mut self) -> Result<Expr, JsError> {
+        self.enter()?;
+        let result = self.parse_unary_inner();
+        self.leave();
+        result
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<Expr, JsError> {
         let pos = self.pos();
         let op = match self.peek_op() {
             Some(Op::Bang) => Some(UnaryOp::Not),
@@ -503,46 +518,92 @@ impl<'a> Parser<'a> {
         self.parse_postfix()
     }
 
+    /// Parses a postfix chain (`.`, `[]`, and `()`).
+    ///
+    /// Unlike unary operators these links are consumed by a loop, so the native
+    /// call stack is not directly at risk. The resulting AST is nevertheless a
+    /// deeply nested chain of `Box` nodes; 50,000 links would overflow the stack
+    /// when the tree is later dropped or evaluated. Each link is therefore
+    /// charged to the same depth budget so a hostile chain fails with a typed
+    /// [`JsError::AstTooDeep`] during parsing.
     fn parse_postfix(&mut self) -> Result<Expr, JsError> {
         let mut expr = self.parse_primary()?;
         let start = expr.pos;
+        // `enter()` must stay held for the whole chain: balancing it after each
+        // link would keep `self.depth` constant and let a 50k-link chain through.
+        let mut links = 0usize;
         loop {
-            if self.at_op(Op::Dot) {
-                self.advance();
-                let property = self.parse_property_name()?;
-                expr = Expr {
-                    pos: start,
-                    kind: ExprKind::Member {
-                        object: Box::new(expr),
-                        property,
-                    },
-                };
-            } else if self.at_op(Op::LBracket) {
-                self.advance();
-                let index = self.parse_expr(0)?;
-                self.expect_op(Op::RBracket, "]")?;
-                expr = Expr {
-                    pos: start,
-                    kind: ExprKind::Index {
-                        object: Box::new(expr),
-                        index: Box::new(index),
-                    },
-                };
-            } else if self.at_op(Op::LParen) {
-                self.advance();
-                let args = self.parse_args()?;
-                expr = Expr {
-                    pos: start,
-                    kind: ExprKind::Call {
-                        callee: Box::new(expr),
-                        args,
-                    },
-                };
-            } else {
+            let is_link = matches!(
+                self.peek_op(),
+                Some(Op::Dot) | Some(Op::LBracket) | Some(Op::LParen)
+            );
+            if !is_link {
                 break;
             }
+            if let Err(error) = self.enter() {
+                Self::unwind(&mut self.depth, links);
+                return Err(error);
+            }
+            links += 1;
+            expr = match self.parse_postfix_link(start, expr) {
+                Ok(next) => next,
+                Err(error) => {
+                    Self::unwind(&mut self.depth, links);
+                    return Err(error);
+                }
+            };
         }
+        Self::unwind(&mut self.depth, links);
         Ok(expr)
+    }
+
+    /// Releases `count` depth levels held by a postfix chain.
+    fn unwind(depth: &mut usize, count: usize) {
+        for _ in 0..count {
+            *depth -= 1;
+        }
+    }
+
+    /// Parses exactly one postfix link. Called only by [`Parser::parse_postfix`],
+    /// which owns the depth accounting and has already confirmed a link follows.
+    fn parse_postfix_link(&mut self, start: Pos, expr: Expr) -> Result<Expr, JsError> {
+        if self.at_op(Op::Dot) {
+            self.advance();
+            let property = self.parse_property_name()?;
+            Ok(Expr {
+                pos: start,
+                kind: ExprKind::Member {
+                    object: Box::new(expr),
+                    property,
+                },
+            })
+        } else if self.at_op(Op::LBracket) {
+            self.advance();
+            let index = self.parse_expr(0)?;
+            self.expect_op(Op::RBracket, "]")?;
+            Ok(Expr {
+                pos: start,
+                kind: ExprKind::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index),
+                },
+            })
+        } else if self.at_op(Op::LParen) {
+            self.advance();
+            let args = self.parse_args()?;
+            Ok(Expr {
+                pos: start,
+                kind: ExprKind::Call {
+                    callee: Box::new(expr),
+                    args,
+                },
+            })
+        } else {
+            Err(JsError::Internal {
+                pos: start,
+                message: "postfix link was not a chain operator".to_owned(),
+            })
+        }
     }
 
     fn parse_property_name(&mut self) -> Result<String, JsError> {

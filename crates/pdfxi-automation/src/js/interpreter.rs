@@ -827,7 +827,17 @@ fn to_number(value: &Value, _limits: &Limits, pos: Pos) -> Result<f64, JsError> 
         Value::Number(value) => Ok(*value),
         Value::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
         Value::Null | Value::Undefined => Ok(0.0),
-        Value::Str(value) => Ok(value.trim().parse::<f64>().unwrap_or(f64::NAN)),
+        Value::Str(value) => {
+            let trimmed = value.trim();
+            // ECMAScript coerces the empty string (including whitespace-only)
+            // to numeric zero, not NaN. An empty parse result must therefore be
+            // handled before falling back to the non-numeric NaN result.
+            if trimmed.is_empty() {
+                Ok(0.0)
+            } else {
+                Ok(trimmed.parse::<f64>().unwrap_or(f64::NAN))
+            }
+        }
         _ => Err(JsError::Type {
             pos,
             message: format!(
@@ -1208,12 +1218,15 @@ fn call_builtin(
             Ok(Value::Number(parse_float_prefix(&text)))
         }
         BuiltinFn::IsNaN => {
-            let value = to_number(
-                &args.first().cloned().unwrap_or(Value::Undefined),
-                interpreter.limits,
-                pos,
-            )?;
-            Ok(Value::Bool(value.is_nan()))
+            let value = args.first().cloned().unwrap_or(Value::Undefined);
+            // `to_number` deliberately maps `undefined` to 0 for arithmetic,
+            // but the `isNaN` predicate must report true for it (and for a call
+            // with no argument) to match JavaScript semantics.
+            if matches!(value, Value::Undefined) {
+                return Ok(Value::Bool(true));
+            }
+            let number = to_number(&value, interpreter.limits, pos)?;
+            Ok(Value::Bool(number.is_nan()))
         }
         BuiltinFn::MathAbs => unary_math(args, interpreter.limits, pos, f64::abs),
         BuiltinFn::MathFloor => unary_math(args, interpreter.limits, pos, f64::floor),
@@ -2011,6 +2024,17 @@ fn util_printf(
                 let number = to_number(&value, interpreter.limits, pos)?;
                 let places = precision.unwrap_or(6);
                 if number.is_finite() {
+                    // `format!` allocates the full fixed-point form before the
+                    // result can be checked. Reject an impossible precision up
+                    // front so `%999999999f` fails with a typed size error. A
+                    // finite value emits at least `places` fractional digits,
+                    // so this guard never rejects a result that would fit.
+                    if places > interpreter.limits.max_string_len.saturating_sub(length) {
+                        return Err(JsError::StringTooLarge {
+                            pos,
+                            limit: interpreter.limits.max_string_len,
+                        });
+                    }
                     format!("{number:.places$}")
                 } else {
                     "NaN".to_owned()
@@ -2027,6 +2051,23 @@ fn util_printf(
         let current = piece.chars().count();
         if width > current {
             let pad_count = width - current;
+            // Check the projected length *before* allocating the padding buffer.
+            // `repeat_n(...).collect()` would otherwise try to allocate `width`
+            // characters for a hostile format such as `%999999999d` before
+            // `push_string` gets a chance to enforce the size limit.
+            let projected = length
+                .checked_add(current)
+                .and_then(|total| total.checked_add(pad_count))
+                .ok_or(JsError::StringTooLarge {
+                    pos,
+                    limit: interpreter.limits.max_string_len,
+                })?;
+            if projected > interpreter.limits.max_string_len {
+                return Err(JsError::StringTooLarge {
+                    pos,
+                    limit: interpreter.limits.max_string_len,
+                });
+            }
             let pad = if zero_pad && !left_align { '0' } else { ' ' };
             let padding: String = std::iter::repeat_n(pad, pad_count).collect();
             if left_align {

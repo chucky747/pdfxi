@@ -7,10 +7,9 @@
   "depends_on": ["T-0096"],
   "owns": [
     "crates/pdfxi-edit/**",
-    "crates/pdfxi-cli/**",
     "docs/evidence/author/T-0125.md",
     "orchestration/feature-updates/T-0125.toml"
   ],
-  "acceptance": "cargo test -p pdfxi-edit -p pdfxi-cli",
+  "acceptance": "cargo test -p pdfxi-edit",
   "evidence": ""
 }

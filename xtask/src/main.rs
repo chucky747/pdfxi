@@ -3,6 +3,8 @@
 //! `xtask` is the single entry point for verification, claims, the task board,
 //! and the goal gate. Agents call it instead of inventing ad-hoc scripts.
 
+mod bench;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -81,11 +83,17 @@ enum Command {
     Board,
     /// Check documentation links and required pages.
     Docs,
-    /// Run fast benchmarks. M0 is a no-op.
+    /// Run the deterministic performance benchmarks and budget gate.
     Bench {
-        /// Gate on regression thresholds.
+        /// Emit an informational report; never exit non-zero on a breach.
+        #[arg(long)]
+        report: bool,
+        /// Gate on regression thresholds (default behavior; kept for scripts).
         #[arg(long)]
         check: bool,
+        /// Write the current report as the committed baseline, then exit.
+        #[arg(long)]
+        update_baseline: bool,
     },
     /// Run the smoke corpus. M0 is a no-op.
     Corpus {
@@ -180,7 +188,11 @@ fn main() -> Result<()> {
         Command::Ready => ready(),
         Command::Board => board(),
         Command::Docs => docs(),
-        Command::Bench { check } => bench(check),
+        Command::Bench {
+            report,
+            check: _,
+            update_baseline,
+        } => bench_command(report, update_baseline),
         Command::Corpus { command } => match command {
             CorpusCommand::Smoke => corpus_smoke(),
         },
@@ -836,18 +848,9 @@ fn docs() -> Result<()> {
     Ok(())
 }
 
-fn bench(check: bool) -> Result<()> {
-    let mut args = vec!["run", "-p", "pdfxi-testkit", "--example", "bench_open"];
-    if check {
-        args.push("--release");
-    }
-    run("cargo", &args)?;
-    if check {
-        println!("BENCH OK (budget enforced)");
-    } else {
-        println!("BENCH OK");
-    }
-    Ok(())
+fn bench_command(report: bool, update_baseline: bool) -> Result<()> {
+    println!("$ cargo xtask bench report={report} update_baseline={update_baseline}");
+    bench::run(report, update_baseline).map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn corpus_smoke() -> Result<()> {

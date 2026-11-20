@@ -15,9 +15,19 @@
 //! script through [`Script::run_with_acrobat`](crate::js::Script::run_with_acrobat),
 //! then read the resulting field or event values back.
 
+use super::{JsError, Pos};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+
+/// Typed error returned by the fallible host accessors when the shared state is
+/// already borrowed by an active script evaluation.
+fn borrow_conflict(what: &str) -> JsError {
+    JsError::Host {
+        pos: Pos::default(),
+        message: format!("{what} is already borrowed"),
+    }
+}
 
 /// An in-memory store of form field values, keyed by fully-qualified name.
 ///
@@ -141,90 +151,174 @@ impl AcrobatContext {
         self
     }
 
-    /// Sets a field value.
+    // The shared state is `Rc<RefCell<_>>`, which is single-threaded. Every
+    // borrow taken by the interpreter is confined to a short lexical scope and
+    // host callbacks are invoked outside those scopes, so a host accessor can
+    // never observe an outstanding borrow. The fallible `try_*` methods expose
+    // contention as a typed error; the original infallible accessors delegate to
+    // them and use a neutral fallback, so none of them can panic on a
+    // `RefCell` borrow conflict. The regression test at the end of this module
+    // exercises the only realistic re-entrancy path (a host callback holding a
+    // cloned context) and confirms the invariant.
+
+    /// Tries to set a field value.
     ///
-    /// # Panics
+    /// Returns a typed [`JsError::Host`] when the field store is already
+    /// borrowed; see the module note above for why that cannot happen in normal
+    /// use.
+    pub fn try_set_field(
+        &self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<(), JsError> {
+        self.fields
+            .try_borrow_mut()
+            .map_err(|_| borrow_conflict("field store"))?
+            .set(name, value);
+        Ok(())
+    }
+
+    /// Sets the value of `name`, overwriting any previous value.
     ///
-    /// Never in practice: the field store is borrowed only inside a synchronous
-    /// script run, so no outstanding borrow can exist when the host calls this.
+    /// Infallible convenience wrapper around [`AcrobatContext::try_set_field`];
+    /// on the (unreachable-by-invariant) contention path it becomes a no-op
+    /// instead of panicking.
     pub fn set_field(&self, name: impl Into<String>, value: impl Into<String>) {
-        self.fields.borrow_mut().set(name, value);
+        let _ = self.try_set_field(name, value);
+    }
+
+    /// Tries to read a field value, returning an empty string for a missing
+    /// field. Returns a typed error if the field store is already borrowed.
+    pub fn try_field_value(&self, name: &str) -> Result<String, JsError> {
+        let fields = self
+            .fields
+            .try_borrow()
+            .map_err(|_| borrow_conflict("field store"))?;
+        Ok(fields.value(name))
     }
 
     /// Reads a field value, returning an empty string for a missing field.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_field_value`]; returns an
+    /// empty string if the invariant is ever broken rather than panicking.
     pub fn field_value(&self, name: &str) -> String {
-        self.fields.borrow().value(name)
+        self.try_field_value(name).unwrap_or_default()
+    }
+
+    /// Tries to report whether a field with `name` exists.
+    pub fn try_has_field(&self, name: &str) -> Result<bool, JsError> {
+        let fields = self
+            .fields
+            .try_borrow()
+            .map_err(|_| borrow_conflict("field store"))?;
+        Ok(fields.contains(name))
     }
 
     /// Returns `true` when a field with `name` exists.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_has_field`].
     pub fn has_field(&self, name: &str) -> bool {
-        self.fields.borrow().contains(name)
+        self.try_has_field(name).unwrap_or_default()
+    }
+
+    /// Tries to return a snapshot of all field values in stable name order.
+    pub fn try_field_snapshot(&self) -> Result<Vec<(String, String)>, JsError> {
+        let store = self
+            .fields
+            .try_borrow()
+            .map_err(|_| borrow_conflict("field store"))?;
+        Ok(store
+            .names()
+            .map(|name| (name.to_owned(), store.value(name)))
+            .collect())
     }
 
     /// Returns a snapshot of all field values in stable name order.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_field_snapshot`].
     pub fn field_snapshot(&self) -> Vec<(String, String)> {
-        let store = self.fields.borrow();
-        store
-            .names()
-            .map(|name| (name.to_owned(), store.value(name)))
-            .collect()
+        self.try_field_snapshot().unwrap_or_default()
+    }
+
+    /// Tries to set the event's `value` property.
+    pub fn try_set_event_value(&self, value: impl Into<String>) -> Result<(), JsError> {
+        self.event
+            .try_borrow_mut()
+            .map_err(|_| borrow_conflict("event data"))?
+            .value = value.into();
+        Ok(())
     }
 
     /// Sets the event's `value` property.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_set_event_value`].
     pub fn set_event_value(&self, value: impl Into<String>) {
-        self.event.borrow_mut().value = value.into();
+        let _ = self.try_set_event_value(value);
+    }
+
+    /// Tries to set the event's `key` property.
+    pub fn try_set_event_key(&self, key: impl Into<String>) -> Result<(), JsError> {
+        self.event
+            .try_borrow_mut()
+            .map_err(|_| borrow_conflict("event data"))?
+            .key = key.into();
+        Ok(())
     }
 
     /// Sets the event's `key` property.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_set_event_key`].
     pub fn set_event_key(&self, key: impl Into<String>) {
-        self.event.borrow_mut().key = key.into();
+        let _ = self.try_set_event_key(key);
+    }
+
+    /// Tries to return the event's current `value`.
+    pub fn try_event_value(&self) -> Result<String, JsError> {
+        let event = self
+            .event
+            .try_borrow()
+            .map_err(|_| borrow_conflict("event data"))?;
+        Ok(event.value.clone())
     }
 
     /// Returns the event's current `value`.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_event_value`].
     pub fn event_value(&self) -> String {
-        self.event.borrow().value.clone()
+        self.try_event_value().unwrap_or_default()
+    }
+
+    /// Tries to return the event's current `key`.
+    pub fn try_event_key(&self) -> Result<String, JsError> {
+        let event = self
+            .event
+            .try_borrow()
+            .map_err(|_| borrow_conflict("event data"))?;
+        Ok(event.key.clone())
     }
 
     /// Returns the event's current `key`.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_event_key`].
     pub fn event_key(&self) -> String {
-        self.event.borrow().key.clone()
+        self.try_event_key().unwrap_or_default()
+    }
+
+    /// Tries to return the event's acceptance flag.
+    pub fn try_event_rc(&self) -> Result<bool, JsError> {
+        let event = self
+            .event
+            .try_borrow()
+            .map_err(|_| borrow_conflict("event data"))?;
+        Ok(event.rc)
     }
 
     /// Returns the event's acceptance flag.
     ///
-    /// # Panics
-    ///
-    /// Never in practice; see [`AcrobatContext::set_field`].
+    /// Infallible wrapper around [`AcrobatContext::try_event_rc`].
     pub fn event_rc(&self) -> bool {
-        self.event.borrow().rc
+        // Acrobat's event.rc defaults to `true` (accept).
+        self.try_event_rc().unwrap_or(true)
     }
 
     /// Returns a shared handle to the field store for interpreter use.
@@ -266,5 +360,108 @@ mod tests {
         assert!(clone.event_rc());
         let copy = AcrobatContext::default();
         assert!(copy.field_snapshot().is_empty());
+    }
+
+    #[test]
+    fn fallible_accessors_report_borrow_contention_as_a_typed_error() {
+        let context = AcrobatContext::new();
+        // Hold both borrows from inside the module (private fields are visible
+        // to this child module) to simulate re-entrant host access.
+        let fields = context
+            .fields
+            .try_borrow_mut()
+            .expect("initial field borrow");
+        let event = context
+            .event
+            .try_borrow_mut()
+            .expect("initial event borrow");
+        assert!(matches!(
+            context.try_set_field("x", "1"),
+            Err(JsError::Host { .. })
+        ));
+        assert!(matches!(
+            context.try_field_value("x"),
+            Err(JsError::Host { .. })
+        ));
+        assert!(matches!(
+            context.try_has_field("x"),
+            Err(JsError::Host { .. })
+        ));
+        assert!(matches!(
+            context.try_field_snapshot(),
+            Err(JsError::Host { .. })
+        ));
+        assert!(matches!(
+            context.try_set_event_value("v"),
+            Err(JsError::Host { .. })
+        ));
+        assert!(matches!(
+            context.try_set_event_key("k"),
+            Err(JsError::Host { .. })
+        ));
+        assert!(matches!(
+            context.try_event_value(),
+            Err(JsError::Host { .. })
+        ));
+        assert!(matches!(context.try_event_key(), Err(JsError::Host { .. })));
+        assert!(matches!(context.try_event_rc(), Err(JsError::Host { .. })));
+
+        // The infallible wrappers degrade gracefully instead of panicking.
+        context.set_field("x", "1");
+        context.set_event_value("v");
+        assert_eq!(context.field_value("x"), "");
+        assert_eq!(context.event_value(), "");
+
+        drop(event);
+        drop(fields);
+        context.set_field("x", "1");
+        assert_eq!(context.try_field_value("x").expect("released"), "1");
+        assert_eq!(context.try_event_value().expect("released"), "");
+    }
+
+    #[test]
+    fn host_callback_can_reenter_the_context_during_a_script_run() {
+        use crate::CancelToken;
+        use crate::js::{HostObject, HostRegistry, Limits, Script, Value};
+        use std::rc::Rc;
+
+        #[derive(Debug)]
+        struct ContextTouchingHost(AcrobatContext);
+
+        impl HostObject for ContextTouchingHost {
+            fn call(&self, method: &str, _args: &[Value]) -> Result<Value, JsError> {
+                match method {
+                    "seed" => {
+                        self.0.try_set_field("from_host", "42")?;
+                        self.0.try_set_event_value("host-event")?;
+                        Ok(Value::Bool(true))
+                    }
+                    _ => Err(JsError::Host {
+                        pos: Pos::default(),
+                        message: format!("unknown method '{method}'"),
+                    }),
+                }
+            }
+        }
+
+        let context = AcrobatContext::new().with_field("seed", "1");
+        let mut host = HostRegistry::new();
+        host.register("touch", Rc::new(ContextTouchingHost(context.clone())))
+            .expect("registration succeeds");
+        let script = Script::parse("touch.seed();").expect("valid script");
+        let result = script
+            .run_with_context(
+                &Limits::default(),
+                &CancelToken::new(),
+                &host,
+                Some(&context),
+            )
+            .expect("script succeeds");
+        assert_eq!(result, Value::Bool(true));
+        assert_eq!(
+            context.try_field_value("from_host").expect("no borrow"),
+            "42"
+        );
+        assert_eq!(context.try_event_value().expect("no borrow"), "host-event");
     }
 }

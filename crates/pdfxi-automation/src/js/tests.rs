@@ -872,3 +872,65 @@ fn acrobat_size_limits_are_enforced() {
     .expect_err("field writes must respect the string-size budget");
     assert!(matches!(failure, JsError::StringTooLarge { .. }));
 }
+
+// --- T-0121 reviewer fix regressions ---------------------------------------
+
+#[test]
+fn repeated_unary_operators_return_a_typed_depth_error() {
+    let source = format!("{}1;", "!".repeat(50_000));
+    let failure = run_script(&source, &Limits::default(), &CancelToken::new())
+        .expect_err("50k unary operators must be rejected before the stack overflows");
+    assert!(
+        matches!(failure, JsError::AstTooDeep { .. }),
+        "unexpected error: {failure}"
+    );
+}
+
+#[test]
+fn long_member_and_index_chains_return_a_typed_depth_error() {
+    for suffix in [".a".repeat(50_000), "[0]".repeat(50_000)] {
+        let source = format!("a{suffix};");
+        let failure = run_script(&source, &Limits::default(), &CancelToken::new())
+            .expect_err("50k postfix links must be rejected by the depth limit");
+        assert!(
+            matches!(failure, JsError::AstTooDeep { .. }),
+            "unexpected error: {failure}"
+        );
+    }
+}
+
+#[test]
+fn deeply_nested_parentheses_return_a_typed_depth_error() {
+    let source = format!("{}1{};", "(".repeat(50_000), ")".repeat(50_000));
+    let failure = run_script(&source, &Limits::default(), &CancelToken::new())
+        .expect_err("50k nested parentheses must be rejected by the depth limit");
+    assert!(
+        matches!(failure, JsError::AstTooDeep { .. }),
+        "unexpected error: {failure}"
+    );
+}
+
+#[test]
+fn printf_width_and_precision_are_checked_before_allocating() {
+    let context = AcrobatContext::new();
+    for source in [
+        "util.printf('%999999999d', 1);",
+        "util.printf('%999999999f', 1);",
+    ] {
+        let failure = error_acrobat(source, &context);
+        assert!(
+            matches!(failure, JsError::StringTooLarge { .. }),
+            "{source} produced {failure}"
+        );
+    }
+}
+
+#[test]
+fn empty_string_coerces_to_zero_and_isnan_handles_undefined() {
+    assert_eq!(eval("Number('');").as_number(), Some(0.0));
+    assert_eq!(eval("Number('   ');").as_number(), Some(0.0));
+    assert_eq!(eval("isNaN('');"), Value::Bool(false));
+    assert_eq!(eval("isNaN();"), Value::Bool(true));
+    assert_eq!(eval("var u; isNaN(u);"), Value::Bool(true));
+    assert_eq!(eval("isNaN('xyz');"), Value::Bool(true));
+}

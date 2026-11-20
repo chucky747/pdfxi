@@ -84,5 +84,86 @@ cargo xtask goal-verify --all
 cargo nextest run --workspace --profile fast
 cargo nextest run --workspace --profile full
 cargo fuzz run parser
-cargo xtask bench --check
+cargo xtask bench
+cargo xtask bench --report
+cargo xtask bench --update-baseline
 ```
+
+## Tracked benchmark harness (T-0120)
+
+`cargo xtask bench` runs a deterministic, offline harness implemented in
+`xtask/src/bench.rs`. It generates three byte-stable, text-only PDF fixtures in
+memory -- **small** (1 page), **medium** (100 pages) and **large** (500 pages) --
+with page count and marker width controlled by `FixtureSpec`. For each fixture it
+measures `open`, `first_page_render` (mock), `text_extract`,
+`search_index_build`, `save` and a `peak_allocation_estimate`, then emits
+versioned JSON (`schema_version = 1`) to stdout and to
+`target/perf/bench-report.json`, plus a human-readable summary.
+
+### Method
+
+1. Every operation runs **2 unmeasured warmup** iterations followed by **7
+   measured** iterations. The median is the tracked number; min and max are also
+   recorded.
+2. The whole harness runs **3 independent rounds** and keeps the best median per
+   metric (`best-of-3`). A real regression appears in every round; a transient
+   scheduler spike does not.
+3. Fixture bytes, JSON field order and all non-timing values are deterministic.
+   Only measured numbers vary; the JSON *shape* is stable.
+4. Each operation's correctness checksum is verified once before timing, so a
+   broken operation fails the harness instead of producing meaningless numbers.
+
+### Explicit budgets
+
+Budgets are derived from the 500-page reference values in the table above. They
+scale linearly with page count, are floored at 5 ms for tiny fixtures, then get a
+documented **+25% host-variance allowance**. A metric passes when its tracked
+median is at or below its budget.
+
+| Operation | Base @ 500 pages | small (1 p) | medium (100 p) | large (500 p) |
+|---|---:|---:|---:|---:|
+| open | 1500 ms | 6.25 ms | 375 ms | 1875 ms |
+| first-page render (mock) | 150 ms | 6.25 ms | 37.5 ms | 187.5 ms |
+| text extraction | 1000 ms | 6.25 ms | 250 ms | 1250 ms |
+| search index build | 1000 ms | 6.25 ms | 250 ms | 1250 ms |
+| save | 2000 ms | 6.25 ms | 500 ms | 2500 ms |
+
+Peak allocation is estimated as `fixture bytes + save output bytes`, budgeted at
+`< 1.5 Ã— file + 512 MiB` per the memory row above.
+
+### Regression gate and variance handling
+
+- A baseline report is committed at `docs/evidence/qa/bench-baseline.json`.
+- A tracked timing regresses when its current best-of-3 median exceeds the
+  baseline median by **more than 10%**. A metric whose baseline median is below a
+  **1 ms noise floor** is informational only: sub-millisecond wall-clock
+  measurements are too resolution-limited for a meaningful ratio.
+- Budget breaches, tracked regressions, or an unreadable/invalid baseline fail
+  the default gate with exit code 1. `--report` is informational and always
+  exits 0.
+- The baseline is **host-specific**. Regenerate it after changing hosts,
+  toolchains, or the harness itself with `cargo xtask bench --update-baseline`.
+
+### Host caveats
+
+- The harness is dependency-free and runs inside the dev-built `xtask` process;
+  it is **not** a Criterion or release-profile run. Numbers are reproducible in
+  shape, not absolute across machines.
+- The renderer is a **mock**: it decodes the first content stream and fills a
+  bounded 320Ã—240 RGB buffer. No PDFium binding is linked. If `PDFIUM_PATH` is
+  set, its presence is recorded for context only.
+- This workspace can run up to five lanes concurrently. The warmup, best-of-3
+  rounds and 25% budget headroom absorb ordinary shared-host noise. Sustained
+  host load that survives all three rounds is reported as a regression rather
+  than silently ignored.
+
+### Commands
+
+```text
+cargo xtask bench                    # enforce budgets and >10% regression gate
+cargo xtask bench --check            # same gate (compatibility with older scripts)
+cargo xtask bench --report           # informational; never exits non-zero
+cargo xtask bench --update-baseline  # refresh the committed baseline JSON
+```
+
+Evidence for this task: `docs/evidence/qa/T-0120.md`.

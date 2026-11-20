@@ -2444,17 +2444,38 @@ tests = [
 title = "Droplets and watched folders"
 
 [[feature]]
-docs = "crates/pdfxi-automation/src/js/, docs/evidence/automation/T-0094.md"
+docs = [
+    "crates/pdfxi-automation/src/js/parser.rs",
+    "crates/pdfxi-automation/src/js/interpreter.rs",
+    "crates/pdfxi-automation/src/js/acrobat.rs",
+    "crates/pdfxi-automation/src/js/tests.rs",
+    "docs/evidence/automation/T-0094.md",
+]
 domain = "Automation"
-evidence = "docs/evidence/automation/T-0094.md"
+evidence = "CARGO_TARGET_DIR=target/lanes/automation; cargo test -p pdfxi-automation: 103 passed, 0 failed, 0 doc tests, EXIT=0. fmt --check, clippy (--all-targets --all-features -D warnings), and RUSTDOCFLAGS=-D warnings cargo doc --no-deps all EXIT=0. Full output in docs/evidence/automation/T-0094.md."
 id = "AUTO-004"
-notes = "Subset interpreter with hard sandbox and typed limits; Action Wizard/UI binding and broader Acrobat API coverage remain open."
+notes = "T-0121 reviewer-fix pass on T-0094: bounded parser recursion and postfix chains with the shared depth budget; pre-checked printf projected size before allocating; replaced panic-capable borrow()/borrow_mut() in the public Acrobat host model with try_borrow plus typed errors and documented/tested the invariant; Number('')->0 and isNaN(undefined)->true. AUTO-004 stays in-progress (no Action Wizard/UI binding)."
 priority = "P3"
 status = "in-progress"
 tests = [
-    "js::interpreter::tests::acrobat_number_and_percent_builtins",
-    "js::interpreter::tests::forbidden_globals_are_rejected",
-    "js::interpreter::tests::cancellation_stops_evaluation",
+    "js::tests::repeated_unary_operators_return_a_typed_depth_error",
+    "js::tests::long_member_and_index_chains_return_a_typed_depth_error",
+    "js::tests::deeply_nested_parentheses_return_a_typed_depth_error",
+    "js::tests::printf_width_and_precision_are_checked_before_allocating",
+    "js::tests::empty_string_coerces_to_zero_and_isnan_handles_undefined",
+    "js::acrobat::tests::fallible_accessors_report_borrow_contention_as_a_typed_error",
+    "js::acrobat::tests::host_callback_can_reenter_the_context_during_a_script_run",
+    "js::tests::division_by_zero_and_deep_expressions_are_rejected",
+    "js::tests::size_limits_are_enforced",
+    "js::tests::acrobat_size_limits_are_enforced",
+    "js::tests::acrobat_arithmetic_and_calculate_script",
+    "js::tests::af_number_format_end_to_end",
+    "js::tests::af_percent_format_and_keystroke_end_to_end",
+    "js::tests::acrobat_strings_and_printf_helpers",
+    "js::tests::dangerous_globals_are_rejected",
+    "js::tests::forbidden_globals_are_rejected_even_with_a_context",
+    "js::tests::cancellation_is_observed_before_and_during_a_run",
+    "js::tests::cancellation_is_honored_with_a_context",
 ]
 title = "Sandboxed Acrobat-compatible JavaScript subset"
 
