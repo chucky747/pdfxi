@@ -1,0 +1,15 @@
+{
+  "id": "T-0161",
+  "lane": "app",
+  "title": "Reflow compare view models",
+  "priority": "P2",
+  "status": "queued",
+  "depends_on": ["T-0155"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/evidence/app/T-0161.md",
+    "orchestration/feature-updates/T-0161.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-app --features ui",
+  "evidence": ""
+}

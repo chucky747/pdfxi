@@ -30,7 +30,9 @@ mod error;
 mod model;
 mod pptx;
 mod xlsx;
-mod xml;
+// Crate-visible so the portfolio manifest serializer can reuse the same
+// deterministic XML declaration/escaping helpers (T-0157).
+pub(crate) mod xml;
 mod zip;
 
 use std::collections::HashSet;

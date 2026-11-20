@@ -493,25 +493,89 @@ tests = []
 title = "Side-by-side compare view"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/print_capture.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0157.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert: 9 new print_capture tests pass, including pages_are_ordered_by_sequence_not_input_order, invalid_page_sizes_are_rejected_with_a_typed_error, postscript_payloads_are_validated_through_the_shared_reader, empty_and_over_budget_inputs_are_rejected and plan_summary_is_byte_for_byte_deterministic; 286 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0157.md."
 id = "CREATE-001"
-notes = ""
+notes = """
+Adds `pdfxi_convert::print_capture`, a local print-capture INGESTION CONTRACT for
+CREATE-001 (ADR 0008). A `CapturePage` carries a caller assembly `sequence`, an
+opaque label, and a `CaptureSource`: a `RenderedImage` (pixel width/height + DPI
+converted to PDF points), a `PostScript` payload, or an `Html` markup payload.
+`build_print_capture_plan` validates every page, rejects duplicate sequences and
+empty/over-budget inputs, orders pages by ascending sequence into a deterministic
+`PrintCapturePlan` (validated `PageSize` per page plus a stable summary string).
+Existing modules are reused rather than duplicated: `create::PageSize::new`
+validates all geometry, `ingest_postscript_str` validates a PostScript payload
+through the bounded DSC reader, and `HTML_MAX_INPUT_BYTES` bounds HTML payloads.
+
+Honest remaining scope: this is a model/plan only. It does not capture a native
+application window, install or drive a print monitor/spooler/printer driver,
+decode or embed the caller's image pixels into PDF bytes, paginate multi-page
+PostScript into multiple planned pages, or expose a CLI/UI entry point. The host
+must feed the plan to the existing PDF writers. The row therefore stays
+in-progress, not replaced.
+"""
 priority = "P0"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "print_capture::tests::pages_are_ordered_by_sequence_not_input_order",
+    "print_capture::tests::rendered_image_page_size_is_derived_from_pixels_and_dpi",
+    "print_capture::tests::invalid_page_sizes_are_rejected_with_a_typed_error",
+    "print_capture::tests::oversized_rendered_geometry_is_rejected",
+    "print_capture::tests::duplicate_sequences_and_empty_labels_are_rejected",
+    "print_capture::tests::postscript_payloads_are_validated_through_the_shared_reader",
+    "print_capture::tests::empty_and_over_budget_inputs_are_rejected",
+    "print_capture::tests::empty_and_oversized_text_payloads_are_rejected",
+    "print_capture::tests::plan_summary_is_byte_for_byte_deterministic",
+]
 title = "Create PDF from any printable application"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/print_job.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0157.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert: 10 new print_job tests pass, including page_range_parses_lists_and_open_ended_ranges, page_range_rejects_malformed_and_out_of_bounds_expressions, copies_bounds_are_enforced, print_job_validation_rejects_empty_ids_and_source_apps, resolve_plan_applies_orientation_and_expands_pages and plan_is_byte_for_byte_deterministic; 286 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0157.md."
 id = "CREATE-002"
-notes = ""
+notes = """
+Adds `pdfxi_convert::print_job`, a local virtual-printer ENVELOPE MODEL for
+CREATE-002 (ADR 0008). `PrintJob` carries job id, source app, `PaperSize`
+(Letter/A4/Legal/Custom), `Orientation` (Portrait/Landscape), copies, source
+page count, and `PageRange`. `validate` checks non-empty/bounded ids, 1..=999
+copies, a non-empty bounded document, valid custom paper geometry (reusing
+`create::PageSize::new`) and a parseable range. `parse_page_range` implements a
+documented one-based grammar (`all`, `N`, `N-M`, `N-`), deduplicating into
+ascending order and rejecting zero, reversed, non-numeric, out-of-bounds and
+over-tokenized expressions. `resolve_plan` emits a deterministic `PrintJobPlan`
+with zero-based expanded pages, orientation-applied media, copies, and summary.
+
+Honest remaining scope: no spooler, OS printer driver, port monitor, or
+installable virtual printer; no spooled job stream or DEVMODE parsing; no
+duplex/collate/media-source/scale model; no CLI/UI entry point; and no rendering
+of the resolved pages into PDF bytes by this module. The row therefore stays
+in-progress, not replaced.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "print_job::tests::page_range_parses_lists_and_open_ended_ranges",
+    "print_job::tests::page_range_rejects_malformed_and_out_of_bounds_expressions",
+    "print_job::tests::print_job_validation_accepts_a_well_formed_envelope",
+    "print_job::tests::print_job_validation_rejects_empty_ids_and_source_apps",
+    "print_job::tests::copies_bounds_are_enforced",
+    "print_job::tests::empty_and_oversized_documents_are_rejected",
+    "print_job::tests::invalid_paper_size_is_a_typed_error",
+    "print_job::tests::resolve_plan_applies_orientation_and_expands_pages",
+    "print_job::tests::plan_is_byte_for_byte_deterministic",
+    "print_job::tests::reversed_range_expression_is_rejected_during_validation",
+]
 title = "Virtual PDF printer"
 
 [[feature]]
@@ -750,14 +814,45 @@ tests = [
 title = "Combine multiple files into one PDF"
 
 [[feature]]
-docs = "docs/FEATURES.md"
+docs = [
+    "crates/pdfxi-convert/src/portfolio.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "docs/evidence/convert/T-0157.md",
+]
 domain = "Create"
-evidence = ""
+evidence = "cargo test -p pdfxi-convert: 9 new portfolio tests pass, including portfolio_entries_validate_when_names_are_safe, duplicate_names_are_rejected_case_insensitively, traversal_and_absolute_names_are_rejected, manifest_output_is_byte_for_byte_deterministic_and_escaped and empty_manifest_is_valid_and_serializes_to_an_empty_document; 286 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0157.md."
 id = "CREATE-010"
-notes = ""
+notes = """
+Adds `pdfxi_convert::portfolio`, a local PDF Portfolio MANIFEST MODEL for
+CREATE-010 (ADR 0008). `PortfolioEntry` carries a relative name, description,
+and order key. `PortfolioManifest::validate` enforces a non-empty title, entry
+and description bounds, traversal-free relative names (no absolute/drive paths,
+backslashes, NUL/control characters, or empty/./.. path components), and rejects
+case-insensitive duplicate names. `serialize` emits a deterministic XML
+descriptor with entries ordered by (order, name), reusing the existing Office
+writers' XML declaration and escaping helpers (the `office_export::xml` module
+was made `pub(crate)` for this). Empty manifests are valid and serialize to an
+empty portfolio document.
+
+Honest remaining scope: this models and serializes portfolio structure only. It
+does not assemble a real PDF package, embed or reference actual file-byte
+streams, write /EmbeddedFiles name trees or a collection dictionary, support
+portfolio schemas/categories/columns, or expose a CLI/UI entry point. The host
+must consume the descriptor. The row therefore stays in-progress, not replaced.
+"""
 priority = "P2"
-status = "planned"
-tests = []
+status = "in-progress"
+tests = [
+    "portfolio::tests::portfolio_entries_validate_when_names_are_safe",
+    "portfolio::tests::empty_names_and_oversized_descriptions_are_rejected",
+    "portfolio::tests::duplicate_names_are_rejected_case_insensitively",
+    "portfolio::tests::traversal_and_absolute_names_are_rejected",
+    "portfolio::tests::duplicate_paths_in_different_folders_are_allowed",
+    "portfolio::tests::manifest_output_is_byte_for_byte_deterministic_and_escaped",
+    "portfolio::tests::empty_manifest_is_valid_and_serializes_to_an_empty_document",
+    "portfolio::tests::empty_title_and_too_many_entries_are_rejected",
+    "portfolio::tests::free_function_matches_method_serialization",
+]
 title = "Create and customize PDF Portfolios"
 
 [[feature]]

@@ -92,6 +92,16 @@
 //!   (no ZIP, COM, or network) and maps a documented markup subset onto the
 //!   [`OfficeDocument`] model, with bounded input, a deterministic report, and
 //!   typed errors for active content and remote references.
+//! - [`print_capture`] is the local print-capture ingestion contract for
+//!   "create PDF from any printable application" (CREATE-001). It orders
+//!   caller-supplied rendered pages, PostScript, and HTML into a deterministic
+//!   assembly plan with shared page-size validation and typed errors.
+//! - [`print_job`] models a virtual PDF printer's job envelope (CREATE-002):
+//!   id, source app, paper, orientation, copies, and an expanded page range,
+//!   validated into a deterministic plan. No spooler or driver is used.
+//! - [`portfolio`] models a customizable PDF Portfolio manifest (CREATE-010):
+//!   named, described, ordered entries with traversal/duplicate validation and
+//!   a deterministic XML descriptor serialized through the Office XML helpers.
 //!
 //! The text/JSON modules are always compiled and add no dependencies, so a
 //! `--no-default-features` build stays dependency-free.
@@ -139,9 +149,12 @@ pub mod office_import;
 mod options;
 #[cfg(feature = "renderer")]
 mod page_export;
+pub mod portfolio;
 pub mod postscript;
 pub mod postscript_ingest;
 pub mod preflight;
+pub mod print_capture;
+pub mod print_job;
 mod rtf;
 mod source;
 mod tagged_text;
@@ -199,6 +212,11 @@ pub use page_export::{
 };
 #[cfg(feature = "pdfium")]
 pub use page_export::{export_pdf_bytes, export_pdf_file};
+pub use portfolio::{
+    PORTFOLIO_MAX_DESCRIPTION_BYTES, PORTFOLIO_MAX_ENTRIES, PORTFOLIO_MAX_NAME_BYTES,
+    PORTFOLIO_MAX_TITLE_BYTES, PortfolioEntry, PortfolioError, PortfolioManifest,
+    serialize_portfolio,
+};
 pub use postscript::{
     MAX_PAGES as POSTSCRIPT_MAX_PAGES, PsContent, PsDocument, PsExportError, PsExportReport,
     PsFont, PsImageRef, PsLine, PsPage, PsRect, PsText, PsUnsupportedItem, export_postscript,
@@ -213,6 +231,16 @@ pub use postscript_ingest::{
 pub use preflight::{
     BytePreflightError, BytePreflightReport, PreflightOptions, PreflightReport,
     REPORTED_ONLY_CHECKS, build_preflight_input, preflight_bytes,
+};
+pub use print_capture::{
+    CapturePage, CaptureSource, PRINT_CAPTURE_MAX_LABEL_BYTES, PRINT_CAPTURE_MAX_PAGES,
+    PlannedCapturePage, PrintCaptureError, PrintCaptureOptions, PrintCapturePlan,
+    build_print_capture_plan,
+};
+pub use print_job::{
+    Orientation, PRINT_MAX_COPIES, PRINT_MAX_JOB_ID_BYTES, PRINT_MAX_PAGES, PRINT_MAX_RANGE_TOKENS,
+    PRINT_MAX_SOURCE_APP_BYTES, PageRange, PaperSize, PrintJob, PrintJobError, PrintJobPlan,
+    parse_page_range,
 };
 pub use rtf::{RtfOptions, RtfPage, export_rtf, export_rtf_string};
 pub use source::SourceKind;

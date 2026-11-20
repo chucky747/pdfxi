@@ -1,0 +1,15 @@
+{
+  "id": "T-0159",
+  "lane": "author",
+  "title": "Review threads and tracker closure",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0146"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "docs/evidence/author/T-0159.md",
+    "orchestration/feature-updates/T-0159.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit",
+  "evidence": ""
+}
