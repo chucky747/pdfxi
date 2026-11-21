@@ -432,6 +432,36 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
                 name: "checkbox-field".to_owned(),
             },
         ),
+        // T-0243 round B: choice, radio, apply/reset, flatten and form data.
+        (
+            "SetFormChoice",
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("three".to_owned()),
+            },
+        ),
+        (
+            "SetFormRadio",
+            AppCommand::SetFormRadio {
+                name: "radio-field".to_owned(),
+                on_state: "B".to_owned(),
+            },
+        ),
+        ("ApplyFormEdit", AppCommand::ApplyFormEdit),
+        ("ResetFormFields", AppCommand::ResetFormFields),
+        ("FlattenForm", AppCommand::FlattenForm),
+        (
+            "FocusFormWidget",
+            AppCommand::FocusFormWidget {
+                name: "choice-field".to_owned(),
+                widget: 0,
+                anchor: [120.0, 240.0],
+            },
+        ),
+        ("ImportXfdfDialog", AppCommand::ImportXfdfDialog),
+        ("ExportXfdfDialog", AppCommand::ExportXfdfDialog),
+        ("ImportFdfDialog", AppCommand::ImportFdfDialog),
+        ("ExportFdfDialog", AppCommand::ExportFdfDialog),
     ]
 }
 
@@ -514,6 +544,16 @@ const PROVEN_LABELS: &[&str] = &[
     "save",
     "set-form-text",
     "toggle-form-checkbox",
+    "set-form-choice",
+    "set-form-radio",
+    "apply-form-edit",
+    "reset-form-fields",
+    "flatten-form",
+    "focus-form-widget",
+    "import-xfdf-dialog",
+    "export-xfdf-dialog",
+    "import-fdf-dialog",
+    "export-fdf-dialog",
 ];
 
 /// Enum variants that exist but are deliberately not covered by this harness
@@ -692,6 +732,16 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("delete-annotation", "delete-annotation"),
         ("set-form-text", "set-form-text"),
         ("toggle-form-checkbox", "toggle-form-checkbox"),
+        ("set-form-choice", "set-form-choice"),
+        ("set-form-radio", "set-form-radio"),
+        ("apply-form-edit", "apply-form-edit"),
+        ("reset-form-fields", "reset-form-fields"),
+        ("flatten-form", "flatten-form"),
+        ("focus-form-widget", "focus-form-widget"),
+        ("import-xfdf-dialog", "import-xfdf-dialog"),
+        ("export-xfdf-dialog", "export-xfdf-dialog"),
+        ("import-fdf-dialog", "import-fdf-dialog"),
+        ("export-fdf-dialog", "export-fdf-dialog"),
     ];
 
     let commands = all_commands();
@@ -1527,6 +1577,86 @@ fn dispatched_form_commands_act() {
         form_value(&app.form_field_values(), "checkbox-field").as_deref(),
         Some(checkbox_toggled.as_str())
     );
+}
+
+#[test]
+fn dispatched_round_b_form_commands_act() {
+    let path = fixture("fixtures/realworld/pdfxi-forms-selfmade.pdf");
+    let mut app = PdfxiApp::new();
+    assert!(
+        app.open_path_text(path.to_string_lossy().as_ref()),
+        "form fixture {} did not open",
+        path.display()
+    );
+    app.refresh_forms();
+    app.dispatch(AppCommand::FillAndSign, None);
+
+    // Focusing a choice widget opens its real option popup (no OS input needed).
+    assert_dispatch_acts(
+        "focus-form-widget",
+        &mut app,
+        AppCommand::FocusFormWidget {
+            name: "choice-field".to_owned(),
+            widget: 0,
+            anchor: [120.0, 240.0],
+        },
+    );
+    assert_eq!(app.form_choice_popup(), Some("choice-field"));
+    assert_eq!(app.active_form_field(), Some("choice-field"));
+
+    // Choice: the real setter writes /V, /AS and a regenerated appearance.
+    assert_dispatch_acts(
+        "set-form-choice",
+        &mut app,
+        AppCommand::SetFormChoice {
+            name: "choice-field".to_owned(),
+            value: Some("three".to_owned()),
+        },
+    );
+    assert_eq!(
+        form_value(&app.form_field_values(), "choice-field").as_deref(),
+        Some("three")
+    );
+
+    // Radio reaches set_form_radio: on a form without a radio group the typed
+    // refusal is a visible hint (the full group behaviour is proven in the
+    // forms.rs integration tests on a generated real radio fixture).
+    assert_dispatch_acts(
+        "set-form-radio",
+        &mut app,
+        AppCommand::SetFormRadio {
+            name: "radio-field".to_owned(),
+            on_state: "B".to_owned(),
+        },
+    );
+
+    // Apply with no active draft reports why there is nothing to commit.
+    assert_dispatch_acts("apply-form-edit", &mut app, AppCommand::ApplyFormEdit);
+
+    // Reset walks the model and commits one session edit.
+    assert_dispatch_acts("reset-form-fields", &mut app, AppCommand::ResetFormFields);
+
+    // Native-dialog commands reach their explicit-path methods; with no window
+    // they surface the typed NoPath error instead of blocking on a modal.
+    for command in [
+        AppCommand::ImportXfdfDialog,
+        AppCommand::ExportXfdfDialog,
+        AppCommand::ImportFdfDialog,
+        AppCommand::ExportFdfDialog,
+    ] {
+        let label = command.label();
+        assert_dispatch_acts(label, &mut app, command);
+        assert!(
+            app.forms_hint()
+                .is_some_and(|hint| hint.contains("no file was chosen")),
+            "{label} must report the typed NoPath hint"
+        );
+    }
+
+    // Flatten is last: it removes the AcroForm from the open fixture.
+    assert_dispatch_acts("flatten-form", &mut app, AppCommand::FlattenForm);
+    assert_eq!(app.form_field_count(), 0);
+    assert!(app.forms_flatten_report().is_some());
 }
 
 #[test]

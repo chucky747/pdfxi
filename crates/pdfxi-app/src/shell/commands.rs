@@ -268,6 +268,43 @@ pub enum AppCommand {
         /// Fully qualified AcroForm field name.
         name: String,
     },
+    /// Select a choice field option through the session.
+    SetFormChoice {
+        /// Fully qualified AcroForm field name.
+        name: String,
+        /// Selected option, or `None` to clear the field.
+        value: Option<String>,
+    },
+    /// Select one radio button by its on-state through the session.
+    SetFormRadio {
+        /// Fully qualified AcroForm radio-group name.
+        name: String,
+        /// Named on-state of the clicked widget.
+        on_state: String,
+    },
+    /// Commit the uncommitted text/choice draft of the focused widget.
+    ApplyFormEdit,
+    /// Restore every form field to its `/DV` default as one session edit.
+    ResetFormFields,
+    /// Flatten the form into page content as one session edit.
+    FlattenForm,
+    /// Focus a form widget and open its choice popup when it is a choice field.
+    FocusFormWidget {
+        /// Fully qualified AcroForm field name.
+        name: String,
+        /// Zero-based widget index inside the field.
+        widget: usize,
+        /// Screen anchor `[x, y]` for the option popup.
+        anchor: [f32; 2],
+    },
+    /// Open the native picker and import XFDF field values.
+    ImportXfdfDialog,
+    /// Open the native picker and export field values as XFDF.
+    ExportXfdfDialog,
+    /// Open the native picker and import legacy FDF field values.
+    ImportFdfDialog,
+    /// Open the native picker and export field values as legacy FDF.
+    ExportFdfDialog,
 }
 
 impl AppCommand {
@@ -373,6 +410,16 @@ impl AppCommand {
             Self::DeleteAnnotation { .. } => "delete-annotation",
             Self::SetFormText { .. } => "set-form-text",
             Self::ToggleFormCheckbox { .. } => "toggle-form-checkbox",
+            Self::SetFormChoice { .. } => "set-form-choice",
+            Self::SetFormRadio { .. } => "set-form-radio",
+            Self::ApplyFormEdit => "apply-form-edit",
+            Self::ResetFormFields => "reset-form-fields",
+            Self::FlattenForm => "flatten-form",
+            Self::FocusFormWidget { .. } => "focus-form-widget",
+            Self::ImportXfdfDialog => "import-xfdf-dialog",
+            Self::ExportXfdfDialog => "export-xfdf-dialog",
+            Self::ImportFdfDialog => "import-fdf-dialog",
+            Self::ExportFdfDialog => "export-fdf-dialog",
         }
     }
 }
@@ -595,6 +642,22 @@ impl crate::ui::PdfxiApp {
             AppCommand::DeleteAnnotation { page, id } => self.delete_annotation(page, &id),
             AppCommand::SetFormText { name, value } => self.set_form_text(&name, &value),
             AppCommand::ToggleFormCheckbox { name } => self.toggle_form_checkbox(&name),
+            AppCommand::SetFormChoice { name, value } => {
+                self.set_form_choice(&name, value.as_deref())
+            }
+            AppCommand::SetFormRadio { name, on_state } => self.set_form_radio(&name, &on_state),
+            AppCommand::ApplyFormEdit => self.apply_form_edit(),
+            AppCommand::ResetFormFields => self.reset_form_fields(),
+            AppCommand::FlattenForm => self.flatten_form(),
+            AppCommand::FocusFormWidget {
+                name,
+                widget,
+                anchor,
+            } => self.focus_form_widget(&name, widget, anchor),
+            AppCommand::ImportXfdfDialog => self.import_xfdf_dialog(ctx),
+            AppCommand::ExportXfdfDialog => self.export_xfdf_dialog(ctx),
+            AppCommand::ImportFdfDialog => self.import_fdf_dialog(ctx),
+            AppCommand::ExportFdfDialog => self.export_fdf_dialog(ctx),
         }
     }
 }

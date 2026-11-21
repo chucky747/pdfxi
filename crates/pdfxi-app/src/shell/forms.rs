@@ -11,8 +11,12 @@
 //! executes JavaScript or XFA. A document that carries either is reported in the
 //! panel banner and its AcroForm fields stay fillable.
 
+use std::path::Path;
+
 use pdfxi_forms::{
-    AcroFormModel, FieldValue, FormFieldKind, FormRect, read_acroform, set_checkbox, set_text,
+    AcroFormError, AcroFormModel, FdfError, Field, FieldFlags, FieldType, FieldValue,
+    FlattenFormReport, Form, FormField, FormFieldKind, FormRect, export_fdf as export_legacy_fdf,
+    import_fdf, read_acroform, set_checkbox, set_choice, set_radio, set_text,
 };
 use pdfxi_security::Permission;
 
@@ -39,6 +43,20 @@ pub(crate) struct FormsUiState {
     pub(crate) active: Option<String>,
     /// Draft text of the focused field, committed on blur or Enter.
     pub(crate) draft: String,
+    /// Which widget of `active` owns keyboard focus (radio groups have several).
+    pub(crate) focus_index: usize,
+    /// Choice field whose option popup is open, if any.
+    pub(crate) choice_popup: Option<String>,
+    /// Screen anchor for the open choice popup.
+    pub(crate) choice_popup_anchor: Option<egui::Pos2>,
+    /// Editable-choice draft, committed with Enter or the popup's Apply button.
+    pub(crate) choice_text: String,
+    /// Result counts of the last confirmed flatten, shown in the panel.
+    pub(crate) flatten_report: Option<FlattenFormReport>,
+    /// Human-readable result of the last FDF/XFDF or reset action.
+    pub(crate) io_status: Option<String>,
+    /// Whether the second click of the two-step Flatten confirmation is armed.
+    pub(crate) flatten_confirm: bool,
 }
 
 impl FormsUiState {
@@ -49,6 +67,193 @@ impl FormsUiState {
         self.tab = None;
         self.active = None;
         self.draft.clear();
+        self.focus_index = 0;
+        self.choice_popup = None;
+        self.choice_popup_anchor = None;
+        self.choice_text.clear();
+        self.flatten_report = None;
+        self.io_status = None;
+        self.flatten_confirm = false;
+    }
+
+    /// Cancel the current field focus and any popup.
+    fn clear_focus(&mut self) {
+        self.active = None;
+        self.draft.clear();
+        self.focus_index = 0;
+        self.choice_popup = None;
+        self.choice_popup_anchor = None;
+        self.choice_text.clear();
+    }
+}
+
+/// Maximum accepted size of an imported FDF/XFDF file (8 MiB).
+///
+/// Form data is small; a larger input is almost certainly hostile and is
+/// rejected with a typed error before it is parsed.
+const MAX_FORM_DATA_BYTES: u64 = 8 * 1024 * 1024;
+
+/// One focusable widget in document/widget order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WidgetRef {
+    /// Fully qualified field name.
+    pub(crate) name: String,
+    /// Zero-based widget index inside the field.
+    pub(crate) index: usize,
+    /// Field kind, used for Enter/Space activation.
+    pub(crate) kind: FormFieldKind,
+    /// Named on-state for radio widgets, `None` otherwise.
+    pub(crate) on_state: Option<String>,
+}
+
+/// Everything a widget painter needs except the `Ui` and the edit gate.
+///
+/// Grouping these keeps each painter cohesive (and under clippy's argument
+/// limit) while making it explicit that a widget is always described by its
+/// field, its own rectangle and its position in the focus order.
+#[derive(Clone, Copy)]
+struct WidgetView<'a> {
+    palette: &'a Palette,
+    rect: egui::Rect,
+    id: egui::Id,
+    field: &'a FormField,
+    widget: Option<&'a pdfxi_forms::FormWidget>,
+    widget_index: usize,
+    focused: bool,
+}
+
+/// Deterministic focus order of every interactive widget of a form.
+///
+/// Fields are visited in document order (the order of `AcroForm /Fields`,
+/// which is what `read_acroform` preserves) and each field's widgets in their
+/// own order. Pushbuttons and signatures carry no user value, so they are not
+/// focusable; every other kind is. The function is pure, so tests and the
+/// canvas overlay agree on the traversal without any OS input.
+#[must_use]
+pub(crate) fn widget_order(model: &AcroFormModel) -> Vec<WidgetRef> {
+    let mut order = Vec::new();
+    for field in model.fields() {
+        if !matches!(
+            field.kind,
+            FormFieldKind::Text
+                | FormFieldKind::Checkbox
+                | FormFieldKind::Choice
+                | FormFieldKind::Radio
+        ) {
+            continue;
+        }
+        for (index, widget) in field.widgets.iter().enumerate() {
+            order.push(WidgetRef {
+                name: field.name.clone(),
+                index,
+                kind: field.kind,
+                on_state: if field.kind == FormFieldKind::Radio {
+                    widget.on_state().map(str::to_owned)
+                } else {
+                    None
+                },
+            });
+        }
+    }
+    order
+}
+
+/// Move focus one widget forward (`Tab`) or backward (`Shift+Tab`).
+///
+/// `current` is the `(field name, widget index)` pair of the focused widget.
+/// An unknown current focus starts at the first (forward) or last (backward)
+/// widget. Traversal wraps at both ends. `None` means the form has no
+/// focusable widgets.
+#[must_use]
+pub(crate) fn focus_transition(
+    order: &[WidgetRef],
+    current: Option<(&str, usize)>,
+    forward: bool,
+) -> Option<(String, usize)> {
+    if order.is_empty() {
+        return None;
+    }
+    let position = current.and_then(|(name, index)| {
+        order
+            .iter()
+            .position(|widget| widget.name == name && widget.index == index)
+    });
+    let next = match (position, forward) {
+        (None, true) => 0,
+        (None, false) => order.len() - 1,
+        (Some(at), true) => (at + 1) % order.len(),
+        (Some(at), false) => (at + order.len() - 1) % order.len(),
+    };
+    let widget = &order[next];
+    Some((widget.name.clone(), widget.index))
+}
+
+/// Why flattening is refused, or `None` when it may proceed.
+#[must_use]
+pub(crate) fn flatten_blocker(read_only: bool, has_form: bool) -> Option<&'static str> {
+    if read_only {
+        return Some("This document is read-only and cannot be flattened.");
+    }
+    if !has_form {
+        return Some("This document has no form to flatten.");
+    }
+    None
+}
+
+/// A typed failure from an FDF/XFDF file operation.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FormsIoError {
+    /// The native dialog was dismissed without a path.
+    #[error("no file was chosen")]
+    NoPath,
+    /// The chosen path is a directory, not a file.
+    #[error("'{0}' is a folder, not a form-data file")]
+    IsDirectory(String),
+    /// The chosen input exceeds [`MAX_FORM_DATA_BYTES`].
+    #[error("'{0}' is too large to be form data (limit 8 MiB)")]
+    TooLarge(String),
+    /// Reading or writing the file failed.
+    #[error("file access failed: {0}")]
+    Io(#[from] std::io::Error),
+    /// The form library rejected the data or a field mutation.
+    #[error("{0}")]
+    Form(#[from] AcroFormError),
+    /// The legacy FDF library rejected the data.
+    #[error("{0}")]
+    Fdf(#[from] FdfError),
+    /// The document does not allow form changes.
+    #[error("the form is read-only and cannot be changed")]
+    ReadOnly,
+    /// There is no form to export.
+    #[error("the document has no form fields to export")]
+    NoForm,
+    /// One field could not be applied; the name and reason are preserved.
+    #[error("field '{field}': {reason}")]
+    Field {
+        /// Fully qualified field name.
+        field: String,
+        /// Why this field was rejected.
+        reason: String,
+    },
+}
+
+/// Validate an import path before reading it.
+fn validate_import_path(path: &Path) -> Result<(), FormsIoError> {
+    if path.is_dir() {
+        return Err(FormsIoError::IsDirectory(path.display().to_string()));
+    }
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > MAX_FORM_DATA_BYTES {
+        return Err(FormsIoError::TooLarge(path.display().to_string()));
+    }
+    Ok(())
+}
+
+/// First selected name of a field value, if it carries one.
+fn first_choice(value: &FieldValue) -> Option<&str> {
+    match value {
+        FieldValue::Choice(values) => values.first().map(String::as_str),
+        _ => None,
     }
 }
 
@@ -182,6 +387,60 @@ impl PdfxiApp {
             .map(|_| self.forms.draft.as_str())
     }
 
+    /// The focused widget as `(field name, widget index)`.
+    #[must_use]
+    pub fn form_focused_widget(&self) -> Option<(String, usize)> {
+        self.forms
+            .active
+            .as_ref()
+            .map(|name| (name.clone(), self.forms.focus_index))
+    }
+
+    /// The choice field whose option popup is currently open.
+    #[must_use]
+    pub fn form_choice_popup(&self) -> Option<&str> {
+        self.forms.choice_popup.as_deref()
+    }
+
+    /// Whether there is an uncommitted draft for the focused field.
+    #[must_use]
+    pub fn form_edit_pending(&self) -> bool {
+        let Some(name) = self.forms.active.as_deref() else {
+            return false;
+        };
+        let Some(field) = self
+            .forms
+            .model
+            .as_ref()
+            .and_then(|model| model.field(name))
+        else {
+            return false;
+        };
+        match field.kind {
+            FormFieldKind::Text => self.forms.draft != display_value(&field.value),
+            FormFieldKind::Choice => self.forms.choice_text != display_value(&field.value),
+            _ => false,
+        }
+    }
+
+    /// The counts of the last confirmed flatten, if any.
+    #[must_use]
+    pub fn forms_flatten_report(&self) -> Option<FlattenFormReport> {
+        self.forms.flatten_report
+    }
+
+    /// The result of the last FDF/XFDF import/export or reset action.
+    #[must_use]
+    pub fn forms_io_status(&self) -> Option<&str> {
+        self.forms.io_status.as_deref()
+    }
+
+    /// Whether the Flatten button is waiting for its confirmation click.
+    #[must_use]
+    pub fn forms_flatten_confirm(&self) -> bool {
+        self.forms.flatten_confirm
+    }
+
     /// Whether the active tab allows form changes.
     ///
     /// Read-only tabs and `/Perms` masks that deny `FILL_IN_FORM` both refuse;
@@ -240,8 +499,7 @@ impl PdfxiApp {
             }
         }
         if !self.has_acroform() {
-            self.forms.active = None;
-            self.forms.draft.clear();
+            self.forms.clear_focus();
         }
     }
 
@@ -273,7 +531,8 @@ impl PdfxiApp {
             return;
         }
         self.forms.hint = Some(
-            "Click a field on the page to type; checkboxes toggle on click. Tab and Enter commit."
+            "Click a field, then Tab / Shift+Tab to move; Enter or Space activates; Escape leaves. \
+             Enter commits text."
                 .to_owned(),
         );
         self.status = "Fill & Sign: click a field on the page".to_owned();
@@ -445,18 +704,591 @@ impl PdfxiApp {
         }
     }
 
+    fn apply_cached_choice(&mut self, name: &str, value: Option<&str>) {
+        if let Some(model) = self.forms.model.as_mut()
+            && let Some(field) = model.fields.iter_mut().find(|field| field.name == name)
+        {
+            field.value = value.map_or(FieldValue::Empty, |value| {
+                FieldValue::Choice(vec![value.to_owned()])
+            });
+            for widget in &mut field.widgets {
+                widget.has_appearance = true;
+            }
+        }
+    }
+
+    fn apply_cached_radio(&mut self, name: &str, on_state: &str) {
+        self.apply_cached_choice(name, Some(on_state));
+    }
+
+    /// Commit an already-mutated document as one undoable session edit.
+    fn commit_form_candidate(&mut self, id: crate::TabId, candidate: pdfxi_core::Document) -> bool {
+        let result = self
+            .sessions
+            .get_mut(&id)
+            .ok_or(pdfxi_document::SessionError::NoPath)
+            .and_then(|session| {
+                session.edit(|document| {
+                    *document = candidate;
+                    Ok(())
+                })
+            });
+        match result {
+            Ok(()) => {
+                self.after_session_edit(id);
+                true
+            }
+            Err(error) => {
+                self.forms.hint = Some(error.to_string());
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Select a choice field option (or clear it) as one session edit.
+    pub(crate) fn set_form_choice(&mut self, name: &str, value: Option<&str>) {
+        if let Some(blocker) = self.form_edit_blocker() {
+            self.forms.hint = Some(blocker.to_owned());
+            self.status = blocker.to_owned();
+            return;
+        }
+        if !self.form_field_is_mutable(name, FormFieldKind::Choice) {
+            return;
+        }
+        // Non-editable choice fields may only take one of their declared
+        // options. The library enforces this too; the cached model lets us give
+        // the same clear hint without a session edit.
+        let allowed = self
+            .forms
+            .model
+            .as_ref()
+            .and_then(|model| model.field(name))
+            .is_some_and(|field| {
+                field.flags.contains(FieldFlags::CHOICE_EDIT)
+                    || value.is_none()
+                    || field
+                        .options
+                        .iter()
+                        .any(|option| Some(option.as_str()) == value)
+            });
+        if !allowed {
+            let message = format!("{name} only accepts its listed options.");
+            self.forms.hint = Some(message.clone());
+            self.status = message;
+            return;
+        }
+        let Some(id) = self.state.active_tab_id() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&id) else {
+            return;
+        };
+        let mut candidate = session.document().clone();
+        if let Err(error) = set_choice(&mut candidate, name, value) {
+            self.forms.hint = Some(error.to_string());
+            self.status = error.to_string();
+            return;
+        }
+        if self.commit_form_candidate(id, candidate) {
+            self.apply_cached_choice(name, value);
+            self.forms.clear_focus();
+            self.status = match value {
+                Some(value) => format!("Selected {value} for {name}"),
+                None => format!("Cleared {name}"),
+            };
+        }
+    }
+
+    /// Select one radio widget of a group as one session edit.
+    ///
+    /// The library writes the group's `/V`, the selected widget's `/AS` and
+    /// regenerates every widget's appearance, so no widget of the group is left
+    /// with a stale on-state.
+    pub(crate) fn set_form_radio(&mut self, name: &str, on_state: &str) {
+        if let Some(blocker) = self.form_edit_blocker() {
+            self.forms.hint = Some(blocker.to_owned());
+            self.status = blocker.to_owned();
+            return;
+        }
+        if !self.form_field_is_mutable(name, FormFieldKind::Radio) {
+            return;
+        }
+        let allowed = self
+            .forms
+            .model
+            .as_ref()
+            .and_then(|model| model.field(name))
+            .is_some_and(|field| {
+                field
+                    .widgets
+                    .iter()
+                    .any(|widget| widget.on_states.iter().any(|state| state == on_state))
+            });
+        if !allowed {
+            let message = format!("{on_state} is not an on-state of {name}.");
+            self.forms.hint = Some(message.clone());
+            self.status = message;
+            return;
+        }
+        let Some(id) = self.state.active_tab_id() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&id) else {
+            return;
+        };
+        let mut candidate = session.document().clone();
+        if let Err(error) = set_radio(&mut candidate, name, on_state) {
+            self.forms.hint = Some(error.to_string());
+            self.status = error.to_string();
+            return;
+        }
+        if self.commit_form_candidate(id, candidate) {
+            self.apply_cached_radio(name, on_state);
+            self.forms.clear_focus();
+            self.status = format!("Selected {on_state} for {name}");
+        }
+    }
+
+    /// Commit the focused text or choice draft (the Apply button / Enter).
+    pub(crate) fn apply_form_edit(&mut self) {
+        let Some(name) = self.forms.active.clone() else {
+            self.forms.hint = Some("No field is being edited.".to_owned());
+            return;
+        };
+        let kind = self
+            .forms
+            .model
+            .as_ref()
+            .and_then(|model| model.field(&name))
+            .map(|field| field.kind);
+        match kind {
+            Some(FormFieldKind::Text) => {
+                let value = self.forms.draft.clone();
+                self.set_form_text(&name, &value);
+            }
+            Some(FormFieldKind::Choice) => {
+                let typed = self.forms.choice_text.clone();
+                let value = if typed.is_empty() { None } else { Some(typed) };
+                self.set_form_choice(&name, value.as_deref());
+            }
+            _ => self.forms.clear_focus(),
+        }
+    }
+
+    /// Restore every mutable field to its `/DV` default as one undoable edit.
+    ///
+    /// There is no document-level reset API in `pdfxi_forms`, so the app walks
+    /// the cached model and calls the typed setter for each field kind on one
+    /// document clone, keeping a per-field result. The clone is committed once,
+    /// so Reset is exactly one Undo step and the panel refreshes with it.
+    pub(crate) fn reset_form_fields(&mut self) {
+        if let Some(blocker) = self.form_edit_blocker() {
+            self.forms.hint = Some(blocker.to_owned());
+            self.status = blocker.to_owned();
+            return;
+        }
+        let Some(id) = self.state.active_tab_id() else {
+            self.forms.hint = Some("Open a document with a form first.".to_owned());
+            return;
+        };
+        let Some(session) = self.sessions.get(&id) else {
+            return;
+        };
+        let Some(model) = self.forms.model.clone() else {
+            self.forms.hint = Some("Open a document with a form first.".to_owned());
+            return;
+        };
+        let mut candidate = session.document().clone();
+        let mut outcomes: Vec<(String, Result<(), String>)> = Vec::new();
+        for field in model.fields() {
+            if field.read_only {
+                outcomes.push((field.name.clone(), Err("the field is read-only".to_owned())));
+                continue;
+            }
+            let outcome = match field.kind {
+                FormFieldKind::Text => {
+                    let text = match &field.default_value {
+                        FieldValue::Text(text) => text.clone(),
+                        FieldValue::Number(number) => number.to_string(),
+                        _ => String::new(),
+                    };
+                    set_text(&mut candidate, &field.name, &text).map_err(|error| error.to_string())
+                }
+                FormFieldKind::Checkbox => set_checkbox(
+                    &mut candidate,
+                    &field.name,
+                    matches!(field.default_value, FieldValue::Bool(true)),
+                )
+                .map_err(|error| error.to_string()),
+                FormFieldKind::Choice => set_choice(
+                    &mut candidate,
+                    &field.name,
+                    first_choice(&field.default_value),
+                )
+                .map_err(|error| error.to_string()),
+                FormFieldKind::Radio => match first_choice(&field.default_value) {
+                    Some(state)
+                        if field
+                            .widgets
+                            .iter()
+                            .any(|widget| widget.on_states.iter().any(|on| on == state)) =>
+                    {
+                        set_radio(&mut candidate, &field.name, state)
+                            .map_err(|error| error.to_string())
+                    }
+                    _ => Err("no radio on-state is declared as the default".to_owned()),
+                },
+                FormFieldKind::Signature | FormFieldKind::Button => {
+                    Err("this field carries no fillable value".to_owned())
+                }
+            };
+            outcomes.push((field.name.clone(), outcome));
+        }
+        let applied = outcomes.iter().filter(|(_, result)| result.is_ok()).count();
+        if applied == 0 {
+            let message = "No field could be reset; see the panel for details.".to_owned();
+            self.forms.io_status = Some(message.clone());
+            self.status = message;
+            return;
+        }
+        if self.commit_form_candidate(id, candidate) {
+            for field in model.fields() {
+                if outcomes
+                    .iter()
+                    .find(|(name, _)| name == &field.name)
+                    .is_some_and(|(_, result)| result.is_ok())
+                {
+                    self.apply_cached_default(&field.name, &field.default_value);
+                }
+            }
+            self.forms.clear_focus();
+            let message = format!(
+                "Reset {applied} field(s) to their defaults ({} skipped).",
+                outcomes.len() - applied
+            );
+            self.forms.io_status = Some(message.clone());
+            self.status = message;
+        }
+    }
+
+    /// Force a cached field value after a reset (read_acroform is snapshot-based).
+    fn apply_cached_default(&mut self, name: &str, value: &FieldValue) {
+        let Some(model) = self.forms.model.as_mut() else {
+            return;
+        };
+        let Some(field) = model.fields.iter_mut().find(|field| field.name == name) else {
+            return;
+        };
+        field.value = value.clone();
+        for widget in &mut field.widgets {
+            widget.has_appearance = true;
+        }
+    }
+
+    /// Flatten the form into page content after an explicit confirmation.
+    pub(crate) fn flatten_form(&mut self) {
+        if let Some(blocker) = self.form_edit_blocker() {
+            self.forms.hint = Some(blocker.to_owned());
+            self.status = blocker.to_owned();
+            return;
+        }
+        if let Some(blocker) = flatten_blocker(false, self.has_acroform()) {
+            self.forms.hint = Some(blocker.to_owned());
+            self.status = blocker.to_owned();
+            return;
+        }
+        let Some(id) = self.state.active_tab_id() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&id) else {
+            return;
+        };
+        let mut candidate = session.document().clone();
+        let report = match pdfxi_forms::flatten(&mut candidate) {
+            Ok(report) => report,
+            Err(error) => {
+                self.forms.hint = Some(error.to_string());
+                self.status = error.to_string();
+                return;
+            }
+        };
+        if self.commit_form_candidate(id, candidate) {
+            self.forms.clear_focus();
+            self.forms.flatten_confirm = false;
+            self.forms.flatten_report = Some(report);
+            let message = format!(
+                "Flattened {} field(s), {} widget(s) on {} page(s).",
+                report.fields, report.widgets, report.pages
+            );
+            self.forms.io_status = Some(message.clone());
+            self.status = message;
+        }
+    }
+
+    /// Focus a widget; choice fields also open their option popup.
+    ///
+    /// The on-page click dispatches this command instead of mutating form state
+    /// directly, so the no-dead-controls gate sees a real action and focus
+    /// changes are available to command-driven tests without OS input.
+    pub(crate) fn focus_form_widget(&mut self, name: &str, widget: usize, anchor: [f32; 2]) {
+        self.forms.active = Some(name.to_owned());
+        self.forms.focus_index = widget;
+        self.forms.choice_popup = None;
+        self.forms.choice_popup_anchor = None;
+        self.forms.choice_text.clear();
+        if let Some(field) = self
+            .forms
+            .model
+            .as_ref()
+            .and_then(|model| model.field(name))
+            && field.kind == FormFieldKind::Choice
+        {
+            self.forms.choice_popup = Some(name.to_owned());
+            self.forms.choice_popup_anchor = Some(egui::pos2(anchor[0], anchor[1]));
+            self.forms.choice_text = display_value(&field.value);
+        }
+    }
+
+    /// Result text of a typed file operation, written to status and panel.
+    fn report_io(&mut self, label: &str, result: Result<String, FormsIoError>) {
+        match result {
+            Ok(message) => {
+                self.forms.io_status = Some(message.clone());
+                self.status = message;
+                self.forms.hint = None;
+            }
+            Err(error) => {
+                let message = format!("{label}: {error}");
+                self.forms.io_status = Some(message.clone());
+                self.forms.hint = Some(message.clone());
+                self.status = message;
+            }
+        }
+    }
+
+    /// Begin an XFDF import from a native picker; a headless dispatch reports
+    /// the typed `NoPath` error instead of blocking on a modal dialog.
+    pub(crate) fn import_xfdf_dialog(&mut self, ctx: Option<&egui::Context>) {
+        let picked = ctx.and_then(|_| {
+            rfd::FileDialog::new()
+                .set_title("Import XFDF form data")
+                .add_filter("XFDF", &["xfdf", "xml"])
+                .pick_file()
+        });
+        let result = self.import_xfdf_at(picked.as_deref());
+        self.report_io(
+            "Import XFDF",
+            result.map(|count| format!("Imported {count} field(s) from XFDF.")),
+        );
+    }
+
+    /// Import XFDF at an explicit path, as one undoable session edit.
+    pub(crate) fn import_xfdf_at(&mut self, path: Option<&Path>) -> Result<usize, FormsIoError> {
+        let path = path.ok_or(FormsIoError::NoPath)?;
+        validate_import_path(path)?;
+        if self.form_edit_blocker().is_some() {
+            return Err(FormsIoError::ReadOnly);
+        }
+        let input = std::fs::read_to_string(path)?;
+        let id = self.state.active_tab_id().ok_or(FormsIoError::NoForm)?;
+        let session = self.sessions.get(&id).ok_or(FormsIoError::NoForm)?;
+        let mut candidate = session.document().clone();
+        let count = pdfxi_forms::document_form::import_xfdf(&mut candidate, &input)?;
+        if !self.commit_form_candidate(id, candidate) {
+            return Err(FormsIoError::NoForm);
+        }
+        self.forms.clear_focus();
+        Ok(count)
+    }
+
+    /// Begin an XFDF export from a native picker.
+    pub(crate) fn export_xfdf_dialog(&mut self, ctx: Option<&egui::Context>) {
+        let picked = ctx.and_then(|_| {
+            rfd::FileDialog::new()
+                .set_title("Export XFDF form data")
+                .add_filter("XFDF", &["xfdf"])
+                .set_file_name("form-data.xfdf")
+                .save_file()
+        });
+        let result = self.export_xfdf_at(picked.as_deref());
+        self.report_io(
+            "Export XFDF",
+            result.map(|_| "Exported form data as XFDF.".to_owned()),
+        );
+    }
+
+    /// Export the cached model as XFDF at an explicit path.
+    pub(crate) fn export_xfdf_at(&mut self, path: Option<&Path>) -> Result<(), FormsIoError> {
+        let path = path.ok_or(FormsIoError::NoPath)?;
+        if path.is_dir() {
+            return Err(FormsIoError::IsDirectory(path.display().to_string()));
+        }
+        let model = self.forms.model.as_ref().ok_or(FormsIoError::NoForm)?;
+        let text = pdfxi_forms::document_form::export_xfdf(model);
+        std::fs::write(path, text)?;
+        Ok(())
+    }
+
+    /// Begin a legacy FDF import from a native picker.
+    pub(crate) fn import_fdf_dialog(&mut self, ctx: Option<&egui::Context>) {
+        let picked = ctx.and_then(|_| {
+            rfd::FileDialog::new()
+                .set_title("Import FDF form data")
+                .add_filter("FDF", &["fdf"])
+                .pick_file()
+        });
+        let result = self.import_fdf_at(picked.as_deref());
+        self.report_io(
+            "Import FDF",
+            result.map(|count| format!("Imported {count} field(s) from FDF.")),
+        );
+    }
+
+    /// Import legacy FDF at an explicit path, applying each field by kind.
+    pub(crate) fn import_fdf_at(&mut self, path: Option<&Path>) -> Result<usize, FormsIoError> {
+        let path = path.ok_or(FormsIoError::NoPath)?;
+        validate_import_path(path)?;
+        if self.form_edit_blocker().is_some() {
+            return Err(FormsIoError::ReadOnly);
+        }
+        let input = std::fs::read_to_string(path)?;
+        let document = import_fdf(&input)?;
+        let id = self.state.active_tab_id().ok_or(FormsIoError::NoForm)?;
+        let session = self.sessions.get(&id).ok_or(FormsIoError::NoForm)?;
+        let mut candidate = session.document().clone();
+        let model = self.forms.model.clone().ok_or(FormsIoError::NoForm)?;
+        let mut applied = 0;
+        for raw in document.fields() {
+            let Some(field) = model.field(raw.name()) else {
+                return Err(FormsIoError::Field {
+                    field: raw.name().to_owned(),
+                    reason: "no such field in the document".to_owned(),
+                });
+            };
+            if field.read_only {
+                continue;
+            }
+            match field.kind {
+                FormFieldKind::Text => {
+                    let text = match raw.value() {
+                        FieldValue::Text(text) => text.clone(),
+                        FieldValue::Number(number) => number.to_string(),
+                        FieldValue::Empty => String::new(),
+                        other => {
+                            return Err(FormsIoError::Field {
+                                field: raw.name().to_owned(),
+                                reason: format!("cannot apply a {other:?} value to a text field"),
+                            });
+                        }
+                    };
+                    set_text(&mut candidate, &field.name, &text)?;
+                    applied += 1;
+                }
+                FormFieldKind::Checkbox => {
+                    set_checkbox(
+                        &mut candidate,
+                        &field.name,
+                        matches!(raw.value(), FieldValue::Bool(true)),
+                    )?;
+                    applied += 1;
+                }
+                FormFieldKind::Choice => {
+                    set_choice(&mut candidate, &field.name, first_choice(raw.value()))?;
+                    applied += 1;
+                }
+                FormFieldKind::Radio => {
+                    if let Some(state) = first_choice(raw.value())
+                        && field
+                            .widgets
+                            .iter()
+                            .any(|widget| widget.on_states.iter().any(|on| on == state))
+                    {
+                        set_radio(&mut candidate, &field.name, state)?;
+                        applied += 1;
+                    }
+                }
+                FormFieldKind::Signature | FormFieldKind::Button => {}
+            }
+        }
+        if applied > 0 && !self.commit_form_candidate(id, candidate) {
+            return Err(FormsIoError::NoForm);
+        }
+        self.forms.clear_focus();
+        Ok(applied)
+    }
+
+    /// Begin a legacy FDF export from a native picker.
+    pub(crate) fn export_fdf_dialog(&mut self, ctx: Option<&egui::Context>) {
+        let picked = ctx.and_then(|_| {
+            rfd::FileDialog::new()
+                .set_title("Export FDF form data")
+                .add_filter("FDF", &["fdf"])
+                .set_file_name("form-data.fdf")
+                .save_file()
+        });
+        let result = self.export_fdf_at(picked.as_deref());
+        self.report_io(
+            "Export FDF",
+            result.map(|_| "Exported form data as FDF.".to_owned()),
+        );
+    }
+
+    /// Export the cached model as legacy FDF at an explicit path.
+    ///
+    /// `fdf::export_fdf` takes the dependency-free `Form`, so the document
+    /// model is converted field by field. Each `FormFieldKind` maps to its
+    /// `FieldType`, the raw `/Ff` flags are carried over (so `NO_EXPORT`
+    /// fields are skipped) and the current value is written verbatim.
+    pub(crate) fn export_fdf_at(&mut self, path: Option<&Path>) -> Result<(), FormsIoError> {
+        let path = path.ok_or(FormsIoError::NoPath)?;
+        if path.is_dir() {
+            return Err(FormsIoError::IsDirectory(path.display().to_string()));
+        }
+        let model = self.forms.model.clone().ok_or(FormsIoError::NoForm)?;
+        let mut fields = Vec::new();
+        for field in model.fields() {
+            let field_type = match field.kind {
+                FormFieldKind::Text => FieldType::Text,
+                FormFieldKind::Checkbox => FieldType::CheckBox,
+                FormFieldKind::Radio => FieldType::Radio,
+                FormFieldKind::Choice => FieldType::Choice,
+                FormFieldKind::Signature => FieldType::Signature,
+                FormFieldKind::Button => FieldType::Button,
+            };
+            fields.push(
+                Field::new(field.name.clone(), field_type)
+                    .with_flags(FieldFlags::from_bits(field.flags.bits()))
+                    .with_value(field.value.clone()),
+            );
+        }
+        let form = Form::from_fields(fields).map_err(|error| FormsIoError::Field {
+            field: "form".to_owned(),
+            reason: error.to_string(),
+        })?;
+        let text = export_legacy_fdf(&form)?;
+        std::fs::write(path, text)?;
+        Ok(())
+    }
+
     /// The Fill & Sign panel: field list, values and the edit state.
     pub(crate) fn forms_panel_ui(&mut self, ctx: &egui::Context) {
         if !self.forms.panel_open {
             return;
         }
+        // The choice popup is anchored to its on-page widget, so it is drawn
+        // as its own small window rather than inside the panel window.
+        self.choice_popup_ui(ctx);
         let palette = Palette::for_mode(self.theme);
         let mut open = true;
         // Default to the lower-left of the workspace: the first fields of a
         // page are usually near its top-left corner, so the panel must not sit
         // on top of the widgets it describes. The window stays movable.
         let screen = ctx.content_rect();
-        let default_pos = egui::pos2(screen.left() + 292.0, screen.bottom() - 396.0);
+        // Default to the far left of the workspace, below the navigation rail.
+        // The widgets of a page start well to the right of this column, so the
+        // panel never sits on top of the choice/radio values it describes.
+        let default_pos = egui::pos2(screen.left() + 40.0, screen.bottom() - 396.0);
         egui::Window::new("Fill & Sign")
             .open(&mut open)
             .resizable(true)
@@ -531,6 +1363,79 @@ impl PdfxiApp {
                     ui.add_space(2.0);
                 }
                 ui.separator();
+                if let Some(status) = self.forms.io_status.clone() {
+                    ui.label(egui::RichText::new(status).size(11.0).color(palette.text));
+                }
+                if let Some(report) = self.forms.flatten_report {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Last flatten: {} field(s), {} widget(s), {} page(s)",
+                            report.fields, report.widgets, report.pages
+                        ))
+                        .size(10.0)
+                        .color(palette.text_muted),
+                    );
+                }
+                ui.horizontal_wrapped(|ui| {
+                    // Apply exists only while there is a draft to flush; a
+                    // permanently visible no-op button would be a dead control.
+                    if self.form_edit_pending() && ui.button("Apply").clicked() {
+                        self.dispatch(AppCommand::ApplyFormEdit, Some(ui.ctx()));
+                    }
+                    if ui.button("Reset").clicked() {
+                        self.dispatch(AppCommand::ResetFormFields, Some(ui.ctx()));
+                    }
+                    let flatten_label = if self.forms_flatten_confirm() {
+                        "Confirm flatten"
+                    } else {
+                        "Flatten…"
+                    };
+                    if ui.button(flatten_label).clicked() {
+                        if self.forms_flatten_confirm() {
+                            self.dispatch(AppCommand::FlattenForm, Some(ui.ctx()));
+                        } else {
+                            self.forms.flatten_confirm = true;
+                            self.forms.hint =
+                                Some("Flattening is permanent. Click Confirm flatten.".to_owned());
+                        }
+                    }
+                });
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("Form data exchange")
+                        .size(11.0)
+                        .color(palette.text),
+                );
+                let editable = self.forms_editable();
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(editable, egui::Button::new("Import XFDF"))
+                        .clicked()
+                    {
+                        self.dispatch(AppCommand::ImportXfdfDialog, Some(ui.ctx()));
+                    }
+                    if ui.button("Export XFDF").clicked() {
+                        self.dispatch(AppCommand::ExportXfdfDialog, Some(ui.ctx()));
+                    }
+                    if ui
+                        .add_enabled(editable, egui::Button::new("Import FDF"))
+                        .clicked()
+                    {
+                        self.dispatch(AppCommand::ImportFdfDialog, Some(ui.ctx()));
+                    }
+                    if ui.button("Export FDF").clicked() {
+                        self.dispatch(AppCommand::ExportFdfDialog, Some(ui.ctx()));
+                    }
+                });
+                if !editable {
+                    ui.label(
+                        egui::RichText::new(
+                            "Import is disabled: this document does not allow form changes.",
+                        )
+                        .size(10.0)
+                        .color(palette.text_muted),
+                    );
+                }
                 ui.label(
                     egui::RichText::new(
                         "Values are written with appearances and saved with the document.",
@@ -541,6 +1446,89 @@ impl PdfxiApp {
             });
         if !open {
             self.forms.panel_open = false;
+        }
+    }
+
+    /// Option popup for the focused choice widget, anchored on the page.
+    ///
+    /// The options come straight from the cached model's `/Opt` entries; an
+    /// editable combo also offers a text box for a typed value. Every control
+    /// here dispatches a real `SetFormChoice` command.
+    pub(crate) fn choice_popup_ui(&mut self, ctx: &egui::Context) {
+        let Some(name) = self.forms.choice_popup.clone() else {
+            return;
+        };
+        let Some((options, editable)) = self
+            .forms
+            .model
+            .as_ref()
+            .and_then(|model| model.field(&name))
+            .map(|field| {
+                (
+                    field.options.clone(),
+                    field.flags.contains(FieldFlags::CHOICE_EDIT),
+                )
+            })
+        else {
+            self.forms.choice_popup = None;
+            return;
+        };
+        let mut open = true;
+        let anchor = self
+            .forms
+            .choice_popup_anchor
+            .unwrap_or_else(|| egui::pos2(ctx.content_rect().center().x, ctx.content_rect().top()));
+        egui::Window::new("Choose an option")
+            .open(&mut open)
+            .resizable(false)
+            .fixed_pos(anchor)
+            .show(ctx, |ui| {
+                ui.set_min_width(140.0);
+                for option in &options {
+                    if ui.button(option).clicked() {
+                        self.dispatch(
+                            AppCommand::SetFormChoice {
+                                name: name.clone(),
+                                value: Some(option.clone()),
+                            },
+                            Some(ui.ctx()),
+                        );
+                    }
+                }
+                if options.is_empty() {
+                    ui.label("This choice field declares no options.");
+                }
+                if editable {
+                    ui.separator();
+                    let value = self.forms.choice_text.clone();
+                    if ui
+                        .text_edit_singleline(&mut self.forms.choice_text)
+                        .lost_focus()
+                        && self.forms.choice_text != value
+                    {
+                        let typed = self.forms.choice_text.clone();
+                        self.dispatch(
+                            AppCommand::SetFormChoice {
+                                name: name.clone(),
+                                value: Some(typed),
+                            },
+                            Some(ui.ctx()),
+                        );
+                    }
+                }
+                if ui.button("Clear").clicked() {
+                    self.dispatch(
+                        AppCommand::SetFormChoice {
+                            name: name.clone(),
+                            value: None,
+                        },
+                        Some(ui.ctx()),
+                    );
+                }
+            });
+        if !open {
+            self.forms.choice_popup = None;
+            self.forms.choice_popup_anchor = None;
         }
     }
 
@@ -567,8 +1555,40 @@ impl PdfxiApp {
         let palette = Palette::for_mode(self.theme);
         let editable = self.forms_editable();
         let screen = ui.clip_rect();
+
+        // Keyboard traversal. The order is a pure function of the cached model
+        // (document order, then widget order), so tests can verify it without
+        // a window and the overlay follows exactly the same sequence.
+        if self.forms.active.is_some() {
+            let order = widget_order(&model);
+            let forward =
+                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+            let backward =
+                ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
+            if forward || backward {
+                let current = self
+                    .forms
+                    .active
+                    .as_deref()
+                    .map(|name| (name, self.forms.focus_index));
+                if let Some((name, index)) = focus_transition(&order, current, forward) {
+                    self.forms.active = Some(name.clone());
+                    self.forms.focus_index = index;
+                    self.forms.draft.clear();
+                    self.forms.choice_text.clear();
+                    self.forms.choice_popup = None;
+                    self.forms.choice_popup_anchor = None;
+                    let id =
+                        ui.make_persistent_id(("pdfxi-form-widget", name.as_str(), index as i32));
+                    ui.ctx().memory_mut(|memory| memory.request_focus(id));
+                }
+            }
+            // Escape is handled by each focused widget: the text field uses it
+            // to cancel a draft, while buttons use it to leave the field.
+        }
+
         for field in model.fields() {
-            for widget in &field.widgets {
+            for (widget_index, widget) in field.widgets.iter().enumerate() {
                 let Some(page) = widget.page else {
                     continue;
                 };
@@ -589,19 +1609,29 @@ impl PdfxiApp {
                 if !rect.intersects(screen) {
                     continue;
                 }
-                let id = ui.make_persistent_id(("pdfxi-form-widget", &field.name, mapped.x as i32));
+                let id = ui.make_persistent_id((
+                    "pdfxi-form-widget",
+                    field.name.as_str(),
+                    widget_index as i32,
+                ));
+                let focused = self.forms.active.as_deref() == Some(field.name.as_str())
+                    && self.forms.focus_index == widget_index;
+                let view = WidgetView {
+                    palette: &palette,
+                    rect,
+                    id,
+                    field,
+                    widget: Some(widget),
+                    widget_index,
+                    focused,
+                };
                 match field.kind {
-                    FormFieldKind::Text => {
-                        self.form_text_widget_ui(ui, &palette, rect, id, field, editable);
-                    }
-                    FormFieldKind::Checkbox => {
-                        self.form_checkbox_widget_ui(ui, &palette, rect, id, field, editable);
-                    }
-                    FormFieldKind::Choice
-                    | FormFieldKind::Radio
-                    | FormFieldKind::Button
-                    | FormFieldKind::Signature => {
-                        draw_field_box(&palette, ui, rect, false);
+                    FormFieldKind::Text => self.form_text_widget_ui(ui, &view, editable),
+                    FormFieldKind::Checkbox => self.form_checkbox_widget_ui(ui, &view, editable),
+                    FormFieldKind::Choice => self.form_choice_widget_ui(ui, &view, editable),
+                    FormFieldKind::Radio => self.form_radio_widget_ui(ui, &view, editable),
+                    FormFieldKind::Button | FormFieldKind::Signature => {
+                        draw_field_box(&palette, ui, rect, focused);
                         let label = display_value(&field.value);
                         if !label.is_empty() {
                             let font = egui::FontId::proportional(field_font_size(rect));
@@ -619,16 +1649,16 @@ impl PdfxiApp {
         }
     }
 
-    fn form_text_widget_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: &Palette,
-        rect: egui::Rect,
-        id: egui::Id,
-        field: &pdfxi_forms::FormField,
-        editable: bool,
-    ) {
-        let focused = self.forms.active.as_deref() == Some(field.name.as_str());
+    fn form_text_widget_ui(&mut self, ui: &mut egui::Ui, view: &WidgetView<'_>, editable: bool) {
+        let WidgetView {
+            palette,
+            rect,
+            id,
+            field,
+            widget_index,
+            focused,
+            ..
+        } = *view;
         if focused && editable {
             let font = egui::FontId::proportional(field_font_size(rect));
             let response = ui.put(
@@ -674,6 +1704,7 @@ impl PdfxiApp {
         let response = ui.interact(rect, id, egui::Sense::click());
         if response.clicked() {
             self.forms.active = Some(field.name.clone());
+            self.forms.focus_index = widget_index;
             self.forms.draft = value;
             ui.ctx().memory_mut(|memory| memory.request_focus(id));
         }
@@ -682,12 +1713,18 @@ impl PdfxiApp {
     fn form_checkbox_widget_ui(
         &mut self,
         ui: &mut egui::Ui,
-        palette: &Palette,
-        rect: egui::Rect,
-        id: egui::Id,
-        field: &pdfxi_forms::FormField,
+        view: &WidgetView<'_>,
         editable: bool,
     ) {
+        let WidgetView {
+            palette,
+            rect,
+            id,
+            field,
+            widget_index,
+            focused,
+            ..
+        } = *view;
         let checked = matches!(field.value, FieldValue::Bool(true));
         let response = ui.interact(
             rect,
@@ -700,12 +1737,22 @@ impl PdfxiApp {
         );
         let painter = ui.painter();
         painter.rect_filled(rect, 1.0, palette.paper);
-        let stroke = if response.hovered() && editable {
-            egui::Stroke::new(1.5_f32, palette.accent)
+        let stroke = if focused || (response.hovered() && editable) {
+            egui::Stroke::new(2.0_f32, palette.accent)
         } else {
             egui::Stroke::new(1.0_f32, palette.border)
         };
         painter.rect_stroke(rect, 1.0, stroke, egui::StrokeKind::Inside);
+        if focused {
+            // A second, wider ring makes keyboard focus visible on the page
+            // without relying on the thin widget border.
+            painter.rect_stroke(
+                rect.expand(2.0),
+                2.0,
+                egui::Stroke::new(1.0_f32, palette.accent),
+                egui::StrokeKind::Outside,
+            );
+        }
         if checked {
             // A vector check mark, not a filled block: it reads as checked in
             // both themes and does not look like a debug overlay.
@@ -720,13 +1767,184 @@ impl PdfxiApp {
             painter.line_segment([left, corner], tick);
             painter.line_segment([corner, right], tick);
         }
-        if response.clicked() {
+        if response.clicked() && editable {
+            self.forms.active = Some(field.name.clone());
+            self.forms.focus_index = widget_index;
             self.dispatch(
                 AppCommand::ToggleFormCheckbox {
                     name: field.name.clone(),
                 },
                 Some(ui.ctx()),
             );
+            return;
+        }
+        if focused && editable {
+            let activate = ui.input_mut(|input| {
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || input.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+            });
+            if activate {
+                self.dispatch(
+                    AppCommand::ToggleFormCheckbox {
+                        name: field.name.clone(),
+                    },
+                    Some(ui.ctx()),
+                );
+            }
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.forms.clear_focus();
+            }
+        }
+    }
+
+    /// A choice (combo box or list box) widget drawn at its real rectangle.
+    ///
+    /// A click opens a popup listing the model's `/Opt` options; each option
+    /// dispatches `SetFormChoice`. An editable combo additionally exposes a
+    /// text box for a typed value, but only when the `CHOICE_EDIT` flag is set.
+    fn form_choice_widget_ui(&mut self, ui: &mut egui::Ui, view: &WidgetView<'_>, editable: bool) {
+        let WidgetView {
+            palette,
+            rect,
+            id,
+            field,
+            widget_index,
+            focused,
+            ..
+        } = *view;
+        draw_field_box(palette, ui, rect, focused);
+        let value = display_value(&field.value);
+        ui.painter().text(
+            rect.left_center() + egui::vec2(4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            if value.is_empty() {
+                " "
+            } else {
+                value.as_str()
+            },
+            egui::FontId::proportional(field_font_size(rect)),
+            if editable { FIELD_INK } else { FIELD_INK_MUTED },
+        );
+        if focused {
+            ui.painter().rect_stroke(
+                rect.expand(2.0),
+                2.0,
+                egui::Stroke::new(1.0_f32, palette.accent),
+                egui::StrokeKind::Outside,
+            );
+        }
+        if !editable {
+            return;
+        }
+        // A short dropdown caret hints that this widget has options.
+        let caret = rect.right_center() - egui::vec2(7.0, 0.0);
+        let caret_stroke = egui::Stroke::new(1.2_f32, FIELD_INK_MUTED);
+        ui.painter()
+            .line_segment([caret + egui::vec2(-3.0, -1.5), caret], caret_stroke);
+        ui.painter()
+            .line_segment([caret, caret + egui::vec2(3.0, -1.5)], caret_stroke);
+        let response = ui.interact(rect, id, egui::Sense::click());
+        if response.clicked() {
+            let anchor = rect.right_top();
+            self.dispatch(
+                AppCommand::FocusFormWidget {
+                    name: field.name.clone(),
+                    widget: widget_index,
+                    anchor: [anchor.x, anchor.y],
+                },
+                Some(ui.ctx()),
+            );
+        }
+        if focused
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.forms.clear_focus();
+        }
+    }
+
+    /// A radio widget drawn as a circle with a dot when its on-state is selected.
+    ///
+    /// Clicking it selects that widget's on-state through `SetFormRadio`; the
+    /// library updates the whole group, so the other widgets lose their dot in
+    /// the same commit.
+    fn form_radio_widget_ui(&mut self, ui: &mut egui::Ui, view: &WidgetView<'_>, editable: bool) {
+        let WidgetView {
+            palette,
+            rect,
+            id,
+            field,
+            widget,
+            widget_index,
+            focused,
+        } = *view;
+        let Some(widget) = widget else {
+            return;
+        };
+        let on_state = widget.on_state();
+        let selected = on_state
+            .is_some_and(|state| first_choice(&field.value).is_some_and(|value| value == state));
+        let response = ui.interact(
+            rect,
+            id,
+            if editable {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
+        );
+        let painter = ui.painter();
+        let center = rect.center();
+        let radius = rect.width().min(rect.height()) * 0.4;
+        painter.circle_filled(center, radius + 1.0, palette.paper);
+        let stroke = if focused || (response.hovered() && editable) {
+            egui::Stroke::new(2.0_f32, palette.accent)
+        } else {
+            egui::Stroke::new(1.0_f32, palette.border)
+        };
+        painter.circle_stroke(center, radius, stroke);
+        if selected {
+            painter.circle_filled(center, radius * 0.45, FIELD_INK);
+        }
+        if focused {
+            painter.circle_stroke(
+                center,
+                radius + 2.5,
+                egui::Stroke::new(1.0_f32, palette.accent),
+            );
+        }
+        if response.clicked() && editable {
+            self.forms.active = Some(field.name.clone());
+            self.forms.focus_index = widget_index;
+            if let Some(on_state) = on_state {
+                let state = on_state.to_owned();
+                self.dispatch(
+                    AppCommand::SetFormRadio {
+                        name: field.name.clone(),
+                        on_state: state,
+                    },
+                    Some(ui.ctx()),
+                );
+            }
+            return;
+        }
+        if focused && editable {
+            let activate = ui.input_mut(|input| {
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || input.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+            });
+            if activate && let Some(on_state) = on_state {
+                let state = on_state.to_owned();
+                self.dispatch(
+                    AppCommand::SetFormRadio {
+                        name: field.name.clone(),
+                        on_state: state,
+                    },
+                    Some(ui.ctx()),
+                );
+            }
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.forms.clear_focus();
+            }
         }
     }
 }
@@ -782,6 +2000,7 @@ fn draw_field_box(palette: &Palette, ui: &egui::Ui, rect: egui::Rect, focused: b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn form_edit_gate_refuses_read_only_and_missing_permission() {
@@ -840,6 +2059,148 @@ mod tests {
         model.has_javascript = false;
         assert_eq!(form_notice(&model), None);
     }
+
+    fn widget(name: &str, on_state: Option<&str>) -> FormField {
+        FormField {
+            name: name.to_owned(),
+            kind: if on_state.is_some() {
+                FormFieldKind::Radio
+            } else {
+                FormFieldKind::Text
+            },
+            value: FieldValue::Empty,
+            default_value: FieldValue::Empty,
+            options: Vec::new(),
+            flags: FieldFlags::NONE,
+            read_only: false,
+            required: false,
+            alignment: 0,
+            default_appearance: None,
+            widgets: vec![pdfxi_forms::FormWidget {
+                object: None,
+                rect: FormRect::new(0.0, 0.0, 10.0, 10.0),
+                page: Some(0),
+                on_states: on_state.into_iter().map(str::to_owned).collect(),
+                has_appearance: false,
+            }],
+            field_object: None,
+        }
+    }
+
+    #[test]
+    fn widget_order_uses_document_and_widget_order_and_skips_value_less_kinds() {
+        let mut model = AcroFormModel {
+            present: true,
+            ..AcroFormModel::default()
+        };
+        model.fields = vec![
+            widget("first", None),
+            FormField {
+                kind: FormFieldKind::Signature,
+                name: "signature".to_owned(),
+                ..widget("signature", None)
+            },
+            widget("radio", Some("A")),
+        ];
+        model.fields[2].widgets.push(pdfxi_forms::FormWidget {
+            object: None,
+            rect: FormRect::new(20.0, 0.0, 30.0, 10.0),
+            page: Some(0),
+            on_states: vec!["B".to_owned()],
+            has_appearance: false,
+        });
+        let order = widget_order(&model);
+        assert_eq!(
+            order
+                .iter()
+                .map(|item| (item.name.as_str(), item.index))
+                .collect::<Vec<_>>(),
+            vec![("first", 0), ("radio", 0), ("radio", 1)]
+        );
+        assert_eq!(order[1].on_state.as_deref(), Some("A"));
+        assert_eq!(order[2].on_state.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn focus_transition_walks_wraps_and_handles_unknown_focus() {
+        let order = vec![
+            WidgetRef {
+                name: "a".to_owned(),
+                index: 0,
+                kind: FormFieldKind::Text,
+                on_state: None,
+            },
+            WidgetRef {
+                name: "b".to_owned(),
+                index: 0,
+                kind: FormFieldKind::Checkbox,
+                on_state: None,
+            },
+            WidgetRef {
+                name: "c".to_owned(),
+                index: 1,
+                kind: FormFieldKind::Radio,
+                on_state: Some("B".to_owned()),
+            },
+        ];
+        assert_eq!(
+            focus_transition(&order, Some(("a", 0)), true),
+            Some(("b".to_owned(), 0))
+        );
+        assert_eq!(
+            focus_transition(&order, Some(("b", 0)), false),
+            Some(("a".to_owned(), 0))
+        );
+        assert_eq!(
+            focus_transition(&order, Some(("c", 1)), true),
+            Some(("a".to_owned(), 0)),
+            "Tab wraps at the last widget"
+        );
+        assert_eq!(
+            focus_transition(&order, Some(("a", 0)), false),
+            Some(("c".to_owned(), 1)),
+            "Shift+Tab wraps at the first widget"
+        );
+        assert_eq!(
+            focus_transition(&order, None, true),
+            Some(("a".to_owned(), 0))
+        );
+        assert_eq!(
+            focus_transition(&order, None, false),
+            Some(("c".to_owned(), 1))
+        );
+        assert_eq!(
+            focus_transition(&order, Some(("missing", 9)), true),
+            Some(("a".to_owned(), 0))
+        );
+        assert_eq!(focus_transition(&[], Some(("a", 0)), true), None);
+    }
+
+    #[test]
+    fn flatten_blocker_refuses_read_only_and_missing_form() {
+        assert_eq!(flatten_blocker(false, true), None);
+        assert!(flatten_blocker(true, true).is_some_and(|message| message.contains("read-only")));
+        assert!(flatten_blocker(false, false).is_some_and(|message| message.contains("no form")));
+    }
+
+    #[test]
+    fn import_path_validation_rejects_directories() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        assert!(matches!(
+            validate_import_path(&dir),
+            Err(FormsIoError::IsDirectory(_))
+        ));
+    }
+
+    #[test]
+    fn first_choice_reads_only_choice_values() {
+        assert_eq!(
+            first_choice(&FieldValue::Choice(vec!["one".to_owned()])),
+            Some("one")
+        );
+        assert_eq!(first_choice(&FieldValue::Choice(Vec::new())), None);
+        assert_eq!(first_choice(&FieldValue::Text("one".to_owned())), None);
+    }
 }
 
 #[cfg(all(test, feature = "pdfium"))]
@@ -858,7 +2219,7 @@ mod integration_tests {
     }
 
     fn output_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/lanes/app2/t0243-out")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/lanes/app3/t0243b-out")
     }
 
     fn open_forms() -> PdfxiApp {
@@ -1062,5 +2423,619 @@ mod integration_tests {
             ink > 40,
             "the filled text appearance must paint inside {text_rect:?}; found {ink} ink pixels"
         );
+    }
+
+    /// Build a real two-widget radio group onto the committed fixture using
+    /// `pdfxi_core` objects, plus `/DV` defaults on every field. This is not a
+    /// fake overlay: the generated bytes are parsed by `read_acroform` and
+    /// rendered by PDFium. The artifact is also used for the four captures.
+    fn radio_fixture() -> PathBuf {
+        use pdfxi_core::{Dictionary, Document, Object, ObjectId};
+        let dir = output_dir();
+        std::fs::create_dir_all(&dir).expect("create the output directory");
+        let target = dir.join("forms-with-radio.pdf");
+        if target.exists() {
+            return target;
+        }
+        let bytes = std::fs::read(fixture()).expect("read the base fixture");
+        let mut doc = Document::from_bytes(bytes).expect("parse the base fixture");
+        let base = doc.trailer_size().expect("trailer size").unwrap_or(10) + 100;
+        let field_id = ObjectId::new(base, 0);
+        let widget_a = ObjectId::new(base + 1, 0);
+        let widget_b = ObjectId::new(base + 2, 0);
+        let states = [
+            (ObjectId::new(base + 3, 0), "A"),
+            (ObjectId::new(base + 4, 0), "Off"),
+            (ObjectId::new(base + 5, 0), "B"),
+            (ObjectId::new(base + 6, 0), "Off"),
+        ];
+        for (id, _) in &states {
+            doc.set_object(
+                *id,
+                Object::Stream {
+                    dictionary: Dictionary::new(),
+                    data: Vec::new(),
+                },
+            )
+            .expect("stage a radio appearance stream");
+        }
+        let radio_widget = |parent: ObjectId,
+                            rect: [i64; 4],
+                            on: ObjectId,
+                            off: ObjectId,
+                            on_name: &str,
+                            active: &str| {
+            let mut named = Dictionary::new();
+            named.insert("Off".to_owned(), Object::Reference(off));
+            named.insert(on_name.to_owned(), Object::Reference(on));
+            let mut ap = Dictionary::new();
+            ap.insert("N".to_owned(), Object::Dictionary(named));
+            let mut widget = Dictionary::new();
+            widget.insert("Type".to_owned(), Object::Name("Annot".to_owned()));
+            widget.insert("Subtype".to_owned(), Object::Name("Widget".to_owned()));
+            widget.insert("Parent".to_owned(), Object::Reference(parent));
+            widget.insert(
+                "Rect".to_owned(),
+                Object::Array(rect.iter().copied().map(Object::Integer).collect()),
+            );
+            widget.insert("P".to_owned(), Object::Reference(ObjectId::new(3, 0)));
+            widget.insert("F".to_owned(), Object::Integer(4));
+            widget.insert("AP".to_owned(), Object::Dictionary(ap));
+            widget.insert("AS".to_owned(), Object::Name(active.to_owned()));
+            Object::Dictionary(widget)
+        };
+        doc.set_object(
+            widget_a,
+            radio_widget(
+                field_id,
+                [300, 660, 320, 680],
+                states[0].0,
+                states[1].0,
+                "A",
+                "A",
+            ),
+        )
+        .expect("stage radio widget A");
+        doc.set_object(
+            widget_b,
+            radio_widget(
+                field_id,
+                [330, 660, 350, 680],
+                states[2].0,
+                states[3].0,
+                "B",
+                "Off",
+            ),
+        )
+        .expect("stage radio widget B");
+        let mut field = Dictionary::new();
+        field.insert("FT".to_owned(), Object::Name("Btn".to_owned()));
+        field.insert("T".to_owned(), Object::String(b"radio-field".to_vec()));
+        field.insert("Ff".to_owned(), Object::Integer(1 << 15));
+        field.insert("V".to_owned(), Object::Name("A".to_owned()));
+        field.insert("DV".to_owned(), Object::Name("A".to_owned()));
+        field.insert("DA".to_owned(), Object::String(b"/Helv 0 Tf 0 g".to_vec()));
+        field.insert(
+            "Kids".to_owned(),
+            Object::Array(vec![
+                Object::Reference(widget_a),
+                Object::Reference(widget_b),
+            ]),
+        );
+        doc.set_object(field_id, Object::Dictionary(field))
+            .expect("stage the radio field");
+
+        let page_id = ObjectId::new(3, 0);
+        let mut page = doc
+            .object(page_id)
+            .expect("page")
+            .as_dictionary()
+            .cloned()
+            .expect("page dictionary");
+        let mut annots = page
+            .get("Annots")
+            .and_then(Object::as_array)
+            .expect("page annots")
+            .to_vec();
+        annots.push(Object::Reference(widget_a));
+        annots.push(Object::Reference(widget_b));
+        page.insert("Annots".to_owned(), Object::Array(annots));
+        doc.set_object(page_id, Object::Dictionary(page))
+            .expect("save page annots");
+
+        let acroform_id = ObjectId::new(6, 0);
+        let mut acroform = doc
+            .object(acroform_id)
+            .expect("acroform")
+            .as_dictionary()
+            .cloned()
+            .expect("acroform dictionary");
+        let mut fields = acroform
+            .get("Fields")
+            .and_then(Object::as_array)
+            .expect("acroform fields")
+            .to_vec();
+        fields.push(Object::Reference(field_id));
+        acroform.insert("Fields".to_owned(), Object::Array(fields));
+        doc.set_object(acroform_id, Object::Dictionary(acroform))
+            .expect("save acroform fields");
+
+        // Give the three original fields real `/DV` defaults for the reset test.
+        for (id, default) in [
+            (7_u32, Object::String(b"Default text".to_vec())),
+            (8_u32, Object::Name("Off".to_owned())),
+            (9_u32, Object::String(b"one".to_vec())),
+        ] {
+            let object_id = ObjectId::new(id, 0);
+            let mut dictionary = doc
+                .object(object_id)
+                .expect("field")
+                .as_dictionary()
+                .cloned()
+                .expect("field dictionary");
+            dictionary.insert("DV".to_owned(), default);
+            doc.set_object(object_id, Object::Dictionary(dictionary))
+                .expect("save field default");
+        }
+
+        let saved = doc.save_incremental().expect("save the derived fixture");
+        std::fs::write(&target, saved).expect("write the derived fixture");
+        target
+    }
+
+    fn open_radio_forms() -> PdfxiApp {
+        let path = radio_fixture();
+        let mut app = PdfxiApp::new();
+        assert!(
+            matches!(app.open_document(&path), crate::OpenOutcome::Opened { .. }),
+            "the radio fixture must open"
+        );
+        app.dispatch(AppCommand::FillAndSign, None);
+        app
+    }
+
+    #[test]
+    fn choice_fields_select_options_and_persist_with_appearances() {
+        let mut app = open_forms();
+        app.dispatch(AppCommand::FillAndSign, None);
+
+        // A non-editable combo refuses a value that is not one of its options.
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("not-an-option".to_owned()),
+            },
+            None,
+        );
+        assert_eq!(value(&app, "choice-field"), "two");
+        assert!(
+            app.forms_hint()
+                .is_some_and(|hint| hint.contains("listed options"))
+        );
+
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("three".to_owned()),
+            },
+            None,
+        );
+        assert_eq!(value(&app, "choice-field"), "three");
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: None,
+            },
+            None,
+        );
+        assert_eq!(value(&app, "choice-field"), "");
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("three".to_owned()),
+            },
+            None,
+        );
+
+        let dir = output_dir();
+        let target = dir.join("choice.pdf");
+        app.save_active_as(&target).expect("save the choice form");
+        let mut viewer = PdfxiApp::new();
+        assert!(matches!(
+            viewer.open_document(&target),
+            crate::OpenOutcome::Opened { .. }
+        ));
+        assert_eq!(value(&viewer, "choice-field"), "three");
+
+        let bytes = std::fs::read(&target).expect("read the choice file");
+        let renderer = PdfiumRenderer::from_bytes(bytes).expect("open the choice file in PDFium");
+        let raster = renderer
+            .render_page(
+                PageIndex::new(0),
+                2.0,
+                &CancellationToken::new(),
+                &mut |_| {},
+            )
+            .expect("render the choice page");
+        let rect = FormRect::new(72.0, 600.0, 272.0, 620.0);
+        let ink = ink_in_pdf_rect(&raster, rect, 2.0, 792.0);
+        assert!(
+            ink > 20,
+            "the selected choice must paint ink in {rect:?}; got {ink}"
+        );
+    }
+
+    #[test]
+    fn radio_group_selects_one_on_state_and_updates_every_widget() {
+        let mut app = open_radio_forms();
+        assert_eq!(app.form_field_count(), 4);
+        assert_eq!(app.form_widget_count(), 5);
+        let order = widget_order(app.forms_model().expect("form model"));
+        assert_eq!(order.len(), 5);
+        assert_eq!(
+            order
+                .iter()
+                .filter(|item| item.name == "radio-field")
+                .map(|item| item.on_state.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("A"), Some("B")]
+        );
+        assert_eq!(value(&app, "radio-field"), "A");
+
+        app.dispatch(
+            AppCommand::SetFormRadio {
+                name: "radio-field".to_owned(),
+                on_state: "B".to_owned(),
+            },
+            None,
+        );
+        assert_eq!(value(&app, "radio-field"), "B");
+        let model = app.forms_model().expect("form model");
+        let radio = model.field("radio-field").expect("radio group");
+        assert_eq!(radio.value, FieldValue::Choice(vec!["B".to_owned()]));
+        assert!(radio.widgets.iter().all(|widget| widget.has_appearance));
+
+        // An unknown on-state is refused without dirtying the document value.
+        app.dispatch(
+            AppCommand::SetFormRadio {
+                name: "radio-field".to_owned(),
+                on_state: "C".to_owned(),
+            },
+            None,
+        );
+        assert_eq!(value(&app, "radio-field"), "B");
+        assert!(
+            app.forms_hint()
+                .is_some_and(|hint| hint.contains("not an on-state"))
+        );
+
+        let dir = output_dir();
+        // The capture artifact shows all four interactive kinds at once: a
+        // filled text field, a checked box, a selected choice and a selected
+        // radio. It is saved from the same real session the assertions used.
+        app.dispatch(
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "Reviewed 2026-11-20".to_owned(),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("two".to_owned()),
+            },
+            None,
+        );
+        let capture = dir.join("capture-form.pdf");
+        app.save_active_as(&capture).expect("save the capture form");
+        let target = dir.join("radio.pdf");
+        app.save_active_as(&target).expect("save the radio form");
+        let mut viewer = PdfxiApp::new();
+        assert!(matches!(
+            viewer.open_document(&target),
+            crate::OpenOutcome::Opened { .. }
+        ));
+        assert_eq!(value(&viewer, "radio-field"), "B");
+    }
+
+    #[test]
+    fn reset_restores_every_default_as_one_undo_step() {
+        let mut app = open_radio_forms();
+        app.dispatch(
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "Changed text".to_owned(),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::ToggleFormCheckbox {
+                name: "checkbox-field".to_owned(),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("three".to_owned()),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormRadio {
+                name: "radio-field".to_owned(),
+                on_state: "B".to_owned(),
+            },
+            None,
+        );
+        assert_eq!(value(&app, "text-field"), "Changed text");
+        assert_eq!(value(&app, "choice-field"), "three");
+        assert_eq!(value(&app, "radio-field"), "B");
+
+        app.dispatch(AppCommand::ResetFormFields, None);
+        assert_eq!(value(&app, "text-field"), "Default text");
+        assert_eq!(value(&app, "checkbox-field"), "Off");
+        assert_eq!(value(&app, "choice-field"), "one");
+        assert_eq!(value(&app, "radio-field"), "A");
+        assert!(
+            app.forms_io_status()
+                .is_some_and(|status| status.contains("Reset 4 field"))
+        );
+
+        // The whole reset is one revision: one Undo restores all four values.
+        app.dispatch(AppCommand::Undo, None);
+        assert_eq!(value(&app, "text-field"), "Changed text");
+        assert_eq!(value(&app, "choice-field"), "three");
+        assert_eq!(value(&app, "radio-field"), "B");
+        app.dispatch(AppCommand::Redo, None);
+        assert_eq!(value(&app, "text-field"), "Default text");
+        assert_eq!(value(&app, "radio-field"), "A");
+    }
+
+    #[test]
+    fn flatten_removes_all_fields_but_keeps_values_visible() {
+        let mut app = open_radio_forms();
+        app.dispatch(
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "Flattened value".to_owned(),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("three".to_owned()),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormRadio {
+                name: "radio-field".to_owned(),
+                on_state: "B".to_owned(),
+            },
+            None,
+        );
+        let fields_before = app.form_field_count();
+        assert_eq!(fields_before, 4);
+
+        app.dispatch(AppCommand::FlattenForm, None);
+        let report = app.forms_flatten_report().expect("flatten report");
+        assert_eq!(report.fields, fields_before);
+        assert!(report.widgets >= 4, "report was {report:?}");
+        assert!(report.pages >= 1);
+        assert!(!app.has_acroform());
+        assert_eq!(app.form_field_count(), 0);
+
+        // Flatten is one undoable edit; the panel refreshes on both paths.
+        app.dispatch(AppCommand::Undo, None);
+        assert!(app.has_acroform());
+        app.dispatch(AppCommand::Redo, None);
+        assert!(!app.has_acroform());
+
+        let dir = output_dir();
+        let target = dir.join("flattened.pdf");
+        app.save_active_as(&target)
+            .expect("save the flattened document");
+        let mut viewer = PdfxiApp::new();
+        assert!(matches!(
+            viewer.open_document(&target),
+            crate::OpenOutcome::Opened { .. }
+        ));
+        assert_eq!(viewer.form_field_count(), 0);
+        assert!(!viewer.has_acroform());
+        // The active catalog must not reference an AcroForm. An incremental save
+        // can still leave old, now-unreachable objects in the byte stream; that
+        // is a storage detail, not an active form.
+        let reopened_bytes = std::fs::read(&target).expect("read the flattened file");
+        let parsed =
+            pdfxi_core::Document::from_bytes(reopened_bytes).expect("parse flattened bytes");
+        let root = parsed
+            .object(parsed.root().expect("root"))
+            .expect("catalog");
+        let catalog = root.as_dictionary().expect("catalog dictionary");
+        assert!(
+            catalog.get("AcroForm").is_none(),
+            "the flattened catalog must not reference an /AcroForm"
+        );
+
+        let bytes = std::fs::read(&target).expect("read the flattened file");
+        let renderer =
+            PdfiumRenderer::from_bytes(bytes).expect("open the flattened file in PDFium");
+        let raster = renderer
+            .render_page(
+                PageIndex::new(0),
+                2.0,
+                &CancellationToken::new(),
+                &mut |_| {},
+            )
+            .expect("render the flattened page");
+        let text_rect = FormRect::new(72.0, 700.0, 272.0, 720.0);
+        let choice_rect = FormRect::new(72.0, 600.0, 272.0, 620.0);
+        let text_ink = ink_in_pdf_rect(&raster, text_rect, 2.0, 792.0);
+        let choice_ink = ink_in_pdf_rect(&raster, choice_rect, 2.0, 792.0);
+        assert!(
+            text_ink > 40,
+            "flattened text must stay visible: {text_ink}"
+        );
+        assert!(
+            choice_ink > 20,
+            "flattened choice must stay visible: {choice_ink}"
+        );
+    }
+
+    #[test]
+    fn xfdf_export_import_round_trips_and_rejects_unknown_fields() {
+        let mut app = open_radio_forms();
+        app.dispatch(
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "XFDF value".to_owned(),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("three".to_owned()),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormRadio {
+                name: "radio-field".to_owned(),
+                on_state: "B".to_owned(),
+            },
+            None,
+        );
+        let dir = output_dir();
+        let xfdf = dir.join("export.xfdf");
+        app.export_xfdf_at(Some(&xfdf)).expect("export XFDF");
+        let text = std::fs::read_to_string(&xfdf).expect("read the XFDF");
+        assert!(text.contains("XFDF value"), "{text}");
+        assert!(text.contains("<value>three</value>"), "{text}");
+        assert!(text.contains("<value>B</value>"), "{text}");
+
+        app.dispatch(
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "overwritten".to_owned(),
+            },
+            None,
+        );
+        assert_eq!(value(&app, "text-field"), "overwritten");
+        let applied = app.import_xfdf_at(Some(&xfdf)).expect("import XFDF");
+        assert!(applied >= 3, "applied {applied}");
+        assert_eq!(value(&app, "text-field"), "XFDF value");
+        assert_eq!(value(&app, "choice-field"), "three");
+        assert_eq!(value(&app, "radio-field"), "B");
+
+        let bad = dir.join("unknown.xfdf");
+        std::fs::write(
+            &bad,
+            "<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields>\
+             <field name=\"ghost\"><value>x</value></field></fields></xfdf>",
+        )
+        .expect("write a bad XFDF");
+        assert!(matches!(
+            app.import_xfdf_at(Some(&bad)),
+            Err(FormsIoError::Form(AcroFormError::UnknownField(_)))
+        ));
+        assert_eq!(value(&app, "text-field"), "XFDF value");
+        assert!(matches!(
+            app.import_xfdf_at(None),
+            Err(FormsIoError::NoPath)
+        ));
+    }
+
+    #[test]
+    fn fdf_export_import_round_trips_every_value_kind() {
+        let mut app = open_radio_forms();
+        app.dispatch(
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "FDF value".to_owned(),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormChoice {
+                name: "choice-field".to_owned(),
+                value: Some("two".to_owned()),
+            },
+            None,
+        );
+        app.dispatch(
+            AppCommand::SetFormRadio {
+                name: "radio-field".to_owned(),
+                on_state: "B".to_owned(),
+            },
+            None,
+        );
+        let dir = output_dir();
+        let fdf = dir.join("export.fdf");
+        app.export_fdf_at(Some(&fdf)).expect("export FDF");
+        let text = std::fs::read_to_string(&fdf).expect("read the FDF");
+        assert!(text.starts_with("%FDF-1.7"), "{text}");
+        assert!(text.contains("(FDF value)"), "{text}");
+        assert!(text.contains("[(B)]"), "{text}");
+
+        app.dispatch(
+            AppCommand::SetFormText {
+                name: "text-field".to_owned(),
+                value: "overwritten".to_owned(),
+            },
+            None,
+        );
+        let applied = app.import_fdf_at(Some(&fdf)).expect("import FDF");
+        assert!(applied >= 3, "applied {applied}");
+        assert_eq!(value(&app, "text-field"), "FDF value");
+        assert_eq!(value(&app, "choice-field"), "two");
+        assert_eq!(value(&app, "radio-field"), "B");
+
+        let bad = dir.join("unknown.fdf");
+        std::fs::write(
+            &bad,
+            "%FDF-1.7\n1 0 obj\n<< /FDF << /Fields [<< /T (ghost) /V (x) >>] >> >>\nendobj\n%%EOF\n",
+        )
+        .expect("write a bad FDF");
+        assert!(matches!(
+            app.import_fdf_at(Some(&bad)),
+            Err(FormsIoError::Field { .. })
+        ));
+    }
+
+    #[test]
+    fn file_dialog_commands_report_a_typed_hint_without_a_window() {
+        let mut app = PdfxiApp::new();
+        for command in [
+            AppCommand::ImportXfdfDialog,
+            AppCommand::ExportXfdfDialog,
+            AppCommand::ImportFdfDialog,
+            AppCommand::ExportFdfDialog,
+        ] {
+            app.dispatch(command.clone(), None);
+            assert!(
+                app.forms_io_status()
+                    .is_some_and(|status| status.contains("no file was chosen")),
+                "{} should report a typed NoPath hint",
+                command.label()
+            );
+        }
+    }
+
+    #[test]
+    fn flatten_is_refused_for_a_read_only_document() {
+        let mut app = open_radio_forms();
+        let id = app.state().active_tab_id().expect("active tab");
+        app.read_only_tabs.insert(id);
+        app.dispatch(AppCommand::FlattenForm, None);
+        assert!(app.has_acroform(), "a refused flatten keeps the form");
+        assert!(
+            app.forms_hint()
+                .is_some_and(|hint| hint.contains("read-only"))
+        );
+        assert_eq!(app.forms_flatten_report(), None);
     }
 }

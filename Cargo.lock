@@ -3002,6 +3002,7 @@ dependencies = [
  "pdfxi-core",
  "pdfxi-forms",
  "pdfxi-security",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

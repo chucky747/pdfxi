@@ -1,20 +1,14 @@
-# T-0243 Round A - Forms UI: field widgets and Fill & Sign
+# T-0243 Round A+B - Forms UI: field widgets and Fill & Sign
 #
-# Round A scope: enable Capability::Forms, list the tool only for a document
-# with an AcroForm, read the real /AcroForm into a cached model, draw text and
-# checkbox widgets at their real page rectangles, fill through AppCommand,
-# undo/redo, save and reopen with appearances, and prove the appearance with an
-# independent PDFium render.
-#
-# Round B (choice/radio interaction, tab order, apply/reset, flatten, FDF/XFDF)
-# is NOT part of this round, so FORMS-001, FORMS-006 and FORMS-007 stay
-# `library` until it lands: this fragment deliberately promotes no row.
-# The matrix rows are listed in `feature_rows` only so the integrator can see
-# which rows this task will eventually carry.
+# Round A delivered text/checkbox fill, appearances, save/reopen, undo/redo
+# refresh, the --tool=fill deep link and four captures. Round B adds choice
+# and radio interaction, deterministic tab order, apply and reset, flatten,
+# and FDF/XFDF import/export behind the same panel. Both rounds are verified:
+# the shell calls pdfxi_forms entry points and never changes library semantics.
 
 task = "T-0243"
 lane = "app"
-status = "in_progress"
+status = "verified"
 evidence = "docs/evidence/ui/T-0243.md"
 docs = [
     "crates/pdfxi-app/Cargo.toml",
@@ -27,75 +21,93 @@ docs = [
     "crates/pdfxi-app/src/shell/session.rs",
     "crates/pdfxi-app/src/shell/document_view.rs",
     "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
     "docs/evidence/ui/T-0243.md",
     "docs/evidence/ui/t0243-forms-light-windows.png",
     "docs/evidence/ui/t0243-forms-dark-windows.png",
     "docs/evidence/ui/t0243-forms-light-macos.png",
     "docs/evidence/ui/t0243-forms-dark-macos.png",
 ]
-feature_rows = ["FORMS-001", "FORMS-006", "FORMS-007"]
-promoted_rows = []
+feature_rows = [
+    "FORMS-001",
+    "FORMS-006",
+    "FORMS-007",
+]
+promoted_rows = [
+    "FORMS-001",
+    "FORMS-006",
+    "FORMS-007",
+]
 
 notes = """
-Round A of the forms shell pair (ADR 0012). Capability::Forms is enabled and the
-Tools panel lists Fill & Sign only when the active document actually carries a
-non-empty AcroForm, so an empty shell or a form-less PDF shows no control that
-could only report "not available". AppCommand::FillAndSign now opens a real
-Fill & Sign panel (field list with kind and value, hint line, read-error and
-XFA/JavaScript banner) instead of not_available().
+Round A of the forms shell pair (ADR 0012) is unchanged: Capability::Forms is
+enabled, the Tools row appears only for a document with an AcroForm, text and
+checkbox widgets are drawn at their real /Rect and filled through AppCommand
+dispatch, and each commit is one DocumentSession::edit with library-generated
+appearances. after_session_edit refreshes the cached model on open, tab switch,
+undo and redo. --tool=fill dispatches the same FillAndSign command as the row.
 
-The shell reads pdfxi_forms::read_acroform(session.document()) on open, tab
-switch, undo/redo and after each edit, caching the AcroFormModel by tab and
-DocumentSession::revision_count(). Text and checkbox commits run
-pdfxi_forms::set_text / set_checkbox on a clone of the session document and
-commit it as one DocumentSession::edit, which is the T-0242 annotation shape:
-/V, widget /AS and regenerated /AP /N come from the library, the shell writes no
-field dictionary, and undo, redo, dirty marking, save and reopen all work.
-after_session_edit (the single post-edit hook shared with open/undo/redo) now
-also refreshes the form model, so undo and redo cannot leave stale values in the
-panel or widgets.
+Round B completes O-05:
 
-Widgets are drawn at their real /Rect through CanvasLayout::page_rect_to_canvas,
-the same mapping as the find, selection and annotation overlays. Text fields
-take focus and a draft, committing on Enter or blur; checkboxes toggle on click
-and draw a vector check mark rather than a filled block so the view matches the
-PDF appearance. Choice, radio, pushbutton and signature widgets are drawn
-read-only at their rectangles; they are not interactive until Round B, which
-keeps the "no dead control" rule.
+* Choice fields: a click dispatches FocusFormWidget, whose handler opens an
+  option popup built from the cached model's /Opt entries; each option and the
+  Clear action dispatch SetFormChoice -> pdfxi_forms::set_choice (or its
+  reported form). A value outside /Opt is refused unless CHOICE_EDIT is set;
+  an editable combo also exposes a text box. The selected value, widget /AS
+  and regenerated /AP survive save and reopen, and PDFium renders ink in the
+  selected choice rectangle.
+* Radio groups: clicking a widget dispatches SetFormRadio with that widget's
+  named on-state -> pdfxi_forms::set_radio. The library writes the group /V,
+  the selected widget /AS and regenerates every widget's appearance, so no
+  widget keeps a stale on-state. An unknown on-state is refused with a typed
+  hint. A real two-widget radio group is generated onto the committed fixture
+  with pdfxi_core objects for the test and the captures (not faked in the
+  overlay).
+* Tab order: widget_order(model) walks fields in document order and each
+  field's widgets in order, skipping pushbuttons and signatures;
+  focus_transition(order, current, forward) wraps at both ends. Both are pure
+  and unit-tested without OS input. The canvas consumes Tab / Shift+Tab, draws
+  a visible focus ring, activates checkbox/radio with Enter or Space, and lets
+  Escape leave the field; typing goes to the focused text/editable-choice
+  field.
+* Apply and reset: Apply is rendered only while a draft differs from the field
+  value, so there is no no-op button. Reset has no document-level library API,
+  so the app walks the model, maps every FormField::default_value to the typed
+  setter for its kind, keeps a per-field Result, and commits one session edit:
+  one Undo step restores all fields. Per-field refusals are reported, not
+  silently skipped.
+* Flatten: a two-click confirmation dispatches FlattenForm -> pdfxi_forms::flatten,
+  reports FlattenFormReport counts in the status and panel, and goes through
+  the normal session edit path. An explicit gate refuses read-only documents
+  and documents without a form. Save/reopen proves the AcroForm is gone while
+  the text and choice appearances still render.
+* FDF/XFDF: four panel commands open native rfd open/save dialogs. Each dialog
+  command forwards to a testable explicit-path method (import_xfdf_at,
+  export_xfdf_at, import_fdf_at, export_fdf_at); a headless dispatch reaches
+  that method and reports its typed NoPath error instead of blocking. Paths
+  are taken only from the dialog result; directories and inputs over 8 MiB are
+  rejected. XFDF uses document_form::export_xfdf/import_xfdf (unknown fields
+  fail, one undo step). FDF import parses with import_fdf and applies every
+  FdfField by kind through the document setters; export builds a legacy Form
+  with Form::from_fields and Field::new/with_value, carrying raw /Ff flags so
+  NO_EXPORT fields are skipped. No network is used.
 
-Read-only tabs and /Perms masks that deny FILL_IN_FORM are refused by a pure,
-unit-tested gate with a one-sentence hint and no session revision; field-level
-/Ff read-only is refused by the library and pre-checked from the cached model.
-/XFA and JavaScript are detected and reported as not rendered or executed; no
-script ever runs.
+New AppCommand variants: SetFormChoice, SetFormRadio, ApplyFormEdit,
+ResetFormFields, FlattenForm, FocusFormWidget, ImportXfdfDialog,
+ExportXfdfDialog, ImportFdfDialog, ExportFdfDialog, with stable labels. The
+no-dead-controls harness covers each with a real dispatch assertion; none were
+allowlisted.
 
-New AppCommand variants: SetFormText { name, value } ("set-form-text") and
-ToggleFormCheckbox { name } ("toggle-form-checkbox"). New public accessors for
-the harness: forms_model, has_acroform, forms_available, form_field_count,
-form_field_values, form_widget_count, forms_panel_open, forms_banner,
-forms_hint, active_form_field, form_draft, forms_editable, form_edit_blocker,
-refresh_forms and tools_panel_rows.
+Gate: cargo fmt -p pdfxi-app -- --check EXIT=0; cargo clippy -p pdfxi-app
+--all-targets --features ui,pdfium -- -D warnings EXIT=0 (exact gate, full
+dependency graph); cargo test -p pdfxi-app --features ui,pdfium = 494 lib +
+24 harness passed, 0 failed. Release build of pdfxi-ui with ui,pdfium EXIT=0;
+pdfium.dll copied beside the binary; all four Round B captures verified.
 
-settings::LaunchOptions gained `tool: Option<LaunchTool>` for `--tool=<name>`
-(edit, comment, highlight, fill|fill-sign|fill-and-sign|forms, sign, organize,
-export, convert, protect, ai|assistant; case-insensitive, last wins, unknown
-ignored). Fill dispatches the same AppCommand::FillAndSign the Tools row emits,
-so a deep link cannot exceed the control; the captures use
-`--tool=fill --light|--dark --controls=windows|macos` on the saved filled file.
-
-Captures found and fixed three defects: the panel opened centred over the page
-widgets (now defaults lower-left), dark-mode widget text drew with the theme
-text colour on the always-white page (now a fixed dark page ink, including the
-focused TextEdit), and the checked checkbox painted a red block over the real
-appearance (now a check mark).
-
-Gate: cargo fmt -p pdfxi-app -- --check = 0; cargo clippy -p pdfxi-app
---all-targets --features ui,pdfium -- -D warnings = 0 (full dependency graph);
-cargo test -p pdfxi-app --features ui,pdfium = 481 lib + 23 harness passed;
-release build of pdfxi-ui with ui,pdfium = 0.
-
-Round B still owns choice/radio interaction, tab order, apply and reset,
-flatten, FDF/XFDF behind the same panel, and promoting FORMS-001/006/007.
+FORMS-004 note: the row was `model`, not `library`. The app now proves the
+tab-order half (widget_order/focus_transition, focus ring, Tab/Escape/Enter/
+Space); the /AA actions half stays model-level and is not claimed by this
+fragment. The integrator may keep the row split if it prefers.
 """
 
 tests = [
@@ -103,8 +115,25 @@ tests = [
     "ui::shell::forms::tests::field_values_display_as_text",
     "ui::shell::forms::tests::widget_rect_flips_the_page_axis",
     "ui::shell::forms::tests::notice_names_xfa_and_javascript_without_claiming_execution",
+    "ui::shell::forms::tests::widget_order_uses_document_and_widget_order_and_skips_value_less_kinds",
+    "ui::shell::forms::tests::focus_transition_walks_wraps_and_handles_unknown_focus",
+    "ui::shell::forms::tests::flatten_blocker_refuses_read_only_and_missing_form",
+    "ui::shell::forms::tests::import_path_validation_rejects_directories",
+    "ui::shell::forms::tests::first_choice_reads_only_choice_values",
     "ui::shell::forms::integration_tests::fills_text_and_checkbox_then_undo_and_redo_restore_values",
     "ui::shell::forms::integration_tests::read_only_render_cannot_be_edited_even_from_the_command",
     "ui::shell::forms::integration_tests::saved_values_persist_and_the_page_renders_the_filled_text",
+    "ui::shell::forms::integration_tests::choice_fields_select_options_and_persist_with_appearances",
+    "ui::shell::forms::integration_tests::radio_group_selects_one_on_state_and_updates_every_widget",
+    "ui::shell::forms::integration_tests::reset_restores_every_default_as_one_undo_step",
+    "ui::shell::forms::integration_tests::flatten_removes_all_fields_but_keeps_values_visible",
+    "ui::shell::forms::integration_tests::xfdf_export_import_round_trips_and_rejects_unknown_fields",
+    "ui::shell::forms::integration_tests::fdf_export_import_round_trips_every_value_kind",
+    "ui::shell::forms::integration_tests::file_dialog_commands_report_a_typed_hint_without_a_window",
+    "ui::shell::forms::integration_tests::flatten_is_refused_for_a_read_only_document",
     "settings::tests::tool_flag_parses_stable_names_and_ignores_unknown_values",
+    "dispatched_form_commands_act",
+    "dispatched_round_b_form_commands_act",
+    "repository_shell_has_no_dead_controls",
 ]
+

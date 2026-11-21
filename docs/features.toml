@@ -1706,8 +1706,11 @@ MacRoman/Standard/Differences ASCII-only, page /Rotate not composed. The app
 shell still has to call the library and promote this row.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
+    "ui::shell::forms::integration_tests::fills_text_and_checkbox_then_undo_and_redo_restore_values",
+    "ui::shell::forms::integration_tests::saved_values_persist_and_the_page_renders_the_filled_text",
+    "ui::shell::forms::tests::widget_rect_flips_the_page_axis",
     "reads_three_real_fields_with_inherited_attributes",
     "fills_saves_reopens_and_writes_appearances",
     "radio_group_fills_widget_states_on_a_derived_fixture",
@@ -1797,7 +1800,7 @@ docs = [
 domain = "Forms"
 evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 184 passed, 0 failed; 22 new tests cover all four /Tabs orders, wrap and no-wrap traversal, hidden/read-only skipping, page subsets, K/F/V/C action parsing, typed rejection of JavaScript/URI/Launch/Import/Export, reset/submit plans, deterministic reports, unknown actions and malformed actions. Full output in docs/evidence/forms/T-0090.md."
 id = "FORMS-004"
-notes = "Model-level implementation in pdfxi-forms: /Tabs order parsing, deterministic widget ordering and next/previous navigation with a skip policy; /AA K/F/V/C and /A parsing into a typed safe whitelist (reset/submit only) with dangerous actions rejected and reported. No scripts are executed. Host adapters for structure-tree order, page geometry and plan execution are out of scope. See T-0090 notes."
+notes = "Model-level implementation in pdfxi-forms: /Tabs order parsing, deterministic widget ordering and next/previous navigation with a skip policy; /AA K/F/V/C and /A parsing into a typed safe whitelist (reset/submit only) with dangerous actions rejected and reported. No scripts are executed. Host adapters for structure-tree order, page geometry and plan execution are out of scope. See T-0090 notes. Tab-order traversal is proven in the shell by T-0243 (widget_order/focus_transition tests); the /AA actions remain model-level and are not claimed by the UI."
 priority = "P3"
 status = "model"
 tests = [
@@ -1849,7 +1852,7 @@ the crate root exposes the document entry points as export_xfdf_document and
 import_xfdf_document to avoid the name collision.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = ["xfdf_round_trips_values_into_a_fresh_copy"]
 title = "Import and export FDF and XFDF"
 
@@ -1875,8 +1878,10 @@ flatten. Page /Rotate is still not composed. The shell task owns the verified
 row.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
+    "ui::shell::forms::integration_tests::flatten_removes_all_fields_but_keeps_values_visible",
+    "ui::shell::forms::integration_tests::flatten_is_refused_for_a_read_only_document",
     "flatten_paints_widgets_removes_acroform_and_keeps_page_text",
     "rotated_widget_matrix_places_the_text_inside_the_rect",
 ]
