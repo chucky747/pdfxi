@@ -1,0 +1,66 @@
+# T-0268 - Redaction form XObject recursion and inline image decoding
+#
+# Library result, not a matrix promotion. Round A recursed form XObjects; Round
+# B decodes and pixel-redacts inline images (BI/ID/EI). EDIT-013 stays `library`
+# because there is still no app shell entry point; T-0263 owns that promotion.
+
+task = "T-0268"
+lane = "author"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0268.md"
+docs = [
+    "docs/evidence/hardening/T-0268.md",
+    "crates/pdfxi-edit/src/content_edit.rs",
+    "crates/pdfxi-edit/src/redact_document.rs",
+    "crates/pdfxi-edit/tests/redaction_document.rs",
+]
+feature_rows = ["EDIT-013"]
+promoted_rows = []
+acceptance_items = ["O-06", "A-30"]
+tests = [
+    "redaction_document::inline_rgb_image_under_a_mark_is_refilled_and_rerendered",
+    "redaction_document::inline_gray_image_under_a_mark_is_refilled",
+    "redaction_document::inline_jpeg_image_under_a_mark_is_decoded_refilled_and_reencoded",
+    "redaction_document::unsupported_inline_filter_fails_closed_without_saving",
+    "redaction_document::inline_image_with_a_mismatched_sample_span_fails_closed",
+    "redaction_document::keep_images_true_survives_an_inline_image",
+    "redaction_document::inline_image_outside_every_mark_is_untouched",
+    "redaction_document::inline_image_inside_a_form_is_redacted_through_the_composed_ctm",
+    "redaction_document::indirect_form_matrix_is_resolved_before_the_intersection_test",
+    "redaction_document::malformed_form_bbox_under_a_mark_is_never_skipped",
+    "redaction_document::malformed_form_matrix_fails_closed",
+    "content_edit::tests::tokenizer_keeps_inline_dictionary_and_exact_sample_span",
+    "redaction_document::form_xobject_text_under_a_mark_is_removed",
+    "redaction_document::nested_form_text_under_a_mark_is_removed",
+    "redaction_document::cyclic_form_xobject_fails_closed",
+]
+notes = """
+Round B closes the inline-image gap. `content_edit::tokenize` now retains each
+inline image's `BI..ID..EI` object: the direct dictionary entries, the exact
+sample byte range (after `ID` and its single white-space, before the white-space
+preceding `EI`), and the offset just past `EI`. Unfiltered images derive their
+length from `/W /H /BPC /CS`, so binary sample bytes that spell `EI` cannot move
+the span; filtered images use the PDF terminator rule (white-space before `EI`,
+white-space/delimiter/EOF after it). A declared-but-mismatched length is marked
+uncertain and fails closed.
+
+An intersecting inline image is mapped into page space through the current CTM
+(the form matrix is already composed for inline images inside forms), decoded
+through the same helper path as image XObjects, pixel-filled with opaque black
+through the inverse transform, and re-encoded as deterministic unfiltered
+8-bit samples in place. Supported: raw 8-bit DeviceGray/G, DeviceRGB/RGB,
+Indexed (palette expanded to RGB) and DCTDecode JPEG. `keep_images = true`
+reports `<inline image>` and `clean = false`. Unsupported filters/formats, an
+unclear sample span or a non-invertible placement return typed
+`UnsupportedImage` before any staging. An image outside every mark is untouched
+byte-for-byte. PDFium re-render proves the marked ink is gone; no app shell is
+exposed, so EDIT-013 remains `library`.
+
+Reviewer follow-ups: indirect form `/Matrix` and `/BBox` are resolved through the
+effective document; a present malformed `/Matrix` returns `UnsupportedForm`, and
+an absent/malformed `/BBox` is treated as possibly intersecting so the form is
+never silently skipped. Unresolvable XObjects have no trustworthy placement, so
+they fail closed whenever the page carries a mark (or the CTM is not invertible)
+rather than being skipped via the unit-square heuristic. Vector paths remain a
+known limit: they are not removed and do not make `report.clean` false.
+"""
