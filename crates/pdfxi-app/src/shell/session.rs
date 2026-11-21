@@ -154,6 +154,11 @@ impl PdfxiApp {
                 self.refresh_renderer_for_active_tab();
                 let title = self.state.tab_title(id).unwrap_or_default();
                 self.library.record_open(path, &title, 0);
+                let opened_name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                self.notify_real_event("Document opened", &opened_name);
                 self.status = format!("Opened {}", path.display());
                 OpenOutcome::Opened { id }
             }
@@ -288,6 +293,11 @@ impl PdfxiApp {
         self.save_conflict = None;
         self.refresh_renderer_for_active_tab();
         self.status = format!("Saved {}", path.display());
+        let saved_name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        self.notify_real_event("Document saved", &saved_name);
         Ok(())
     }
 
@@ -306,6 +316,16 @@ impl PdfxiApp {
         self.sync_tab_dirty(id);
         self.save_conflict = None;
         self.status = "Saved over the external change".to_owned();
+        let saved_name = self
+            .state
+            .tab(id)
+            .and_then(|tab| tab.path())
+            .and_then(|path| path.file_name())
+            .map_or_else(
+                || "document".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+        self.notify_real_event("Document saved", &saved_name);
         Ok(())
     }
 
@@ -483,6 +503,16 @@ impl PdfxiApp {
                 self.sync_tab_dirty(id);
                 self.refresh_renderer_for_active_tab();
                 self.status = "Saved".to_owned();
+                let saved_name = self
+                    .state
+                    .tab(id)
+                    .and_then(|tab| tab.path())
+                    .and_then(|path| path.file_name())
+                    .map_or_else(
+                        || "document".to_owned(),
+                        |name| name.to_string_lossy().into_owned(),
+                    );
+                self.notify_real_event("Document saved", &saved_name);
                 Ok(())
             }
             Err(SessionError::ExternallyModified { path }) => {

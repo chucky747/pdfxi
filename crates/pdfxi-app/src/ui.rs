@@ -609,6 +609,8 @@ pub struct PdfxiApp {
     bookmarks: shell::bookmarks_panel::BookmarksPanelState,
     /// Document properties window state.
     properties_state: shell::bookmarks_panel::DocumentPropertiesState,
+    /// Notifications window and its on-disk store.
+    notifications: shell::notifications::NotificationsUiState,
     /// Export card state.
     export_ui: shell::export_card::ExportUiState,
     /// Pre-print panel, progress and worker state.
@@ -674,11 +676,14 @@ impl PdfxiApp {
     pub fn new() -> Self {
         let defaults = Self::default();
         let identity_name = defaults.settings.display_name.clone();
-        Self {
+        let mut app = Self {
             page_box: "1".to_owned(),
             identity_name,
             ..defaults
-        }
+        };
+        // Headless tests must never write the user's real notification file.
+        app.notifications.path = Some(Self::default_test_notifications_path());
+        app
     }
 
     /// Create an empty viewer window with persisted preferences applied.
@@ -689,6 +694,9 @@ impl PdfxiApp {
     pub fn new_for_window() -> Self {
         let mut app = Self::new();
         app.load_persisted_settings();
+        // The shipped shell uses the per-user notification file, not the
+        // isolated path that Self::new installs for headless tests.
+        app.notifications.path = None;
         app
     }
 
@@ -1831,6 +1839,7 @@ impl eframe::App for PdfxiApp {
         self.signing_dialog_ui(ctx);
         self.place_signature_dialog_ui(ctx);
         self.document_properties_ui(ctx);
+        self.notifications_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);
@@ -2114,6 +2123,36 @@ impl PdfxiApp {
         self.identity_name = trimmed.to_owned();
         self.persist_settings();
         self.status = "Display name updated".to_owned();
+    }
+
+    /// Set, replace or clear the shared folder and persist it.
+    ///
+    /// Passing `None` clears the choice. The Shared capability follows the
+    /// choice immediately, so the rail updates without a restart. Tests call
+    /// this instead of the native folder picker.
+    pub(crate) fn set_shared_folder(&mut self, folder: Option<PathBuf>) {
+        self.settings.shared_folder = folder;
+        self.capabilities = if self.settings.shared_folder.is_some() {
+            Capabilities::available().with(Capability::Shared)
+        } else {
+            Capabilities::available()
+        };
+        self.persist_settings();
+        self.status = if self.settings.shared_folder.is_some() {
+            "Shared folder updated".to_owned()
+        } else {
+            "Shared folder cleared".to_owned()
+        };
+    }
+
+    /// Show the native folder picker and persist the chosen shared folder.
+    pub(crate) fn choose_shared_folder(&mut self) {
+        if let Some(folder) = rfd::FileDialog::new()
+            .set_title("Choose the shared folder")
+            .pick_folder()
+        {
+            self.set_shared_folder(Some(folder));
+        }
     }
 
     /// Open the library folder in the platform file manager.

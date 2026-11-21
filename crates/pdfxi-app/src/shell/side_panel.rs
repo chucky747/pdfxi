@@ -1,12 +1,28 @@
 //! Left side panel: page thumbnails, Recent, Home, and future rail content.
 
+use std::path::PathBuf;
+
+use pdfxi_edit::document_annotations::{export_xfdf, import_xfdf};
+
 use crate::design::{Icon, Palette};
+use crate::shared_folder::SharedFolderSource;
 use crate::ui::{AppCommand, PdfxiApp};
 #[cfg(feature = "pdfium")]
 use pdfxi_render::{CancellationToken, thumbnail::ThumbnailSpec};
 
 use super::capabilities::{Capability, RailItem};
 use super::widgets::shell_icon_button;
+
+/// One PDF listed from the shared folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SharedEntry {
+    /// File name shown in the panel.
+    pub(crate) name: String,
+    /// Absolute path opened on click.
+    pub(crate) path: PathBuf,
+    /// File size in bytes.
+    pub(crate) size: u64,
+}
 
 impl PdfxiApp {
     /// Draw the side panel selected by the rail.
@@ -203,17 +219,222 @@ impl PdfxiApp {
                 .size(13.0)
                 .color(palette.text_muted),
         );
-        if let Some(folder) = &self.settings.shared_folder {
-            let name = folder
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("shared folder");
-            ui.label(egui::RichText::new(format!("Folder: {name}")).color(palette.text_muted));
-        }
+        let Some(root) = self.settings.shared_folder.clone() else {
+            ui.label(egui::RichText::new("No shared folder chosen").color(palette.text_muted));
+            ui.label(
+                egui::RichText::new("Choose one in Settings (gear) > Shared folder.")
+                    .size(10.0)
+                    .color(palette.text_muted),
+            );
+            return;
+        };
         ui.label(
-            egui::RichText::new("Shared review browsing arrives in round B")
+            egui::RichText::new(format!("Folder: {}", root.display()))
+                .size(10.0)
                 .color(palette.text_muted),
         );
+        let mut open = None;
+        match self.shared_entries() {
+            Ok(entries) => {
+                if entries.is_empty() {
+                    ui.label(egui::RichText::new("This folder is empty").color(palette.text_muted));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            for entry in &entries {
+                                let label = format!(
+                                    "{}  ({})",
+                                    entry.name,
+                                    crate::ui::library::format_bytes(entry.size)
+                                );
+                                if ui.selectable_label(false, label).clicked() {
+                                    open = Some(entry.path.clone());
+                                }
+                            }
+                        });
+                }
+            }
+            Err(error) => {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+        }
+
+        if let Some(sidecar) = self.shared_review_sidecar() {
+            ui.separator();
+            ui.label(egui::RichText::new("Shared review").strong());
+            let review_name = sidecar.file_name().map_or_else(
+                || sidecar.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let exists = sidecar.is_file();
+            ui.label(
+                egui::RichText::new(format!(
+                    "Review file: {review_name} ({})",
+                    if exists { "present" } else { "not written yet" }
+                ))
+                .size(10.0)
+                .color(palette.text_muted),
+            );
+            let mut share = false;
+            let mut import = false;
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Share review comments").clicked() {
+                    share = true;
+                }
+                if ui
+                    .add_enabled(exists, egui::Button::new("Import review comments"))
+                    .on_disabled_hover_text("Share this document's review first")
+                    .clicked()
+                {
+                    import = true;
+                }
+            });
+            if share {
+                let _ = self.sync_review_to_shared_folder();
+            }
+            if import {
+                let _ = self.import_review_from_shared_folder();
+            }
+        }
+
+        if let Some(path) = open {
+            let _ = self.open_document(&path);
+        }
+    }
+
+    /// PDFs in the configured shared folder, sorted by name and capped at 200.
+    pub(crate) fn shared_entries(&self) -> Result<Vec<SharedEntry>, String> {
+        let Some(root) = &self.settings.shared_folder else {
+            return Ok(Vec::new());
+        };
+        let source = SharedFolderSource::new(root.to_string_lossy().into_owned())
+            .map_err(|error| error.to_string())?
+            .with_recursive(false)
+            .with_max_entries(200)
+            .with_extension("pdf");
+        let read = std::fs::read_dir(root)
+            .map_err(|error| format!("Could not read {}: {error}", root.display()))?;
+        let mut entries = Vec::new();
+        for item in read {
+            let item = item.map_err(|error| error.to_string())?;
+            let path = item.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = item.file_name().to_string_lossy().into_owned();
+            if !name.to_ascii_lowercase().ends_with(".pdf") {
+                continue;
+            }
+            source
+                .validate_child(&name)
+                .map_err(|error| error.to_string())?;
+            let size = item.metadata().map_or(0, |metadata| metadata.len());
+            entries.push(SharedEntry { name, path, size });
+        }
+        entries.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        entries.truncate(source.max_entries());
+        Ok(entries)
+    }
+
+    /// The sidecar XFDF path for the active document, when it is shared.
+    pub(crate) fn shared_review_sidecar(&self) -> Option<PathBuf> {
+        self.shared_review_target()
+            .ok()
+            .map(|(_, _, sidecar)| sidecar)
+    }
+
+    /// Export the active document's annotations beside it as `<stem>.xfdf`.
+    pub(crate) fn sync_review_to_shared_folder(&mut self) -> Result<PathBuf, String> {
+        let (id, document_path, sidecar) = self.shared_review_target()?;
+        let xml = self
+            .sessions
+            .get(&id)
+            .ok_or_else(|| "The document has no open session".to_owned())
+            .and_then(|session| {
+                export_xfdf(session.document()).map_err(|error| error.to_string())
+            })?;
+        let temporary = sidecar.with_extension("xfdf.tmp");
+        std::fs::write(&temporary, xml)
+            .map_err(|error| format!("Could not write {}: {error}", temporary.display()))?;
+        if let Err(error) = std::fs::rename(&temporary, &sidecar) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("Could not write {}: {error}", sidecar.display()));
+        }
+        let name = document_path.file_name().map_or_else(
+            || document_path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        self.notify_real_event("Review comments shared", &name);
+        self.status = format!("Shared review comments to {}", sidecar.display());
+        Ok(sidecar)
+    }
+
+    /// Import the sidecar XFDF into the active document as one session edit.
+    pub(crate) fn import_review_from_shared_folder(&mut self) -> Result<usize, String> {
+        let (id, _document_path, sidecar) = self.shared_review_target()?;
+        if !sidecar.is_file() {
+            return Err(format!("No review file at {}", sidecar.display()));
+        }
+        if self.read_only_tabs.contains(&id) {
+            return Err("The document permissions do not allow changes".to_owned());
+        }
+        let xml = std::fs::read_to_string(&sidecar)
+            .map_err(|error| format!("Could not read {}: {error}", sidecar.display()))?;
+        let author = if self.settings.display_name.trim().is_empty() {
+            "PDFXI reviewer".to_owned()
+        } else {
+            self.settings.display_name.trim().to_owned()
+        };
+        let mut candidate = self
+            .sessions
+            .get(&id)
+            .ok_or_else(|| "The document has no open session".to_owned())?
+            .document()
+            .clone();
+        let imported =
+            import_xfdf(&mut candidate, &xml, &author).map_err(|error| error.to_string())?;
+        self.sessions
+            .get_mut(&id)
+            .ok_or_else(|| "The document has no open session".to_owned())?
+            .edit(|document| {
+                *document = candidate;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        self.after_session_edit(id);
+        self.status = format!("Imported {imported} review comment(s)");
+        Ok(imported)
+    }
+
+    /// Active tab id, canonical document path and sidecar for shared review.
+    fn shared_review_target(&self) -> Result<(crate::TabId, PathBuf, PathBuf), String> {
+        let root = self
+            .settings
+            .shared_folder
+            .as_ref()
+            .ok_or_else(|| "Choose a shared folder first".to_owned())?;
+        let id = self
+            .state
+            .active_tab_id()
+            .ok_or_else(|| "Open a document first".to_owned())?;
+        let path = self
+            .sessions
+            .get(&id)
+            .and_then(|session| session.path())
+            .ok_or_else(|| "The document has no file path".to_owned())?;
+        let document = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        if !document.starts_with(&root) {
+            return Err("The active document is not inside the shared folder".to_owned());
+        }
+        let sidecar = document.with_extension("xfdf");
+        Ok((id, document, sidecar))
     }
 
     /// Pages panel: header, grid/list toggle, optional organise actions.
@@ -499,4 +720,185 @@ fn short_title(title: &str, max_chars: usize) -> String {
         shortened.push('…');
     }
     shortened
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfxi_document::DocumentSession;
+    use pdfxi_edit::{Rect, add_highlight, list_annotations};
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/realworld")
+            .join(name)
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        // Build an absolute root without `..`; SharedFolderSource rejects
+        // parent traversal and verbatim (`\\?\`) paths.
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = workspace
+            .parent()
+            .and_then(Path::parent)
+            .expect("the workspace root")
+            .to_path_buf();
+        let dir = root
+            .join("target/tmp/shared-panel")
+            .join(format!("{}-{unique}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create the shared folder");
+        dir
+    }
+
+    fn copy_fixture(fixture_name: &str, dir: &Path, name: &str) -> PathBuf {
+        let target = dir.join(name);
+        std::fs::copy(fixture(fixture_name), &target).expect("copy the fixture");
+        target
+    }
+
+    #[test]
+    fn lists_pdfs_sorted_by_name_and_opens_a_row() {
+        let dir = temp_dir("list");
+        copy_fixture("microsoft-excel-2019-sample.pdf", &dir, "a-excel.pdf");
+        copy_fixture("powerpoint-slides.pdf", &dir, "z-slides.pdf");
+        std::fs::write(dir.join("notes.txt"), b"not a PDF").expect("write a non-PDF");
+        let mut app = PdfxiApp::new();
+        app.set_shared_folder(Some(dir.clone()));
+
+        let entries = app.shared_entries().expect("list the shared folder");
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, vec!["a-excel.pdf", "z-slides.pdf"]);
+        assert!(entries.iter().all(|entry| entry.size > 0));
+
+        let outcome = app.open_document(&entries[1].path);
+        assert!(matches!(outcome, crate::OpenOutcome::Opened { .. }));
+        assert_eq!(
+            app.state
+                .active_tab()
+                .and_then(|tab| tab.path())
+                .map(Path::to_path_buf),
+            Some(entries[1].path.clone())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_folder_and_empty_folder_states() {
+        let app = PdfxiApp::new();
+        assert!(app.shared_entries().expect("no folder").is_empty());
+        assert_eq!(app.shared_review_sidecar(), None);
+
+        let dir = temp_dir("empty");
+        let mut app = PdfxiApp::new();
+        app.set_shared_folder(Some(dir.clone()));
+        assert!(app.shared_entries().expect("empty folder").is_empty());
+        assert!(matches!(
+            app.sync_review_to_shared_folder(),
+            Err(error) if error.contains("Open a document")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn share_review_writes_the_sidecar_with_the_highlight() {
+        let dir = temp_dir("share");
+        let path = copy_fixture("microsoft-excel-2019-sample.pdf", &dir, "review.pdf");
+        let mut app = PdfxiApp::new();
+        app.set_shared_folder(Some(dir.clone()));
+        app.open_document(&path);
+        let id = app.state.active_tab_id().expect("the fixture opens");
+        let mut candidate = app.sessions.get(&id).expect("session").document().clone();
+        let rect = Rect::new(72.0, 700.0, 200.0, 716.0).expect("a valid rect");
+        add_highlight(&mut candidate, 0, &[rect], "Review note", "Reviewer")
+            .expect("add a highlight");
+        app.sessions
+            .get_mut(&id)
+            .expect("session")
+            .edit(|document| {
+                *document = candidate;
+                Ok(())
+            })
+            .expect("commit the highlight");
+
+        let sidecar = app
+            .sync_review_to_shared_folder()
+            .expect("share the review");
+        assert_eq!(
+            sidecar.file_name().and_then(|name| name.to_str()),
+            Some("review.xfdf")
+        );
+        let xml = std::fs::read_to_string(&sidecar).expect("read the sidecar");
+        assert!(xml.contains("<annots"), "XFDF annots root: {xml}");
+        assert!(xml.contains("Highlight"), "XFDF subtype: {xml}");
+        assert!(app.status().starts_with("Shared review comments"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_review_adds_one_annotation_and_persists() {
+        let dir = temp_dir("import");
+        let path = copy_fixture("microsoft-excel-2019-sample.pdf", &dir, "review.pdf");
+        {
+            let mut author = PdfxiApp::new();
+            author.set_shared_folder(Some(dir.clone()));
+            author.open_document(&path);
+            let id = author.state.active_tab_id().expect("the fixture opens");
+            let mut candidate = author
+                .sessions
+                .get(&id)
+                .expect("session")
+                .document()
+                .clone();
+            let rect = Rect::new(72.0, 700.0, 200.0, 716.0).expect("a valid rect");
+            add_highlight(&mut candidate, 0, &[rect], "Review note", "Reviewer")
+                .expect("add a highlight");
+            author
+                .sessions
+                .get_mut(&id)
+                .expect("session")
+                .edit(|document| {
+                    *document = candidate;
+                    Ok(())
+                })
+                .expect("commit the highlight");
+            author
+                .sync_review_to_shared_folder()
+                .expect("share the review");
+        }
+        // Restore the clean copy so the import is the only annotation source.
+        std::fs::copy(fixture("microsoft-excel-2019-sample.pdf"), &path)
+            .expect("reset to the clean fixture");
+
+        let mut app = PdfxiApp::new();
+        app.set_shared_folder(Some(dir.clone()));
+        app.open_document(&path);
+        assert_eq!(
+            app.annotations().len(),
+            0,
+            "the clean copy has no annotations"
+        );
+        let imported = app
+            .import_review_from_shared_folder()
+            .expect("import the review");
+        assert_eq!(imported, 1);
+        assert_eq!(app.annotations().len(), 1);
+        assert!(app.status().starts_with("Imported 1 review comment"));
+
+        let checkpoint = dir.join("review-imported.pdf");
+        app.save_active_as(&checkpoint)
+            .expect("save the imported review");
+        let reopened = DocumentSession::open(&checkpoint).expect("reopen the saved file");
+        assert_eq!(
+            list_annotations(reopened.document(), 0)
+                .expect("read annotations")
+                .len(),
+            1,
+            "the imported annotation persists through save and reopen"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

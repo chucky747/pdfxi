@@ -26,6 +26,7 @@ pub(crate) mod export_card;
 pub mod find_bar;
 pub mod forms;
 pub mod help;
+pub(crate) mod notifications;
 pub mod preferences;
 pub mod print_dialog;
 pub mod rail;

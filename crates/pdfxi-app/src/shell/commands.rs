@@ -197,6 +197,8 @@ pub enum AppCommand {
     OpenHelp,
     /// Close the help window.
     CloseHelp,
+    /// Toggle the local notifications window.
+    ToggleNotifications,
     /// Persist a new local display name.
     SetDisplayName(String),
     /// Star or unstar a document path.
@@ -431,6 +433,7 @@ impl AppCommand {
             Self::PageMenu => "page-menu",
             Self::OpenHelp => "open-help",
             Self::CloseHelp => "close-help",
+            Self::ToggleNotifications => "toggle-notifications",
             Self::SetDisplayName(_) => "set-display-name",
             Self::ToggleStar(_) => "toggle-star",
             Self::RemoveRecent(_) => "remove-recent",
@@ -631,6 +634,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::PageMenu => self.not_available("Page menu"),
             AppCommand::OpenHelp => self.help_open = true,
             AppCommand::CloseHelp => self.help_open = false,
+            AppCommand::ToggleNotifications => self.toggle_notifications(),
             AppCommand::SetDisplayName(name) => self.set_display_name(name),
             AppCommand::ToggleStar(path) => {
                 let starred = self.library.toggle_star(&path);

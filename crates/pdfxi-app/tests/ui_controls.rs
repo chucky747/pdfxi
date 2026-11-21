@@ -358,6 +358,7 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
         // T-0221/T-0222 surfaces proven through public accessors.
         ("OpenHelp", AppCommand::OpenHelp),
         ("CloseHelp", AppCommand::CloseHelp),
+        ("ToggleNotifications", AppCommand::ToggleNotifications),
         ("Undo", AppCommand::Undo),
         ("Redo", AppCommand::Redo),
         (
@@ -543,6 +544,7 @@ const PROVEN_LABELS: &[&str] = &[
     "delete-annotation",
     "open-help",
     "close-help",
+    "toggle-notifications",
     "undo",
     "redo",
     "set-display-name",
@@ -760,6 +762,7 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("page-menu", "page-menu"),
         ("open-help", "open-help"),
         ("close-help", "close-help"),
+        ("toggle-notifications", "toggle-notifications"),
         ("undo", "undo"),
         ("redo", "redo"),
         ("set-display-name", "set-display-name"),
@@ -1438,6 +1441,26 @@ fn undo_redo_and_help_commands_act() {
 }
 
 #[test]
+fn toggle_notifications_opens_the_window_and_an_empty_store_says_so() {
+    let mut app = PdfxiApp::new();
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/notifications");
+    std::fs::create_dir_all(&dir).expect("create the temporary directory");
+    let path = dir.join(format!("ui-{}.tsv", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    app.set_notifications_path(path.clone());
+
+    app.dispatch(AppCommand::ToggleNotifications, None);
+    assert!(app.notifications_open());
+    assert_eq!(app.notification_count(), 0);
+    assert_eq!(
+        app.notifications_empty_label(),
+        Some("No notifications yet.")
+    );
+    assert_eq!(app.unread_notification_count(), 0);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn set_display_name_and_document_title_act() {
     let mut app = with_excel_document();
 
@@ -1795,6 +1818,7 @@ fn dispatched_capability_commands_report_unavailable() {
         AppCommand::PlaceSignature,
         AppCommand::RequestSignature,
         AppCommand::DocumentProperties,
+        AppCommand::ToggleNotifications,
         AppCommand::Organize,
         AppCommand::Export,
         AppCommand::ConvertToPdf,
@@ -2020,6 +2044,14 @@ struct Function {
 /// Allowing them by name (rather than by return type) keeps the exemption
 /// narrow: a new factory needs an explicit entry and a reason.
 const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "shared_panel_ui",
+        "shared folder panel: rows open documents and the review buttons call the sync/import methods; the folder and review state are unit-tested without a window",
+    ),
+    (
+        "notifications_ui",
+        "notifications window: the Mark all read button writes the already-loaded store; the ToggleNotifications command proof covers opening, and the store itself is unit-tested",
+    ),
     (
         "export_card_ui",
         "export card: the format picker is state only and the Export button calls choose_export_path, whose result the Export command proof covers; the native picker is never opened in tests",

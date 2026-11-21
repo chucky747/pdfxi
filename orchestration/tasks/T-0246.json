@@ -3,7 +3,7 @@
     "lane":  "app",
     "title":  "Shared folder, review sync and notifications",
     "priority":  "P0",
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0221"
                    ],

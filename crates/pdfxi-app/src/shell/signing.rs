@@ -261,6 +261,11 @@ impl PdfxiApp {
             let _ = tracker.save();
             self.signing.tracker_error = None;
             self.status = "A returned signature was matched to a request".to_owned();
+            let signer_name = document.file_name().map_or_else(
+                || document.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            self.notify_real_event("Signed copy returned", &signer_name);
         }
         self.signing.tracker = Some(tracker);
     }
@@ -327,6 +332,7 @@ impl PdfxiApp {
         self.signing.request_message.clear();
         self.signing.tracker_error = None;
         self.status = format!("Signature request recorded for {recipient}");
+        self.notify_real_event("Signature requested", &recipient);
         Ok(())
     }
 

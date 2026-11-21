@@ -146,7 +146,8 @@ impl PdfxiApp {
             match result {
                 Ok(message) => {
                     self.status = message.clone();
-                    self.print_ui.message = Some(message);
+                    self.print_ui.message = Some(message.clone());
+                    self.notify_real_event("Print finished", &message);
                 }
                 Err(message) => {
                     self.status = message.clone();

@@ -277,6 +277,7 @@ impl PdfxiApp {
                 self.export_ui.error = None;
                 self.export_ui.progress = None;
                 self.export_ui.last_path = Some(path.to_path_buf());
+                self.notify_real_event("Export finished", &path.display().to_string());
                 Ok(())
             }
             Err(error) => {

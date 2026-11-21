@@ -185,6 +185,22 @@ impl PdfxiApp {
                     if avatar.clicked() {
                         self.identity_open = !self.identity_open;
                     }
+                    let unread = self.notification_badge_count();
+                    if title_icon_button(ui, palette, Icon::Bell, 26.0)
+                        .on_hover_text("Notifications")
+                        .clicked()
+                    {
+                        self.dispatch(AppCommand::ToggleNotifications, Some(ui.ctx()));
+                    }
+                    if unread > 0 {
+                        ui.label(
+                            egui::RichText::new(unread.to_string())
+                                .size(10.0)
+                                .strong()
+                                .color(palette.accent),
+                        )
+                        .on_hover_text("Unread notifications");
+                    }
                     if title_icon_button(ui, palette, Icon::Help, 26.0)
                         .on_hover_text("Help")
                         .clicked()
@@ -205,6 +221,8 @@ impl PdfxiApp {
                         title_icon_button(ui, palette, Icon::Gear, 26.0).on_hover_text("Settings");
                     let mut theme_choice = None;
                     let mut controls_choice = None;
+                    let mut choose_shared = false;
+                    let mut clear_shared = false;
                     egui::Popup::from_toggle_button_response(&gear)
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                         .show(|ui| {
@@ -232,12 +250,37 @@ impl PdfxiApp {
                                     controls_choice = Some(style);
                                 }
                             }
+                            ui.separator();
+                            ui.label(egui::RichText::new("Shared folder").strong());
+                            let folder = self.settings.shared_folder.as_ref().map_or_else(
+                                || "not set".to_owned(),
+                                |path| path.display().to_string(),
+                            );
+                            ui.label(
+                                egui::RichText::new(folder)
+                                    .size(10.0)
+                                    .color(palette.text_muted),
+                            );
+                            ui.horizontal(|ui| {
+                                if ui.button("Choose folder").clicked() {
+                                    choose_shared = true;
+                                }
+                                if ui.button("Clear").clicked() {
+                                    clear_shared = true;
+                                }
+                            });
                         });
                     if let Some(preference) = theme_choice {
                         self.dispatch(AppCommand::SetThemePreference(preference), Some(ui.ctx()));
                     }
                     if let Some(style) = controls_choice {
                         self.dispatch(AppCommand::SetWindowControls(style), Some(ui.ctx()));
+                    }
+                    if choose_shared {
+                        self.choose_shared_folder();
+                    }
+                    if clear_shared {
+                        self.set_shared_folder(None);
                     }
                 });
             });

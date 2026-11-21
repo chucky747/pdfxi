@@ -1,0 +1,84 @@
+# T-0246 - Shared folder, review sync and notifications
+#
+# Shell half of A-02 (bell), A-11 (Shared rail) and A-32 (Comment & Review
+# collaborate). The exercised feature rows are listed for review only; none is
+# promoted and docs/features.toml is unchanged by this fragment.
+
+task = "T-0246"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0246.md"
+docs = [
+    "crates/pdfxi-app/src/shell/notifications.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/shell/title_bar.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/export_card.rs",
+    "crates/pdfxi-app/src/shell/print_dialog.rs",
+    "crates/pdfxi-app/src/shell/session.rs",
+    "crates/pdfxi-app/src/shell/signing.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/ui/T-0246.md",
+]
+feature_rows = [
+    "REVIEW-005",
+    "REVIEW-006",
+    "REVIEW-007",
+    "MANAGE-006",
+]
+promoted_rows = []
+acceptance_items = ["A-02", "A-11", "A-32"]
+tests = [
+    "ui::shell::notifications::tests::record_save_load_round_trip_keeps_unread_count",
+    "ui::shell::notifications::tests::mark_all_read_persists",
+    "ui::shell::notifications::tests::the_cap_drops_the_oldest_entries",
+    "ui::shell::notifications::tests::escaping_round_trips_tabs_newlines_and_backslashes",
+    "ui::shell::notifications::tests::a_corrupt_file_loads_empty",
+    "ui::shell::notifications::tests::opening_a_real_fixture_records_document_opened",
+    "ui::shell::side_panel::tests::lists_pdfs_sorted_by_name_and_opens_a_row",
+    "ui::shell::side_panel::tests::no_folder_and_empty_folder_states",
+    "ui::shell::side_panel::tests::share_review_writes_the_sidecar_with_the_highlight",
+    "ui::shell::side_panel::tests::import_review_adds_one_annotation_and_persists",
+    "ui_controls::toggle_notifications_opens_the_window_and_an_empty_store_says_so",
+]
+notes = """
+A-02: shell/notifications.rs adds Notification, NotificationStore and
+NotificationsUiState backed by a capped (100), field-escaped TSV file at the
+platform config path. notify_real_event records only events that actually
+happened (open, save, export finish, signature requested/returned, print
+finish) and never fails the action that raised it. Icon::Bell dispatches
+ToggleNotifications and shows the unread count; the popover has a UTC timestamp
+per row, an explicit "No notifications yet." empty state and Mark all read.
+A headless constructor installs a unique temp store so tests never touch the
+user file.
+
+A-11: settings.shared_folder is chosen in the title-bar gear popup and
+persisted; shared_panel_ui lists the chosen folder's PDFs non-recursively
+through SharedFolderSource (validated child names, sorted, size shown), opens a
+row through PdfxiApp::open_document, and reports honest empty/error states.
+
+A-32: for an active document inside the shared folder the panel shows a Shared
+review block naming <stem>.xfdf. Share review comments exports annotations with
+pdfxi_edit::document_annotations::export_xfdf and atomically writes the sidecar;
+Import review comments reads it, imports with import_xfdf on a cloned document
+and commits through DocumentSession::edit. Conflicts are not silently merged;
+last writer wins (documented limit). The T-0243 form-field Import/ExportXfdf
+commands remain separate.
+
+Feature matrix: REVIEW-005 (XFDF import/export), REVIEW-006 (shared review
+workflows), REVIEW-007 (review tracker) and MANAGE-006 (local file-based shared
+workspace) are the rows exercised by this slice. A-02 has no dedicated matrix
+row. All stay at their current status; promoted_rows is empty and this fragment
+promotes nothing.
+
+Gates (CARGO_TARGET_DIR=target/lanes/app9, cited from the orchestrator's final
+run, not rerun here): cargo fmt -p pdfxi-app EXIT=0; cargo clippy -p pdfxi-app
+--all-targets --features ui,pdfium -- -D warnings EXIT=0; cargo test -p pdfxi-app
+--features ui,pdfium = 574 lib passed / 0 failed / 4 ignored, ui_controls 29
+passed / 0 failed; the notifications filter reports 6 passed and the
+side_panel filter 4 passed. Integrator gates: cargo xtask board and cargo xtask
+features verify (FEATURES OK: 145 rows, 33 verified). No capture is claimed;
+T-0262 captures the installed build.
+"""
