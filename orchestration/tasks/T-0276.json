@@ -1,0 +1,18 @@
+{
+  "id": "T-0276",
+  "lane": "core",
+  "title": "Expose page extract, delete, move, reorder, rotate, insert, replace, merge and split in the CLI",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0131"],
+  "owns": [
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/src/pages.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/evidence/cli/T-0276.md",
+    "orchestration/feature-updates/T-0276.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli passes; pdfxi pages extract/delete/insert/replace/move/reorder/rotate/merge/split operate on the real PowerPoint fixture with text order asserted from the produced PDFs; EDIT-005 and EDIT-007 move to verified. EDIT-006 stays library until crop and resize exist.",
+  "notes": "The core page plan already validates selections, rebuilds the page tree and preserves stream bytes, but only tests could reach it. This task adds the CLI surface plus selection parsing, with insert/replace composed from Merge + Extract so no new core operation is needed.",
+  "evidence": "docs/evidence/cli/T-0276.md"
+}

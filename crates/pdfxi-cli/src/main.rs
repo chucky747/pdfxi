@@ -77,6 +77,9 @@ mod preflight;
 // Virtual PDF printer control: install/status/remove the "PDFXI PDF" queue and
 // capture one finished job (`printer`).
 mod printer;
+// Page-level editing: extract, delete, move, reorder, rotate, insert, replace,
+// merge and split (`pages`).
+mod pages;
 mod repair;
 
 use std::path::{Path, PathBuf};
@@ -186,6 +189,17 @@ enum Command {
         /// Output encoding: `png` (the default) or `ppm`.
         #[arg(long, value_enum, default_value = "png")]
         format: OutputFormat,
+    },
+    /// Edit pages: extract, delete, move, reorder, rotate, insert, replace,
+    /// merge or split.
+    ///
+    /// Every command writes a standalone PDF built from the real page objects;
+    /// the source file is never modified. Page numbers are one-based; `--pages`
+    /// accepts `all`, lists (`1,3`) and ranges (`2-4`).
+    Pages {
+        /// The page operation to perform.
+        #[command(subcommand)]
+        command: PagesCommand,
     },
     /// Manage the virtual PDF printer and capture one printed job.
     ///
@@ -427,6 +441,121 @@ enum ExportCommand {
     },
 }
 
+/// Page-level edit operations exposed by `pdfxi pages`.
+#[derive(Debug, Subcommand)]
+enum PagesCommand {
+    /// Keep the selected pages, in the order given.
+    Extract {
+        /// Source PDF.
+        input: PathBuf,
+        /// Page selection: `all`, `1,3` or `2-4`.
+        #[arg(long, value_name = "SPEC")]
+        pages: String,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Remove the selected pages.
+    Delete {
+        /// Source PDF.
+        input: PathBuf,
+        /// Page selection: `all`, `1,3` or `2-4`.
+        #[arg(long, value_name = "SPEC")]
+        pages: String,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Move one page to a new one-based position.
+    Move {
+        /// Source PDF.
+        input: PathBuf,
+        /// One-based position of the page to move.
+        #[arg(long, value_name = "N")]
+        from: usize,
+        /// One-based position the page should end up at.
+        #[arg(long, value_name = "N")]
+        to: usize,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Reorder all pages with an explicit permutation.
+    Reorder {
+        /// Source PDF.
+        input: PathBuf,
+        /// One-based permutation, e.g. `3,1,2`.
+        #[arg(long, value_name = "ORDER")]
+        order: String,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Rotate the selected pages clockwise.
+    Rotate {
+        /// Source PDF.
+        input: PathBuf,
+        /// Page selection; defaults to every page.
+        #[arg(long, value_name = "SPEC", default_value = "all")]
+        pages: String,
+        /// Clockwise angle in degrees: 90, 180 or 270 (negative angles allowed).
+        #[arg(long, value_name = "DEG", allow_negative_numbers = true)]
+        angle: i32,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Insert every page of another document after a position (0 = first).
+    Insert {
+        /// Source PDF.
+        input: PathBuf,
+        /// One-based position to insert after; 0 puts the pages first.
+        #[arg(long, value_name = "N")]
+        after: usize,
+        /// Document whose pages are inserted.
+        other: PathBuf,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Replace one page with a page from another document.
+    Replace {
+        /// Source PDF.
+        input: PathBuf,
+        /// One-based page to replace.
+        #[arg(long, value_name = "N")]
+        page: usize,
+        /// Document that provides the replacement page.
+        other: PathBuf,
+        /// One-based page of `other` to use.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        source_page: usize,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Concatenate documents in the order given.
+    Merge {
+        /// Two or more source PDFs.
+        #[arg(required = true, num_args = 2..)]
+        inputs: Vec<PathBuf>,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Split into numbered parts of `every` pages.
+    Split {
+        /// Source PDF.
+        input: PathBuf,
+        /// Pages per part.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        every: usize,
+        /// Directory that receives `<stem>-01.pdf`, `<stem>-02.pdf`, ...
+        #[arg(long, value_name = "DIR")]
+        out_dir: PathBuf,
+    },
+}
+
 /// Virtual-printer operations exposed by `pdfxi printer`.
 #[derive(Debug, Subcommand)]
 enum PrinterCommand {
@@ -596,6 +725,42 @@ fn main() -> anyhow::Result<()> {
             out,
             format,
         } => render(&file, page, scale, &out, format),
+        Command::Pages { command } => match command {
+            PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
+            PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),
+            PagesCommand::Move {
+                input,
+                from,
+                to,
+                out,
+            } => pages::move_page(&input, from, to, &out),
+            PagesCommand::Reorder { input, order, out } => pages::reorder(&input, &order, &out),
+            PagesCommand::Rotate {
+                input,
+                pages,
+                angle,
+                out,
+            } => pages::rotate(&input, &pages, angle / 90, &out),
+            PagesCommand::Insert {
+                input,
+                after,
+                other,
+                out,
+            } => pages::insert(&input, after, &other, &out),
+            PagesCommand::Replace {
+                input,
+                page,
+                other,
+                source_page,
+                out,
+            } => pages::replace(&input, page, &other, source_page, &out),
+            PagesCommand::Merge { inputs, out } => pages::merge(&inputs, &out),
+            PagesCommand::Split {
+                input,
+                every,
+                out_dir,
+            } => pages::split(&input, every, &out_dir),
+        },
         Command::Printer { command } => match command {
             PrinterCommand::Install { name, port, json } => {
                 let path = printer::install(&name, port.as_deref())?;

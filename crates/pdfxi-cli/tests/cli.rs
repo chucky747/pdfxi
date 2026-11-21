@@ -2413,3 +2413,205 @@ fn printer_watch_times_out_without_a_job() {
         stderr(&output)
     );
 }
+
+/// Absolute path of a checked-in real-world fixture.
+fn real_fixture(name: &str) -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/realworld")
+        .join(name);
+    assert!(path.exists(), "fixture missing: {}", path.display());
+    path
+}
+
+/// Extract the page texts from a PDF through the CLI and return them in order.
+fn page_texts(path: &Path) -> Vec<String> {
+    let output = run(&["text", path.to_str().expect("utf-8 path")]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    text.lines()
+        .filter(|line| line.contains("slide marker"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn pages_extract_keeps_real_world_pages_in_order() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "extract",
+        source.to_str().expect("utf-8 source"),
+        "--pages",
+        "3,1",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("pages: 2"), "{}", stdout(&output));
+    let texts = page_texts(&out.path);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts[0].contains("Meadow"), "{texts:?}");
+    assert!(texts[1].contains("Lantern"), "{texts:?}");
+}
+
+#[test]
+fn pages_delete_removes_a_real_world_page() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "delete",
+        source.to_str().expect("utf-8 source"),
+        "--pages",
+        "2",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("pages: 2"), "{}", stdout(&output));
+    let texts = page_texts(&out.path);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts[0].contains("Lantern"), "{texts:?}");
+    assert!(texts[1].contains("Meadow"), "{texts:?}");
+    assert!(
+        !texts.iter().any(|line| line.contains("Harbor")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn pages_move_reorders_real_world_pages() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "move",
+        source.to_str().expect("utf-8 source"),
+        "--from",
+        "1",
+        "--to",
+        "3",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let texts = page_texts(&out.path);
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(texts[0].contains("Harbor"), "{texts:?}");
+    assert!(texts[1].contains("Meadow"), "{texts:?}");
+    assert!(texts[2].contains("Lantern"), "{texts:?}");
+}
+
+#[test]
+fn pages_rotate_writes_rotation_on_the_selected_page() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "rotate",
+        source.to_str().expect("utf-8 source"),
+        "--pages",
+        "1",
+        "--angle",
+        "90",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let bytes = fs::read(&out.path).expect("read rotation output");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("/Rotate 90"), "no /Rotate 90 in output");
+    let info = run(&["info", out.arg()]);
+    assert!(stdout(&info).contains("pages: 3"), "{}", stdout(&info));
+}
+
+#[test]
+fn pages_insert_places_every_page_of_the_other_document() {
+    let one = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let three = TempPdf::new(&pdfxi_testkit::multipage_pdf(3));
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "insert",
+        three.arg(),
+        "--after",
+        "1",
+        one.arg(),
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("pages: 4"), "{}", stdout(&output));
+}
+
+#[test]
+fn pages_replace_swaps_one_page() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "replace",
+        source.to_str().expect("utf-8 source"),
+        "--page",
+        "2",
+        source.to_str().expect("utf-8 source"),
+        "--source-page",
+        "3",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let texts = page_texts(&out.path);
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(texts[1].contains("Meadow"), "{texts:?}");
+    assert!(texts[2].contains("Meadow"), "{texts:?}");
+}
+
+#[test]
+fn pages_merge_concatenates_documents() {
+    let first = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let second = TempPdf::new(&pdfxi_testkit::multipage_pdf(2));
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "merge",
+        first.arg(),
+        second.arg(),
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("pages: 3"), "{}", stdout(&output));
+}
+
+#[test]
+fn pages_split_writes_numbered_parts() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let directory = std::env::temp_dir().join(format!(
+        "pdfxi-split-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default()
+    ));
+    let output = run(&[
+        "pages",
+        "split",
+        source.to_str().expect("utf-8 source"),
+        "--every",
+        "1",
+        "--out-dir",
+        directory.to_str().expect("utf-8 directory"),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("parts: 3"), "{}", stdout(&output));
+    for index in 1..=3 {
+        let part = directory.join(format!("powerpoint-slides-{index:02}.pdf"));
+        assert!(part.exists(), "missing {}", part.display());
+        let info = run(&["info", part.to_str().expect("utf-8 part")]);
+        assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+    }
+    let _ = fs::remove_dir_all(&directory);
+}

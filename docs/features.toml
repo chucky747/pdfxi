@@ -1106,19 +1106,35 @@ title = "Add move resize and replace images"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/pages.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/evidence/cli/T-0276.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 94 unit + 6 integration passed; TEST_EXIT=0. Extracted subsets reparse with correct /Count, distinct page objects, one shared /Pages /Parent and unchanged per-page text."
+evidence = "`pdfxi pages extract --pages 3,1` on fixtures/realworld/powerpoint-slides.pdf produced a 2-page PDF whose extracted text is Meadow then Lantern; `pages delete --pages 2` produced Lantern, Meadow with Harbor gone; `pages replace --page 2 --source-page 3` put the Meadow page in the middle and kept the original third page; `pages insert --after 1` produced 4 pages from 3 + 1. All outputs reparse with the expected /Count. Eight CLI integration tests pass (`cargo test -p pdfxi-cli --test cli pages`: 8 passed, 0 failed) and ordering is asserted from the produced PDFs' text. Pasted output in docs/evidence/cli/T-0276.md."
 id = "EDIT-005"
-notes = ""
+notes = """
+EDIT-005 is now reachable through `pdfxi pages extract/delete/insert/replace`.
+Insert and replace are composed from the existing Merge plan plus an Extract
+selection, so the core guarantees (single flat /Pages tree, correct /Count and
+/Parent, inherited boxes flattened, stream bytes preserved) apply unchanged.
+Selection parsing accepts all, comma lists and inclusive ranges, and rejects
+zero, out-of-range and reversed ranges with errors instead of clipping.
+"""
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "pages::tests::extract_subset_reparses_with_correct_order_and_text",
     "pages::tests::extract_can_duplicate_a_page",
     "pages::tests::page_tree_metadata_is_correct_after_extract",
     "pages::tests::empty_selections_are_rejected",
     "pages::tests::out_of_range_indices_are_rejected_without_panicking",
+    "pages_extract_keeps_real_world_pages_in_order",
+    "pages_delete_removes_a_real_world_page",
+    "pages_insert_places_every_page_of_the_other_document",
+    "pages_replace_swaps_one_page",
+    "selection_parses_all_lists_and_ranges",
+    "selection_rejects_zero_and_out_of_range_pages",
 ]
 title = "Insert delete extract and replace pages"
 
@@ -1149,30 +1165,29 @@ title = "Reorder rotate crop and resize pages"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/pages.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/evidence/cli/T-0276.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 94 unit + 6 integration passed; TEST_EXIT=0. PagePlan::split returns one independent extract plan per chunk; each plan applies to the same receiver and reparses with the expected page texts."
+evidence = "`pdfxi pages merge A B --out OUT` concatenated a 1-page and a 2-page document into a 3-page file that reparses; `pdfxi pages split --every 1` on the real 3-page PowerPoint fixture wrote powerpoint-slides-01/02/03.pdf, each a one-page PDF accepted by `pdfxi info`. `cargo test -p pdfxi-cli --test cli pages`: 8 passed, 0 failed, including the merge and split cases. Pasted output in docs/evidence/cli/T-0276.md."
 id = "EDIT-007"
 notes = """
-Added a dependency-free `pages` module with `PagePlan` / `PageOperation` /
-`RotationTarget`, a `Document::apply_page_plan` entry point, and structured
-errors (`EmptyPageSelection`, `InvalidPageIndex`, `DuplicatePageIndex`,
-`InvalidSourceDocument`, `InvalidPageRotation`). Every plan rebuilds a single
-flat `/Pages` tree with a correct `/Count`, `/Kids` and per-page `/Parent`,
-materializes inherited `/MediaBox`, `/Resources` and `/Rotate` onto each page,
-and copies all other objects with remapped numbers and unchanged stream bytes.
-Duplicate indices are explicit in Extract (each occurrence becomes its own
-page object) and rejected in Reorder. All public items are rustdoc'd; the
-crate keeps `#![forbid(unsafe_code)]` and uses no unwrap/expect/panic outside
-tests.
+EDIT-007 is reachable through `pdfxi pages merge` and `pdfxi pages split`.
+Split returns one independent plan per chunk and writes numbered parts; merge
+appends every page of the listed documents after the primary in order. Both use
+the existing PagePlan rendering, so page objects are remapped and stream bytes
+stay unchanged.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "pages::tests::split_into_chunks_produces_independent_pdfs",
     "pages::tests::encrypted_sources_are_rejected",
     "pages::tests::empty_document_selection_is_rejected",
     "pages::tests::invalid_source_document_index_is_rejected",
+    "pages_merge_concatenates_documents",
+    "pages_split_writes_numbered_parts",
 ]
 title = "Split and merge documents"
 
