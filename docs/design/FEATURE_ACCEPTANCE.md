@@ -36,7 +36,7 @@ in `docs/evidence/release/T-0262.md`.
 | A-13 | Rail: Pages + panel header "Pages (n)", grid toggle, add page | Real count; grid view; insert page works | T-0231 | pass | docs/evidence/ui/T-0231.md, docs/evidence/ui/T-0271.md |
 | A-14 | Thumbnails with selection | Already shipped; plus multi-select and drag reorder | T-0231 | pass | docs/evidence/ui/T-0231.md |
 | A-15 | Rail: Comments with count badge | Panel lists real comments; badge is the real count | T-0242 | pass | docs/evidence/ui/T-0242.md |
-| A-16 | Rail + card + pill: AI Assistant | Ask, summarize, key insights on the open document through OpenCode | T-0252, T-0253 | pass | docs/evidence/ui/T-0253.md, docs/evidence/ui/final/light-windows-ai.png |
+| A-16 | Rail + card + pill: AI Assistant | Ask, summarize, key insights on the open document through OpenCode | T-0252, T-0253 | pass | docs/evidence/ui/T-0253.md, docs/evidence/release/T-0262.md (live turn: connected to OpenCode 2.3.2, model opencode-go/hy4-flash-free, summarize + key-insights answers), docs/evidence/ui/final/light-windows-ai-answer.png, docs/evidence/ui/final/light-windows-ai-insights.png |
 | A-17 | Text edit box with handles on a paragraph | Click a paragraph, edit, reflow; saved file shows and extracts the new text | T-0233, T-0264 | pass | docs/evidence/ui/T-0264.md |
 | A-18 | Highlight | Highlight from a text selection; visible in other readers | T-0242 | pass | docs/evidence/ui/T-0242.md |
 | A-19 | Comment note with thread popup, author, time, menu | Add, reply, edit, delete, resolve; persists in the PDF | T-0242 | pass | docs/evidence/ui/T-0242.md |
@@ -61,6 +61,7 @@ in `docs/evidence/release/T-0262.md`.
 | O-05 | Form filling | Fill, tab order, save with appearances, FDF/XFDF, flatten | T-0243 | pass | docs/evidence/ui/T-0243.md, docs/evidence/ui/final/light-windows-fill-forms.png |
 | O-06 | Redaction | Content is removed, verified by re-extraction and a byte scan | T-0237, T-0257, T-0263 | pass | docs/evidence/ui/T-0263.md |
 | O-07 | No dead controls | Automated test: every enabled control emits a working command | T-0212 | pass | docs/evidence/hardening/T-0212.md |
+
 
 
 
