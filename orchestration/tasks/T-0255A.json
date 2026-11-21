@@ -1,0 +1,18 @@
+{
+    "id":  "T-0255A",
+    "lane":  "author",
+    "title":  "Real-PDF outline reader and writer bridge",
+    "priority":  "P0",
+    "status":  "verified",
+    "depends_on":  [
+
+                   ],
+    "owns":  [
+                 "crates/pdfxi-edit/src/navigation/**",
+                 "docs/evidence/hardening/T-0255A.md",
+                 "orchestration/feature-updates/T-0255A.toml"
+             ],
+    "acceptance":  "cargo test -p pdfxi-edit; a real fixture outline round-trips (read -\u003e edit -\u003e write -\u003e PDFium reopen) and a document without /Outlines gains one on add; malformed outlines are typed errors, not panics",
+    "notes":  "Library slice split out of T-0255 after the app lane found that pdfxi_edit::navigation has an id-based Outline/BookmarkSummary model and outline_to_dict, but no bridge to a real pdfxi_core::Document. Reads the catalog /Outlines tree, resolves /Dest and /A page references to zero-based page indexes (including named destinations when the document provides them), builds BookmarkSummary/Outline, and writes an edited Outline back as the catalog /Outlines with /Parent /First /Last /Next /Prev and real page references. Creates /Outlines on first add when absent; reports a malformed tree with a typed error. Tests on the real fixtures: read -\u003e add/rename/move -\u003e write -\u003e reopen with PDFium and assert the order/titles/pages; no-outlines case; malformed case. The app panel and properties dialog remain T-0255.",
+    "evidence":  "docs/evidence/hardening/T-0255A.md"
+}

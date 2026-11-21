@@ -10,7 +10,8 @@
     "owns":  [
                  "crates/pdfxi-app/src/**",
                  "docs/evidence/ui/T-0246.md",
-                 "orchestration/feature-updates/T-0246.toml"
+                 "orchestration/feature-updates/T-0246.toml",
+                 "crates/pdfxi-app/tests/**"
              ],
     "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; A-02 real local notifications, A-11 shared-folder browsing and A-32 shared-folder review with XFDF import/export",
     "notes":  "Split out of T-0221 round A. Serves A-02 (bell lists real local events only: document saved, export finished, signature request returned later; capped list, popover, honest empty state), A-11 (shared folder configured in settings, lists PDFs and XFDF review files, opens them, no network assumptions) and A-32 (Comment \u0026 Review collaborate: XFDF import/export and shared-folder review sync) from docs/design/FEATURE_ACCEPTANCE.md. pdfxi-edit already exports export_xfdf/import_xfdf for annotations and has review::ReviewRegistry for a network-free local shared-review file with deterministic merge. The app must surface XFDF import/export in the Comment \u0026 Review flow, sync the review registry through the shared folder, show new-comment notifications, and report conflicts rather than silently overwriting. App-lane work serialised behind T-0221. Remove the reachable placeholder copy in `crates/pdfxi-app/src/shell/side_panel.rs`: `shared_panel_ui` currently shows \u0027Shared review browsing arrives in round B\u0027 and `future_panel` renders a \u0027placeholder\u0027 message for any rail entry whose feature has not landed. After this task no placeholder or roadmap copy may be reachable; unsupported rail entries must be absent via the capability registry.",

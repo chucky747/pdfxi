@@ -1,18 +1,19 @@
 {
-  "id": "T-0244",
-  "lane": "app",
-  "title": "Export card and export menu",
-  "priority": "P1",
-  "status": "queued",
-  "depends_on": [
-    "T-0239"
-  ],
-  "owns": [
-    "crates/pdfxi-app/src/**",
-    "docs/evidence/ui/T-0244.md",
-    "orchestration/feature-updates/T-0244.toml"
-  ],
-  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-27 exports a real fixture and Office opens the result, in all four theme/control combinations",
-  "notes": "Shell half of the export pair per ADR 0012; opens only after the T-0239 library is verified and its claim is released. Serves acceptance item A-27 (Export PDF plus the Export card with a format dropdown and Export button: Word, Excel, PowerPoint, image, text, HTML, RTF) from docs/design/FEATURE_ACCEPTANCE.md. Adds the Export card with the format dropdown, progress and cancel, and an export pill in the command bar, calling the T-0239 writer API and not changing its semantics. Only formats the library actually implements are offered: an unimplemented format is absent, not a disabled ghost control. The export feature-matrix rows become `verified` only when this task lands; until then they stay `library` after T-0239. The app lane runs one task at a time, so earlier app tasks are implicit ordering constraints, not formal dependencies.",
-  "evidence": "docs/evidence/ui/T-0244.md"
+    "id":  "T-0244",
+    "lane":  "app",
+    "title":  "Export card and export menu",
+    "priority":  "P1",
+    "status":  "queued",
+    "depends_on":  [
+                       "T-0239"
+                   ],
+    "owns":  [
+                 "crates/pdfxi-app/src/**",
+                 "docs/evidence/ui/T-0244.md",
+                 "orchestration/feature-updates/T-0244.toml",
+                 "crates/pdfxi-app/tests/**"
+             ],
+    "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; A-27 exports a real fixture and Office opens the result, in all four theme/control combinations",
+    "notes":  "Shell half of the export pair per ADR 0012; opens only after the T-0239 library is verified and its claim is released. Serves acceptance item A-27 (Export PDF plus the Export card with a format dropdown and Export button: Word, Excel, PowerPoint, image, text, HTML, RTF) from docs/design/FEATURE_ACCEPTANCE.md. Adds the Export card with the format dropdown, progress and cancel, and an export pill in the command bar, calling the T-0239 writer API and not changing its semantics. Only formats the library actually implements are offered: an unimplemented format is absent, not a disabled ghost control. The export feature-matrix rows become `verified` only when this task lands; until then they stay `library` after T-0239. The app lane runs one task at a time, so earlier app tasks are implicit ordering constraints, not formal dependencies.",
+    "evidence":  "docs/evidence/ui/T-0244.md"
 }

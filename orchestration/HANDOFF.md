@@ -2,7 +2,7 @@
 
 > The `Current state` section below is the Phase 1 snapshot and is kept for
 > history. The live state is the last checkpoint section (currently
-> `T-0245A checkpoint`): 145 feature rows with 33 `verified`, HEAD moving with
+> `T-0255A checkpoint`): 145 feature rows with 33 `verified`, HEAD moving with
 > each checkpoint.
 
 ## Current state
@@ -414,3 +414,57 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
 - **Next:** finish T-0255 (bookmarks panel and document-properties dialog), then
   T-0245 round B (Sign panel, E-signed badge, request-signature tracker) on top
   of `DocumentSession::sign`.
+
+### T-0255A checkpoint (2026-11-20, real-PDF outline reader and writer)
+
+- **HEAD before:** `ed06a67` (`feat(document): add session signing with
+  incremental revisions [T-0245A]`). **HEAD after:** this checkpoint commit
+  (`checkpoint(acceptance): real-PDF outline reader and writer [T-0255A]`;
+  `git log -1 --oneline`). Linear history, not pushed, no amend/rebase.
+- **Task state:** T-0255A is `verified`; its claim is released after this
+  checkpoint. T-0255 (app lane, bookmarks panel and document-properties dialog)
+  is back to `queued` and now `depends_on` T-0255A. T-0245 (signature UI,
+  E-signed badge, request-signature tracker) stays `queued` as round B and keeps
+  its app claim, which is deliberately left held and uncommitted here.
+- **What landed:** `crates/pdfxi-edit/src/navigation/document_outline.rs` adds a
+  document-backed outline bridge to `pdfxi_edit::navigation`:
+  `read_outline(&Document) -> Result<OutlineRead, OutlineReadError>` and
+  `write_outline(&mut Document, &Outline) -> Result<(), OutlineWriteError>`,
+  with `OutlineRead`, `OutlineIssue`, `OutlineIssueReason`, `OutlineReadError`,
+  `OutlineWriteError` and the `MAX_OUTLINE_ITEMS`/`MAX_OUTLINE_DEPTH` bounds.
+  The reader walks the catalog `/Outlines` tree, resolves `/Dest` and `/A` GoTo
+  page references to zero-based indexes (including named destinations) and
+  reports unresolvable ones as typed issues; the writer installs the edited
+  tree as real catalog `/Outlines` with `/Parent`/`/First`/`/Last`/`/Next`/
+  `/Prev` and page references, creating `/Outlines` on first add. Malformed
+  trees are typed errors, never panics.
+- **Tests:** `cargo test -p pdfxi-edit` EXIT=0 with **405 passed, 0 failed**
+  (359 lib + 5 object_render + 13 annotations + 27 redaction + 1 text_render +
+  0 doctests). All 13 `document_outline` tests pass, including
+  `f32_overflow_coordinate_is_an_issue_and_other_items_still_read`, the
+  PowerPoint read -> edit -> write -> PDFium-reopen round trip, the no-outline
+  case and the malformed-input cases. `cargo fmt -p pdfxi-edit -- --check`
+  EXIT=0; `cargo clippy -p pdfxi-edit --all-targets --all-features -- -D
+  warnings` EXIT=0; `RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit
+  --no-deps` EXIT=0. These were rerun in `target/integration` after the final
+  fix; the full workspace was intentionally not rerun while the app lane is
+  mid-edit.
+- **PDFium limit:** this workspace's PDFium binding exposes no bookmark
+  traversal, so PDFium cannot independently read outline titles/pages. PDFium
+  is the independent file-validity and page-tree check on the saved bytes (3
+  pages on the PowerPoint fixture); PDFXI's reader asserts the outline order,
+  titles and destination pages. The writer also leaves superseded outline
+  objects unreachable in the file.
+- **Matrix:** `cargo xtask features verify` reports `FEATURES OK: 145 rows, 33
+  verified` - unchanged, because the T-0255A fragment promotes nothing
+  (VIEW-008 stays `model`, MANAGE-001 stays `library` until the app lane lands
+  the visible surface). Nothing was merged into `docs/features.toml`.
+- **Evidence:** `docs/evidence/hardening/T-0255A.md`;
+  `orchestration/feature-updates/T-0255A.toml`;
+  `orchestration/blockers/T-0255-outline-bridge.md` records the library gap as
+  resolved with the app pane still outstanding.
+- **Scope discipline:** no `crates/pdfxi-app/**` path was staged. The in-progress
+  signature UI work (T-0245) stays uncommitted and its claim held.
+- **Next:** T-0245 round B (Sign panel, E-signed badge, request-signature
+  tracker), then T-0255 app (bookmarks panel wired to the new bridge, plus the
+  document-properties dialog).

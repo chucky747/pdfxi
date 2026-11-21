@@ -1,0 +1,74 @@
+# T-0255A - Real-PDF outline reader and writer bridge
+#
+# Library slice split out of T-0255. The bookmark pane and properties dialog
+# remain app-lane work, so no feature matrix row is promoted: VIEW-008 stays
+# `model` (its current status) and MANAGE-001 stays `library`.
+
+task = "T-0255A"
+lane = "author"
+status = "verified"
+evidence = "docs/evidence/hardening/T-0255A.md"
+docs = [
+    "docs/evidence/hardening/T-0255A.md",
+    "crates/pdfxi-edit/src/navigation/document_outline.rs",
+    "crates/pdfxi-edit/src/navigation/mod.rs",
+]
+feature_rows = []
+promoted_rows = []
+acceptance_items = ["O-03"]
+tests = [
+    "navigation::document_outline::tests::reads_real_powerpoint_outline_titles_and_pages",
+    "navigation::document_outline::tests::f32_overflow_coordinate_is_an_issue_and_other_items_still_read",
+    "navigation::document_outline::tests::document_without_outlines_reads_empty",
+    "navigation::document_outline::tests::named_dest_goto_action_and_missing_destination_are_reported",
+    "navigation::document_outline::tests::cyclic_next_chain_is_a_typed_error",
+    "navigation::document_outline::tests::wrong_parent_is_a_typed_error",
+    "navigation::document_outline::tests::round_trip_edits_real_powerpoint_outline_and_reopens_with_pdfium",
+    "navigation::document_outline::tests::document_without_outlines_gains_one_and_preserves_pages_and_catalog",
+    "navigation::document_outline::tests::repeated_write_sees_the_previous_staged_outline",
+    "navigation::document_outline::tests::invalid_page_and_title_are_typed_errors_without_staging",
+    "navigation::document_outline::tests::invalid_input_leaves_document_bytes_untouched_and_later_writes_work",
+    "navigation::document_outline::tests::write_is_deterministic_for_identical_input",
+    "navigation::document_outline::tests::malformed_existing_outlines_is_a_typed_error",
+]
+notes = """
+Adds the document-backed bridge the T-0255 blocker named. `read_outline` walks
+the catalog /Outlines /First//Next tree through `pdfxi_core::Document`,
+resolves /Dest and /A /D page references (references or integer indices) to
+zero-based page indexes through `Document::pages()`, and resolves named
+destinations through catalog /Dests and /Names /Dests. Unresolvable
+destinations stay honest: the bookmark is kept with no destination and an
+`OutlineIssue` names the reason. A finite f64 coordinate that overflows f32
+(such as 1e39) is narrowed first and reported as an `OutlineIssue` rather than
+accepted as an infinite fit. Cyclic, dangling, wrong-parent or malformed
+linked lists return typed `OutlineReadError`; item and depth budgets bound the
+walk.
+
+`write_outline` installs the edited `Outline` as a real catalog /Outlines
+linked list with /Parent, /First, /Last, /Count, /Next, /Prev and
+`[page_reference /Fit ...]` destinations. It reuses an existing indirect
+outline object id, creates /Outlines on first add, preserves unrelated catalog
+entries and never changes page objects/ids. Titles, page ranges and finite
+coordinates are validated before any object is staged, so an invalid outline
+leaves `document.save()` bytes byte-identical; regression tests cover an
+out-of-range page and a NaN coordinate.
+
+Round trip on `fixtures/realworld/powerpoint-slides.pdf`: read, add a root and
+a child, close the parent, rename one item, move another, write, save, reopen.
+PDFXI asserts the order (Prelude, Slide 3, Slide 1, Harbor renamed), pages
+(0, 2, 0, 1), the closed /Count -1 and every /Parent//Prev link. PDFium opens
+the saved bytes, reports 3 pages and reads every page; this workspace's PDFium
+binding exposes no bookmark traversal, so PDFium is the independent validity
+check and PDFXI asserts the outline.
+
+`fixtures/realworld/microsoft-excel-2019-sample.pdf` has no /Outlines; the test
+adds one, asserts the new entry, and confirms every original catalog key and
+every page object id is preserved.
+
+Gates (CARGO_TARGET_DIR=target/lanes/author): fmt clean; clippy
+`-p pdfxi-edit --all-targets --all-features -- -D warnings` clean; rustdoc
+`RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps` clean; `cargo test
+-p pdfxi-edit` 404 passed (358 lib + 5 object_render + 13 real annotations + 27
+redaction + 1 text_render), 0 failed. No app lane, no orchestration change
+outside this fragment, no git.
+"""

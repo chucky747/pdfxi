@@ -28,12 +28,17 @@
 //! [`Value`]: crate::pdf::Value
 
 mod attachment;
+mod document_outline;
 mod edit;
 mod error;
 mod link;
 mod outline;
 
 pub use attachment::{Attachment, NameTree, dict_to_name_tree, name_tree_to_dict};
+pub use document_outline::{
+    MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, OutlineIssue, OutlineIssueReason, OutlineRead,
+    OutlineReadError, OutlineWriteError, read_outline, write_outline,
+};
 pub use edit::{BookmarkPath, LinkStore};
 pub use error::NavigationError;
 pub use link::{Link, LinkBorder, LinkHighlight, LinkTarget, dict_to_link, link_to_dict};

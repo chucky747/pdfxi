@@ -9,9 +9,9 @@
                    ],
     "owns":  [
                  "crates/pdfxi-app/src/**",
-        "crates/pdfxi-document/src/**",
                  "docs/evidence/ui/T-0245.md",
-                 "orchestration/feature-updates/T-0245.toml"
+                 "orchestration/feature-updates/T-0245.toml",
+                 "crates/pdfxi-app/tests/**"
              ],
     "acceptance":  "cargo test -p pdfxi-app --features ui,pdfium; A-20 and A-31 work on a real signed document, in all four theme/control combinations",
     "notes":  "Shell half of the signing pair per ADR 0012; opens only after the T-0241 library is verified and its claim is released. Serves acceptance items A-20 (signature with an E-signed badge only when the cryptographic check passes on an unmodified document), A-31 (request signature by email with a tracker that updates on import of the signed copy) and A-25 (place drawn/typed/image signature appearances) from docs/design/FEATURE_ACCEPTANCE.md. Two rounds. Round 1: place drawn, typed and image signature appearances and certificate signatures on the page, calling the T-0241 signing API, plus a signature panel that shows the verification result. Round 2: the E-signed badge gated on a passing digest of an unmodified document, the request-signature email flow and the tracker list. Calls the library and does not change its semantics. The signing feature-matrix rows become `verified` only when this task lands; until then they stay `library` after T-0241. The app lane runs one task at a time, so earlier app tasks are implicit ordering constraints, not formal dependencies. Badge rule: A-20 badges a signature only when the digest check passes on an unmodified document; chain and identity status are shown separately and honestly, and when no trust anchor exists the UI says \"identity not verified\" instead of implying a trusted signer. A-31 request signature prepares a copy with an empty signature field, hands it to the default mail client as an attachment (Simple MAPI; fallback reveals the file for manual attachment), keeps a local tracker, imports the returned signed copy, validates it and raises a notification.",
