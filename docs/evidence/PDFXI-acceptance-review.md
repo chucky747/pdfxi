@@ -18,8 +18,8 @@ appear inline with their descriptors.
 | --- | --- |
 | Acceptance items (A-/O- matrix) | 40 pass, 0 open |
 | Feature rows (canonical matrix) | 145 |
-| Reachable and tested (`verified`) | 59 |
-| `library` (byte-level code, no user path) | 10 |
+| Reachable and tested (`verified`) | 60 |
+| `library` (byte-level code, no user path) | 9 |
 | `model` (model, contract or stub) | 74 |
 | `replaced` | 2 |
 | Installed build | `%LOCALAPPDATA%\Programs\PDFXI\pdfxi-ui.exe`, SHA-256 `6787a129f8321e2c08aea07f1532d9e349306a0daffabd461351f27914ca77dc` |
@@ -429,19 +429,19 @@ the descriptor names another file.
 
 ## Feature status register
 
-Counts from `docs/features.toml`: 145 rows - 59 verified,
-10 library, 74 model, 2 replaced.
+Counts from `docs/features.toml`: 145 rows - 60 verified,
+9 library, 74 model, 2 replaced.
 The meanings come from ADR 0009.
 
 | Status | Rows | Meaning |
 | --- | --- | --- |
-| erified | 59 | Runs on real document bytes and a user can reach it through the GUI or the CLI. |
-| library | 10 | Real byte-level implementation over PDF documents and tested, but no user-reachable path or narrower than the product row. |
+| erified | 60 | Runs on real document bytes and a user can reach it through the GUI or the CLI. |
+| library | 9 | Real byte-level implementation over PDF documents and tested, but no user-reachable path or narrower than the product row. |
 | model | 74 | In-memory model, plan, contract, or host-boundary stub; not a working product feature. |
 | eplaced | 2 | Superseded by another row. |
 | **total** | **145** | Canonical matrix: docs/features.toml |
 
-### Verified rows (59)
+### Verified rows (60)
 
 | ID | Title | Domain |
 | --- | --- | --- |
@@ -458,6 +458,7 @@ The meanings come from ADR 0009.
 | `EDIT-001` | Edit text with paragraph reflow | Edit |
 | `EDIT-004` | Add move resize and replace images | Edit |
 | `EDIT-005` | Insert delete extract and replace pages | Edit |
+| `EDIT-006` | Reorder rotate crop and resize pages | Edit |
 | `EDIT-007` | Split and merge documents | Edit |
 | `EDIT-013` | Redaction marks and permanent removal | Edit |
 | `EDIT-015` | Repair malformed documents | Edit |
@@ -505,14 +506,13 @@ The meanings come from ADR 0009.
 | `VIEW-017` | Find text in a document and select copy text | View & Navigate |
 | `VIEW-019` | Window controls, title bar settings, and persisted theme | View & Navigate |
 
-### Not verified (86)
+### Not verified (85)
 
 These rows exist in the matrix but are not reachable product features yet.
 
 | ID | Title | Status | Domain |
 | --- | --- | --- | --- |
 | `CREATE-010` | Create and customize PDF Portfolios | `library` | Create |
-| `EDIT-006` | Reorder rotate crop and resize pages | `library` | Edit |
 | `EDIT-014` | Optimize and compress documents | `library` | Edit |
 | `EXPORT-008` | Export to PDF/A PDF/X and PDF/E | `library` | Export |
 | `FORMS-002` | Create text checkbox radio choice and button fields | `library` | Forms |
