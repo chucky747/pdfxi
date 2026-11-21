@@ -284,6 +284,9 @@ pub enum Error {
     /// The requested page index does not exist.
     #[error("page index {0} is out of range")]
     PageNotFound(usize),
+    /// The requested embedded-file attachment does not exist.
+    #[error("attachment not found: {0}")]
+    AttachmentNotFound(String),
     /// A page operation was given an empty selection.
     #[error("page operation requires at least one page")]
     EmptyPageSelection,

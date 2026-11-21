@@ -2748,3 +2748,32 @@ fn links_json_has_stable_fields() {
     assert_eq!(links[1]["uri"], "https://example.com");
     assert_eq!(links[2]["dest_name"], "here");
 }
+
+#[test]
+fn attachments_extract_writes_the_embedded_file() {
+    let pdf = TempPdf::new(&pdfxi_testkit::annotated_pdf());
+    let directory = std::env::temp_dir().join(format!(
+        "pdfxi-extract-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default()
+    ));
+    let output = run(&[
+        "attachments",
+        pdf.arg(),
+        "--extract",
+        directory.to_str().expect("utf-8 directory"),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("extracted: 1 files"),
+        "{}",
+        stdout(&output)
+    );
+    let extracted = directory.join("notes.txt");
+    assert!(extracted.exists(), "missing {}", extracted.display());
+    assert_eq!(fs::read(&extracted).expect("read extracted file"), b"hello");
+    let _ = fs::remove_dir_all(&directory);
+}

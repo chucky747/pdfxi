@@ -50,6 +50,9 @@ struct AttachmentRow {
     size: Option<u64>,
     /// One-based page of a `/FileAttachment` annotation.
     page: Option<usize>,
+    /// Path written by `--extract`, when used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
 }
 
 /// JSON shape of `pdfxi attachments --json`.
@@ -124,7 +127,11 @@ pub(crate) fn run_links(file: &Path, json: bool) -> anyhow::Result<()> {
 }
 
 /// Print every embedded-file attachment in the document.
-pub(crate) fn run_attachments(file: &Path, json: bool) -> anyhow::Result<()> {
+pub(crate) fn run_attachments(
+    file: &Path,
+    json: bool,
+    extract: Option<&Path>,
+) -> anyhow::Result<()> {
     let document = load(file)?;
     let attachments = document.attachments().context("read attachments")?;
     let rows = attachments
@@ -134,13 +141,38 @@ pub(crate) fn run_attachments(file: &Path, json: bool) -> anyhow::Result<()> {
             description: attachment.description,
             size: attachment.size,
             page: attachment.page.map(|page| page + 1),
+            path: None,
         })
         .collect::<Vec<_>>();
-    let report = AttachmentsReport {
+    let mut report = AttachmentsReport {
         file: file.display().to_string(),
         count: rows.len(),
         attachments: rows,
     };
+    let mut extracted = 0_usize;
+    if let Some(directory) = extract {
+        std::fs::create_dir_all(directory)
+            .with_context(|| format!("create extraction directory {}", directory.display()))?;
+        let mut used = std::collections::BTreeSet::new();
+        for row in &mut report.attachments {
+            let base = safe_file_name(&row.name).with_context(|| {
+                format!("attachment name is not a safe file name: {:?}", row.name)
+            })?;
+            let mut candidate = base.clone();
+            let mut counter = 1_usize;
+            while !used.insert(candidate.clone()) {
+                counter += 1;
+                candidate = format!("{counter}-{base}");
+            }
+            let bytes = document
+                .attachment_bytes(&row.name)
+                .with_context(|| format!("extract attachment {}", row.name))?;
+            let path = directory.join(&candidate);
+            std::fs::write(&path, &bytes).with_context(|| format!("write {}", path.display()))?;
+            row.path = Some(path.display().to_string());
+            extracted += 1;
+        }
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -157,7 +189,40 @@ pub(crate) fn run_attachments(file: &Path, json: bool) -> anyhow::Result<()> {
                 .map_or_else(String::new, |text| format!("  description: {text}"));
             println!("name: {}  size: {size}{page}{description}", row.name);
         }
+        if extract.is_some() {
+            println!("extracted: {extracted} files");
+        }
         println!("attachments: {}", report.count);
     }
     Ok(())
+}
+
+/// Reduce an attachment name to a safe file name inside the target directory.
+fn safe_file_name(name: &str) -> Option<String> {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default().trim();
+    if base.is_empty() || base == "." || base == ".." {
+        return None;
+    }
+    if base
+        .chars()
+        .any(|character| matches!(character, ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'))
+    {
+        return None;
+    }
+    Some(base.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_file_name;
+
+    #[test]
+    fn attachment_names_cannot_escape_the_target_directory() {
+        assert_eq!(safe_file_name("../evil.txt").as_deref(), Some("evil.txt"));
+        assert_eq!(safe_file_name("..\\evil.txt").as_deref(), Some("evil.txt"));
+        assert_eq!(safe_file_name(".."), None);
+        assert_eq!(safe_file_name("").as_deref(), None);
+        assert_eq!(safe_file_name("C:evil.txt"), None);
+        assert_eq!(safe_file_name("notes.txt").as_deref(), Some("notes.txt"));
+    }
 }

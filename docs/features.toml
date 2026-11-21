@@ -203,22 +203,33 @@ title = "Bookmarks destinations and article threads"
 docs = [
     "crates/pdfxi-edit/src/navigation/attachment.rs",
     "crates/pdfxi-edit/src/navigation/mod.rs",
+    "crates/pdfxi-core/src/links.rs",
+    "crates/pdfxi-cli/src/links.rs",
+    "docs/evidence/cli/T-0279.md",
 ]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-edit navigation::attachment (CARGO_TARGET_DIR=target/lanes/author): all 8 name-tree/attachment tests passed. cargo clippy -p pdfxi-edit --all-targets -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps: clean."
+evidence = '`pdfxi attachments annotated-demo.pdf --extract target\tmp\extracted` printed `name: notes.txt size: 5 description: Sample notes`, `extracted: 1 files` and wrote notes.txt with the exact payload `hello` (5 bytes, read back and shown). A missing name returns Error::AttachmentNotFound; a hostile name `../../evil.txt` is reduced to `evil.txt` and `..`/empty names are rejected by the sanitiser test. cargo test -p pdfxi-core --lib links: 3 passed; cargo test -p pdfxi-cli --test cli attachments: 2 passed. Pasted output in docs/evidence/cli/T-0279.md.'
 id = "VIEW-009"
-notes = "Embedded-file name-tree /Names round-trip, name size limits, deterministic name ordering, and duplicate-key rejection. Stream bytes are caller-held via XI_StreamRef and are not embedded in the dictionary intermediate."
+notes = """
+VIEW-009 now both lists and saves attachments. Document::attachment_bytes finds
+the file specification through /Names /EmbeddedFiles or a /FileAttachment
+annotation, resolves /EF /F and decodes the stream through the core filter
+chain; the CLI writes each attachment with a sanitised name, de-duplicates
+collisions and reports the written path.
+
+Honest scope: extraction writes the decoded payload only (no original directory
+structure, by design for traversal safety); encrypted embedded streams are
+rejected by the decoder; in-app attachment viewing remains the CLI extraction
+plus the OS default handler.
+"""
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
-    "navigation::attachment::tests::name_tree_round_trip",
-    "navigation::attachment::tests::names_are_sorted_and_deterministic",
-    "navigation::attachment::tests::attachment_value_round_trip",
-    "navigation::attachment::tests::name_size_limit_is_enforced",
-    "navigation::attachment::tests::duplicate_name_is_rejected",
-    "navigation::attachment::tests::malformed_names_array_is_rejected",
-    "navigation::attachment::tests::get_returns_registered_attachment",
-    "navigation::attachment::tests::empty_name_tree_round_trip",
+    "links::tests::attachments_report_name_description_and_size",
+    "links::tests::attachment_bytes_returns_the_embedded_payload",
+    "attachments_report_an_embedded_file",
+    "attachments_extract_writes_the_embedded_file",
+    "attachment_names_cannot_escape_the_target_directory",
 ]
 title = "Attachments and embedded files"
 

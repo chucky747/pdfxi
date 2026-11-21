@@ -425,6 +425,93 @@ fn named_or_page(
     }
 }
 
+impl Document {
+    /// Return the decoded bytes of the embedded file called `name`.
+    ///
+    /// The name is matched against `/Names /EmbeddedFiles` entries and
+    /// `/FileAttachment` annotations. The embedded stream is decoded through its
+    /// `/Filter` chain, so the caller receives the original file bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AttachmentNotFound`] when no attachment carries the
+    /// name, and a decoding error when the stream cannot be decoded.
+    pub fn attachment_bytes(&self, name: &str) -> Result<Vec<u8>> {
+        let structure = self.supported_structure()?;
+        let reader = Reader {
+            data: self.bytes(),
+            structure,
+        };
+        let spec = self.find_attachment_spec(&reader, name)?;
+        let Some(spec) = spec else {
+            return Err(Error::AttachmentNotFound(name.to_owned()));
+        };
+        let Some(embedded) = spec.get("EF") else {
+            return Err(Error::AttachmentNotFound(name.to_owned()));
+        };
+        let Some(embedded) = reader.dictionary(embedded, 0)? else {
+            return Err(Error::AttachmentNotFound(name.to_owned()));
+        };
+        let Some(stream_object) = embedded.get("F").or_else(|| embedded.get("UF")) else {
+            return Err(Error::AttachmentNotFound(name.to_owned()));
+        };
+        let Object::Stream { dictionary, data } = reader.resolve(stream_object, 0)? else {
+            return Err(Error::AttachmentNotFound(name.to_owned()));
+        };
+        let filters = crate::filter::filters_from_dictionary(&dictionary)?;
+        crate::filter::decode_stream(&data, &filters)
+    }
+
+    /// Find the file-specification dictionary for an attachment name.
+    fn find_attachment_spec(&self, reader: &Reader<'_>, name: &str) -> Result<Option<Dictionary>> {
+        let structure = reader.structure;
+        let catalog = reader.resolve(&Object::Reference(structure.root_id), 0)?;
+        if let Object::Dictionary(catalog) = catalog
+            && let Some(tree) = catalog.get("Names")
+            && let Some(tree) = reader.dictionary(tree, 0)?
+            && let Some(files) = tree.get("EmbeddedFiles")
+        {
+            let mut entries = Vec::new();
+            reader.walk_name_tree(files, &mut entries, 0)?;
+            for (entry_name, spec) in entries {
+                if entry_name == name || file_name(&spec).as_deref() == Some(name) {
+                    return Ok(Some(spec));
+                }
+            }
+        }
+        for page in &structure.pages {
+            let page_object = reader.resolve(&Object::Reference(page.id), 0)?;
+            let Object::Dictionary(page_dictionary) = page_object else {
+                continue;
+            };
+            let Some(annots) = page_dictionary.get("Annots") else {
+                continue;
+            };
+            let Object::Array(annotations) = reader.resolve(annots, 0)? else {
+                continue;
+            };
+            for annotation in annotations {
+                let Some(dictionary) = reader.dictionary(&annotation, 0)? else {
+                    continue;
+                };
+                if dictionary.get("Subtype").and_then(Object::as_name) != Some("FileAttachment") {
+                    continue;
+                }
+                let Some(spec_object) = dictionary.get("FS") else {
+                    continue;
+                };
+                let Some(spec) = reader.dictionary(spec_object, 0)? else {
+                    continue;
+                };
+                if file_name(&spec).as_deref() == Some(name) {
+                    return Ok(Some(spec));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +578,19 @@ mod tests {
                 name: Some("here".to_owned())
             }
         );
+    }
+
+    #[test]
+    fn attachment_bytes_returns_the_embedded_payload() {
+        let document = Document::from_bytes(annotated_pdf()).expect("fixture parses");
+        let bytes = document
+            .attachment_bytes("notes.txt")
+            .expect("attachment decodes");
+        assert_eq!(bytes, b"hello");
+        assert!(matches!(
+            document.attachment_bytes("missing.txt"),
+            Err(Error::AttachmentNotFound(name)) if name == "missing.txt"
+        ));
     }
 
     #[test]

@@ -101,7 +101,7 @@ const MAX_RENDER_SCALE: f32 = 8.0;
 
 /// PDFXI command-line interface.
 #[derive(Debug, Parser)]
-#[command(name = "pdfxi", version, about = "PDFXI â€” a Rust PDF workbench")]
+#[command(name = "pdfxi", version, about = "PDFXI Ã¢â‚¬â€ a Rust PDF workbench")]
 struct Cli {
     /// The command to run.
     #[command(subcommand)]
@@ -218,6 +218,9 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+        /// Write every attachment into this directory.
+        #[arg(long, value_name = "DIR")]
+        extract: Option<PathBuf>,
     },
     /// Manage the virtual PDF printer and capture one printed job.
     ///
@@ -772,7 +775,11 @@ fn main() -> anyhow::Result<()> {
             format,
         } => render(&file, page, scale, &out, format),
         Command::Links { file, json } => links::run_links(&file, json),
-        Command::Attachments { file, json } => links::run_attachments(&file, json),
+        Command::Attachments {
+            file,
+            json,
+            extract,
+        } => links::run_attachments(&file, json, extract.as_deref()),
         Command::Pages { command } => match command {
             PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
             PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),

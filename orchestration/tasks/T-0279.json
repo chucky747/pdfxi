@@ -1,0 +1,20 @@
+{
+  "id": "T-0279",
+  "lane": "core",
+  "title": "Open and save embedded-file attachments with pdfxi attachments --extract",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0278"],
+  "owns": [
+    "crates/pdfxi-core/src/links.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/links.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/evidence/cli/T-0279.md",
+    "orchestration/feature-updates/T-0279.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core --lib links and cargo test -p pdfxi-cli pass; pdfxi attachments --extract writes the decoded embedded payload and rejects traversal names; VIEW-009 moves to verified.",
+  "notes": "Adds Document::attachment_bytes (spec lookup through the EmbeddedFiles name tree or FileAttachment annotations, EF/F stream decode through the filter chain, AttachmentNotFound) and CLI extraction with a name sanitiser and collision handling.",
+  "evidence": "docs/evidence/cli/T-0279.md"
+}
