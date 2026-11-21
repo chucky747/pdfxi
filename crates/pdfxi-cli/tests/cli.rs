@@ -2356,3 +2356,60 @@ fn compat_handles_a_real_world_document() {
     assert!(text.contains("gates: effective="), "{text}");
     assert!(text.contains("features:"), "{text}");
 }
+
+#[test]
+fn printer_status_reports_an_absolute_port_for_a_missing_queue() {
+    let output = run(&[
+        "printer",
+        "status",
+        "--name",
+        "PDFXI Nonexistent Queue",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["installed"], false);
+    assert_eq!(value["port_file_exists"], false);
+    assert_eq!(value["capture_ready"], false);
+    let port = value["port"].as_str().expect("port string");
+    assert!(Path::new(port).is_absolute(), "{port}");
+    assert!(port.ends_with("capture.pdf"), "{port}");
+}
+
+#[test]
+fn printer_install_rejects_a_relative_port() {
+    let output = run(&["printer", "install", "--port", "capture.pdf"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("absolute"), "{}", stderr(&output));
+}
+
+#[test]
+fn printer_watch_times_out_without_a_job() {
+    let directory = std::env::temp_dir().join(format!(
+        "pdfxi-watch-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default()
+    ));
+    fs::create_dir_all(&directory).expect("create watch directory");
+    let out = directory.join("captured.pdf");
+    let output = run(&[
+        "printer",
+        "watch",
+        "--port",
+        directory.join("capture.pdf").to_str().expect("utf-8 port"),
+        "--out",
+        out.to_str().expect("utf-8 out"),
+        "--timeout",
+        "1",
+    ]);
+    let _ = fs::remove_dir_all(&directory);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("no print job arrived"),
+        "{}",
+        stderr(&output)
+    );
+}

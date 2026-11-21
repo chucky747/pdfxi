@@ -74,6 +74,9 @@ mod export;
 // (`marks`) added for T-0131. Both use the core application API.
 mod marks;
 mod preflight;
+// Virtual PDF printer control: install/status/remove the "PDFXI PDF" queue and
+// capture one finished job (`printer`).
+mod printer;
 mod repair;
 
 use std::path::{Path, PathBuf};
@@ -183,6 +186,17 @@ enum Command {
         /// Output encoding: `png` (the default) or `ppm`.
         #[arg(long, value_enum, default_value = "png")]
         format: OutputFormat,
+    },
+    /// Manage the virtual PDF printer and capture one printed job.
+    ///
+    /// `install` creates a local printer port that is a file path plus a
+    /// `PDFXI PDF` queue using the Windows PDF driver, so any application can
+    /// print to PDF and the result lands in a known file. `watch` waits for one
+    /// finished job and copies it to `--out`. No elevation is required.
+    Printer {
+        /// The printer operation to perform.
+        #[command(subcommand)]
+        command: PrinterCommand,
     },
     /// Create a new PDF from an image or text/Markdown source.
     Create {
@@ -413,6 +427,59 @@ enum ExportCommand {
     },
 }
 
+/// Virtual-printer operations exposed by `pdfxi printer`.
+#[derive(Debug, Subcommand)]
+enum PrinterCommand {
+    /// Create the capture port and the `PDFXI PDF` queue.
+    Install {
+        /// Queue name shown in the Windows print dialog.
+        #[arg(long, default_value = printer::DEFAULT_PRINTER)]
+        name: String,
+        /// Absolute path of the capture file the spooler writes.
+        #[arg(long, value_name = "PATH")]
+        port: Option<PathBuf>,
+        /// Emit the result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report whether the queue and capture port exist.
+    Status {
+        /// Queue name.
+        #[arg(long, default_value = printer::DEFAULT_PRINTER)]
+        name: String,
+        /// Absolute path of the capture file.
+        #[arg(long, value_name = "PATH")]
+        port: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the queue and its capture port.
+    Remove {
+        /// Queue name.
+        #[arg(long, default_value = printer::DEFAULT_PRINTER)]
+        name: String,
+        /// Absolute path of the capture file.
+        #[arg(long, value_name = "PATH")]
+        port: Option<PathBuf>,
+    },
+    /// Wait for one finished print job and copy it to `--out`.
+    Watch {
+        /// Queue name being watched.
+        #[arg(long, default_value = printer::DEFAULT_PRINTER)]
+        name: String,
+        /// Absolute path of the capture file.
+        #[arg(long, value_name = "PATH")]
+        port: Option<PathBuf>,
+        /// Destination path for the captured PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Give up after this many seconds.
+        #[arg(long, value_name = "SECS", default_value_t = 300)]
+        timeout: u64,
+    },
+}
+
 /// Page geometry accepted by `create image` and `create text`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum CreatePageSize {
@@ -529,6 +596,49 @@ fn main() -> anyhow::Result<()> {
             out,
             format,
         } => render(&file, page, scale, &out, format),
+        Command::Printer { command } => match command {
+            PrinterCommand::Install { name, port, json } => {
+                let path = printer::install(&name, port.as_deref())?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "printer": name,
+                            "port": path,
+                            "installed": true,
+                        })
+                    );
+                } else {
+                    println!("printer: {name}");
+                    println!("port: {}", path.display());
+                    println!("installed: yes");
+                }
+                Ok(())
+            }
+            PrinterCommand::Status { name, port, json } => {
+                printer::status(&name, port.as_deref(), json)
+            }
+            PrinterCommand::Remove { name, port } => {
+                printer::remove(&name, port.as_deref())?;
+                println!("removed: {name}");
+                Ok(())
+            }
+            PrinterCommand::Watch {
+                name,
+                port,
+                out,
+                timeout,
+            } => {
+                let path = printer::watch(
+                    &name,
+                    port.as_deref(),
+                    &out,
+                    std::time::Duration::from_secs(timeout),
+                )?;
+                println!("captured: {}", path.display());
+                Ok(())
+            }
+        },
         Command::Create { command } => match command {
             CreateCommand::Image {
                 input,

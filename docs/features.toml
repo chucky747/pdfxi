@@ -412,29 +412,31 @@ docs = [
     "crates/pdfxi-convert/src/create_assembly.rs",
     "crates/pdfxi-convert/src/print_capture.rs",
     "crates/pdfxi-convert/src/lib.rs",
+    "crates/pdfxi-cli/src/printer.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "scripts/test-virtual-printer.ps1",
     "docs/evidence/convert/T-0174.md",
+    "docs/evidence/cli/T-0275.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 7 new create_assembly tests pass, including assembly_plan_joins_job_and_capture_pages_in_resolved_order, assembly_plan_fits_oversized_rendered_image_to_media, assembly_plan_rejects_image_that_exceeds_media_without_fit, missing_and_unexpected_capture_pages_are_typed_errors and assembly_summary_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
+evidence = "`scripts/test-virtual-printer.ps1` passed 11/11 assertions: `pdfxi printer install` created the file-port queue without elevation, Microsoft Word printed a document to it through the Windows spooler, `pdfxi printer watch` captured a 185035-byte one-page PDF that `pdfxi info` parses (pages: 1), `printer status` reported the queue, driver and capture state, and `printer remove` removed it. The captured job is open in the installed build in docs/evidence/ui/final/virtual-printer-captured.png. cargo test -p pdfxi-cli: 72 integration + 15 unit tests passed. Pasted output in docs/evidence/cli/T-0275.md."
 id = "CREATE-001"
 notes = """
-Library-level gap closed: `pdfxi_convert::create_assembly` joins the existing
-print-capture plan with a caller-supplied rendered image/PostScript/HTML set
-into one deterministic `PdfAssemblyPlan`: it validates every page, requires the
-captured sequences to match the job's requested source pages, resolves a media
-box, centres and scales rendered images to fit (`ImagePlacement`), expands
-copies in collated order, and emits a byte-stable summary. Typed errors cover
-invalid envelopes, invalid payloads, missing/unexpected pages, images that do
-not fit, and over-budget output.
+CREATE-001 is now reachable from any application that prints through the Windows
+spooler. `pdfxi printer install` creates a local printer port that is a file path
+and a queue on the inbox Microsoft Print To PDF driver; printing to the queue
+writes a complete PDF to that file, and `pdfxi printer watch` copies the finished
+job out and clears the port for the next one. The existing assembly plan and
+print-job envelope remain the model behind the captured pages.
 
-Honest remaining scope (host boundary): this is a deterministic assembly
-*plan*, not PDF bytes. No native-window capture, print monitor/spooler/printer
-driver, pixel decode/embed, or CLI/UI entry point is provided; the host must
-feed the plan to the existing `create` writers. Library-level scope is complete;
-see the row verification policy in `docs/ASSUMPTIONS.md`.
+Honest scope: PDFXI ships no driver and needs no elevation; the queue uses the
+Windows PDF driver. One queue writes one port file at a time, the spooler
+serialises jobs, and the capture is cleared between jobs. Applications that only
+export PDFs directly, without a print path, are not captured; that is the normal
+limit of a virtual printer.
 """
 priority = "P0"
-status = "model"
+status = "verified"
 tests = [
     "create_assembly::tests::assembly_plan_joins_job_and_capture_pages_in_resolved_order",
     "create_assembly::tests::assembly_plan_applies_copies_in_collated_output_order",
@@ -443,6 +445,10 @@ tests = [
     "create_assembly::tests::missing_and_unexpected_capture_pages_are_typed_errors",
     "create_assembly::tests::invalid_job_envelope_and_capture_payload_propagate_typed_errors",
     "create_assembly::tests::assembly_summary_is_byte_for_byte_deterministic",
+    "printer::tests::default_port_is_an_absolute_capture_file",
+    "printer::tests::resolve_port_rejects_relative_paths",
+    "printer::tests::pdf_header_detection_is_exact",
+    "printer::tests::capture_readiness_requires_a_real_pdf",
 ]
 title = "Create PDF from any printable application"
 
@@ -451,31 +457,39 @@ docs = [
     "crates/pdfxi-convert/src/create_assembly.rs",
     "crates/pdfxi-convert/src/print_job.rs",
     "crates/pdfxi-convert/src/lib.rs",
+    "crates/pdfxi-cli/src/printer.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "scripts/test-virtual-printer.ps1",
     "docs/evidence/convert/T-0174.md",
+    "docs/evidence/cli/T-0275.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: the same 7 create_assembly tests cover the print-job envelope join, including assembly_plan_applies_copies_in_collated_output_order (3 copies -> 6 ordered pages), invalid_job_envelope_and_capture_payload_propagate_typed_errors (empty job id) and assembly_summary_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
+evidence = 'The queue itself is the deliverable: `pdfxi printer install` created a port whose name is C:\Users\<user>\AppData\Local\PDFXI\Inbox\capture.pdf and a PDFXI PDF queue on the Microsoft Print To PDF driver without elevation; `printer status --json` reports installed=true, driver=Microsoft Print To PDF, an absolute port, port_file_exists and capture_ready; the end-to-end script prints from Word, captures 185035 bytes and clears the port, then removes the queue and asserts installed=false. cargo test -p pdfxi-cli passed 72 integration and 15 unit tests, including the port validation and watch-timeout tests. Full output in docs/evidence/cli/T-0275.md.'
 id = "CREATE-002"
 notes = """
-Library-level gap closed: the validated virtual-printer envelope
-(`print_job::PrintJob` -> `PrintJobPlan`) is now reconciled with the captured
-pages by `PdfAssemblyPlan`, including orientation-applied media, requested
-page order, and collated copies. Envelope defects are surfaced as a typed
-`AssemblyError::Job` rather than being silently ignored.
+CREATE-002 is the queue itself and is now real: a per-user local printer port
+backed by a file path, a queue using the Windows PDF driver, status reporting,
+job capture with port clearing, and removal. No driver is shipped and no
+elevation is required. The earlier virtual-printer envelope model
+(`print_job::PrintJob` -> `PrintJobPlan` and the assembly plan) remains the
+model the captured pages feed.
 
-Honest remaining scope (host boundary): no spooler, OS printer driver, port
-monitor, spooled stream/DEVMODE parsing, duplex/collate/media-source/scale
-model, or CLI/UI; `create_assembly` still produces a plan, not rendered PDF
-bytes. Library-level scope is complete; see the row verification policy in
-`docs/ASSUMPTIONS.md`.
+Honest scope: the capture is one file per finished job; concurrent consumers of
+the same queue would race, and the spooler serialises jobs so a single watcher is
+the supported pattern.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "create_assembly::tests::assembly_plan_applies_copies_in_collated_output_order",
     "create_assembly::tests::invalid_job_envelope_and_capture_payload_propagate_typed_errors",
     "create_assembly::tests::assembly_plan_fits_oversized_rendered_image_to_media",
     "create_assembly::tests::assembly_summary_is_byte_for_byte_deterministic",
+    "printer::tests::default_port_is_an_absolute_capture_file",
+    "printer::tests::capture_readiness_requires_a_real_pdf",
+    "printer_status_reports_an_absolute_port_for_a_missing_queue",
+    "printer_install_rejects_a_relative_port",
+    "printer_watch_times_out_without_a_job",
 ]
 title = "Virtual PDF printer"
 

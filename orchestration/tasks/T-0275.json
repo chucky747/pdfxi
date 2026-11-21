@@ -1,0 +1,19 @@
+{
+  "id": "T-0275",
+  "lane": "core",
+  "title": "Virtual PDF printer: install, status, capture and remove a PDFXI queue",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0174"],
+  "owns": [
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/src/printer.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "scripts/test-virtual-printer.ps1",
+    "docs/evidence/cli/T-0275.md",
+    "orchestration/feature-updates/T-0275.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli passes; `pdfxi printer install` creates a file-port queue named PDFXI PDF using the Windows PDF driver without elevation; printing a document from Notepad through the spooler lands a real PDF that `pdfxi printer watch` captures and `pdfxi info` accepts; `pdfxi printer status` reports the queue, driver, port and capture readiness; `pdfxi printer remove` removes both. CREATE-001 and CREATE-002 move to verified.",
+  "notes": "The library already had the print-job envelope and assembly plan but no host path. Printing through the inbox Microsoft Print To PDF driver to a local file port produces a complete PDF per job, so no kernel driver or admin rights are needed. The queue serialises jobs, so watch copies the finished capture and clears the port before the next job.",
+  "evidence": "docs/evidence/cli/T-0275.md"
+}
