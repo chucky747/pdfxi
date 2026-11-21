@@ -3,7 +3,7 @@
     "lane":  "app",
     "title":  "Organize pages and Combine Files UI",
     "priority":  "P0",
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0222"
                    ],

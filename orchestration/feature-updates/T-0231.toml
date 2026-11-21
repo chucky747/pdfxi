@@ -1,0 +1,78 @@
+# T-0231 - Organize pages and Combine Files UI
+#
+# App surface for A-13 (real page count, grid/list toggle, add page), A-14
+# (multi-select and drag reorder), A-26 (reorder, rotate, delete, insert,
+# extract, split) and A-29 (merge several files into one PDF). The core page
+# planner already ships the operations; this task wires the Organize Pages and
+# Combine Files windows to it through the pdfxi-document session. The relevant
+# view and create rows are listed below for review without promotion; the edit
+# rows (EDIT-005, EDIT-006, EDIT-007) are likewise held for integrator review
+# and no row status changes here.
+
+task = "T-0231"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0231.md"
+feature_rows = ["VIEW-007", "CREATE-009"]
+promoted_rows = []
+acceptance_items = ["A-13", "A-14", "A-26", "A-29"]
+docs = [
+    "crates/pdfxi-app/src/shell/organize_card.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/ui/T-0231.md",
+]
+tests = [
+    "ui::shell::organize_card::tests::organize_command_needs_a_document_then_opens_the_card",
+    "ui::shell::organize_card::tests::thumbnail_click_selects_inside_organize_and_navigates_outside",
+    "ui::shell::organize_card::tests::rotate_page_zero_by_ninety_degrees_commits_and_reopts",
+    "ui::shell::organize_card::tests::rotate_left_is_counterclockwise",
+    "ui::shell::organize_card::tests::deleting_page_one_removes_its_text_and_page",
+    "ui::shell::organize_card::tests::reorder_two_zero_one_puts_old_page_two_first",
+    "ui::shell::organize_card::tests::moving_down_from_the_bottom_is_a_no_op",
+    "ui::shell::organize_card::tests::extracting_page_one_writes_a_one_page_pdf",
+    "ui::shell::organize_card::tests::splitting_writes_one_file_per_page",
+    "ui::shell::organize_card::tests::combine_sums_pages_and_keeps_text_from_both_files",
+    "ui::shell::organize_card::tests::combining_one_source_is_a_typed_error_and_writes_nothing",
+    "ui::shell::organize_card::tests::extracted_page_is_opened_and_the_source_stays_unchanged",
+    "ui_controls::organize_and_combine_commands_open_their_cards",
+]
+notes = """
+Organize Pages (shell/organize_card.rs): OrganizeUiState and
+handle_organize_command. AppCommand::Organize ("organize") says "Open a
+document to organize" with no document and otherwise opens the Organize Pages
+window. While it is open, a thumbnail click toggles the page under Ctrl or
+selects a range under Shift; outside the card the same click navigates as
+before.
+
+The card offers Rotate left/right, Delete, Move up/down, Extract selected,
+Split each page and Combine Files. Every mutation clones the session Document,
+builds a pdfxi_core::pages::PagePlan and applies it with apply_page_plan,
+reparses the bytes, commits through session.edit and calls after_session_edit.
+Rotate uses RotationTarget::Indices(selection); Delete extracts the complement;
+Move swaps the selected index with its neighbour; Extract writes
+<stem>-extract.pdf and opens it; Split writes one <stem>-page-N.pdf per page.
+This is a full rewrite (fresh object numbers), so it marks the tab dirty and
+undo does not cross the rewrite boundary (ADR 0010, point 5).
+
+Combine Files: AppCommand::CombineFiles ("combine-files") opens a window with
+Add files (rfd PDF multi-select), per-row Remove, an output path (default
+combined.pdf) and Combine. combine_to_path reads each PDF into a Document,
+builds PagePlan::merge(documents[1..]), applies it to the first document, writes
+and opens the result, returning the page count. Fewer than two sources is a
+typed error that writes nothing.
+
+Tests: twelve organize_card unit tests run on real fixture bytes and reopen the
+written PDFs with pdfxi_core::Document; the harness test proves both commands
+open their cards on a real document. fmt exit 0; clippy exit 0;
+cargo test -p pdfxi-app --features ui,pdfium = lib 606 passed / 0 failed /
+4 ignored, ui_controls 34 passed, organize_card filter 12 passed.
+
+Limits: drag reorder is button-based move up/down, not pointer drag-and-drop;
+insert blank page and add page from file are not exposed; extract/split/combine
+write new files that undo does not cover; no page-range selection or image
+sources for combine; no capture is claimed (T-0262 captures the installed
+build).
+"""

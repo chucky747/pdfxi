@@ -581,7 +581,14 @@ impl crate::ui::PdfxiApp {
             AppCommand::DismissOpenError => self.dismiss_open_error(),
             AppCommand::ClearOpenErrors => self.clear_open_errors(),
             AppCommand::SelectThumbnailPage(page) => {
-                self.select_thumbnail_page(page);
+                if self.organize.open {
+                    let (additive, range) = ctx.map_or((false, false), |ctx| {
+                        ctx.input(|input| (input.modifiers.command, input.modifiers.shift))
+                    });
+                    self.organize_select_page(page, additive, range);
+                } else {
+                    self.select_thumbnail_page(page);
+                }
             }
             AppCommand::SetClosePolicy(policy) => self.set_close_policy(policy),
             AppCommand::EditDocument => self.handle_edit_document_command(),
@@ -592,10 +599,10 @@ impl crate::ui::PdfxiApp {
             AppCommand::PlaceSignature => self.handle_place_signature_command(),
             AppCommand::RequestSignature => self.handle_request_signature_command(),
             AppCommand::DocumentProperties => self.handle_document_properties_command(),
-            AppCommand::Organize => self.not_available("Organize Pages"),
+            AppCommand::Organize => self.handle_organize_command(),
             AppCommand::Export => self.handle_export_command(),
             AppCommand::ConvertToPdf => self.handle_convert_command(),
-            AppCommand::CombineFiles => self.not_available("Combine Files"),
+            AppCommand::CombineFiles => self.handle_combine_command(),
             AppCommand::Protect => self.handle_protect_command(),
             AppCommand::Redact => self.handle_redact_command(),
             AppCommand::AiAssistant => self.open_assistant_connect(),

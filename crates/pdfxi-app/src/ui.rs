@@ -613,6 +613,10 @@ pub struct PdfxiApp {
     notifications: shell::notifications::NotificationsUiState,
     /// Convert to PDF card state.
     convert: shell::convert_card::ConvertUiState,
+    /// Organize Pages card and its thumbnail selection.
+    organize: shell::organize_card::OrganizeUiState,
+    /// Combine Files card state.
+    combine: shell::organize_card::CombineUiState,
     /// Protect PDF card state.
     protect: shell::protect_card::ProtectUiState,
     /// Redact and sanitize card state.
@@ -1849,6 +1853,8 @@ impl eframe::App for PdfxiApp {
         self.document_properties_ui(ctx);
         self.notifications_ui(ctx);
         self.convert_card_ui(ctx);
+        self.organize_card_ui(ctx);
+        self.combine_card_ui(ctx);
         self.protect_card_ui(ctx);
         self.redact_card_ui(ctx);
         self.edit_tool_ui(ctx);

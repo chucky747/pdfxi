@@ -1870,6 +1870,25 @@ fn dispatched_capability_commands_report_unavailable() {
 }
 
 #[test]
+fn organize_and_combine_commands_open_their_cards() {
+    let path = temp_fixture_copy("organize-card");
+    let mut app = open_temp_copy(&path);
+    assert!(!app.organize_card_open(), "the card starts closed");
+    assert!(!app.combine_card_open(), "the combine card starts closed");
+    app.dispatch(AppCommand::Organize, None);
+    assert!(
+        app.organize_card_open(),
+        "Organize must open the Organize Pages card on a real document"
+    );
+    app.dispatch(AppCommand::CombineFiles, None);
+    assert!(
+        app.combine_card_open(),
+        "CombineFiles must open the Combine Files card"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn edit_document_command_activates_the_edit_tool() {
     let mut app = PdfxiApp::new();
     assert!(!app.edit_tool_active(), "the edit tool starts inactive");
@@ -2111,6 +2130,14 @@ const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
     (
         "convert_card_ui",
         "convert to PDF window: Add files/Choose output call the rfd-backed methods and Convert calls convert_to_path; source loading and conversion are unit-tested without a window",
+    ),
+    (
+        "organize_card_ui",
+        "organize pages window: the six page buttons call organize_rotate/organize_delete/organize_move/organize_extract/organize_split, which are unit-tested on a real fixture without a window; the thumbnail selection comes from the Pages panel dispatch",
+    ),
+    (
+        "combine_card_ui",
+        "combine files window: Add files/Choose output call the rfd-backed methods and Combine calls combine_to_path, which is unit-tested on two real fixtures without a window",
     ),
     (
         "shared_panel_ui",

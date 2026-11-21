@@ -29,6 +29,7 @@ pub mod find_bar;
 pub mod forms;
 pub mod help;
 pub(crate) mod notifications;
+pub(crate) mod organize_card;
 pub mod preferences;
 pub mod print_dialog;
 pub(crate) mod protect_card;
