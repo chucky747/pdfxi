@@ -72,6 +72,7 @@ $toolNotes = @{
     'print'             = 'Print dialog over the viewer: pages All/Current/Pages, copies, scale, orientation, Print and Cancel. Note: this file is named light-windows-print but was captured in the dark theme.'
     'help'              = 'PDFXI help panel: getting started, keyboard shortcuts, themes and window controls, the privacy statement about what leaves the machine, and an Open user guide button.'
     'word-opens-docx'   = 'Microsoft Word opening the exported DOCX (t0260-export.docx, Compatibility Mode) and showing the exported text, as the round-trip check for Word export.'
+    'virtual-printer-captured' = 'The file captured from the PDFXI virtual printer (T-0275): Microsoft Word printed a document to the PDFXI PDF queue, the spooler wrote it to the capture port, and the installed viewer opens the captured one-page PDF showing the printed line. This is the origin evidence for CREATE-001 and CREATE-002.'
 }
 
 $groups = [ordered]@{

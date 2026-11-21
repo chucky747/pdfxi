@@ -18,12 +18,12 @@ appear inline with their descriptors.
 | --- | --- |
 | Acceptance items (A-/O- matrix) | 40 pass, 0 open |
 | Feature rows (canonical matrix) | 145 |
-| Reachable and tested (`verified`) | 54 |
-| `library` (byte-level code, no user path) | 13 |
-| `model` (model, contract or stub) | 76 |
+| Reachable and tested (`verified`) | 57 |
+| `library` (byte-level code, no user path) | 12 |
+| `model` (model, contract or stub) | 74 |
 | `replaced` | 2 |
 | Installed build | `%LOCALAPPDATA%\Programs\PDFXI\pdfxi-ui.exe`, SHA-256 `6787a129f8321e2c08aea07f1532d9e349306a0daffabd461351f27914ca77dc` |
-| Captures | 56 PNG files, embedded below |
+| Captures | 57 PNG files, embedded below |
 
 **The honest reading:** the campaign accepted 40 of 40 items on the surface it
 chose, and 54 of 145 feature rows run on real documents and are reachable. The
@@ -43,7 +43,7 @@ cargo xtask goal-verify --all -> 145 rows / 54 verified / 89 not verified or rep
 
 ## Captures
 
-All 56 installed-build captures are embedded below, grouped by
+All 57 installed-build captures are embedded below, grouped by
 theme and caption style. Each image is followed by a descriptor of what the
 window actually shows, including the cases where a tool is selected but its
 panel is not open.
@@ -54,7 +54,7 @@ panel is not open.
 | Light theme, macOS caption buttons | 12 |
 | Dark theme, Windows caption buttons | 12 |
 | Dark theme, macOS caption buttons | 14 |
-| Other | 1 |
+| Other | 2 |
 
 Two things to keep in mind while reading them: `light-windows-print.png` is
 dark despite its name, and `sign` / `request-signature` are the same dialog.
@@ -410,10 +410,16 @@ the descriptor names another file.
 
 *Dark theme, macOS caption buttons. Sign dialog: certificate signature (PKCS#12 identity, container password, reason, location, page, appearance, Sign/Close) and the request-signature form (recipient email, subject, message, Send request) with Tracked requests empty.*
 
-## 5. Other captures (1)
+## 5. Other captures (2)
 
 Fixture: `fixtures/realworld/powerpoint-slides.pdf` (3 landscape pages) unless
 the descriptor names another file.
+
+### `virtual-printer-captured.png`
+
+![virtual-printer-captured](ui/final/virtual-printer-captured.png)
+
+*The file captured from the PDFXI virtual printer (T-0275): Microsoft Word printed a document to the PDFXI PDF queue, the spooler wrote it to the capture port, and the installed viewer opens the captured one-page PDF showing the printed line. This is the origin evidence for CREATE-001 and CREATE-002.*
 
 ### `word-opens-docx.png`
 
@@ -423,24 +429,26 @@ the descriptor names another file.
 
 ## Feature status register
 
-Counts from `docs/features.toml`: 145 rows - 54 verified,
-13 library, 76 model, 2 replaced.
+Counts from `docs/features.toml`: 145 rows - 57 verified,
+12 library, 74 model, 2 replaced.
 The meanings come from ADR 0009.
 
 | Status | Rows | Meaning |
 | --- | --- | --- |
-| erified | 54 | Runs on real document bytes and a user can reach it through the GUI or the CLI. |
-| library | 13 | Real byte-level implementation over PDF documents and tested, but no user-reachable path or narrower than the product row. |
-| model | 76 | In-memory model, plan, contract, or host-boundary stub; not a working product feature. |
+| erified | 57 | Runs on real document bytes and a user can reach it through the GUI or the CLI. |
+| library | 12 | Real byte-level implementation over PDF documents and tested, but no user-reachable path or narrower than the product row. |
+| model | 74 | In-memory model, plan, contract, or host-boundary stub; not a working product feature. |
 | eplaced | 2 | Superseded by another row. |
 | **total** | **145** | Canonical matrix: docs/features.toml |
 
-### Verified rows (54)
+### Verified rows (57)
 
 | ID | Title | Domain |
 | --- | --- | --- |
 | `AUTO-009` | CLI info command with stable JSON output | Automation |
 | `AUTO-010` | CLI text extraction for uncompressed content streams | Automation |
+| `CREATE-001` | Create PDF from any printable application | Create |
+| `CREATE-002` | Virtual PDF printer | Create |
 | `CREATE-003` | Create PDF from images | Create |
 | `CREATE-004` | Create PDF from plain text and Markdown | Create |
 | `CREATE-005` | Create PDF from HTML | Create |
@@ -476,6 +484,7 @@ The meanings come from ADR 0009.
 | `SEC-009` | Metadata and XMP scrubbing | Security |
 | `SEC-012` | Protect PDF: apply and remove password protection | Security |
 | `SEC-013` | Assistant tool lockdown and hostile-document hardening | Security |
+| `STD-001` | PDF 1.0 through 2.0 compatibility | Standards |
 | `STD-002` | Cross-reference tables and streams | Standards |
 | `STD-007` | PDF/A conformance | Standards |
 | `STD-008` | PDF/X conformance | Standards |
@@ -494,7 +503,7 @@ The meanings come from ADR 0009.
 | `VIEW-017` | Find text in a document and select copy text | View & Navigate |
 | `VIEW-019` | Window controls, title bar settings, and persisted theme | View & Navigate |
 
-### Not verified (91)
+### Not verified (88)
 
 These rows exist in the matrix but are not reachable product features yet.
 
@@ -509,7 +518,6 @@ These rows exist in the matrix but are not reachable product features yet.
 | `FORMS-002` | Create text checkbox radio choice and button fields | `library` | Forms |
 | `SEC-002` | RC4 and AES encryption handlers | `library` | Security |
 | `SEC-005` | Sign and certify documents | `library` | Security |
-| `STD-001` | PDF 1.0 through 2.0 compatibility | `library` | Standards |
 | `STD-003` | Object streams and linearization | `library` | Standards |
 | `STD-004` | Font embedding and CID fonts | `library` | Standards |
 | `STD-010` | Incremental update and digital preservation | `library` | Standards |
@@ -527,8 +535,6 @@ These rows exist in the matrix but are not reachable product features yet.
 | `AUTO-006` | Local JSON API for automation | `model` | Automation |
 | `AUTO-007` | Custom toolsets and commands | `model` | Automation |
 | `AUTO-008` | WASM plugin host | `model` | Automation |
-| `CREATE-001` | Create PDF from any printable application | `model` | Create |
-| `CREATE-002` | Virtual PDF printer | `model` | Create |
 | `CREATE-006` | Create PDF from Microsoft Office via adapter | `model` | Create |
 | `CREATE-007` | Scan to PDF with TWAIN and WIA | `model` | Create |
 | `CREATE-008` | OCR scanned pages to searchable PDF | `model` | Create |
@@ -621,5 +627,5 @@ These rows exist in the matrix but are not reachable product features yet.
 
 ---
 
-Generated by `scripts/build-review-md.ps1`: 56 captures, 145 feature rows, 40 acceptance items.
+Generated by `scripts/build-review-md.ps1`: 57 captures, 145 feature rows, 40 acceptance items.
 
