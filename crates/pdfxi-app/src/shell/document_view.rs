@@ -193,6 +193,14 @@ impl PdfxiApp {
                     self.scroll_y = scroll_offset_for_page(&layout, page);
                 }
 
+                // Opening a signed document reveals its signature block instead
+                // of leaving it below the initial viewport.
+                if let Some(page) = self.pending_signature_scroll.take()
+                    && self.signature_badge_visible()
+                {
+                    self.scroll_y = self.signature_scroll_target(&layout, page, viewport.height);
+                }
+
                 // A find navigation request scrolls the current match into view
                 // once a layout is available, using the pure helper below.
                 if self.pending_scroll {
@@ -319,6 +327,10 @@ impl PdfxiApp {
                 // annotation overlays. Text fields take focus and typing;
                 // checkboxes toggle on click.
                 self.form_widgets_ui(ui, &layout, origin, pad_x);
+
+                // E-signed chip: a label above the typed signature note, shown
+                // only while the badge predicate holds for this tab.
+                self.signature_badge_ui(ui, &layout, origin, pad_x);
 
                 // Thread popup anchored beside the selected annotation.
                 self.annotation_popup_ui(ui, &layout, origin, pad_x);

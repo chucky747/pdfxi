@@ -505,3 +505,56 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
   T-0261A docs work stay uncommitted with their claims held.
 - **Next:** T-0245 round B and T-0261A docs land, then T-0262 final
   package/install/captures/handoff.
+
+### T-0245B checkpoint (2026-11-21, signing card, verification and E-signed badge)
+
+- **HEAD before:** `6ed8e82` (`checkpoint(acceptance): fuzz targets for redaction
+  and edit paths [T-0260A]`). **HEAD after:** this checkpoint commit
+  (`checkpoint(acceptance): signing card, verification and E-signed badge
+  [T-0245B]`; `git log -1 --oneline`). Linear history on `main`, not pushed, no
+  amend/rebase.
+- **Task state:** T-0245 stays `in_progress` - this is a partial round-B slice:
+  A-20 (signing card, verification readout and E-signed badge) is served, while
+  A-25 (drawn/typed/image signature placement) and A-31 (request-signature by
+  email plus the returned-copy tracker) remain open. T-0245A (document session
+  signing) stays `verified`; T-0267 (trust/store/timestamps/revocation) stays
+  `in_progress`; T-0255 stays `queued`. T-0245 is **not released** and no claim
+  is released here.
+- **What landed:** a signing card reachable from the command bar, the Tools row
+  and `--tool=sign` through `AppCommand::Sign` under the new `Capability::Signing`;
+  PKCS#12 import via `SigningIdentity::from_pfx` with immediate password clear;
+  a typed signature appearance plus incremental signature revision through
+  `DocumentSession::sign`; a verification readout (status, signer, SHA-256,
+  time, whole-file coverage, append-after check, honest "identity not verified"
+  while no trust anchor exists); an E-signed badge gated on
+  `Valid && bytes_match && covers_entire_file && !appended_after_signature` and
+  scoped to the active tab/byte state; and `verify_signature_on_open` so the
+  badge shows on open for a signed file and clears for an unsigned one. New
+  `crates/pdfxi-app/src/shell/signing.rs` plus capabilities, commands,
+  document_view, session, mod and ui.rs wiring.
+- **Verification (cited from the orchestrator's final run in `target/integration`,
+  not rerun here):** `cargo fmt --all --check` EXIT=0; `cargo clippy -p pdfxi-app
+  --all-targets --features ui,pdfium -- -D warnings` EXIT=0; `cargo test -p
+  pdfxi-app --features ui,pdfium` EXIT=0 with **546 lib + 24 harness passed,
+  0 failed, 4 ignored**. The four ignored signing tests pass:
+  `write_signed_capture_fixture`,
+  `signed_badge_and_readout_are_scoped_to_the_signing_tab`,
+  `signed_document_verifies_and_tampering_clears_the_badge`, and
+  `signature_is_verified_when_the_signed_document_opens`. The six captures were
+  reviewed by the orchestrator. (The lane fragment's inline note records an
+  earlier 544-lib count; 546 is the authoritative final figure.)
+- **Matrix:** `cargo xtask features verify` reports `FEATURES OK: 145 rows,
+  33 verified` - unchanged; this partial slice promotes no row. The T-0245
+  fragment has empty `feature_rows`/`promoted_rows`, `status = "partial"`; SEC-005
+  and FORMS-010 stay as they are until A-25/A-31 land, and SEC-006 is T-0267.
+  `docs/features.toml` is not in the commit.
+- **Evidence:** `docs/evidence/ui/T-0245.md` and the six
+  `docs/evidence/ui/t0245-{sign,badge}-{light,dark}-{windows,macos}.png`
+  captures; fragment `orchestration/feature-updates/T-0245.toml`.
+- **Scope discipline:** only the approved paths were staged. `docs/book/**`,
+  `docs/evidence/acceptance/**` and `orchestration/feature-updates/T-0261A.toml`
+  were explicitly excluded - the T-0261A docs lane is mid-edit and its claim
+  stays held. The regenerated board shows T-0245 `in_progress` and T-0255
+  `queued`.
+- **Next:** finish T-0245 (A-25 placement and A-31 request/tracker), then T-0261A
+  docs, T-0255, and T-0262 final package/install/captures/handoff.

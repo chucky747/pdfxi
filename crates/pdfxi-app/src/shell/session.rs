@@ -135,6 +135,10 @@ impl PdfxiApp {
                 }
                 self.sessions.insert(id, session);
                 self.finish_new_tab(id);
+                // A signed PDF shows its chip and verification panel
+                // immediately, once per opened document; an unsigned one
+                // clears the previous readout without an error.
+                self.verify_signature_on_open(id);
                 self.sync_tab_dirty(id);
                 self.refresh_annotations();
                 self.refresh_forms();
@@ -496,6 +500,10 @@ impl PdfxiApp {
         self.force_canvas_reload();
         self.refresh_annotations();
         self.refresh_forms();
+        // A verification readout describes one exact byte state, so any later
+        // edit, undo or redo makes the E-signed badge stale until it is
+        // checked again.
+        self.signing.verification = None;
     }
 
     /// Sync a tab's dirty marker with its session.

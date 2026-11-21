@@ -1,0 +1,85 @@
+# T-0245 - Certificate signing shell (Round B)
+#
+# Partial: A-20 is served, A-25 (drawn/typed/image placement) and A-31
+# (request/track) are still open, and SEC-006 (timestamps/revocation) belongs to
+# T-0267. No feature row is promoted.
+
+task = "T-0245"
+lane = "app"
+status = "partial"
+evidence = "docs/evidence/ui/T-0245.md"
+docs = [
+    "crates/pdfxi-app/src/shell/signing.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/session.rs",
+    "crates/pdfxi-app/src/shell/document_view.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/ui/T-0245.md",
+]
+feature_rows = []
+promoted_rows = []
+acceptance_items = ["A-20"]
+
+tests = [
+    "ui::shell::signing::tests::sign_command_opens_the_card_and_close_closes_it",
+    "ui::shell::signing::tests::badge_requires_a_valid_whole_file_signature",
+    "ui::shell::signing::tests::signature_overlay_geometry_sits_inside_the_page",
+    "ui::shell::signing::tests::signature_scroll_target_reveals_the_block",
+    "ui::shell::signing::tests::signature_sequence_skips_names_already_in_the_document",
+    "ui::shell::signing::tests::verification_from_another_tab_is_not_badged_or_shown",
+    "ui::shell::signing::tests::opening_an_unsigned_document_clears_the_signature_readout",
+    "ui::shell::signing::tests::chain_trust_none_is_reported_as_unverified",
+    "ui::shell::signing::tests::signing_time_formats_utc_and_falls_back_to_seconds",
+    "ui::shell::signing::tests::signed_document_verifies_and_tampering_clears_the_badge",
+    "ui::shell::signing::tests::signed_badge_and_readout_are_scoped_to_the_signing_tab",
+    "ui::shell::signing::tests::signature_is_verified_when_the_signed_document_opens",
+    "ui::shell::signing::tests::write_signed_capture_fixture",
+]
+
+notes = """
+Round B of the signing shell per ADR 0012. Capability::Signing is enabled, so the
+same AppCommand::Sign (label "sign") is reachable from the command bar, the
+Tools panel row and --tool=sign. The card picks a PKCS#12 container, imports it
+with SigningIdentity::from_pfx, clears the password immediately, shows the
+signer subject and chain length, and signs the active writable tab.
+
+Signing draws a visible typed /Text appearance at the bottom-right of the page
+(/NM pdfxi-signature-N) and then calls DocumentSession::sign with a first-free
+Signature-N field name seeded from the document's /AcroForm /Fields signature
+entries. The appearance is committed as one revision and the signature as a
+second incremental revision that covers the appearance; the session API has no
+single annotation-plus-sign call. Verified with verify_signature on the session
+bytes: status, signer, SHA-256, time, whole-file coverage, appended-after-
+signature, and chain trust shown honestly as "identity not verified" while the
+trust store is absent (T-0267).
+
+The E-signed badge predicate is Valid && bytes_match && covers_entire_file &&
+!appended_after_signature, further scoped to the active tab and the byte state
+(edits clear it). The green chip is a label above the typed note, drawn through
+the existing page transform; the panel shows "Not checked for this document"
+when the stored readout belongs to another tab. open_document_session calls
+verify_signature_on_open once per opened document: a signed file shows the chip
+and panel immediately under --tool=sign, an unsigned file clears the readout
+with no error, and a malformed signature error is kept for that tab.
+
+Tests: 544 lib passed + 24 harness, 4 ignored signing tests (real PFX fixture),
+fmt and clippy clean. The ignored tests also reopen the signed bytes with
+PdfiumRenderer (original page count, real page-0 geometry) and prove the typed
+note is in the signed document; one flips a signed byte and asserts the badge
+predicate becomes false.
+
+Capture fixture: the ignored write_signed_capture_fixture leaves
+target/tmp/signing/capture-signed.pdf (111330 bytes, SHA-256
+B2D99AD720BAC8D4CC9E9ED1061C078285351556B25BAA1D7831C4C687BFCACD) for the
+reviewer's four captures. No screenshots are committed yet.
+
+Not promoted: SEC-005/FORMS-010 stay as they are because A-25 (drawn/typed/image
+placement plus drag placement) and A-31 (request signature by email and the
+returned-copy tracker) are still open; SEC-006 (timestamps/revocation) is T-0267.
+Other limits: only a typed text-note appearance, invisible signature widget,
+verification not re-run after save, no multi-signature list, PFX read and signing
+synchronous on the UI thread (~0.1 s for the fixture), encrypted documents refuse
+signing.
+"""

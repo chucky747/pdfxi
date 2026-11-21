@@ -75,11 +75,11 @@ impl Capabilities {
     /// Capabilities that are enabled today.
     ///
     /// The document workspace, recent files, bookmarks navigation, the local
-    /// Files library, starring, comments, AcroForm filling and the OpenCode
-    /// connection screen exist. Shared is added by the shell when a shared
-    /// folder is configured; [`Capability::AiAssistant`] is added by the shell
-    /// only after the connection screen reports a usable service. Edit, export,
-    /// print and protect remain off until their task lands.
+    /// Files library, starring, comments, AcroForm filling, the certificate
+    /// signing card and the OpenCode connection screen exist. Shared is added by
+    /// the shell when a shared folder is configured; [`Capability::AiAssistant`]
+    /// is added by the shell only after the connection screen reports a usable
+    /// service. Edit, export, print and protect remain off until their task lands.
     #[must_use]
     pub fn available() -> Self {
         Self::none()
@@ -90,6 +90,7 @@ impl Capabilities {
             .with(Capability::Starred)
             .with(Capability::Comments)
             .with(Capability::Forms)
+            .with(Capability::Signing)
             .with(Capability::AssistantConnect)
     }
 

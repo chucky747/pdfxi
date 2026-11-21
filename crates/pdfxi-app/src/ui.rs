@@ -601,6 +601,8 @@ pub struct PdfxiApp {
     comments: shell::comments::CommentsUiState,
     /// Fill & Sign state: cached AcroForm model, panel, draft and notices.
     forms: shell::forms::FormsUiState,
+    /// Certificate signing card and signature verification readout.
+    signing: shell::signing::SigningUiState,
     /// Pre-print panel, progress and worker state.
     print_ui: shell::print_dialog::PrintUiState,
     /// Revision of the active session bound to the renderer.
@@ -633,6 +635,8 @@ pub struct PdfxiApp {
     pending_scroll: bool,
     /// Set when a thumbnail click should scroll the canvas next frame.
     pending_page_scroll: Option<usize>,
+    /// Set when opening a signed document should reveal its signature block.
+    pending_signature_scroll: Option<usize>,
     /// Window-free thumbnail navigation pane model.
     thumbs: ThumbnailPaneState,
     /// When true, the next pane frame scrolls its active row into view.
@@ -902,6 +906,7 @@ impl PdfxiApp {
         self.scroll_y = 0.0;
         self.pending_scroll = false;
         self.pending_page_scroll = None;
+        self.pending_signature_scroll = None;
         self.thumbs.reset(0);
         self.thumb_follow_active = true;
         self.assistant_chat
@@ -1813,6 +1818,7 @@ impl eframe::App for PdfxiApp {
         self.print_ui_ui(ctx);
         self.note_draft_ui(ctx);
         self.forms_panel_ui(ctx);
+        self.signing_dialog_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);

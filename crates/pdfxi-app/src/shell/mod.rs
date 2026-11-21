@@ -29,6 +29,7 @@ pub mod print_dialog;
 pub mod rail;
 pub mod session;
 pub mod side_panel;
+pub(crate) mod signing;
 pub mod title_bar;
 pub mod tools_panel;
 pub mod widgets;

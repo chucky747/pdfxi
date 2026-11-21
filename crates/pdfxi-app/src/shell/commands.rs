@@ -573,7 +573,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::Comment => self.start_note_tool(),
             AppCommand::Highlight => self.highlight_selection(),
             AppCommand::FillAndSign => self.open_fill_and_sign(),
-            AppCommand::Sign => self.not_available("Sign"),
+            AppCommand::Sign => self.handle_sign_command(),
             AppCommand::Organize => self.not_available("Organize Pages"),
             AppCommand::Export => self.not_available("Export"),
             AppCommand::ConvertToPdf => self.not_available("Convert to PDF"),
