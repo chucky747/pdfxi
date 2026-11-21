@@ -1142,13 +1142,29 @@ title = "Insert delete extract and replace pages"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/pages.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/evidence/cli/T-0276.md",
+    "docs/evidence/cli/T-0277.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 94 unit + 6 integration passed; TEST_EXIT=0. Rotation normalizes to {0,90,180,270}, composes with inherited /Rotate along the /Parent chain, and preserves raw Flate stream bytes."
+evidence = "`pdfxi pages crop --bounds 10,20,700,560` on fixtures/realworld/powerpoint-slides.pdf wrote /CropBox [ 10 20 700 560 ] on all three pages (crop_boxes=3) and the output reparses with pages: 3 and keeps all three slide markers. `pdfxi pages resize --size 400x300` wrote /MediaBox [ 0 0 400 300 ] and /CropBox on every page with three `cm` content transforms, and text extraction still returns three markers (resize_text_pages=3); the output reparses with pages: 3. cargo test -p pdfxi-core --lib pages: 22 passed; cargo test -p pdfxi-cli --test cli pages: 11 passed, 0 failed. Pasted output in docs/evidence/cli/T-0277.md."
 id = "EDIT-006"
-notes = ""
+notes = """
+EDIT-006 now has all four capabilities reachable: move/reorder/rotate through
+`pdfxi pages` (T-0276) and crop/resize through the new SetBoxes and Resize plan
+operations. Crop writes /CropBox with validated absolute point boxes; Resize
+sets the media and crop boxes to the target size and scales content to fit,
+centred, by wrapping the untouched /Contents in two uncompressed streams
+(`q ... cm` and `Q`). Invalid boxes, zero sizes and out-of-range selections are
+rejected before anything is written.
+
+Honest scope: resize scales existing content (no reflow, no font re-embedding),
+and crop only sets the crop box; it does not remove cropped content from the
+file (redaction is a separate row).
+"""
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "pages::tests::reorder_reparses_in_the_requested_order",
     "pages::tests::rotate_writes_rotate_on_the_page_and_reparses",
@@ -1158,6 +1174,14 @@ tests = [
     "pages::tests::compressed_stream_bytes_are_preserved_after_rotation",
     "pages::tests::duplicate_index_in_reorder_is_rejected",
     "pages::tests::non_multiple_of_90_rotation_is_rejected",
+    "pages::tests::crop_sets_crop_box_and_keeps_every_page",
+    "pages::tests::resize_replaces_the_media_box_and_scales_content",
+    "pages::tests::invalid_boxes_and_sizes_are_rejected",
+    "pages_move_reorders_real_world_pages",
+    "pages_rotate_writes_rotation_on_the_selected_page",
+    "pages_crop_sets_the_crop_box_on_a_real_document",
+    "pages_resize_scales_the_page_and_keeps_its_content",
+    "pages_crop_rejects_a_degenerate_box",
 ]
 title = "Reorder rotate crop and resize pages"
 

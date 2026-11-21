@@ -491,6 +491,34 @@ enum PagesCommand {
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
     },
+    /// Set the crop box of the selected pages.
+    Crop {
+        /// Source PDF.
+        input: PathBuf,
+        /// Page selection; defaults to every page.
+        #[arg(long, value_name = "SPEC", default_value = "all")]
+        pages: String,
+        /// Crop box as four points: `left,bottom,right,top`.
+        #[arg(long, value_name = "BOX")]
+        bounds: String,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Resize the selected pages, scaling their content to fit.
+    Resize {
+        /// Source PDF.
+        input: PathBuf,
+        /// Page selection; defaults to every page.
+        #[arg(long, value_name = "SPEC", default_value = "all")]
+        pages: String,
+        /// Target size in points as `WIDTHxHEIGHT`, e.g. `612x792`.
+        #[arg(long, value_name = "WxH")]
+        size: String,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
     /// Rotate the selected pages clockwise.
     Rotate {
         /// Source PDF.
@@ -735,6 +763,21 @@ fn main() -> anyhow::Result<()> {
                 out,
             } => pages::move_page(&input, from, to, &out),
             PagesCommand::Reorder { input, order, out } => pages::reorder(&input, &order, &out),
+            PagesCommand::Crop {
+                input,
+                pages,
+                bounds,
+                out,
+            } => pages::crop(&input, &pages, &bounds, &out),
+            PagesCommand::Resize {
+                input,
+                pages,
+                size,
+                out,
+            } => {
+                let (width, height) = pages::parse_size(&size)?;
+                pages::resize(&input, &pages, width, height, &out)
+            }
             PagesCommand::Rotate {
                 input,
                 pages,

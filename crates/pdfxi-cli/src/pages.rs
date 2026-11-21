@@ -71,6 +71,75 @@ fn apply(document: &Document, plan: &PagePlan, out: &Path) -> anyhow::Result<()>
     write(out, &bytes)
 }
 
+/// Set the crop box of the selected pages (absolute points).
+pub(crate) fn crop(input: &Path, spec: &str, bounds: &str, out: &Path) -> anyhow::Result<()> {
+    let document = load(input)?;
+    let count = document.page_count()?;
+    let indices = parse_selection(spec, count)?;
+    let target = if indices.len() == count {
+        RotationTarget::All
+    } else {
+        RotationTarget::Indices(indices)
+    };
+    let crop_box = parse_box(bounds)?;
+    let plan = PagePlan::identity().then(PageOperation::SetBoxes {
+        target,
+        media_box: None,
+        crop_box: Some(crop_box),
+    })?;
+    apply(&document, &plan, out)?;
+    report(out)
+}
+
+/// Resize the selected pages to `width` x `height` points, scaling content to fit.
+pub(crate) fn resize(
+    input: &Path,
+    spec: &str,
+    width: f64,
+    height: f64,
+    out: &Path,
+) -> anyhow::Result<()> {
+    let document = load(input)?;
+    let count = document.page_count()?;
+    let indices = parse_selection(spec, count)?;
+    let target = if indices.len() == count {
+        RotationTarget::All
+    } else {
+        RotationTarget::Indices(indices)
+    };
+    let plan = PagePlan::identity().then(PageOperation::Resize {
+        target,
+        width,
+        height,
+    })?;
+    apply(&document, &plan, out)?;
+    report(out)
+}
+
+/// Parse `left,bottom,right,top` as four finite numbers.
+fn parse_box(text: &str) -> anyhow::Result<[f64; 4]> {
+    let parts: Vec<&str> = text.split(',').map(str::trim).collect();
+    if parts.len() != 4 {
+        bail!("--box needs four comma-separated numbers: left,bottom,right,top");
+    }
+    let mut values = [0.0_f64; 4];
+    for (slot, part) in values.iter_mut().zip(parts) {
+        *slot = part
+            .parse()
+            .with_context(|| format!("invalid box coordinate {part:?}"))?;
+    }
+    Ok(values)
+}
+
+/// Parse `WIDTHxHEIGHT` in points.
+pub(crate) fn parse_size(text: &str) -> anyhow::Result<(f64, f64)> {
+    let (width, height) = text
+        .split_once(['x', 'X'])
+        .with_context(|| format!("--size must be WIDTHxHEIGHT, got {text:?}"))?;
+    let width: f64 = width.trim().parse().context("invalid size width")?;
+    let height: f64 = height.trim().parse().context("invalid size height")?;
+    Ok((width, height))
+}
 /// Keep the selected pages, in the order given.
 pub(crate) fn extract(input: &Path, spec: &str, out: &Path) -> anyhow::Result<()> {
     let document = load(input)?;

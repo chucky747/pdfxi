@@ -2615,3 +2615,82 @@ fn pages_split_writes_numbered_parts() {
     }
     let _ = fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn pages_crop_sets_the_crop_box_on_a_real_document() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "crop",
+        source.to_str().expect("utf-8 source"),
+        "--bounds",
+        "10,20,700,560",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("pages: 3"), "{}", stdout(&output));
+    let bytes = fs::read(&out.path).expect("read crop output");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("/CropBox [ 10 20 700 560 ]"),
+        "missing crop box"
+    );
+    let texts = page_texts(&out.path);
+    assert_eq!(
+        texts.len(),
+        3,
+        "cropping must keep the page text: {texts:?}"
+    );
+}
+
+#[test]
+fn pages_resize_scales_the_page_and_keeps_its_content() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "resize",
+        source.to_str().expect("utf-8 source"),
+        "--size",
+        "400x300",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let bytes = fs::read(&out.path).expect("read resize output");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("/MediaBox [ 0 0 400 300 ]"),
+        "missing media box"
+    );
+    assert!(
+        text.contains("/CropBox [ 0 0 400 300 ]"),
+        "missing crop box"
+    );
+    assert!(text.contains(" cm"), "content transform must be written");
+    let texts = page_texts(&out.path);
+    assert_eq!(
+        texts.len(),
+        3,
+        "resizing must keep the page text: {texts:?}"
+    );
+}
+
+#[test]
+fn pages_crop_rejects_a_degenerate_box() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "pages",
+        "crop",
+        source.to_str().expect("utf-8 source"),
+        "--bounds",
+        "10,20,10,40",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(!output.status.success());
+    assert!(!out.path.exists(), "no output for a rejected box");
+}

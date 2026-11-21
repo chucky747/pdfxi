@@ -57,7 +57,7 @@ pub enum RotationTarget {
 }
 
 /// A single transformation step in a [`PagePlan`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PageOperation {
     /// Keep the pages at the given positions of the current selection, in the
     /// listed order.
@@ -87,6 +87,34 @@ pub enum PageOperation {
         /// Number of clockwise quarter turns; may be negative.
         quarter_turns: i32,
     },
+    /// Replace the media and/or crop box of the targeted pages.
+    ///
+    /// Each box is `[left, bottom, right, top]` in PDF points, must be finite
+    /// and non-degenerate (`left < right`, `bottom < top`). Page content is not
+    /// moved; use [`PageOperation::Resize`] to scale it.
+    SetBoxes {
+        /// Which pages to change.
+        target: RotationTarget,
+        /// New `/MediaBox`, when given.
+        media_box: Option<[f64; 4]>,
+        /// New `/CropBox`, when given.
+        crop_box: Option<[f64; 4]>,
+    },
+    /// Resize the targeted pages to `width` by `height` points and scale their
+    /// content to fit, centred.
+    ///
+    /// The page's current media box (including any [`PageOperation::SetBoxes`]
+    /// override) determines the scale factor, which preserves the aspect ratio
+    /// and never crops. The content is wrapped in a `cm` transform using two
+    /// uncompressed streams, so compressed source streams stay untouched.
+    Resize {
+        /// Which pages to resize.
+        target: RotationTarget,
+        /// Target width in points; must be finite and positive.
+        width: f64,
+        /// Target height in points; must be finite and positive.
+        height: f64,
+    },
 }
 
 /// One page in a plan's working selection.
@@ -98,6 +126,12 @@ struct SelectionEntry {
     page: usize,
     /// Absolute rotation, in degrees, to write on the new page dictionary.
     rotation: u16,
+    /// `/MediaBox` override, if a box operation targets this page.
+    media_box: Option<[f64; 4]>,
+    /// `/CropBox` override, if a box operation targets this page.
+    crop_box: Option<[f64; 4]>,
+    /// Content transform `[a, b, c, d, e, f]` written around the contents.
+    content_transform: Option<[f64; 6]>,
 }
 
 /// A deterministic, reusable description of a page-level edit.
@@ -305,6 +339,9 @@ pub(crate) fn apply(document: &Document, plan: &PagePlan) -> Result<Vec<u8>> {
             source: 0,
             page: page_index,
             rotation: effective_rotation(sources[0], page_index)?,
+            media_box: None,
+            crop_box: None,
+            content_transform: None,
         });
     }
 
@@ -367,6 +404,9 @@ pub(crate) fn apply(document: &Document, plan: &PagePlan) -> Result<Vec<u8>> {
                             source: doc_index,
                             page: page_index,
                             rotation: effective_rotation(sources[doc_index], page_index)?,
+                            media_box: None,
+                            crop_box: None,
+                            content_transform: None,
                         });
                     }
                 }
@@ -381,6 +421,80 @@ pub(crate) fn apply(document: &Document, plan: &PagePlan) -> Result<Vec<u8>> {
                 for position in positions {
                     if let Some(entry) = selection.get_mut(position) {
                         entry.rotation = normalize_rotation(i64::from(entry.rotation) + delta);
+                    }
+                }
+            }
+            PageOperation::SetBoxes {
+                target,
+                media_box,
+                crop_box,
+            } => {
+                if let Some(boxes) = media_box {
+                    validate_box("media box", *boxes)?;
+                }
+                if let Some(boxes) = crop_box {
+                    validate_box("crop box", *boxes)?;
+                }
+                if media_box.is_none() && crop_box.is_none() {
+                    return Err(Error::CannotSerialize(
+                        "set-boxes operation has no box".to_owned(),
+                    ));
+                }
+                for position in rotation_positions(target, selection.len())? {
+                    if let Some(entry) = selection.get_mut(position) {
+                        if let Some(boxes) = media_box {
+                            entry.media_box = Some(*boxes);
+                        }
+                        if let Some(boxes) = crop_box {
+                            entry.crop_box = Some(*boxes);
+                        }
+                    }
+                }
+            }
+            PageOperation::Resize {
+                target,
+                width,
+                height,
+            } => {
+                if !width.is_finite() || !height.is_finite() || *width <= 0.0 || *height <= 0.0 {
+                    return Err(Error::CannotSerialize(
+                        "resize needs a finite positive width and height".to_owned(),
+                    ));
+                }
+                for position in rotation_positions(target, selection.len())? {
+                    let Some(entry) = selection.get(position).cloned() else {
+                        continue;
+                    };
+                    let current = match entry.media_box {
+                        Some(boxes) => boxes,
+                        None => {
+                            let structure = sources[entry.source].supported_structure()?;
+                            let page = structure
+                                .pages
+                                .get(entry.page)
+                                .ok_or(Error::PageNotFound(entry.page))?;
+                            [
+                                page.media_box.left,
+                                page.media_box.bottom,
+                                page.media_box.right,
+                                page.media_box.top,
+                            ]
+                        }
+                    };
+                    let box_width = current[2] - current[0];
+                    let box_height = current[3] - current[1];
+                    if box_width <= 0.0 || box_height <= 0.0 {
+                        return Err(Error::CannotSerialize(
+                            "source page has an empty media box".to_owned(),
+                        ));
+                    }
+                    let scale = (width / box_width).min(height / box_height);
+                    let offset_x = (width - box_width * scale) / 2.0 - current[0] * scale;
+                    let offset_y = (height - box_height * scale) / 2.0 - current[1] * scale;
+                    if let Some(slot) = selection.get_mut(position) {
+                        slot.media_box = Some([0.0, 0.0, *width, *height]);
+                        slot.crop_box = Some([0.0, 0.0, *width, *height]);
+                        slot.content_transform = Some([scale, 0.0, 0.0, scale, offset_x, offset_y]);
                     }
                 }
             }
@@ -483,6 +597,7 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
 
     // Build a fresh page dictionary for each selected position.
     let mut new_pages: Vec<(u32, Object)> = Vec::with_capacity(selection.len());
+    let mut extra_objects: Vec<(u32, Object)> = Vec::new();
     for (position, entry) in selection.iter().enumerate() {
         let source = sources[entry.source];
         let structure = source.supported_structure()?;
@@ -511,12 +626,13 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
             Object::Integer(i64::from(entry.rotation)),
         );
         let mut media_box = Vec::with_capacity(4);
-        for coordinate in [
+        let media = entry.media_box.unwrap_or([
             page.media_box.left,
             page.media_box.bottom,
             page.media_box.right,
             page.media_box.top,
-        ] {
+        ]);
+        for coordinate in media {
             media_box.push(if coordinate.fract() == 0.0 {
                 Object::Integer(coordinate as i64)
             } else {
@@ -524,6 +640,25 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
             });
         }
         dictionary.insert("MediaBox".to_owned(), Object::Array(media_box));
+        if let Some(crop) = entry.crop_box {
+            dictionary.insert("CropBox".to_owned(), box_array(crop));
+        }
+        if let Some([a, b, c, d, e, f]) = entry.content_transform {
+            let pre = allocate()?;
+            let post = allocate()?;
+            let matrix = format!("q {a} {b} {c} {d} {e} {f} cm\n");
+            extra_objects.push((pre, content_stream(matrix.into_bytes())));
+            extra_objects.push((post, content_stream(b"Q\n".to_vec())));
+            let contents = dictionary.get("Contents").cloned().unwrap_or(Object::Null);
+            let mut items = vec![Object::Reference(ObjectId::new(pre, 0))];
+            match contents {
+                Object::Array(existing) => items.extend(existing),
+                Object::Null => {}
+                other => items.push(other),
+            }
+            items.push(Object::Reference(ObjectId::new(post, 0)));
+            dictionary.insert("Contents".to_owned(), Object::Array(items));
+        }
         if let Some(resources) = page.resources {
             let value = match remap
                 .get(entry.source)
@@ -569,6 +704,9 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
     output.insert(catalog_number, Object::Dictionary(catalog));
     output.insert(pages_number, Object::Dictionary(pages_dictionary));
     for (number, object) in new_pages {
+        output.insert(number, object);
+    }
+    for (number, object) in extra_objects {
         output.insert(number, object);
     }
     for (source_index, store) in object_store.iter().enumerate() {
@@ -771,7 +909,75 @@ fn validate_operation_shape(operation: &PageOperation) -> Result<()> {
             RotationTarget::All => Ok(()),
             RotationTarget::Indices(indices) => require_non_empty(indices),
         },
+        PageOperation::SetBoxes {
+            target,
+            media_box,
+            crop_box,
+        } => {
+            if let RotationTarget::Indices(indices) = target {
+                require_non_empty(indices)?;
+            }
+            if media_box.is_none() && crop_box.is_none() {
+                return Err(Error::CannotSerialize(
+                    "set-boxes operation has no box".to_owned(),
+                ));
+            }
+            if let Some(boxes) = media_box {
+                validate_box("media box", *boxes)?;
+            }
+            if let Some(boxes) = crop_box {
+                validate_box("crop box", *boxes)?;
+            }
+            Ok(())
+        }
+        PageOperation::Resize {
+            target,
+            width,
+            height,
+        } => {
+            if let RotationTarget::Indices(indices) = target {
+                require_non_empty(indices)?;
+            }
+            if !width.is_finite() || !height.is_finite() || *width <= 0.0 || *height <= 0.0 {
+                return Err(Error::CannotSerialize(
+                    "resize needs a finite positive width and height".to_owned(),
+                ));
+            }
+            Ok(())
+        }
     }
+}
+
+/// Validate a `[left, bottom, right, top]` box.
+fn validate_box(name: &str, boxes: [f64; 4]) -> Result<()> {
+    if boxes.iter().any(|value| !value.is_finite()) || boxes[0] >= boxes[2] || boxes[1] >= boxes[3]
+    {
+        return Err(Error::CannotSerialize(format!("invalid {name}")));
+    }
+    Ok(())
+}
+
+/// Encode a `[left, bottom, right, top]` box as a PDF array.
+fn box_array(boxes: [f64; 4]) -> Object {
+    let mut values = Vec::with_capacity(4);
+    for coordinate in boxes {
+        values.push(if coordinate.fract() == 0.0 {
+            Object::Integer(coordinate as i64)
+        } else {
+            Object::Real(coordinate)
+        });
+    }
+    Object::Array(values)
+}
+
+/// Build an uncompressed content stream carrying `data`.
+fn content_stream(data: Vec<u8>) -> Object {
+    let mut dictionary = Dictionary::new();
+    dictionary.insert(
+        "Length".to_owned(),
+        Object::Integer(i64::try_from(data.len()).unwrap_or(i64::MAX)),
+    );
+    Object::Stream { dictionary, data }
 }
 
 #[cfg(test)]
@@ -1336,5 +1542,70 @@ mod tests {
             !matches!(error, Error::UnsupportedState(_)),
             "a structural failure must not be reported as unsupported state: {error:?}"
         );
+    }
+    #[test]
+    fn crop_sets_crop_box_and_keeps_every_page() {
+        let document = Document::from_bytes(pages_pdf(2)).expect("fixture parses");
+        let plan = PagePlan::identity()
+            .then(PageOperation::SetBoxes {
+                target: RotationTarget::All,
+                media_box: None,
+                crop_box: Some([10.0, 20.0, 300.0, 400.0]),
+            })
+            .expect("crop plan");
+        let bytes = document.apply_page_plan(&plan).expect("crop applies");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("/CropBox [ 10 20 300 400 ]"),
+            "missing crop box"
+        );
+        let reparsed = Document::from_bytes(bytes).expect("crop output reparses");
+        assert_eq!(reparsed.page_count().expect("page count"), 2);
+    }
+
+    #[test]
+    fn resize_replaces_the_media_box_and_scales_content() {
+        let document = Document::from_bytes(pages_pdf(1)).expect("fixture parses");
+        let plan = PagePlan::identity()
+            .then(PageOperation::Resize {
+                target: RotationTarget::All,
+                width: 200.0,
+                height: 100.0,
+            })
+            .expect("resize plan");
+        let bytes = document.apply_page_plan(&plan).expect("resize applies");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("/MediaBox [ 0 0 200 100 ]"),
+            "missing media box"
+        );
+        assert!(text.contains(" cm"), "content transform must be written");
+        assert!(
+            text.contains("/CropBox [ 0 0 200 100 ]"),
+            "missing crop box"
+        );
+        let reparsed = Document::from_bytes(bytes).expect("resize output reparses");
+        assert_eq!(reparsed.page_count().expect("page count"), 1);
+        assert_eq!(texts(reparsed.bytes()).len(), 1, "text survives resizing");
+    }
+
+    #[test]
+    fn invalid_boxes_and_sizes_are_rejected() {
+        let error = PagePlan::identity()
+            .then(PageOperation::SetBoxes {
+                target: RotationTarget::All,
+                media_box: None,
+                crop_box: Some([10.0, 10.0, 10.0, 20.0]),
+            })
+            .expect_err("degenerate crop box must fail");
+        assert!(matches!(error, Error::CannotSerialize(_)), "{error:?}");
+        let error = PagePlan::identity()
+            .then(PageOperation::Resize {
+                target: RotationTarget::All,
+                width: 0.0,
+                height: 100.0,
+            })
+            .expect_err("zero width must fail");
+        assert!(matches!(error, Error::CannotSerialize(_)), "{error:?}");
     }
 }

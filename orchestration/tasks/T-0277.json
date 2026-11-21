@@ -1,0 +1,19 @@
+{
+  "id": "T-0277",
+  "lane": "core",
+  "title": "Crop and resize page boxes through the page plan and CLI",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0276"],
+  "owns": [
+    "crates/pdfxi-core/src/pages.rs",
+    "crates/pdfxi-cli/src/pages.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/evidence/cli/T-0277.md",
+    "orchestration/feature-updates/T-0277.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core --lib pages and cargo test -p pdfxi-cli pass; pdfxi pages crop writes /CropBox on a real fixture and pdfxi pages resize writes a new /MediaBox plus a content transform while page text survives; EDIT-006 moves to verified.",
+  "notes": "Adds PageOperation::SetBoxes and PageOperation::Resize. Resize wraps the original /Contents in two uncompressed streams so compressed source streams are preserved, and validates finite, non-degenerate boxes and positive sizes before rendering.",
+  "evidence": "docs/evidence/cli/T-0277.md"
+}
