@@ -11,10 +11,18 @@ use std::path::{Path, PathBuf};
 
 use pdfxi_core::{Dictionary, Document, Object, ObjectId};
 use pdfxi_edit::{
-    AnnotationEditError, AnnotationState, AnnotationSubtype, Point, Rect, add_highlight,
-    add_text_note, delete_annotation, export_xfdf, import_xfdf, list_annotations, reply_to,
-    set_state, update_contents,
+    AnnotationEditError, AnnotationKind, AnnotationState, AnnotationSubtype, MAX_INK_PATHS,
+    MAX_INK_POINTS, MAX_MARKUP_QUADS, Point, Rect, add_highlight, add_ink, add_strikeout,
+    add_text_note, add_underline, delete_annotation, export_xfdf, import_xfdf, list_annotations,
+    reply_to, set_state, update_contents,
 };
+use pdfxi_render::pdfium_backend::PdfiumRenderer;
+use pdfxi_render::{CancellationToken, PageIndex, RenderedPage, Renderer};
+
+/// Page 1 of the fixture, in default user space points.
+const PAGE_WIDTH: f32 = 612.0;
+/// Page 1 of the fixture, in default user space points.
+const PAGE_HEIGHT: f32 = 792.0;
 
 /// Read the real-world fixture.
 fn fixture() -> Vec<u8> {
@@ -113,6 +121,15 @@ fn output_path() -> PathBuf {
         .nth(2)
         .expect("workspace root")
         .join("target/lanes/author/t0230-out/annotated.pdf")
+}
+
+/// Where the T-0247 artifact (underline, strikeout and ink) is written.
+fn markup_output_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("workspace root")
+        .join("target/lanes/author7/t0247-out/markup.pdf")
 }
 
 #[test]
@@ -431,4 +448,590 @@ fn empty_identifier_is_rejected() {
         ),
         Err(AnnotationEditError::EmptyId)
     ));
+}
+
+/// The underline, strikeout and ink geometry used by the round-A tests.
+fn markup_quads() -> [Rect; 3] {
+    [
+        rect(72.0, 600.0, 300.0, 616.0),
+        rect(72.0, 620.0, 240.0, 632.0),
+        rect(72.0, 560.0, 300.0, 576.0),
+    ]
+}
+
+/// Two deterministic ink strokes inside page 1.
+fn ink_paths() -> Vec<Vec<Point>> {
+    vec![
+        vec![
+            Point::new(80.0, 500.0),
+            Point::new(120.0, 520.0),
+            Point::new(160.0, 500.0),
+            Point::new(200.0, 520.0),
+        ],
+        vec![Point::new(220.0, 500.0), Point::new(260.0, 540.0)],
+    ]
+}
+
+#[test]
+fn underline_strikeout_and_ink_survive_a_full_rewrite() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let original_text = document.page_text(0).expect("page 1 text before editing");
+
+    add_text_note(
+        &mut document,
+        0,
+        Point::new(40.0, 700.0),
+        "Existing note",
+        "Reader",
+        "existing-note",
+    )
+    .expect("add an annotation that must be preserved");
+
+    let quads = markup_quads();
+    let underline = add_underline(&mut document, 0, &quads[..2], "Underlined phrase", "Alice")
+        .expect("add underline");
+    let strikeout = add_strikeout(&mut document, 0, &quads[2..], "Rejected phrase", "Bob")
+        .expect("add strikeout");
+    let paths = ink_paths();
+    let ink = add_ink(&mut document, 0, &paths, 2.0, "Freehand note", "Carol").expect("add ink");
+
+    assert_eq!(underline.subtype.as_pdf_name(), "Underline");
+    assert_eq!(strikeout.subtype.as_pdf_name(), "StrikeOut");
+    assert_eq!(ink.subtype.as_pdf_name(), "Ink");
+    assert_ne!(underline.object, strikeout.object);
+
+    let views = list_annotations(&document, 0).expect("list annotations");
+    assert_eq!(views.len(), 4, "existing note plus three new annotations");
+    assert_eq!(
+        views
+            .iter()
+            .find(|view| view.id == "existing-note")
+            .expect("existing note view")
+            .contents,
+        "Existing note"
+    );
+
+    let underline_view = views
+        .iter()
+        .find(|view| view.id == underline.id)
+        .expect("underline view");
+    assert_eq!(underline_view.kind, Some(AnnotationKind::Underline));
+    assert_eq!(underline_view.author, "Alice");
+    assert_eq!(underline_view.quads, quads[..2].to_vec());
+    assert_eq!(underline_view.rect, rect(72.0, 600.0, 300.0, 632.0));
+    assert_eq!(underline_view.color, Some(vec![0.0, 0.0, 0.0]));
+    assert_eq!(underline_view.stroke_width, Some(1.0));
+    assert_eq!(underline_view.contents, "Underlined phrase");
+
+    let strikeout_view = views
+        .iter()
+        .find(|view| view.id == strikeout.id)
+        .expect("strikeout view");
+    assert_eq!(strikeout_view.kind, Some(AnnotationKind::Strikeout));
+    assert_eq!(strikeout_view.quads, quads[2..].to_vec());
+    assert_eq!(strikeout_view.stroke_width, Some(1.0));
+
+    let ink_view = views
+        .iter()
+        .find(|view| view.id == ink.id)
+        .expect("ink view");
+    assert_eq!(ink_view.kind, Some(AnnotationKind::Pencil));
+    assert_eq!(ink_view.author, "Carol");
+    assert_eq!(ink_view.ink_paths, paths);
+    assert!(ink_view.quads.is_empty());
+    assert_eq!(ink_view.stroke_width, Some(2.0));
+    assert_eq!(
+        ink_view.rect,
+        rect(78.5, 498.5, 261.5, 541.5),
+        "the ink rect expands the point bounds by half the stroke plus slack"
+    );
+
+    let saved = document.save().expect("full rewrite");
+    let reopened = Document::from_bytes(saved.clone()).expect("saved document parses");
+    assert_eq!(
+        reopened.page_text(0).expect("page 1 text after editing"),
+        original_text,
+        "annotations must not change page text"
+    );
+    assert_eq!(annotation_ids(&reopened, 0).len(), 4);
+
+    let (_, note_dictionary) = annotation_by_id(&reopened, 0, "existing-note");
+    assert_eq!(
+        string_field(&note_dictionary, "Contents").as_deref(),
+        Some("Existing note"),
+        "the pre-existing annotation must be preserved"
+    );
+
+    let (_, underline_dictionary) = annotation_by_id(&reopened, 0, &underline.id);
+    assert_eq!(name_field(&underline_dictionary, "Type"), Some("Annot"));
+    assert_eq!(
+        name_field(&underline_dictionary, "Subtype"),
+        Some("Underline")
+    );
+    assert_eq!(
+        string_field(&underline_dictionary, "T").as_deref(),
+        Some("Alice")
+    );
+    assert!(
+        string_field(&underline_dictionary, "M")
+            .as_deref()
+            .is_some_and(|date| date.starts_with("D:")),
+        "markup must carry a PDF date"
+    );
+    assert_eq!(
+        numbers(underline_dictionary.get("Rect")),
+        vec![72.0, 600.0, 300.0, 632.0]
+    );
+    assert_eq!(
+        numbers(underline_dictionary.get("QuadPoints")),
+        vec![
+            72.0, 616.0, 300.0, 616.0, 72.0, 600.0, 300.0, 600.0, 72.0, 632.0, 240.0, 632.0, 72.0,
+            620.0, 240.0, 620.0,
+        ]
+    );
+    assert_eq!(numbers(underline_dictionary.get("C")), vec![0.0, 0.0, 0.0]);
+    assert_eq!(
+        underline_dictionary
+            .get("BS")
+            .and_then(Object::as_dictionary)
+            .and_then(|border| border.get("W"))
+            .and_then(Object::as_f64),
+        Some(1.0)
+    );
+    let (underline_appearance, underline_content) = appearance(&reopened, &underline_dictionary);
+    assert_eq!(
+        numbers(underline_appearance.get("BBox")),
+        vec![0.0, 0.0, 228.0, 32.0]
+    );
+    let underline_drawing = String::from_utf8_lossy(&underline_content);
+    assert_eq!(
+        underline_drawing.matches(" l S").count(),
+        2,
+        "one stroked underline per quad: {underline_drawing:?}"
+    );
+    assert!(underline_drawing.contains("0.000 0.000 0.000 RG"));
+
+    let (_, strikeout_dictionary) = annotation_by_id(&reopened, 0, &strikeout.id);
+    assert_eq!(
+        name_field(&strikeout_dictionary, "Subtype"),
+        Some("StrikeOut")
+    );
+    assert_eq!(
+        numbers(strikeout_dictionary.get("QuadPoints")),
+        vec![72.0, 576.0, 300.0, 576.0, 72.0, 560.0, 300.0, 560.0]
+    );
+    let (_, strikeout_content) = appearance(&reopened, &strikeout_dictionary);
+    assert_eq!(
+        String::from_utf8_lossy(&strikeout_content)
+            .matches(" l S")
+            .count(),
+        1
+    );
+
+    let (_, ink_dictionary) = annotation_by_id(&reopened, 0, &ink.id);
+    assert_eq!(name_field(&ink_dictionary, "Subtype"), Some("Ink"));
+    assert_eq!(string_field(&ink_dictionary, "T").as_deref(), Some("Carol"));
+    assert_eq!(
+        numbers(ink_dictionary.get("Rect")),
+        vec![78.5, 498.5, 261.5, 541.5]
+    );
+    let strokes: Vec<Vec<f64>> = ink_dictionary
+        .get("InkList")
+        .and_then(Object::as_array)
+        .expect("ink list")
+        .iter()
+        .map(|stroke| numbers(Some(stroke)))
+        .collect();
+    assert_eq!(strokes.len(), 2);
+    assert_eq!(strokes[0].len(), 8, "four points with x and y each");
+    assert_eq!(strokes[1], vec![220.0, 500.0, 260.0, 540.0]);
+    assert_eq!(
+        ink_dictionary
+            .get("BS")
+            .and_then(Object::as_dictionary)
+            .and_then(|border| border.get("W"))
+            .and_then(Object::as_f64),
+        Some(2.0)
+    );
+    assert_eq!(numbers(ink_dictionary.get("C")), vec![0.0, 0.0, 0.0]);
+    let (ink_appearance, ink_content) = appearance(&reopened, &ink_dictionary);
+    assert_eq!(
+        numbers(ink_appearance.get("BBox")),
+        vec![0.0, 0.0, 183.0, 43.0]
+    );
+    let ink_drawing = String::from_utf8_lossy(&ink_content);
+    assert_eq!(
+        ink_drawing.matches(" m\n").count(),
+        2,
+        "one move for each stroke: {ink_drawing:?}"
+    );
+    assert_eq!(ink_drawing.matches(" l\n").count(), 4);
+    assert!(ink_drawing.contains("2.000 w"));
+    assert!(ink_drawing.contains("1 J 1 j"));
+
+    let output = markup_output_path();
+    std::fs::create_dir_all(output.parent().expect("output directory")).expect("create output dir");
+    std::fs::write(&output, &saved).expect("write markup PDF");
+    assert!(output.is_file());
+
+    // The session path appends; an incremental revision must read back too.
+    let bytes = fixture();
+    let mut session_document = Document::from_bytes(bytes.clone()).expect("fixture parses");
+    add_ink(
+        &mut session_document,
+        0,
+        &ink_paths(),
+        2.0,
+        "Incremental ink",
+        "Carol",
+    )
+    .expect("add ink to the session document");
+    let appended = session_document
+        .save_incremental()
+        .expect("incremental save");
+    assert!(
+        appended.starts_with(&bytes),
+        "an incremental save must preserve the source prefix"
+    );
+    let session_reopened = Document::from_bytes(appended).expect("appended revision parses");
+    let session_views = list_annotations(&session_reopened, 0).expect("list incremental views");
+    assert_eq!(session_views.len(), 1);
+    assert_eq!(session_views[0].kind, Some(AnnotationKind::Pencil));
+    assert_eq!(session_views[0].ink_paths, ink_paths());
+}
+
+#[test]
+fn invalid_markup_input_is_rejected_without_mutation() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    add_text_note(
+        &mut document,
+        0,
+        Point::new(40.0, 700.0),
+        "Existing note",
+        "Reader",
+        "existing-note",
+    )
+    .expect("add an annotation that must be preserved");
+    let annotations_before = annotation_ids(&document, 0);
+    let next_object_before = document.allocate_object_number().expect("object number");
+
+    assert!(matches!(
+        add_underline(&mut document, 0, &[], "x", "Alice"),
+        Err(AnnotationEditError::EmptyQuads)
+    ));
+    assert!(matches!(
+        add_underline(
+            &mut document,
+            0,
+            &[Rect::saturating(10.0, 10.0, 10.0, 20.0)],
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::EmptyQuads)
+    ));
+    assert!(matches!(
+        add_strikeout(
+            &mut document,
+            0,
+            &[rect(700.0, 700.0, 760.0, 760.0)],
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::CoordinateOutsidePage { page: 0, .. })
+    ));
+    let too_many_quads = vec![rect(10.0, 10.0, 20.0, 20.0); MAX_MARKUP_QUADS + 1];
+    assert!(matches!(
+        add_underline(&mut document, 0, &too_many_quads, "x", "Alice"),
+        Err(AnnotationEditError::TooManyQuads {
+            count,
+            limit: MAX_MARKUP_QUADS
+        }) if count == MAX_MARKUP_QUADS + 1
+    ));
+
+    assert!(matches!(
+        add_ink(&mut document, 0, &[], 1.0, "x", "Alice"),
+        Err(AnnotationEditError::EmptyInk)
+    ));
+    assert!(matches!(
+        add_ink(&mut document, 0, &[Vec::new()], 1.0, "x", "Alice"),
+        Err(AnnotationEditError::EmptyInk)
+    ));
+    assert!(matches!(
+        add_ink(
+            &mut document,
+            0,
+            &[vec![Point::new(f32::NAN, 10.0)]],
+            1.0,
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::Geometry(_))
+    ));
+    assert!(matches!(
+        add_ink(
+            &mut document,
+            0,
+            &[vec![Point::new(5000.0, 10.0)]],
+            1.0,
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::CoordinateOutsidePage { page: 0, .. })
+    ));
+    for width in [0.0, f32::NAN, 100.0] {
+        assert!(matches!(
+            add_ink(
+                &mut document,
+                0,
+                &[vec![Point::new(10.0, 10.0), Point::new(20.0, 20.0)]],
+                width,
+                "x",
+                "Alice"
+            ),
+            Err(AnnotationEditError::InvalidStrokeWidth { .. })
+        ));
+    }
+    let too_many_paths = vec![Vec::new(); MAX_INK_PATHS + 1];
+    assert!(matches!(
+        add_ink(&mut document, 0, &too_many_paths, 1.0, "x", "Alice"),
+        Err(AnnotationEditError::TooManyInkPaths {
+            count,
+            limit: MAX_INK_PATHS
+        }) if count == MAX_INK_PATHS + 1
+    ));
+    let too_many_points = vec![vec![Point::new(10.0, 10.0); MAX_INK_POINTS + 1]];
+    assert!(matches!(
+        add_ink(&mut document, 0, &too_many_points, 1.0, "x", "Alice"),
+        Err(AnnotationEditError::TooManyInkPoints {
+            count,
+            limit: MAX_INK_POINTS
+        }) if count == MAX_INK_POINTS + 1
+    ));
+
+    assert_eq!(
+        annotation_ids(&document, 0),
+        annotations_before,
+        "a rejected annotation must not change the /Annots array"
+    );
+    assert_eq!(
+        document.allocate_object_number().expect("object number"),
+        next_object_before,
+        "a rejected annotation must not consume an object number"
+    );
+    let views = list_annotations(&document, 0).expect("list annotations");
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].id, "existing-note");
+    assert_eq!(views[0].contents, "Existing note");
+}
+
+#[test]
+fn new_markup_types_render_inside_their_rect() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let page = document.page(1).expect("page 1");
+    assert_eq!(
+        (page.media_box.width(), page.media_box.height()),
+        (f64::from(PAGE_WIDTH), f64::from(PAGE_HEIGHT)),
+        "the render helpers assume page 1 is US Letter"
+    );
+
+    let underline_quad = rect(72.0, 660.0, 300.0, 676.0);
+    let strikeout_quad = rect(72.0, 620.0, 300.0, 636.0);
+    let ink_stroke = vec![
+        Point::new(72.0, 540.0),
+        Point::new(110.0, 600.0),
+        Point::new(150.0, 545.0),
+        Point::new(200.0, 600.0),
+        Point::new(250.0, 545.0),
+        Point::new(300.0, 590.0),
+    ];
+
+    let underline = add_underline(
+        &mut document,
+        1,
+        &[underline_quad],
+        "Rendered underline",
+        "Alice",
+    )
+    .expect("add underline");
+    let strikeout = add_strikeout(
+        &mut document,
+        1,
+        &[strikeout_quad],
+        "Rendered strikeout",
+        "Bob",
+    )
+    .expect("add strikeout");
+    let ink = add_ink(
+        &mut document,
+        1,
+        &[ink_stroke],
+        2.0,
+        "Rendered ink",
+        "Carol",
+    )
+    .expect("add ink");
+
+    let views = list_annotations(&document, 1).expect("list annotations");
+    let rects = vec![
+        views
+            .iter()
+            .find(|view| view.id == underline.id)
+            .expect("underline view")
+            .rect,
+        views
+            .iter()
+            .find(|view| view.id == strikeout.id)
+            .expect("strikeout view")
+            .rect,
+        views
+            .iter()
+            .find(|view| view.id == ink.id)
+            .expect("ink view")
+            .rect,
+    ];
+
+    let saved = document.save().expect("save edited page");
+    let before = render_page(&renderer_for(&fixture()), 1);
+    let after = render_page(&renderer_for(&saved), 1);
+    assert_eq!(
+        (before.width(), before.height()),
+        (after.width(), after.height()),
+        "the render must keep the page size"
+    );
+
+    for (name, rect, minimum) in [
+        ("underline", rects[0], 100usize),
+        ("strikeout", rects[1], 100),
+        ("ink", rects[2], 40),
+    ] {
+        let changed = changed_pixels_inside(&before, &after, rect, 2);
+        assert!(
+            changed > minimum,
+            "{name} must paint inside its annotation rect, changed {changed} pixels"
+        );
+        println!("{name} rect {rect:?} changed {changed} pixels");
+    }
+    let outside = changed_pixels_outside(&before, &after, &rects, 2);
+    assert_eq!(
+        outside, 0,
+        "the new markup must not paint outside its annotation rects"
+    );
+}
+
+#[test]
+fn old_annotations_keep_their_view_but_have_no_markup_geometry() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    add_text_note(
+        &mut document,
+        0,
+        Point::new(20.0, 20.0),
+        "Plain note",
+        "Alice",
+        "plain-note",
+    )
+    .expect("add note");
+    let views = list_annotations(&document, 0).expect("list annotations");
+    let note = views
+        .iter()
+        .find(|view| view.id == "plain-note")
+        .expect("note view");
+    assert_eq!(note.kind, Some(AnnotationKind::Note));
+    assert!(note.quads.is_empty());
+    assert!(note.ink_paths.is_empty());
+    assert!(note.stroke_width.is_none());
+    assert_eq!(note.color.as_deref(), Some([1.0, 0.82, 0.1].as_slice()));
+}
+
+// ---------------------------------------------------------------------------
+// PDFium raster helpers
+// ---------------------------------------------------------------------------
+
+fn renderer_for(bytes: &[u8]) -> PdfiumRenderer {
+    PdfiumRenderer::from_bytes(bytes.to_vec()).expect("PDFium must open the document")
+}
+
+fn render_page(renderer: &PdfiumRenderer, index: usize) -> RenderedPage {
+    renderer
+        .render_page(
+            PageIndex::new(index),
+            1.0,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .expect("PDFium must rasterize the page")
+}
+
+/// Pixel bounds of `rect` in `page`, expanded by `margin` pixels, clamped.
+fn pixel_bounds(page: &RenderedPage, rect: Rect, margin: usize) -> (usize, usize, usize, usize) {
+    let width = page.width() as usize;
+    let height = page.height() as usize;
+    let scale_x = page.width() as f32 / PAGE_WIDTH;
+    let scale_y = page.height() as f32 / PAGE_HEIGHT;
+    let left = ((rect.x0().max(0.0) * scale_x) as usize)
+        .saturating_sub(margin)
+        .min(width);
+    let right = (((rect.x1().clamp(0.0, PAGE_WIDTH) * scale_x) as usize) + margin).min(width);
+    let top = ((((PAGE_HEIGHT - rect.y1().clamp(0.0, PAGE_HEIGHT)) * scale_y) as usize)
+        .saturating_sub(margin))
+    .min(height);
+    let bottom = ((((PAGE_HEIGHT - rect.y0().clamp(0.0, PAGE_HEIGHT)) * scale_y) as usize)
+        + margin)
+        .min(height);
+    (left, right, top, bottom)
+}
+
+fn pixel_changed(before: &RenderedPage, after: &RenderedPage, index: usize) -> bool {
+    let before = before.pixels().get(index..index + 4);
+    let after = after.pixels().get(index..index + 4);
+    match (before, after) {
+        (Some(before), Some(after)) => before != after,
+        _ => false,
+    }
+}
+
+/// Count pixels that differ between the two renders inside `rect`.
+fn changed_pixels_inside(
+    before: &RenderedPage,
+    after: &RenderedPage,
+    rect: Rect,
+    margin: usize,
+) -> usize {
+    let width = after.width() as usize;
+    let (left, right, top, bottom) = pixel_bounds(after, rect, margin);
+    let mut changed = 0usize;
+    for y in top..bottom {
+        for x in left..right {
+            if pixel_changed(before, after, (y * width + x) * 4) {
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
+/// Count pixels that differ between the two renders outside every `rect`.
+fn changed_pixels_outside(
+    before: &RenderedPage,
+    after: &RenderedPage,
+    rects: &[Rect],
+    margin: usize,
+) -> usize {
+    let width = after.width() as usize;
+    let height = after.height() as usize;
+    let boxes: Vec<(usize, usize, usize, usize)> = rects
+        .iter()
+        .map(|rect| pixel_bounds(after, *rect, margin))
+        .collect();
+    let mut changed = 0usize;
+    for y in 0..height {
+        for x in 0..width {
+            let inside = boxes.iter().any(|(left, right, top, bottom)| {
+                x >= *left && x < *right && y >= *top && y < *bottom
+            });
+            if !inside && pixel_changed(before, after, (y * width + x) * 4) {
+                changed += 1;
+            }
+        }
+    }
+    changed
 }

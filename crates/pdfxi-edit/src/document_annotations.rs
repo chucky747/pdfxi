@@ -28,20 +28,49 @@
 //! PDF date), a `/C` colour array, `/CA` opacity, `/F 4` (print) and
 //! `/AP << /N <form XObject> >>`. The form carries `/BBox`, `/Resources` and a
 //! content stream: a vector note icon for `/Text`, a translucent fill for
-//! `/Highlight`. Highlights also carry `/QuadPoints` as required by
-//! ISO 32000-1 for markup annotations.
+//! `/Highlight`, a stroked line under or through each quad for `/Underline` and
+//! `/StrikeOut`, and stroked point paths for `/Ink`. Text markup annotations
+//! also carry `/QuadPoints`, and an ink annotation carries `/InkList`, as
+//! required by ISO 32000-1.
 //!
 //! [`DocumentSession`]: https://docs.rs/pdfxi-document
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pdfxi_core::{Dictionary, Document, Object, ObjectId, decode_text_string, encode_text_string};
+use pdfxi_core::{
+    Dictionary, Document, Object, ObjectId, Rectangle, decode_text_string, encode_text_string,
+};
 use thiserror::Error;
 
+use crate::annotation::AnnotationKind;
 use crate::geometry::{GeometryError, Point, Rect};
 
 /// Side length of the sticky-note icon, in default user space units.
 pub const NOTE_ICON_SIZE: f32 = 24.0;
+
+/// Maximum number of quads accepted by one text-markup annotation.
+///
+/// The cap bounds the `/QuadPoints` array and the appearance stream so a hostile
+/// or buggy caller cannot make one annotation allocate without limit.
+pub const MAX_MARKUP_QUADS: usize = 4096;
+
+/// Maximum number of separate strokes accepted by one ink annotation.
+pub const MAX_INK_PATHS: usize = 256;
+
+/// Maximum total number of points accepted by one ink annotation.
+pub const MAX_INK_POINTS: usize = 8192;
+
+/// Minimum ink stroke width in default user space units.
+pub const MIN_INK_STROKE_WIDTH: f32 = 0.1;
+
+/// Maximum ink stroke width in default user space units.
+pub const MAX_INK_STROKE_WIDTH: f32 = 32.0;
+
+/// Stroke colour of underline, strikeout and ink annotations as an RGB triple.
+pub const MARKUP_STROKE_COLOR: [f64; 3] = [0.0, 0.0, 0.0];
+
+/// Stroke width of underline and strikeout markup, in default user space units.
+pub const MARKUP_STROKE_WIDTH: f32 = 1.0;
 
 /// Fill colour of the note icon as an RGB triple in `0.0..=1.0`.
 const NOTE_COLOR: [f64; 3] = [1.0, 0.82, 0.1];
@@ -51,6 +80,11 @@ const HIGHLIGHT_COLOR: [f64; 3] = [1.0, 1.0, 0.0];
 
 /// Annotation opacity written to `/CA` for highlights.
 const HIGHLIGHT_OPACITY: f64 = 0.5;
+
+/// Extra slack, in points, added around an ink path before its annotation
+/// rectangle is derived, so the stroked line is fully inside the appearance
+/// bounding box.
+const INK_RECT_PADDING: f32 = 0.5;
 
 /// One annotation subtype this module writes and reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,6 +185,14 @@ pub struct AnnotationView {
     pub id: String,
     /// The annotation subtype.
     pub subtype: AnnotationSubtype,
+    /// The modelled toolset kind, when the subtype is one this crate models.
+    ///
+    /// Text-markup and drawing subtypes are reported as
+    /// [`AnnotationSubtype::Other`] so that the enum stays compatible with the
+    /// shell's existing exhaustive match; this field carries the typed kind
+    /// (`Underline`, `Strikeout`, `Pencil`, `Stamp`, and so on) that a caller
+    /// should branch on.
+    pub kind: Option<AnnotationKind>,
     /// The `/Contents` text decoded from its PDF string.
     pub contents: String,
     /// The `/T` author decoded from its PDF string.
@@ -163,6 +205,14 @@ pub struct AnnotationView {
     pub rect: Rect,
     /// The `/M` date string, when present.
     pub date: Option<String>,
+    /// One rectangle per `/QuadPoints` group for a text-markup annotation.
+    pub quads: Vec<Rect>,
+    /// One point list per `/InkList` stroke for an ink annotation.
+    pub ink_paths: Vec<Vec<Point>>,
+    /// The raw `/C` colour components, when the annotation carries them.
+    pub color: Option<Vec<f64>>,
+    /// The `/BS /W` stroke width in default user space units, when present.
+    pub stroke_width: Option<f32>,
 }
 
 /// Typed errors returned by the annotation library.
@@ -208,9 +258,52 @@ pub enum AnnotationEditError {
     /// A page lacked a rectangle that an annotation operation requires.
     #[error("page {0} has no valid /MediaBox")]
     MissingPageBounds(usize),
-    /// A highlight was given no usable quads.
-    #[error("a highlight requires at least one non-empty quad")]
+    /// A text markup was given no usable quads.
+    #[error("a text markup annotation requires at least one non-empty quad")]
     EmptyQuads,
+    /// An ink annotation was given no stroke with a point.
+    #[error("an ink annotation requires at least one stroke with at least one point")]
+    EmptyInk,
+    /// A text markup exceeded the documented quad cap.
+    #[error("text markup has {count} quads; the maximum is {limit}")]
+    TooManyQuads {
+        /// Number of quads supplied.
+        count: usize,
+        /// The documented cap, [`MAX_MARKUP_QUADS`].
+        limit: usize,
+    },
+    /// An ink annotation exceeded the documented stroke cap.
+    #[error("ink annotation has {count} strokes; the maximum is {limit}")]
+    TooManyInkPaths {
+        /// Number of strokes supplied.
+        count: usize,
+        /// The documented cap, [`MAX_INK_PATHS`].
+        limit: usize,
+    },
+    /// An ink annotation exceeded the documented point cap.
+    #[error("ink annotation has {count} points; the maximum is {limit}")]
+    TooManyInkPoints {
+        /// Number of points supplied.
+        count: usize,
+        /// The documented cap, [`MAX_INK_POINTS`].
+        limit: usize,
+    },
+    /// An ink stroke width was non-finite or outside the accepted range.
+    #[error("ink stroke width must be finite and in 0.1..=32.0 points, got {value}")]
+    InvalidStrokeWidth {
+        /// The rejected width.
+        value: f32,
+    },
+    /// An input coordinate lay outside the page media box.
+    #[error("coordinate ({x}, {y}) lies outside the media box of page {page}")]
+    CoordinateOutsidePage {
+        /// The zero-based page index.
+        page: usize,
+        /// The rejected x coordinate.
+        x: f32,
+        /// The rejected y coordinate.
+        y: f32,
+    },
     /// The PDF object-number space is exhausted.
     #[error("the PDF object number space is exhausted")]
     ObjectSpaceExhausted,
@@ -289,6 +382,106 @@ pub fn add_highlight(
     author: &str,
 ) -> Result<AnnotationRef, AnnotationEditError> {
     add_highlight_with(document, page_index, quads, contents, author, None, None)
+}
+
+/// Add an underline text-markup annotation covering every rectangle in `quads`.
+///
+/// The annotation carries `/QuadPoints` and a vector appearance that strokes one
+/// line just above the bottom edge of each quad, so viewers that do not
+/// synthesise appearances still draw it. The `/NM` identifier is derived from the
+/// allocated annotation object number.
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::TooManyQuads`] above [`MAX_MARKUP_QUADS`],
+/// [`AnnotationEditError::EmptyQuads`] when every quad is degenerate,
+/// [`AnnotationEditError::CoordinateOutsidePage`] for a quad outside the page
+/// media box, a missing-page error, or a core error. A rejected input leaves the
+/// document unchanged.
+pub fn add_underline(
+    document: &mut Document,
+    page_index: usize,
+    quads: &[Rect],
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_text_markup_with(
+        document,
+        page_index,
+        quads,
+        contents,
+        author,
+        TextMarkup::Underline,
+        None,
+        None,
+    )
+}
+
+/// Add a strikeout text-markup annotation covering every rectangle in `quads`.
+///
+/// Like [`add_underline`], but the stroked line crosses the middle of each quad.
+///
+/// # Errors
+///
+/// Returns the same typed errors as [`add_underline`].
+pub fn add_strikeout(
+    document: &mut Document,
+    page_index: usize,
+    quads: &[Rect],
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_text_markup_with(
+        document,
+        page_index,
+        quads,
+        contents,
+        author,
+        TextMarkup::StrikeOut,
+        None,
+        None,
+    )
+}
+
+/// Add a freehand ink annotation built from `paths`.
+///
+/// Each path is one stroke: at least two points draw a line, one point draws a
+/// dot, and empty paths are ignored. The annotation carries `/InkList`, a
+/// `/BS << /W stroke_width /S /S >>` border and a vector appearance that strokes
+/// every path. Its `/Rect` is the point bounds expanded by half the stroke width
+/// plus a small slack, so the stroke is fully inside the appearance bounding box.
+///
+/// `stroke_width` must be finite and within
+/// `MIN_INK_STROKE_WIDTH..=MAX_INK_STROKE_WIDTH`.
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::TooManyInkPaths`] above [`MAX_INK_PATHS`],
+/// [`AnnotationEditError::TooManyInkPoints`] above [`MAX_INK_POINTS`],
+/// [`AnnotationEditError::EmptyInk`] when no path carries a point,
+/// [`AnnotationEditError::InvalidStrokeWidth`] for a bad width,
+/// [`AnnotationEditError::Geometry`] for a non-finite point coordinate,
+/// [`AnnotationEditError::CoordinateOutsidePage`] for a point outside the page
+/// media box, a missing-page error, or a core error. A rejected input leaves the
+/// document unchanged.
+pub fn add_ink(
+    document: &mut Document,
+    page_index: usize,
+    paths: &[Vec<Point>],
+    stroke_width: f32,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_ink_with(
+        document,
+        page_index,
+        paths,
+        stroke_width,
+        contents,
+        author,
+        None,
+        None,
+    )
 }
 
 /// List the annotations on `page_index`, resolving each referenced dictionary.
@@ -457,10 +650,11 @@ pub fn export_xfdf(document: &Document) -> Result<String, AnnotationEditError> {
 /// Import the `<annots>` block of an XFDF document into `document`.
 ///
 /// Text annotations become [`add_text_note`] notes, highlights become
-/// [`add_highlight`] calls covering the exported rectangle, and an annotation
-/// with a `replyto` attribute becomes a thread reply. `author` is used when the
-/// element has no `author` attribute. The returned count is the number of
-/// annotations created.
+/// [`add_highlight`] calls covering the exported rectangle, underline and
+/// strikeout markup become [`add_underline`] / [`add_strikeout`] calls covering
+/// it, and an annotation with a `replyto` attribute becomes a thread reply.
+/// `author` is used when the element has no `author` attribute. The returned
+/// count is the number of annotations created.
 ///
 /// # Errors
 ///
@@ -531,6 +725,28 @@ pub fn import_xfdf(
                 std::slice::from_ref(&rect),
                 &raw.contents,
                 element_author,
+                date,
+                id.as_deref(),
+            )?
+        } else if subtype.eq_ignore_ascii_case("Underline") {
+            add_text_markup_with(
+                document,
+                page_index,
+                std::slice::from_ref(&rect),
+                &raw.contents,
+                element_author,
+                TextMarkup::Underline,
+                date,
+                id.as_deref(),
+            )?
+        } else if subtype.eq_ignore_ascii_case("StrikeOut") {
+            add_text_markup_with(
+                document,
+                page_index,
+                std::slice::from_ref(&rect),
+                &raw.contents,
+                element_author,
+                TextMarkup::StrikeOut,
                 date,
                 id.as_deref(),
             )?
@@ -741,6 +957,267 @@ fn add_highlight_with(
     })
 }
 
+/// A text-markup subtype that strokes a line through or under its quads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextMarkup {
+    /// `/Subtype /Underline`.
+    Underline,
+    /// `/Subtype /StrikeOut`.
+    StrikeOut,
+}
+
+impl TextMarkup {
+    fn subtype_name(self) -> &'static str {
+        match self {
+            Self::Underline => "Underline",
+            Self::StrikeOut => "StrikeOut",
+        }
+    }
+
+    /// `/NM` prefix for an annotation whose id the caller did not supply.
+    fn id_prefix(self) -> &'static str {
+        match self {
+            Self::Underline => "pdfxi-underline-",
+            Self::StrikeOut => "pdfxi-strikeout-",
+        }
+    }
+
+    /// Y offset of the stroked line inside the annotation rectangle.
+    ///
+    /// The underline sits half a stroke width above the bottom edge of the quad
+    /// so it stays inside the appearance bounding box; the strikeout crosses
+    /// the vertical middle.
+    fn line_offset(self, quad: Rect, rect: Rect) -> f64 {
+        let half_stroke = f64::from(MARKUP_STROKE_WIDTH) / 2.0;
+        match self {
+            Self::Underline => f64::from(quad.y0() - rect.y0()) + half_stroke,
+            Self::StrikeOut => f64::from((quad.y0() + quad.y1()) / 2.0 - rect.y0()),
+        }
+    }
+
+    fn subtype(self) -> AnnotationSubtype {
+        AnnotationSubtype::Other(self.subtype_name().to_owned())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_text_markup_with(
+    document: &mut Document,
+    page_index: usize,
+    quads: &[Rect],
+    contents: &str,
+    author: &str,
+    markup: TextMarkup,
+    date: Option<&str>,
+    id: Option<&str>,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    if quads.len() > MAX_MARKUP_QUADS {
+        return Err(AnnotationEditError::TooManyQuads {
+            count: quads.len(),
+            limit: MAX_MARKUP_QUADS,
+        });
+    }
+    let mut bounds: Option<Rect> = None;
+    let mut usable: Vec<Rect> = Vec::with_capacity(quads.len());
+    for quad in quads {
+        if quad.is_empty() {
+            continue;
+        }
+        usable.push(*quad);
+        bounds = Some(match bounds {
+            Some(current) => current.union(quad),
+            None => *quad,
+        });
+    }
+    let Some(rect) = bounds else {
+        return Err(AnnotationEditError::EmptyQuads);
+    };
+
+    let current = effective_document(document)?;
+    let page_info = current.page(page_index)?;
+    ensure_quads_on_page(page_index, page_info.media_box, &usable)?;
+    let mut page = read_page_state(&current, page_index)?;
+    let ids = allocate_ids(document, 2)?;
+    let appearance_id = ids[0];
+    let annotation_id = ids[1];
+    let generated = format!("{}{}", markup.id_prefix(), annotation_id.number);
+    let id = match id {
+        Some(id) if !id.is_empty() => id,
+        _ => generated.as_str(),
+    };
+    if annotation_id_exists(&current, &page.annots, id)? {
+        return Err(AnnotationEditError::DuplicateId {
+            id: id.to_owned(),
+            page: page_index,
+        });
+    }
+    let now;
+    let date = match date {
+        Some(date) => date,
+        None => {
+            now = now_pdf_date();
+            now.as_str()
+        }
+    };
+
+    let annotation = build_text_markup_annotation(
+        markup,
+        rect,
+        &usable,
+        contents,
+        author,
+        id,
+        date,
+        appearance_id,
+    );
+    let appearance = text_markup_appearance(rect, &usable, markup);
+
+    document.set_object(appearance_id, appearance)?;
+    document.set_object(annotation_id, Object::Dictionary(annotation))?;
+    page.annots
+        .items_mut()
+        .push(Object::Reference(annotation_id));
+    stage_page_state(document, page)?;
+
+    Ok(AnnotationRef {
+        id: id.to_owned(),
+        object: annotation_id,
+        page_index,
+        subtype: markup.subtype(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_ink_with(
+    document: &mut Document,
+    page_index: usize,
+    paths: &[Vec<Point>],
+    stroke_width: f32,
+    contents: &str,
+    author: &str,
+    date: Option<&str>,
+    id: Option<&str>,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    if paths.len() > MAX_INK_PATHS {
+        return Err(AnnotationEditError::TooManyInkPaths {
+            count: paths.len(),
+            limit: MAX_INK_PATHS,
+        });
+    }
+    let total_points = paths
+        .iter()
+        .fold(0usize, |total, path| total.saturating_add(path.len()));
+    if total_points > MAX_INK_POINTS {
+        return Err(AnnotationEditError::TooManyInkPoints {
+            count: total_points,
+            limit: MAX_INK_POINTS,
+        });
+    }
+    if !stroke_width.is_finite()
+        || !(MIN_INK_STROKE_WIDTH..=MAX_INK_STROKE_WIDTH).contains(&stroke_width)
+    {
+        return Err(AnnotationEditError::InvalidStrokeWidth {
+            value: stroke_width,
+        });
+    }
+
+    let usable: Vec<&[Point]> = paths
+        .iter()
+        .filter(|path| !path.is_empty())
+        .map(Vec::as_slice)
+        .collect();
+    if usable.is_empty() {
+        return Err(AnnotationEditError::EmptyInk);
+    }
+    for path in &usable {
+        for point in path.iter() {
+            if !point.is_finite() {
+                return Err(AnnotationEditError::Geometry(
+                    GeometryError::NonFiniteCoordinate {
+                        field: "point",
+                        value: point.x,
+                    },
+                ));
+            }
+        }
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for point in usable.iter().flat_map(|path| path.iter()) {
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    let padding = stroke_width / 2.0 + INK_RECT_PADDING;
+    let rect = Rect::new(
+        min_x - padding,
+        min_y - padding,
+        max_x + padding,
+        max_y + padding,
+    )?;
+
+    let current = effective_document(document)?;
+    let page_info = current.page(page_index)?;
+    ensure_points_on_page(
+        page_index,
+        page_info.media_box,
+        usable.iter().flat_map(|path| path.iter().copied()),
+    )?;
+    let mut page = read_page_state(&current, page_index)?;
+    let ids = allocate_ids(document, 2)?;
+    let appearance_id = ids[0];
+    let annotation_id = ids[1];
+    let generated = format!("pdfxi-ink-{}", annotation_id.number);
+    let id = match id {
+        Some(id) if !id.is_empty() => id,
+        _ => generated.as_str(),
+    };
+    if annotation_id_exists(&current, &page.annots, id)? {
+        return Err(AnnotationEditError::DuplicateId {
+            id: id.to_owned(),
+            page: page_index,
+        });
+    }
+    let now;
+    let date = match date {
+        Some(date) => date,
+        None => {
+            now = now_pdf_date();
+            now.as_str()
+        }
+    };
+
+    let annotation = build_ink_annotation(
+        rect,
+        &usable,
+        stroke_width,
+        contents,
+        author,
+        id,
+        date,
+        appearance_id,
+    );
+    let appearance = ink_appearance(rect, &usable, stroke_width);
+
+    document.set_object(appearance_id, appearance)?;
+    document.set_object(annotation_id, Object::Dictionary(annotation))?;
+    page.annots
+        .items_mut()
+        .push(Object::Reference(annotation_id));
+    stage_page_state(document, page)?;
+
+    Ok(AnnotationRef {
+        id: id.to_owned(),
+        object: annotation_id,
+        page_index,
+        subtype: AnnotationSubtype::Other("Ink".to_owned()),
+    })
+}
+
 fn build_note_annotation(spec: &NoteSpec<'_>, appearance_id: ObjectId) -> Dictionary {
     let mut dictionary = Dictionary::new();
     dictionary.insert("Type".to_owned(), pdf_name("Annot"));
@@ -784,6 +1261,89 @@ fn build_highlight_annotation(
     dictionary.insert("F".to_owned(), Object::Integer(4));
     dictionary.insert("AP".to_owned(), appearance_dictionary(appearance_id));
     dictionary
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_text_markup_annotation(
+    markup: TextMarkup,
+    rect: Rect,
+    quads: &[Rect],
+    contents: &str,
+    author: &str,
+    id: &str,
+    date: &str,
+    appearance_id: ObjectId,
+) -> Dictionary {
+    let mut dictionary = Dictionary::new();
+    dictionary.insert("Type".to_owned(), pdf_name("Annot"));
+    dictionary.insert("Subtype".to_owned(), pdf_name(markup.subtype_name()));
+    dictionary.insert("Rect".to_owned(), rect_array(rect));
+    dictionary.insert("QuadPoints".to_owned(), quad_points_array(quads));
+    dictionary.insert("Contents".to_owned(), pdf_text(contents));
+    dictionary.insert("T".to_owned(), pdf_text(author));
+    dictionary.insert("NM".to_owned(), pdf_text(id));
+    dictionary.insert("M".to_owned(), pdf_text(date));
+    dictionary.insert("C".to_owned(), color_array(MARKUP_STROKE_COLOR));
+    dictionary.insert("CA".to_owned(), Object::Real(1.0));
+    dictionary.insert("F".to_owned(), Object::Integer(4));
+    dictionary.insert(
+        "BS".to_owned(),
+        border_style(f64::from(MARKUP_STROKE_WIDTH)),
+    );
+    dictionary.insert("AP".to_owned(), appearance_dictionary(appearance_id));
+    dictionary
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_ink_annotation(
+    rect: Rect,
+    paths: &[&[Point]],
+    stroke_width: f32,
+    contents: &str,
+    author: &str,
+    id: &str,
+    date: &str,
+    appearance_id: ObjectId,
+) -> Dictionary {
+    let mut dictionary = Dictionary::new();
+    dictionary.insert("Type".to_owned(), pdf_name("Annot"));
+    dictionary.insert("Subtype".to_owned(), pdf_name("Ink"));
+    dictionary.insert("Rect".to_owned(), rect_array(rect));
+    dictionary.insert("InkList".to_owned(), ink_list_array(paths));
+    dictionary.insert("Contents".to_owned(), pdf_text(contents));
+    dictionary.insert("T".to_owned(), pdf_text(author));
+    dictionary.insert("NM".to_owned(), pdf_text(id));
+    dictionary.insert("M".to_owned(), pdf_text(date));
+    dictionary.insert("C".to_owned(), color_array(MARKUP_STROKE_COLOR));
+    dictionary.insert("CA".to_owned(), Object::Real(1.0));
+    dictionary.insert("F".to_owned(), Object::Integer(4));
+    dictionary.insert("BS".to_owned(), border_style(f64::from(stroke_width)));
+    dictionary.insert("AP".to_owned(), appearance_dictionary(appearance_id));
+    dictionary
+}
+
+/// A solid border style dictionary (`/BS << /W w /S /S >>`).
+fn border_style(width: f64) -> Object {
+    let mut border = Dictionary::new();
+    border.insert("W".to_owned(), Object::Real(width));
+    border.insert("S".to_owned(), pdf_name("S"));
+    Object::Dictionary(border)
+}
+
+/// `/InkList`: one array of alternating x/y coordinates per stroke.
+fn ink_list_array(paths: &[&[Point]]) -> Object {
+    let strokes = paths
+        .iter()
+        .map(|path| {
+            let mut coordinates = Vec::with_capacity(path.len() * 2);
+            for point in path.iter() {
+                coordinates.push(Object::Real(f64::from(point.x)));
+                coordinates.push(Object::Real(f64::from(point.y)));
+            }
+            Object::Array(coordinates)
+        })
+        .collect();
+    Object::Array(strokes)
 }
 
 fn appearance_dictionary(appearance_id: ObjectId) -> Object {
@@ -847,6 +1407,72 @@ fn highlight_appearance(rect: Rect, quads: &[Rect]) -> Object {
 
     let mut dictionary = form_dictionary(width, height);
     dictionary.insert("Resources".to_owned(), Object::Dictionary(resources));
+    Object::Stream {
+        dictionary,
+        data: data.into_bytes(),
+    }
+}
+
+/// Build a stroked-line form XObject for underline or strikeout markup whose
+/// coordinates are relative to the annotation `/Rect` lower-left corner.
+fn text_markup_appearance(rect: Rect, quads: &[Rect], markup: TextMarkup) -> Object {
+    let width = f64::from(rect.width());
+    let height = f64::from(rect.height());
+    let [red, green, blue] = MARKUP_STROKE_COLOR;
+    let mut data = format!(
+        "q\n{red:.3} {green:.3} {blue:.3} RG\n{:.3} w\n",
+        MARKUP_STROKE_WIDTH
+    );
+    for quad in quads {
+        let x0 = f64::from(quad.x0() - rect.x0());
+        let x1 = f64::from(quad.x1() - rect.x0());
+        let y = markup.line_offset(*quad, rect);
+        data.push_str(&format!("{x0:.3} {y:.3} m {x1:.3} {y:.3} l S\n"));
+    }
+    data.push_str("Q\n");
+
+    let mut dictionary = form_dictionary(width, height);
+    dictionary.insert(
+        "Resources".to_owned(),
+        Object::Dictionary(Dictionary::new()),
+    );
+    Object::Stream {
+        dictionary,
+        data: data.into_bytes(),
+    }
+}
+
+/// Build a stroked-path form XObject for an ink annotation whose coordinates are
+/// relative to the annotation `/Rect` lower-left corner.
+fn ink_appearance(rect: Rect, paths: &[&[Point]], stroke_width: f32) -> Object {
+    let width = f64::from(rect.width());
+    let height = f64::from(rect.height());
+    let [red, green, blue] = MARKUP_STROKE_COLOR;
+    // Round caps and joins give freehand ink its natural look and make a
+    // single-point stroke paint a dot.
+    let mut data = format!("q\n{red:.3} {green:.3} {blue:.3} RG\n{stroke_width:.3} w\n1 J 1 j\n");
+    for path in paths {
+        let mut points = path.iter();
+        let Some(first) = points.next() else {
+            continue;
+        };
+        let x = f64::from(first.x - rect.x0());
+        let y = f64::from(first.y - rect.y0());
+        data.push_str(&format!("{x:.3} {y:.3} m\n"));
+        for point in points {
+            let x = f64::from(point.x - rect.x0());
+            let y = f64::from(point.y - rect.y0());
+            data.push_str(&format!("{x:.3} {y:.3} l\n"));
+        }
+        data.push_str("S\n");
+    }
+    data.push_str("Q\n");
+
+    let mut dictionary = form_dictionary(width, height);
+    dictionary.insert(
+        "Resources".to_owned(),
+        Object::Dictionary(Dictionary::new()),
+    );
     Object::Stream {
         dictionary,
         data: data.into_bytes(),
@@ -1055,6 +1681,7 @@ fn view_from_dictionary(
     AnnotationView {
         object,
         id: string_from_dictionary(dictionary, "NM").unwrap_or_default(),
+        kind: AnnotationKind::from_pdf_name(subtype.as_pdf_name()),
         subtype,
         contents: string_from_dictionary(dictionary, "Contents").unwrap_or_default(),
         author: string_from_dictionary(dictionary, "T").unwrap_or_default(),
@@ -1065,7 +1692,82 @@ fn view_from_dictionary(
             .map(str::to_owned),
         rect: rect_from_dictionary(dictionary),
         date: string_from_dictionary(dictionary, "M"),
+        quads: quad_rects_from_dictionary(dictionary),
+        ink_paths: ink_paths_from_dictionary(dictionary),
+        color: color_from_dictionary(dictionary),
+        stroke_width: stroke_width_from_dictionary(dictionary),
     }
+}
+
+/// Decode `/QuadPoints` into one rectangle per eight-number group.
+fn quad_rects_from_dictionary(dictionary: &Dictionary) -> Vec<Rect> {
+    let Some(Object::Array(items)) = dictionary.get("QuadPoints") else {
+        return Vec::new();
+    };
+    let Some(values) = items
+        .iter()
+        .map(Object::as_f64)
+        .collect::<Option<Vec<f64>>>()
+    else {
+        return Vec::new();
+    };
+    values
+        .as_slice()
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|group| {
+            let xs = [group[0], group[2], group[4], group[6]];
+            let ys = [group[1], group[3], group[5], group[7]];
+            let x0 = xs.iter().copied().fold(f64::INFINITY, f64::min);
+            let x1 = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let y0 = ys.iter().copied().fold(f64::INFINITY, f64::min);
+            let y1 = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            Rect::saturating(x0 as f32, y0 as f32, x1 as f32, y1 as f32)
+        })
+        .collect()
+}
+
+/// Decode `/InkList` into one point list per stroke, skipping malformed entries.
+fn ink_paths_from_dictionary(dictionary: &Dictionary) -> Vec<Vec<Point>> {
+    let Some(Object::Array(strokes)) = dictionary.get("InkList") else {
+        return Vec::new();
+    };
+    strokes
+        .iter()
+        .filter_map(|stroke| {
+            let items = stroke.as_array()?;
+            let values = items
+                .iter()
+                .map(Object::as_f64)
+                .collect::<Option<Vec<f64>>>()?;
+            Some(
+                values
+                    .as_slice()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| Point::new(pair[0] as f32, pair[1] as f32))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// Decode the `/C` colour array, preserving its component count.
+fn color_from_dictionary(dictionary: &Dictionary) -> Option<Vec<f64>> {
+    let items = dictionary.get("C").and_then(Object::as_array)?;
+    items.iter().map(Object::as_f64).collect()
+}
+
+/// Decode the `/BS /W` border width.
+fn stroke_width_from_dictionary(dictionary: &Dictionary) -> Option<f32> {
+    dictionary
+        .get("BS")
+        .and_then(Object::as_dictionary)
+        .and_then(|border| border.get("W"))
+        .and_then(Object::as_f64)
+        .map(|width| width as f32)
 }
 
 fn find_annotation(
@@ -1107,6 +1809,55 @@ fn annotation_id_exists(
         }
     }
     Ok(false)
+}
+
+/// Reject a quad whose corners fall outside the page media box.
+fn ensure_quads_on_page(
+    page: usize,
+    media_box: Rectangle,
+    quads: &[Rect],
+) -> Result<(), AnnotationEditError> {
+    for quad in quads {
+        ensure_points_on_page(
+            page,
+            media_box,
+            [
+                Point::new(quad.x0(), quad.y0()),
+                Point::new(quad.x1(), quad.y0()),
+                Point::new(quad.x1(), quad.y1()),
+                Point::new(quad.x0(), quad.y1()),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Reject a point that is not finite or that falls outside the page media box.
+fn ensure_points_on_page(
+    page: usize,
+    media_box: Rectangle,
+    points: impl IntoIterator<Item = Point>,
+) -> Result<(), AnnotationEditError> {
+    for point in points {
+        if !point.is_finite() {
+            return Err(AnnotationEditError::Geometry(
+                GeometryError::NonFiniteCoordinate {
+                    field: "point",
+                    value: point.x,
+                },
+            ));
+        }
+        let x = f64::from(point.x);
+        let y = f64::from(point.y);
+        if x < media_box.left || x > media_box.right || y < media_box.bottom || y > media_box.top {
+            return Err(AnnotationEditError::CoordinateOutsidePage {
+                page,
+                x: point.x,
+                y: point.y,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn rect_from_dictionary(dictionary: &Dictionary) -> Rect {
@@ -1548,5 +2299,53 @@ mod tests {
         assert_eq!(attributes[0], ("page".to_owned(), "1".to_owned()));
         assert_eq!(attributes[1], ("author".to_owned(), "A & B".to_owned()));
         assert_eq!(attributes[2], ("id".to_owned(), "x".to_owned()));
+    }
+
+    #[test]
+    fn quad_points_decode_back_into_rectangles() {
+        let quads = [rect(10.0, 20.0, 30.0, 40.0), rect(50.0, 60.0, 70.0, 80.0)];
+        let mut dictionary = Dictionary::new();
+        dictionary.insert("QuadPoints".to_owned(), quad_points_array(&quads));
+        assert_eq!(quad_rects_from_dictionary(&dictionary), quads.to_vec());
+    }
+
+    #[test]
+    fn ink_list_round_trips_each_stroke() {
+        let first = [
+            Point::new(1.0, 2.0),
+            Point::new(3.0, 4.0),
+            Point::new(5.0, 6.0),
+        ];
+        let second = [Point::new(7.0, 8.0)];
+        let paths: Vec<&[Point]> = vec![&first, &second];
+        let mut dictionary = Dictionary::new();
+        dictionary.insert("InkList".to_owned(), ink_list_array(&paths));
+        assert_eq!(
+            ink_paths_from_dictionary(&dictionary),
+            vec![first.to_vec(), second.to_vec()]
+        );
+    }
+
+    #[test]
+    fn text_markup_lines_stay_inside_the_annotation_box() {
+        let quad = rect(10.0, 20.0, 30.0, 40.0);
+        let bounds = rect(10.0, 20.0, 30.0, 40.0);
+        let underline = TextMarkup::Underline.line_offset(quad, bounds);
+        assert!(
+            underline > 0.0 && underline < f64::from(bounds.height()),
+            "underline offset {underline} must stay inside the box"
+        );
+        let strikeout = TextMarkup::StrikeOut.line_offset(quad, bounds);
+        assert!((strikeout - f64::from(bounds.height()) / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn markup_annotations_name_the_expected_pdf_subtypes() {
+        assert_eq!(TextMarkup::Underline.subtype_name(), "Underline");
+        assert_eq!(TextMarkup::StrikeOut.subtype_name(), "StrikeOut");
+        assert_eq!(
+            TextMarkup::Underline.subtype(),
+            AnnotationSubtype::Other("Underline".to_owned())
+        );
     }
 }

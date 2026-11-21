@@ -4,7 +4,8 @@
 //! and depends only on the standard library: [`geometry`] defines validated
 //! page-space primitives, [`annotation`] defines the review and drawing
 //! annotation model with hit-testing, bounds, and clamping helpers,
-//! [`document_annotations`] writes real note and highlight annotations into a
+//! [`document_annotations`] writes real note, highlight, underline, strikeout
+//! and ink annotations into a
 //! [`pdfxi_core::Document`] (dictionary, `/Annots` entry and appearance stream)
 //! with XFDF import/export, and [`pdf`]
 //! maps annotations to and from a dependency-free PDF dictionary intermediate
@@ -110,8 +111,10 @@ pub use content_edit::{
 };
 pub use document_annotations::{
     AnnotationEditError, AnnotationRef, AnnotationState, AnnotationSubtype, AnnotationView,
-    NOTE_ICON_SIZE, add_highlight, add_text_note, delete_annotation, export_xfdf, import_xfdf,
-    list_annotations, reply_to, set_state, update_contents,
+    MARKUP_STROKE_COLOR, MARKUP_STROKE_WIDTH, MAX_INK_PATHS, MAX_INK_POINTS, MAX_INK_STROKE_WIDTH,
+    MAX_MARKUP_QUADS, MIN_INK_STROKE_WIDTH, NOTE_ICON_SIZE, add_highlight, add_ink, add_strikeout,
+    add_text_note, add_underline, delete_annotation, export_xfdf, import_xfdf, list_annotations,
+    reply_to, set_state, update_contents,
 };
 pub use find_replace::{
     FindReplaceError, ReplaceAllPlan, ReplaceLimits, ReplaceStep, SearchDocument, SearchHit,

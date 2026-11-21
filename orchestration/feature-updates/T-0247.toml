@@ -1,0 +1,53 @@
+# T-0247 - Underline, strikeout and ink annotations (Round A)
+#
+# Library result, no matrix promotion. The new kinds are exposed through
+# AnnotationView::kind; shapes and stamps remain Round B, and the Comments
+# shell exposes them in a later task.
+
+task = "T-0247"
+lane = "author"
+status = "in_progress"
+evidence = "docs/evidence/hardening/T-0247.md"
+docs = [
+    "docs/evidence/hardening/T-0247.md",
+    "crates/pdfxi-edit/src/annotation.rs",
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-edit/tests/real_document_annotations.rs",
+]
+feature_rows = []
+promoted_rows = []
+acceptance_items = ["A-24"]
+tests = [
+    "real_document_annotations::underline_strikeout_and_ink_survive_a_full_rewrite",
+    "real_document_annotations::annotations_survive_the_incremental_save_the_session_uses",
+    "real_document_annotations::invalid_markup_input_is_rejected_without_mutation",
+    "real_document_annotations::new_markup_types_render_inside_their_rect",
+    "real_document_annotations::old_annotations_keep_their_view_but_have_no_markup_geometry",
+]
+notes = """
+Round A adds Underline, StrikeOut and Ink annotations through the
+pdfxi-document annotation model. Underline/StrikeOut write /QuadPoints, /Rect,
+colour (/C), opacity (/CA), author (/T), date (/M), /NM, /BS << /W 1 /S /S >>
+and an indirect /AP /N form XObject that strokes one line per quad (half a
+stroke above the bottom edge, or the vertical middle) with butt caps. Ink
+writes /InkList, /BS stroke width, the expanded /Rect (point bounds + width/2 +
+0.5) and a stroked appearance with round caps and joins; a one-point path is a
+degenerate round-capped subpath (dot rendering is viewer-dependent and
+untested). Validation (MAX_MARKUP_QUADS 4096, MAX_INK_PATHS 256,
+MAX_INK_POINTS 8192, width 0.1..=32.0, finite and in-media-box coordinates)
+runs before any object allocation, so rejected input leaves /Annots and the
+object-number space unchanged. AnnotationView gained kind, quads, ink_paths,
+colour and stroke_width. AnnotationSubtype remains Text | Highlight | Other so
+the app's exhaustive subtype_label match stays green; the new kinds are exposed
+through AnnotationView::kind and render as Other("<Name>") in the current shell,
+so a later shell task should switch subtype_label/subtype_icon to view.kind.
+PDFium proof on page 1 of the real fixture: 228/456/1153 changed pixels inside
+the three rects and 0 outside. Gates: 383 tests (341 lib, 5 object, 9 annotations,
+27 redaction, 1 text) with fmt, clippy -D warnings and rustdoc -D warnings
+clean. Artifact target/lanes/author7/t0247-out/markup.pdf, 96477 bytes, SHA-256
+CA68282144D097C2B2EF8513DB18B220DAD1B31AC764676A86EBEC387CAC6004 (the /M dates
+carry the run time, so a rerun changes the hash but not the size). Round B
+still owns Line, Square, Circle, Polygon, arrow line endings and Stamp; no
+matrix promotion (feature_rows and promoted_rows stay empty).
+"""

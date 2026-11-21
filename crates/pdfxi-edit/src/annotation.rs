@@ -122,6 +122,46 @@ impl AnnotationKind {
         )
     }
 
+    /// Map a PDF annotation `/Subtype` name to the modelled toolset kind.
+    ///
+    /// Names are matched case-insensitively. PDF has no distinct subtype for an
+    /// arrow or an oval: arrows are `/Line` annotations and ellipses are
+    /// `/Circle`, so those names map to [`Self::Line`] and [`Self::Oval`].
+    /// Returns `None` for a subtype this toolset does not model, such as
+    /// `/Link`, `/Widget` or `/Popup`.
+    pub fn from_pdf_name(name: &str) -> Option<Self> {
+        let kind = if name.eq_ignore_ascii_case("Text") {
+            Self::Note
+        } else if name.eq_ignore_ascii_case("Highlight") {
+            Self::Highlight
+        } else if name.eq_ignore_ascii_case("Underline") {
+            Self::Underline
+        } else if name.eq_ignore_ascii_case("StrikeOut") {
+            Self::Strikeout
+        } else if name.eq_ignore_ascii_case("Squiggly") {
+            Self::Squiggly
+        } else if name.eq_ignore_ascii_case("FreeText") {
+            Self::FreeText
+        } else if name.eq_ignore_ascii_case("Line") {
+            Self::Line
+        } else if name.eq_ignore_ascii_case("Square") {
+            Self::Rectangle
+        } else if name.eq_ignore_ascii_case("Circle") {
+            Self::Oval
+        } else if name.eq_ignore_ascii_case("Polygon") {
+            Self::Polygon
+        } else if name.eq_ignore_ascii_case("Ink") {
+            Self::Pencil
+        } else if name.eq_ignore_ascii_case("Stamp") {
+            Self::Stamp
+        } else if name.eq_ignore_ascii_case("FileAttachment") {
+            Self::FileAttachment
+        } else {
+            return None;
+        };
+        Some(kind)
+    }
+
     /// Returns a stable lowercase name for diagnostics and serialization.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -507,5 +547,35 @@ mod tests {
         assert_eq!(AnnotationKind::Highlight.as_str(), "highlight");
         assert!(AnnotationKind::Highlight.is_markup());
         assert!(!AnnotationKind::Note.is_markup());
+    }
+
+    #[test]
+    fn pdf_subtype_names_map_to_toolset_kinds() {
+        assert_eq!(
+            AnnotationKind::from_pdf_name("Underline"),
+            Some(AnnotationKind::Underline)
+        );
+        assert_eq!(
+            AnnotationKind::from_pdf_name("StrikeOut"),
+            Some(AnnotationKind::Strikeout)
+        );
+        assert_eq!(
+            AnnotationKind::from_pdf_name("ink"),
+            Some(AnnotationKind::Pencil)
+        );
+        assert_eq!(
+            AnnotationKind::from_pdf_name("Square"),
+            Some(AnnotationKind::Rectangle)
+        );
+        assert_eq!(
+            AnnotationKind::from_pdf_name("Circle"),
+            Some(AnnotationKind::Oval)
+        );
+        assert_eq!(
+            AnnotationKind::from_pdf_name("Stamp"),
+            Some(AnnotationKind::Stamp)
+        );
+        assert_eq!(AnnotationKind::from_pdf_name("Link"), None);
+        assert_eq!(AnnotationKind::from_pdf_name(""), None);
     }
 }

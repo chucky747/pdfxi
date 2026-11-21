@@ -3,7 +3,7 @@
   "lane": "author",
   "title": "Underline, strikeout, ink, shapes and stamps annotations",
   "priority": "P0",
-  "status": "queued",
+  "status": "in_progress",
   "depends_on": [
     "T-0230"
   ],
@@ -13,6 +13,6 @@
     "orchestration/feature-updates/T-0247.toml"
   ],
   "acceptance": "cargo test -p pdfxi-edit; the new markup types render in PDFium and extract through the annotation model on a real fixture",
-  "notes": "Follow-up split from T-0230, which delivered note, highlight, reply, resolve and XFDF. This task adds underline, strikeout, ink, geometric shapes (line, arrow, rectangle, ellipse, polygon) and stamp annotations, each with its own quads or appearance and its own serialization round-trip, proven on a real document through the pdfxi-document session of ADR 0010. The shell half (T-0242 already owns the Comments UI) is extended separately when these land; feature-matrix rows stay `library` until a shell task exposes the new types.",
+  "notes": "Follow-up split from T-0230, which delivered note, highlight, reply, resolve and XFDF. This task adds underline, strikeout, ink, geometric shapes (line, arrow, rectangle, ellipse, polygon) and stamp annotations, each with its own quads or appearance and its own serialization round-trip, proven on a real document through the pdfxi-document session of ADR 0010. The shell half (T-0242 already owns the Comments UI) is extended separately when these land; feature-matrix rows stay `library` until a shell task exposes the new types. ROUND A DELIVERED (checkpoint 2026-11-20): underline, strikeout and ink with indirect /AP appearances, fail-closed validation and a PDFium render proof; evidence in docs/evidence/hardening/T-0247.md, no matrix promotion, claim released. ROUND B PENDING: Line, Square, Circle, Polygon, arrow line endings and Stamp, each with appearance, read-back and PDFium proof; AnnotationSubtype stays unextended until a shell task switches to AnnotationView::kind. Task therefore stays in_progress, not verified.",
   "evidence": "docs/evidence/hardening/T-0247.md"
 }
