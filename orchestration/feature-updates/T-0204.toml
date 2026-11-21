@@ -30,6 +30,7 @@ integrator merged the matrix fixes. The real-world fixture is a locally
 produced Microsoft Excel 2019 PDF (xref stream + object stream + Flate content
 + embedded subset font); its read/text path passes, and the incremental-save
 round trip (ignored at T-0204) is enabled and passing after T-0207.
+"""
 tests = [
     "citation_parser_accepts_supported_forms",
     "citation_parser_rejects_non_identifiers",
