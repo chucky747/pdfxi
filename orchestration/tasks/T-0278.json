@@ -1,0 +1,21 @@
+{
+  "id": "T-0278",
+  "lane": "core",
+  "title": "Read link annotations and named destinations through pdfxi links",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0131"],
+  "owns": [
+    "crates/pdfxi-core/src/links.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/links.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "crates/pdfxi-testkit/src/lib.rs",
+    "docs/evidence/cli/T-0278.md",
+    "orchestration/feature-updates/T-0278.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core --lib links and cargo test -p pdfxi-cli pass; pdfxi links resolves URI, explicit and named destinations on the real annotation fixture and on a generated document with all three kinds; VIEW-011 moves to verified. VIEW-009 stays model until embedded bytes can be opened or saved.",
+  "notes": "Adds a permissive interactive-layer reader: link annotations with /A /URI, /A /GoTo, /Dest arrays and named destinations from /Dests and the /Names /Dests tree, plus the attachment listing used by pdfxi attachments. Malformed annotations are skipped and unresolved destinations are reported by name.",
+  "evidence": "docs/evidence/cli/T-0278.md"
+}

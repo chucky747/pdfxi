@@ -13,8 +13,8 @@
 //!
 //! Object numbers are assigned deterministically:
 //!
-//! - object `1` — the document catalog;
-//! - object `2` — the page tree root (`/Pages`);
+//! - object `1` â€” the document catalog;
+//! - object `2` â€” the page tree root (`/Pages`);
 //! - for page `i` (zero-based): object `3 + 2*i` is the `/Page` and object
 //!   `4 + 2*i` is its content stream;
 //! - the final object, `3 + 2*n` where `n` is the page count, is the shared
@@ -240,6 +240,41 @@ pub fn pdf_with_page_size(width: f64, height: f64) -> Vec<u8> {
         DEFAULT_HEIGHT
     };
     build_pdf(&[PageSpec::new(DEFAULT_TEXT, width, height)])
+}
+
+/// Build a one-page PDF with three link annotations (explicit destination,
+/// external URI, named destination) and one embedded file named `notes.txt`.
+///
+/// The bytes are a complete classic-xref document, so the links, the `/Dests`
+/// entry and the `/Names /EmbeddedFiles` tree can be read by any consumer.
+pub fn annotated_pdf() -> Vec<u8> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /Dests << /here [3 0 R /Fit] >> /Names << /EmbeddedFiles << /Names [(notes.txt) 6 0 R] >> >> >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R 8 0 R] >>".to_owned(),
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 100 100] /Dest [3 0 R /Fit] >>".to_owned(),
+        "<< /Type /Annot /Subtype /Link /Rect [10 120 100 160] /A << /S /URI /URI (https://example.com) >> >>".to_owned(),
+        "<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /Desc (Sample notes) /EF << /F 7 0 R >> >>".to_owned(),
+        "<< /Type /EmbeddedFile /Length 5 >>\nstream\nhello\nendstream".to_owned(),
+        "<< /Type /Annot /Subtype /Link /Rect [10 170 100 200] /Dest (here) >>".to_owned(),
+    ];
+    let mut out = String::from("%PDF-1.7\n%PDFXI\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
+    }
+    let xref = out.len();
+    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    out.push_str("0000000000 65535 f \n");
+    for offset in &offsets {
+        out.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    out.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    out.into_bytes()
 }
 
 #[cfg(test)]

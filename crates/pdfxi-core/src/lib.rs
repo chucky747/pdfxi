@@ -27,6 +27,7 @@ pub mod incremental;
 pub mod launch;
 pub mod linearization;
 pub mod linearize;
+pub mod links;
 pub mod metadata;
 pub mod object;
 pub mod objstm;
@@ -98,6 +99,7 @@ pub use linearize::{
     HintStream, LinearizationOptions, LinearizedLayout, PageHint, SharedObjectHint,
     parse_hint_stream, write_linearized_document, write_linearized_document_with_layout,
 };
+pub use links::{Attachment, LinkAnnotation, LinkTarget};
 pub use metadata::{
     DocumentInfo, PdfDate, XmpMetadata, decode_text_string, encode_text_string, parse_pdf_date,
     parse_xmp,
@@ -713,7 +715,7 @@ impl Document {
     ///
     /// `Ok(None)` means the first few objects contain no `/Linearized`
     /// dictionary; a present but malformed dictionary is reported as
-    /// [`Error::MalformedLinearization`]. This reads the hint only — it does
+    /// [`Error::MalformedLinearization`]. This reads the hint only â€” it does
     /// not verify or produce a linearized file layout.
     ///
     /// # Errors
@@ -877,10 +879,10 @@ impl Document {
 
     /// Serialize the whole document as a standalone PDF byte stream.
     ///
-    /// This is a full rewrite: every live object — including objects stored
+    /// This is a full rewrite: every live object â€” including objects stored
     /// compressed inside `/ObjStm` streams and sources whose final
     /// cross-reference section is a `/Type /XRef` stream or a hybrid
-    /// `/XRefStm` table — is loaded through the typed reader and written to a
+    /// `/XRefStm` table â€” is loaded through the typed reader and written to a
     /// fresh file as a plain indirect object. Stream dictionaries keep their
     /// filters and encoded bytes untouched; only `/Length` is recomputed. A
     /// single classic `xref` table, trailer, `startxref` and `%%EOF` are
@@ -971,8 +973,8 @@ impl Document {
     /// The appended section matches the kind of the source's final section
     /// (ISO 32000-1, 7.5.6 and 7.5.8): a cross-reference-stream source gets a
     /// new `/Type /XRef` stream whose `/Prev` points at the previous section,
-    /// while a classic table — including a hybrid file whose final revision is
-    /// a classic table with `/XRefStm` — gets a new classic table. The hybrid
+    /// while a classic table â€” including a hybrid file whose final revision is
+    /// a classic table with `/XRefStm` â€” gets a new classic table. The hybrid
     /// marker is dropped because the new revision has no companion stream.
     ///
     /// # Errors

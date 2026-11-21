@@ -80,6 +80,8 @@ mod printer;
 // Page-level editing: extract, delete, move, reorder, rotate, insert, replace,
 // merge and split (`pages`).
 mod pages;
+// Link annotations and embedded-file attachments (`links`, `attachments`).
+mod links;
 mod repair;
 
 use std::path::{Path, PathBuf};
@@ -99,7 +101,7 @@ const MAX_RENDER_SCALE: f32 = 8.0;
 
 /// PDFXI command-line interface.
 #[derive(Debug, Parser)]
-#[command(name = "pdfxi", version, about = "PDFXI — a Rust PDF workbench")]
+#[command(name = "pdfxi", version, about = "PDFXI â€” a Rust PDF workbench")]
 struct Cli {
     /// The command to run.
     #[command(subcommand)]
@@ -200,6 +202,22 @@ enum Command {
         /// The page operation to perform.
         #[command(subcommand)]
         command: PagesCommand,
+    },
+    /// List link annotations and where they point.
+    Links {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List embedded-file attachments.
+    Attachments {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Manage the virtual PDF printer and capture one printed job.
     ///
@@ -753,6 +771,8 @@ fn main() -> anyhow::Result<()> {
             out,
             format,
         } => render(&file, page, scale, &out, format),
+        Command::Links { file, json } => links::run_links(&file, json),
+        Command::Attachments { file, json } => links::run_attachments(&file, json),
         Command::Pages { command } => match command {
             PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
             PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),

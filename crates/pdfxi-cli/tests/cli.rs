@@ -2694,3 +2694,57 @@ fn pages_crop_rejects_a_degenerate_box() {
     assert!(!output.status.success());
     assert!(!out.path.exists(), "no output for a rejected box");
 }
+
+#[test]
+fn links_report_a_real_annotation_fixture() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/authoring/authoring-annotations.pdf");
+    assert!(source.exists(), "fixture missing: {}", source.display());
+    let output = run(&["links", source.to_str().expect("utf-8 source")]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("links: 1"), "{text}");
+    assert!(
+        text.contains("target: uri https://example.invalid/doc"),
+        "{text}"
+    );
+}
+
+#[test]
+fn links_report_explicit_uri_and_named_destinations() {
+    let pdf = TempPdf::new(&pdfxi_testkit::annotated_pdf());
+    let output = run(&["links", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("links: 3"), "{text}");
+    assert!(text.contains("target: page 1 (named here)"), "{text}");
+    assert!(text.contains("target: uri https://example.com"), "{text}");
+    assert!(text.contains("target: page 1"), "{text}");
+}
+
+#[test]
+fn attachments_report_an_embedded_file() {
+    let pdf = TempPdf::new(&pdfxi_testkit::annotated_pdf());
+    let output = run(&["attachments", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("attachments: 1"), "{text}");
+    assert!(text.contains("name: notes.txt"), "{text}");
+    assert!(text.contains("size: 5"), "{text}");
+    assert!(text.contains("description: Sample notes"), "{text}");
+}
+
+#[test]
+fn links_json_has_stable_fields() {
+    let pdf = TempPdf::new(&pdfxi_testkit::annotated_pdf());
+    let output = run(&["links", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["count"], 3);
+    let links = value["links"].as_array().expect("links array");
+    assert_eq!(links.len(), 3);
+    assert_eq!(links[0]["kind"], "page");
+    assert_eq!(links[1]["kind"], "uri");
+    assert_eq!(links[1]["uri"], "https://example.com");
+    assert_eq!(links[2]["dest_name"], "here");
+}

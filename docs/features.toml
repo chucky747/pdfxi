@@ -260,20 +260,33 @@ title = "Optional content layers"
 docs = [
     "crates/pdfxi-edit/src/navigation/link.rs",
     "crates/pdfxi-edit/src/navigation/mod.rs",
+    "crates/pdfxi-core/src/links.rs",
+    "crates/pdfxi-cli/src/links.rs",
+    "docs/evidence/cli/T-0278.md",
 ]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-edit navigation::link (CARGO_TARGET_DIR=target/lanes/author): all 6 link tests passed. cargo clippy -p pdfxi-edit --all-targets -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps: clean."
+evidence = "`pdfxi links` on the checked-in fixture fixtures/authoring/authoring-annotations.pdf reports `page: 1 ... target: uri https://example.invalid/doc` and links: 1. On pdfxi_testkit::annotated_pdf() it resolves all three kinds: `target: page 1`, `target: uri https://example.com` and `target: page 1 (named here)`, links: 3. JSON carries page/rect/kind/dest_page/dest_name/uri. cargo test -p pdfxi-core --lib links: 2 passed; cargo test -p pdfxi-cli --test cli links: 3 passed, 0 failed. Pasted output in docs/evidence/cli/T-0278.md."
 id = "VIEW-011"
-notes = "Link /Link annotation round-trips for URI, internal destination, and named-action targets, all four /H highlight modes, and border. Named destinations map to the model's named-action variant."
+notes = """
+VIEW-011 is now reachable from the CLI. pdfxi-core::links walks each page's
+/Link annotations, resolves /A /URI, /A /GoTo and /Dest, and resolves named
+destinations through the catalog /Dests dictionary and the /Names /Dests tree
+(including /Kids). Unresolvable targets are reported by name instead of being
+dropped.
+
+Honest scope: the reader does not follow links in the GUI yet and does not write
+or repair annotations; destinations in non-GoTo actions are reported unresolved
+rather than executed. Attachment listing exists for VIEW-009 but opening or
+saving embedded bytes is not implemented, so that row is not claimed here.
+"""
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
-    "navigation::link::tests::uri_link_round_trip",
-    "navigation::link::tests::internal_destination_link_round_trip",
-    "navigation::link::tests::named_action_link_round_trip",
-    "navigation::link::tests::all_highlight_modes_round_trip",
-    "navigation::link::tests::goto_action_destination_is_parsed",
-    "navigation::link::tests::invalid_link_dictionaries_are_rejected",
+    "links::tests::links_report_explicit_uri_and_named_targets",
+    "links::tests::attachments_report_name_description_and_size",
+    "links_report_a_real_annotation_fixture",
+    "links_report_explicit_uri_and_named_destinations",
+    "links_json_has_stable_fields",
 ]
 title = "Links and named destinations"
 
