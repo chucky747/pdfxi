@@ -4,6 +4,21 @@
 //! and call [`crate::ui::PdfxiApp::dispatch`]. The command carries every value
 //! the action needs, so the widget itself never mutates application state. This
 //! gives later UI tests one stable entry point and a `label` for every action.
+//!
+//! Assistant panel actions (T-0253) are commands too, so no panel control calls
+//! a mutating method directly: [`AppCommand::AssistantConnect`] (probe),
+//! [`AppCommand::AssistantAsk`], [`AppCommand::AssistantStop`],
+//! [`AppCommand::AssistantDisconnect`], [`AppCommand::AssistantSelectModel`]
+//! (carries the `provider/model` label), [`AppCommand::AssistantPair`] and
+//! [`AppCommand::AssistantCitation`] (a one-based page cited in an answer), with
+//! the stable labels `assistant-connect`, `assistant-ask`, `assistant-stop`,
+//! `assistant-disconnect`, `assistant-select-model`, `assistant-pair` and
+//! `assistant-citation`.
+//!
+//! `tests/ui_controls.rs` currently records the assistant variants in
+//! `PENDING_COVERAGE` with a per-variant reason, not in `all_commands()` or
+//! `PROVEN_LABELS`; moving them into the proven set is a separate harness
+//! decision, so this module only keeps the labels stable for it.
 
 use std::path::PathBuf;
 
@@ -136,6 +151,20 @@ pub enum AppCommand {
     Protect,
     /// Open the AI assistant (capability-gated).
     AiAssistant,
+    /// Open the Connect screen and start the OpenCode metadata probe.
+    AssistantConnect,
+    /// Send the typed question to the connected OpenCode service.
+    AssistantAsk,
+    /// Cancel the running assistant turn.
+    AssistantStop,
+    /// Return the assistant panel to the disconnected state.
+    AssistantDisconnect,
+    /// Select one model reported by the connected OpenCode service.
+    AssistantSelectModel(String),
+    /// Start the explicit "pair with a code" connection probe.
+    AssistantPair,
+    /// Navigate the active document to a one-based page cited in an answer.
+    AssistantCitation(u32),
     /// Show or hide the right tools panel.
     ToggleTools,
     /// Toggle the page-thumbnail grid/list layout.
@@ -368,6 +397,13 @@ impl AppCommand {
             Self::CombineFiles => "combine-files",
             Self::Protect => "protect",
             Self::AiAssistant => "ai-assistant",
+            Self::AssistantConnect => "assistant-connect",
+            Self::AssistantAsk => "assistant-ask",
+            Self::AssistantStop => "assistant-stop",
+            Self::AssistantDisconnect => "assistant-disconnect",
+            Self::AssistantSelectModel(_) => "assistant-select-model",
+            Self::AssistantPair => "assistant-pair",
+            Self::AssistantCitation(_) => "assistant-citation",
             Self::ToggleTools => "toggle-tools",
             Self::ToggleGrid => "toggle-grid",
             Self::ToggleFullscreen => "toggle-fullscreen",
@@ -536,6 +572,15 @@ impl crate::ui::PdfxiApp {
             AppCommand::CombineFiles => self.not_available("Combine Files"),
             AppCommand::Protect => self.not_available("Protect PDF"),
             AppCommand::AiAssistant => self.open_assistant_connect(),
+            AppCommand::AssistantConnect => self.begin_assistant_connect(),
+            AppCommand::AssistantAsk => {
+                self.begin_assistant_ask();
+            }
+            AppCommand::AssistantStop => self.stop_assistant_turn(),
+            AppCommand::AssistantDisconnect => self.disconnect_assistant(),
+            AppCommand::AssistantSelectModel(label) => self.select_assistant_model(label),
+            AppCommand::AssistantPair => self.start_assistant_pair(),
+            AppCommand::AssistantCitation(page) => self.follow_assistant_citation(page),
             AppCommand::ToggleTools => self.toggle_tools(),
             AppCommand::ToggleGrid => self.grid_view = !self.grid_view,
             AppCommand::ToggleFullscreen => {

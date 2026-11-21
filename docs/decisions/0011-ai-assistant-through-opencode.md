@@ -363,3 +363,23 @@ route cannot conjure a handler. Plugin RPC events use the
 - No hosted service, account, or PDFXI-operated relay (campaign section 7).
 - No write or editing tools for the assistant; no filesystem or shell access.
 - No local model runtime shipped with PDFXI.
+
+## Amendment (2026-11-20): credential lifetime in the app
+
+Shipped T-0251/T-0252/T-0253 behavior. Where it differs from decision 6 and
+"Authentication" above, this section is authoritative.
+
+- Discovery reads the password from `<home>/.local/state/opencode/service.json`
+  (the registration file OpenCode itself writes) into the client's `Secret`.
+  Explicit pairing puts the user-entered code into the same `Secret`; it uses
+  the explicit-endpoint path, not an OpenCode pairing handshake.
+- The app keeps the `ServiceEndpoint` and its Basic credential in memory for the
+  connection's lifetime, so later prompts reuse the same client/session. It is
+  never written to settings, logs, evidence or crash text, and is not displayed:
+  the UI shows only the service URL.
+- `disconnect()` clears the retained endpoint and pairing input; dropping the
+  app drops the secret. The Windows Credential Manager storage in the original
+  decision is **not implemented**: the registration file is the only persisted
+  credential source, and OpenCode writes it, not PDFXI.
+- Consequence: any future remote pairing that must survive a restart needs an
+  explicit credential-storage task; it is out of scope for this campaign.

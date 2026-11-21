@@ -490,6 +490,9 @@ pub fn run() -> Result<(), String> {
             app.apply_launch_title(launch.title.as_deref());
             app.apply_launch_panel(launch.panel);
             app.apply_launch_tool(launch.tool);
+            if let Some(question) = launch.assistant_question {
+                app.request_launch_question(question);
+            }
             if print_requested {
                 app.dispatch(AppCommand::Print, None);
             }
@@ -548,6 +551,12 @@ pub struct PdfxiApp {
     capabilities: Capabilities,
     /// OpenCode connection screen state and its worker-thread probe.
     assistant: shell::assistant_connect::AssistantConnection,
+    /// Per-document assistant conversation and its worker-thread turn.
+    assistant_chat: shell::assistant_chat::AssistantChat,
+    /// A launch/deep-link question to ask once an explicit connect succeeds.
+    ///
+    /// `None` for every normal run: opening the panel never sets it.
+    pending_assistant_question: Option<String>,
     /// Active left rail and side-panel content.
     active_rail: RailItem,
     /// Whether the right tools panel is open.
@@ -895,6 +904,8 @@ impl PdfxiApp {
         self.pending_page_scroll = None;
         self.thumbs.reset(0);
         self.thumb_follow_active = true;
+        self.assistant_chat
+            .sync_document(self.state.active_tab_id());
         self.active_rail = RailItem::Pages;
         self.page_box = "1".to_owned();
         #[cfg(feature = "pdfium")]
@@ -1262,6 +1273,8 @@ impl PdfxiApp {
         self.restore_scroll_from_active();
         self.pending_scroll = false;
         self.pending_page_scroll = None;
+        self.assistant_chat
+            .sync_document(self.state.active_tab_id());
         self.refresh_renderer_for_active_tab();
         self.refresh_annotations();
         self.refresh_forms();
@@ -1629,6 +1642,7 @@ impl PdfxiApp {
             undo,
             redo,
             print,
+            assistant_panel,
         ) = ctx.input(|input| {
             let ctrl = input.modifiers.ctrl;
             let shift = input.modifiers.shift;
@@ -1673,6 +1687,7 @@ impl PdfxiApp {
                 ctrl && !shift && input.key_pressed(Key::Z),
                 ctrl && (input.key_pressed(Key::Y) || (shift && input.key_pressed(Key::Z))),
                 ctrl && input.key_pressed(Key::P),
+                ctrl && shift && input.key_pressed(Key::A),
             )
         });
 
@@ -1703,6 +1718,9 @@ impl PdfxiApp {
         if print {
             self.dispatch(AppCommand::Print, Some(ctx));
         }
+        if assistant_panel {
+            self.dispatch(AppCommand::AiAssistant, Some(ctx));
+        }
         if let Some(command) = view_command {
             let command = match command {
                 ViewCommand::RotateClockwise => AppCommand::RotateClockwise,
@@ -1729,12 +1747,16 @@ impl PdfxiApp {
             self.dispatch(AppCommand::CopySelection, Some(ctx));
         }
         if escape {
-            let command = if self.find_open {
-                AppCommand::CloseFind
+            if self.assistant_chat.is_thinking() {
+                self.dispatch(AppCommand::AssistantStop, Some(ctx));
             } else {
-                AppCommand::ClearSelection
-            };
-            self.dispatch(command, Some(ctx));
+                let command = if self.find_open {
+                    AppCommand::CloseFind
+                } else {
+                    AppCommand::ClearSelection
+                };
+                self.dispatch(command, Some(ctx));
+            }
         }
     }
 }
@@ -1773,6 +1795,7 @@ impl eframe::App for PdfxiApp {
         self.handle_keyboard(ctx);
         self.pump_text_extraction();
         self.poll_assistant_connection(ctx);
+        self.poll_assistant_chat(ctx);
 
         let dropped: Vec<PathBuf> = ctx.input(|input| {
             input
@@ -1879,6 +1902,15 @@ impl PdfxiApp {
     #[cfg(not(feature = "pdfium"))]
     fn pump_text_extraction(&mut self) {}
 
+    /// Width of the left content panel; the assistant needs room for answers.
+    fn panel_width(&self) -> f32 {
+        if self.active_rail == RailItem::AiAssistant {
+            300.0
+        } else {
+            metrics::PAGES
+        }
+    }
+
     /// Resolve the theme preference to the palette to draw now.
     ///
     /// `Follow system` reads the OS preference from the `egui` context; when
@@ -1941,7 +1973,7 @@ impl PdfxiApp {
             .show(ctx, |ui| self.rail_ui(ui, palette));
 
         egui::SidePanel::left("shell_pages")
-            .exact_width(metrics::PAGES)
+            .exact_width(self.panel_width())
             .resizable(false)
             .frame(
                 egui::Frame::new()
@@ -2513,8 +2545,16 @@ mod tests {
         let export = labels(Capabilities::none().with(Capability::Export));
         assert!(export.contains(&"organize"));
         assert!(export.contains(&"export"));
-        let ai = labels(Capabilities::none().with(Capability::AiAssistant));
-        assert!(ai.contains(&"ai-assistant"));
+        let ai = labels(Capabilities::none().with(Capability::AssistantConnect));
+        assert!(
+            ai.contains(&"ai-assistant"),
+            "the assistant pill is reachable before a service exists"
+        );
+        let conversation = labels(Capabilities::none().with(Capability::AiAssistant));
+        assert!(
+            !conversation.contains(&"ai-assistant"),
+            "the conversation capability does not own the placement; the connect entry does"
+        );
     }
 
     #[test]

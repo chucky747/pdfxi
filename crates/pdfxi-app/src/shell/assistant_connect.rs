@@ -88,6 +88,12 @@ impl ConnectedService {
 /// Result of a successful metadata probe.
 #[derive(Debug, Clone)]
 pub(crate) struct ProbeOutcome {
+    /// Endpoint that answered, including the in-memory credential.
+    ///
+    /// The credential is never formatted, rendered, logged, or persisted; the
+    /// conversation needs it to open a session without asking for the pairing
+    /// code again.
+    pub(crate) endpoint: ServiceEndpoint,
     /// Base URL of the service, without credentials.
     pub(crate) url: String,
     /// `/api/info` payload.
@@ -150,11 +156,12 @@ pub(crate) fn probe_endpoint_with(
     config: ClientConfig,
     cancel: &CancelFlag,
 ) -> Result<ProbeOutcome, ProbeFailure> {
-    let assistant = Assistant::connect_with(endpoint, config);
+    let assistant = Assistant::connect_with(endpoint.clone(), config);
     let info = assistant.check_compatible(cancel).map_err(classify)?;
     let providers = assistant.providers(cancel).map_err(classify)?;
     let models = assistant.models(cancel).map_err(classify)?;
     Ok(ProbeOutcome {
+        endpoint,
         url: assistant.endpoint().url().to_owned(),
         info,
         providers,
@@ -238,8 +245,11 @@ pub(crate) struct AssistantConnection {
     pair_error: Option<String>,
     job: Option<ConnectionJob>,
     probe_requested: bool,
-    auto_probe_done: bool,
     persist: Option<PersistRequest>,
+    /// Endpoint retained in memory for the conversation; cleared on disconnect.
+    endpoint: Option<ServiceEndpoint>,
+    /// Whether the full Connect screen is showing instead of the short card.
+    show_connect: bool,
 }
 
 impl Default for AssistantConnection {
@@ -256,8 +266,9 @@ impl Default for AssistantConnection {
             pair_error: None,
             job: None,
             probe_requested: false,
-            auto_probe_done: false,
             persist: None,
+            endpoint: None,
+            show_connect: false,
         }
     }
 }
@@ -276,6 +287,18 @@ impl AssistantConnection {
     /// The last endpoint that answered, without credentials.
     pub(crate) fn last_endpoint(&self) -> Option<&str> {
         self.last_endpoint.as_deref()
+    }
+
+    /// The connected endpoint, including the in-memory credential.
+    ///
+    /// Only the conversation worker reads this; it is never rendered.
+    pub(crate) fn endpoint(&self) -> Option<&ServiceEndpoint> {
+        self.endpoint.as_ref()
+    }
+
+    /// Whether the full Connect screen is showing on the assistant panel.
+    pub(crate) fn shows_connect(&self) -> bool {
+        self.show_connect
     }
 
     /// Seeds the picker from persisted settings.
@@ -301,6 +324,7 @@ impl AssistantConnection {
         matches!(&self.state, ConnectionState::Connected(service)
             if !service.models.is_empty())
             && !self.selected_model.is_empty()
+            && self.endpoint.is_some()
     }
 
     /// Whether a probe is queued or running.
@@ -311,9 +335,15 @@ impl AssistantConnection {
     /// Ask the next poll to start a discovery probe.
     ///
     /// Dispatching a command stays free of I/O; the frame calls [`Self::poll`]
-    /// and the worker thread does the network work.
-    pub(crate) fn request_probe(&mut self) {
+    /// and the worker thread does the network work. A probe that is already
+    /// queued or running makes this a no-op and returns `false`, so two rapid
+    /// Connect clicks cannot queue a second probe behind the first one.
+    pub(crate) fn request_probe(&mut self) -> bool {
+        if self.probe_requested || self.is_checking() {
+            return false;
+        }
         self.probe_requested = true;
+        true
     }
 
     /// Records the explicit pairing form values. The code stays in memory only.
@@ -337,6 +367,9 @@ impl AssistantConnection {
         self.state = ConnectionState::Checking;
         self.service_url = url.clone();
         self.provider_labels.clear();
+        // An explicit connection replaces any discovery probe that was only
+        // queued and not yet started.
+        self.probe_requested = false;
         self.job = Some(start_probe(ConnectTarget::Explicit { url, code }));
     }
 
@@ -358,6 +391,12 @@ impl AssistantConnection {
     }
 
     /// Returns to the disconnected state and abandons any running probe.
+    ///
+    /// The pairing code is the credential in this build, so it is erased from
+    /// memory and from the visible field here: after Disconnect there is no
+    /// service left that the code could be replayed against. The queued-probe
+    /// flag is cleared too, so a manual disconnect cannot reconnect on the next
+    /// frame.
     pub(crate) fn disconnect(&mut self) {
         if let Some(job) = self.job.take() {
             job.cancel();
@@ -365,10 +404,12 @@ impl AssistantConnection {
         self.state = ConnectionState::Disconnected;
         self.service_url.clear();
         self.provider_labels.clear();
+        self.pair_code.clear();
         self.pair_error = None;
+        self.probe_requested = false;
         self.persist = None;
-        // A manual disconnect must not immediately reconnect on the next frame.
-        self.auto_probe_done = true;
+        self.endpoint = None;
+        self.show_connect = true;
     }
 
     /// Returns the latest settings write, once.
@@ -376,14 +417,20 @@ impl AssistantConnection {
         self.persist.take()
     }
 
-    /// Probe the service once when the panel is first opened.
-    pub(crate) fn ensure_auto_probe(&mut self) {
-        if self.auto_probe_done {
-            return;
-        }
-        self.auto_probe_done = true;
-        if matches!(self.state, ConnectionState::Disconnected) {
-            self.request_probe();
+    /// Open the full Connect screen and queue one discovery probe.
+    ///
+    /// This is the "Connect to OpenCode" action; opening the assistant panel by
+    /// itself never calls it, so opening the panel sends no request. A probe
+    /// that is already queued or running is not duplicated.
+    pub(crate) fn begin_connect(&mut self) {
+        self.show_connect = true;
+        let _ = self.request_probe();
+    }
+
+    /// Show the short assistant card instead of the full Connect screen.
+    pub(crate) fn show_assistant_card(&mut self) {
+        if !self.is_usable() {
+            self.show_connect = false;
         }
     }
 
@@ -441,6 +488,7 @@ impl AssistantConnection {
         self.service_url = outcome.url.clone();
         self.provider_labels = provider_labels.clone();
         self.last_endpoint = Some(outcome.url.clone());
+        self.endpoint = Some(outcome.endpoint);
         self.persist = Some(PersistRequest {
             endpoint: outcome.url.clone(),
             model: selected,
@@ -457,6 +505,7 @@ impl AssistantConnection {
     fn apply_failure(&mut self, failure: ProbeFailure) {
         self.provider_labels.clear();
         self.service_url.clear();
+        self.endpoint = None;
         self.state = match failure {
             ProbeFailure::Incompatible { version } => ConnectionState::Incompatible { version },
             ProbeFailure::Unreachable { message } => {
@@ -495,9 +544,11 @@ impl PdfxiApp {
     /// Poll the worker and keep [`Capability::AiAssistant`] honest.
     ///
     /// The conversation capability exists only while the connection screen has a
-    /// usable service, so no assistant control is drawn before there is one. The
-    /// connection screen itself stays available through
-    /// [`Capability::AssistantConnect`].
+    /// usable service. The assistant panel reads it to choose the conversation
+    /// over the connection screen, so no assistant conversation control is drawn
+    /// before there is a service to talk to. The connection screen itself stays
+    /// available through [`Capability::AssistantConnect`]. A frame polls before
+    /// it draws, so the flag is never a frame behind the panel.
     pub(crate) fn poll_assistant_connection(&mut self, ctx: &egui::Context) {
         self.assistant.poll();
         if let Some(persist) = self.assistant.take_persist() {
@@ -536,36 +587,28 @@ impl PdfxiApp {
         self.status = "Disconnected from OpenCode".to_owned();
     }
 
-    /// Open the connection screen and queue a probe.
+    /// Open the assistant panel without sending anything.
     ///
-    /// Called by [`AppCommand::AiAssistant`] from the Tools row, the command bar
-    /// and the `--tool=ai` deep link; dispatch itself performs no I/O.
+    /// Called by [`AppCommand::AiAssistant`] from the Tools row, the command bar,
+    /// the rail and the `--tool=ai` deep link. The panel shows a "Connect to
+    /// OpenCode" card when no service is connected; only the explicit connect
+    /// action starts the metadata probe.
     pub(crate) fn open_assistant_connect(&mut self) {
         self.active_rail = super::capabilities::RailItem::AiAssistant;
-        self.assistant.request_probe();
+        self.assistant.show_assistant_card();
+        self.status = "AI Assistant".to_owned();
+    }
+
+    /// Start the explicit connection probe from the assistant panel.
+    pub(crate) fn begin_assistant_connect(&mut self) {
+        self.active_rail = super::capabilities::RailItem::AiAssistant;
+        self.assistant.begin_connect();
         self.status = "Connect to OpenCode to use the AI assistant".to_owned();
     }
 
-    /// Draw the connection screen inside the left side panel.
-    pub(crate) fn assistant_connect_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        self.assistant.ensure_auto_probe();
-
-        ui.label(
-            egui::RichText::new("AI Assistant")
-                .strong()
-                .size(13.0)
-                .color(palette.text),
-        );
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(self.assistant.state().label())
-                    .size(10.0)
-                    .color(state_color(self.assistant.state(), palette)),
-            )
-            .wrap_mode(egui::TextWrapMode::Wrap),
-        );
-        ui.add_space(6.0);
-
+    /// Draw the connection states, model picker and pairing fields without a
+    /// header, so the conversation can show them in its Connection section.
+    pub(crate) fn assistant_connection_body_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         let state = self.assistant.state().clone();
         match &state {
             ConnectionState::Disconnected => {
@@ -645,11 +688,11 @@ impl PdfxiApp {
                 .add_enabled(enabled, egui::Button::new(connect_label))
                 .clicked()
             {
-                self.dispatch(AppCommand::AiAssistant, Some(ui.ctx()));
+                self.dispatch(AppCommand::AssistantConnect, Some(ui.ctx()));
             }
             if matches!(&state, ConnectionState::Connected(_)) && ui.button("Disconnect").clicked()
             {
-                self.disconnect_assistant();
+                self.dispatch(AppCommand::AssistantDisconnect, Some(ui.ctx()));
             }
         });
 
@@ -676,7 +719,7 @@ impl PdfxiApp {
                     .desired_width(f32::INFINITY),
             );
             if ui.button("Pair and check").clicked() {
-                self.start_assistant_pair();
+                self.dispatch(AppCommand::AssistantPair, Some(ui.ctx()));
             }
             if let Some(error) = &self.assistant.pair_error {
                 ui.label(
@@ -734,7 +777,7 @@ impl PdfxiApp {
                     }
                 });
             if let Some(label) = chosen {
-                self.select_assistant_model(label);
+                self.dispatch(AppCommand::AssistantSelectModel(label), Some(ui.ctx()));
             }
         }
 
@@ -748,7 +791,7 @@ impl PdfxiApp {
 }
 
 /// Status colour for the panel header.
-fn state_color(state: &ConnectionState, palette: Palette) -> egui::Color32 {
+pub(crate) fn state_color(state: &ConnectionState, palette: Palette) -> egui::Color32 {
     match state {
         ConnectionState::Connected(_) => palette.accent,
         ConnectionState::Incompatible { .. } | ConnectionState::Unreachable { .. } => {
@@ -771,231 +814,16 @@ fn provider_summary(labels: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::net::TcpListener;
     use std::time::Duration;
 
-    use pdfxi_assistant::{Timeouts, redact};
+    use pdfxi_assistant::redact;
 
     use crate::settings::{self, Settings};
-
-    const PASSWORD: &str = "test-secret";
-    const EXPECTED_AUTH: &str = "Basic b3BlbmNvZGU6dGVzdC1zZWNyZXQ=";
-
-    const INFO: &str = r#"{"version":"2.3.2","pid":17164,"hostname":"test",
-        "urls":["http://127.0.0.1:1"],"capabilities":{"persistentPty":true}}"#;
-    const INFO_NEWER: &str = r#"{"version":"2.4.0","pid":17164,"hostname":"test",
-        "urls":["http://127.0.0.1:1"]}"#;
-    const PROVIDERS: &str = r#"{"data":[
-        {"id":"opencode-go","name":"OpenCode Go","enabled":true},
-        {"id":"opencode","name":"OpenCode","enabled":true},
-        {"id":"claude-agent","name":"Claude Agent","enabled":false}]}"#;
-    const MODELS: &str = r#"{"data":[
-        {"id":"hy4-flash-free","modelID":"hy4-flash-free","providerID":"opencode-go",
-         "type":"chat","name":"Hy4 flash Free","status":"active","enabled":true,
-         "variants":[{"id":"none"},{"id":"high"}],
-         "capabilities":{"tools":true,"input":["text"],"output":["text"]},
-         "limit":{"context":1048576}},
-        {"id":"deepseek-v4.1-flash","providerID":"opencode-go","type":"chat",
-         "name":"DeepSeek V4.1 Flash","enabled":true,
-         "limit":{"context":262144}}]}"#;
-
-    #[derive(Debug, Clone, Default)]
-    struct Recorded {
-        method: String,
-        path: String,
-        authorization: Option<String>,
-        body_len: usize,
-    }
-
-    /// An in-process loopback stub for the three metadata routes.
-    struct Stub {
-        url: String,
-        address: std::net::SocketAddr,
-        requests: Arc<Mutex<Vec<Recorded>>>,
-        stop: Arc<AtomicBool>,
-        handle: Option<JoinHandle<()>>,
-    }
-
-    impl Stub {
-        fn start(info: &'static str) -> Self {
-            // A blocking listener: Windows is sensitive to a non-blocking
-            // listener's flag leaking into accepted sockets and resetting the
-            // connection before the client reads the response.
-            let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback stub");
-            let address = listener.local_addr().expect("stub address");
-            let url = format!("http://{address}");
-            let requests = Arc::new(Mutex::new(Vec::new()));
-            let recorded = Arc::clone(&requests);
-            let stop = Arc::new(AtomicBool::new(false));
-            let worker_stop = Arc::clone(&stop);
-            let handle = std::thread::spawn(move || {
-                while !worker_stop.load(Ordering::SeqCst) {
-                    let Ok((mut stream, _)) = listener.accept() else {
-                        break;
-                    };
-                    if worker_stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let _ = stream.set_nonblocking(false);
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-                    // Stay on this connection until the client closes it. The
-                    // response advertises `Connection: close`, so a conforming
-                    // client opens a new socket per request, but a keep-alive
-                    // client is handled by the same loop.
-                    while let Some((head, body)) = read_request(&mut stream) {
-                        let request = parse_head(&head, body.len());
-                        let authorized = request.authorization.as_deref() == Some(EXPECTED_AUTH);
-                        let payload = if !authorized {
-                            ""
-                        } else if request.path == "/api/info" {
-                            info
-                        } else if request.path == "/api/provider" {
-                            PROVIDERS
-                        } else if request.path == "/api/model" {
-                            MODELS
-                        } else {
-                            ""
-                        };
-                        let status = if authorized {
-                            "200 OK"
-                        } else {
-                            "401 Unauthorized"
-                        };
-                        recorded.lock().expect("record requests").push(request);
-                        let response = format!(
-                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
-                             Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-                            payload.len()
-                        );
-                        if stream.write_all(response.as_bytes()).is_err() {
-                            break;
-                        }
-                        let _ = stream.flush();
-                        if worker_stop.load(Ordering::SeqCst) {
-                            break;
-                        }
-                    }
-                }
-            });
-            Self {
-                url,
-                address,
-                requests,
-                stop,
-                handle: Some(handle),
-            }
-        }
-
-        fn requests(&self) -> Vec<Recorded> {
-            self.requests.lock().expect("requests").clone()
-        }
-    }
-
-    impl Drop for Stub {
-        fn drop(&mut self) {
-            self.stop.store(true, Ordering::SeqCst);
-            // Wake the blocking `accept`; the worker sees the stop flag and exits.
-            if let Ok(wake) = TcpStream::connect(self.address) {
-                drop(wake);
-            }
-            if let Some(handle) = self.handle.take() {
-                let _ = handle.join();
-            }
-        }
-    }
-
-    /// Reads one complete request: all headers and any `Content-Length` body.
-    fn read_request(stream: &mut TcpStream) -> Option<(String, Vec<u8>)> {
-        let mut bytes = Vec::new();
-        let mut chunk = [0u8; 1024];
-        let header_end = loop {
-            if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-                break position + 4;
-            }
-            let read = read_chunk(stream, &mut chunk)?;
-            if read == 0 {
-                return None;
-            }
-            bytes.extend_from_slice(&chunk[..read]);
-            if bytes.len() > 64 * 1024 {
-                return None;
-            }
-        };
-        let head = String::from_utf8(bytes[..header_end].to_vec()).ok()?;
-        let content_length = head.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())
-                .flatten()
-        });
-        let mut body = bytes[header_end..].to_vec();
-        let expected = content_length.unwrap_or(0);
-        while body.len() < expected {
-            let read = read_chunk(stream, &mut chunk)?;
-            if read == 0 {
-                return None;
-            }
-            body.extend_from_slice(&chunk[..read]);
-            if body.len() > 1024 * 1024 {
-                return None;
-            }
-        }
-        body.truncate(expected);
-        Some((head, body))
-    }
-
-    /// Reads one chunk, retrying a transient non-blocking result.
-    fn read_chunk(stream: &mut TcpStream, chunk: &mut [u8]) -> Option<usize> {
-        loop {
-            match stream.read(chunk) {
-                Ok(read) => return Some(read),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                    ) =>
-                {
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(_) => return None,
-            }
-        }
-    }
-
-    fn parse_head(head: &str, body_len: usize) -> Recorded {
-        let mut lines = head.lines();
-        let request_line = lines.next().unwrap_or_default();
-        let mut parts = request_line.split_whitespace();
-        let method = parts.next().unwrap_or_default().to_owned();
-        let path = parts.next().unwrap_or_default().to_owned();
-        let authorization = lines.find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("authorization")
-                .then(|| value.trim().to_owned())
-        });
-        Recorded {
-            method,
-            path,
-            authorization,
-            body_len,
-        }
-    }
-
-    fn test_config() -> ClientConfig {
-        ClientConfig {
-            timeouts: Timeouts {
-                connect: Duration::from_secs(2),
-                response: Duration::from_secs(5),
-                read: Duration::from_secs(5),
-                body: Duration::from_secs(5),
-            },
-            ..ClientConfig::default()
-        }
-    }
-
+    use crate::ui::AppCommand;
+    use crate::ui::shell::assistant_stub::{
+        EXPECTED_AUTH, INFO, INFO_NEWER, PASSWORD, Stub, test_config,
+    };
     fn connected_to(stub: &Stub) -> AssistantConnection {
         let endpoint = ServiceEndpoint::explicit(&stub.url, PASSWORD).expect("endpoint");
         let outcome = probe_endpoint_with(endpoint, test_config(), &CancelFlag::new())
@@ -1028,7 +856,7 @@ mod tests {
         assert_eq!(paths, vec!["/api/info", "/api/provider", "/api/model"]);
         for request in &requests {
             assert_eq!(request.method, "GET", "the probe sends metadata GETs only");
-            assert_eq!(request.body_len, 0, "the probe sends bodiless GETs");
+            assert!(request.body.is_empty(), "the probe sends bodiless GETs");
             assert_eq!(
                 request.authorization.as_deref(),
                 Some(EXPECTED_AUTH),
@@ -1097,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_opens_the_connect_panel_without_network_io() {
+    fn dispatch_opens_the_assistant_panel_without_network_io() {
         let mut app = PdfxiApp::new();
         assert_eq!(
             app.active_rail(),
@@ -1105,12 +933,13 @@ mod tests {
         );
         assert!(
             app.capabilities.contains(Capability::AssistantConnect),
-            "the connection screen is reachable before a service exists"
+            "the assistant panel is reachable before a service exists"
         );
         assert!(
             !app.capabilities.contains(Capability::AiAssistant),
             "the conversation capability stays off until a usable service exists"
         );
+        assert!(!app.assistant.shows_connect());
 
         app.dispatch(AppCommand::AiAssistant, None);
 
@@ -1118,7 +947,11 @@ mod tests {
             app.active_rail(),
             super::super::capabilities::RailItem::AiAssistant
         );
-        assert!(app.status().contains("OpenCode"));
+        assert_eq!(app.status(), "AI Assistant");
+        assert!(
+            !app.assistant.shows_connect(),
+            "opening the panel shows the card, not the Connect screen"
+        );
         assert!(matches!(
             app.assistant.state(),
             ConnectionState::Disconnected
@@ -1127,6 +960,12 @@ mod tests {
             app.assistant.selected_model(),
             DEFAULT_ASSISTANT_MODEL,
             "the picker starts on the acceptance model"
+        );
+
+        app.begin_assistant_connect();
+        assert!(
+            app.assistant.shows_connect(),
+            "the explicit connect action opens the Connect screen"
         );
     }
 
@@ -1216,6 +1055,102 @@ mod tests {
             connection.selected_model(),
             "opencode-go/deepseek-v4.1-flash",
             "the remembered model survives a disconnect"
+        );
+    }
+
+    #[test]
+    fn disconnect_clears_the_pairing_code_and_the_queued_probe() {
+        let stub = Stub::start(INFO);
+        let mut connection = connected_to(&stub);
+        connection.set_pair_inputs(stub.url.clone(), PASSWORD.to_owned());
+        assert_eq!(
+            connection.pair_code, PASSWORD,
+            "the form holds the typed code"
+        );
+        assert!(
+            connection.request_probe(),
+            "a connected screen may reconnect"
+        );
+
+        connection.disconnect();
+
+        assert!(
+            connection.pair_code.is_empty(),
+            "the credential must not stay in memory after Disconnect"
+        );
+        assert!(
+            !connection.probe_requested,
+            "a manual disconnect must not leave a probe queued"
+        );
+        assert!(matches!(connection.state(), ConnectionState::Disconnected));
+    }
+
+    #[test]
+    fn duplicate_probe_requests_start_only_one_probe() {
+        let stub = Stub::start(INFO);
+        let mut connection = AssistantConnection::default();
+        connection.set_pair_inputs(stub.url.clone(), PASSWORD.to_owned());
+        connection.begin_explicit();
+        assert!(
+            !connection.request_probe(),
+            "a running probe refuses a duplicate request"
+        );
+        assert!(
+            !connection.probe_requested,
+            "the refused request queued nothing behind the running probe"
+        );
+
+        wait_for_probe(&mut connection);
+        connection.poll();
+        assert!(
+            matches!(connection.state(), ConnectionState::Connected(_)),
+            "the single probe connected: {:?}",
+            connection.state()
+        );
+        assert_eq!(
+            stub.requests().len(),
+            3,
+            "one probe sends the three metadata GETs, never six"
+        );
+
+        // The same guard coalesces two rapid Connect clicks before the first
+        // frame: the second request is refused and the first stays queued.
+        let mut queued = AssistantConnection::default();
+        assert!(queued.request_probe());
+        assert!(
+            !queued.request_probe(),
+            "a queued probe rejects a second request"
+        );
+        assert!(queued.probe_requested, "the first request is still queued");
+    }
+
+    #[test]
+    fn a_usable_service_enables_the_conversation_capability() {
+        let stub = Stub::start(INFO);
+        let endpoint = ServiceEndpoint::explicit(&stub.url, PASSWORD).expect("endpoint");
+        let outcome = probe_endpoint_with(endpoint, test_config(), &CancelFlag::new())
+            .expect("probe succeeds");
+
+        let mut app = PdfxiApp::new();
+        let context = egui::Context::default();
+        app.poll_assistant_connection(&context);
+        assert!(
+            !app.capabilities.contains(Capability::AiAssistant),
+            "no service yet: the panel keeps showing the connection screen"
+        );
+
+        app.assistant.apply_outcome(outcome);
+        app.poll_assistant_connection(&context);
+        assert!(
+            app.capabilities.contains(Capability::AiAssistant),
+            "a usable service turns the conversation surface on"
+        );
+
+        app.assistant.disconnect();
+        app.poll_assistant_connection(&context);
+        assert!(
+            !app.capabilities.contains(Capability::AiAssistant),
+            "Disconnect turns the conversation surface off again"
         );
     }
 

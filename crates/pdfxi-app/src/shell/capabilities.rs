@@ -262,7 +262,11 @@ pub fn command_bar_features(capabilities: Capabilities) -> Vec<FeatureButton> {
             command: AppCommand::Export,
         },
         FeatureButton {
-            capability: Capability::AiAssistant,
+            // The pill opens the assistant panel in every state: disconnected,
+            // it shows the "Connect to OpenCode" card; connected, the
+            // conversation. The conversation itself stays gated by
+            // `Capability::AiAssistant` inside the panel.
+            capability: Capability::AssistantConnect,
             label: "AI Assistant",
             icon: Icon::Sparkle,
             command: AppCommand::AiAssistant,

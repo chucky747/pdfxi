@@ -1,0 +1,81 @@
+# T-0253 - Assistant panel: ask, stop, citations (Round A)
+#
+# Round A only: panel, ask/stop, per-document conversation and page citations.
+# No feature row is promoted and SEC-013 is not claimed.
+
+task = "T-0253"
+lane = "app"
+status = "in_progress"
+evidence = "docs/evidence/ui/T-0253.md"
+docs = [
+    "docs/evidence/ui/T-0253.md",
+    "crates/pdfxi-app/src/shell/assistant_chat.rs",
+    "crates/pdfxi-app/src/shell/assistant_connect.rs",
+    "crates/pdfxi-app/src/shell/assistant_stub.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/settings.rs",
+]
+feature_rows = []
+promoted_rows = []
+acceptance_items = ["A-06", "A-16"]
+tests = [
+    "shell::assistant_chat::tests::opening_the_panel_sends_nothing",
+    "shell::assistant_chat::tests::ask_sends_only_after_the_click_and_never_document_text",
+    "shell::assistant_chat::tests::ask_uses_the_model_remembered_in_settings",
+    "shell::assistant_chat::tests::stop_cancels_a_slow_turn_and_returns_to_idle",
+    "shell::assistant_chat::tests::citation_navigation_changes_the_active_page",
+    "shell::assistant_chat::tests::switching_or_opening_a_document_resets_the_conversation",
+    "shell::assistant_chat::tests::citations_parse_the_supported_forms_and_ignore_false_positives",
+    "shell::assistant_chat::tests::citations_accept_unicode_context_without_splitting_characters",
+    "shell::assistant_chat::tests::model_labels_split_into_provider_and_id",
+    "shell::assistant_chat::tests::question_messages_never_invent_citations",
+    "shell::assistant_connect::tests::dispatch_opens_the_assistant_panel_without_network_io",
+    "shell::assistant_connect::tests::app_persists_the_model_and_endpoint_but_never_the_password",
+    "settings::tests::assistant_question_flag_is_a_capture_only_override",
+]
+notes = """
+Round A of the assistant panel per ADR 0011. The panel now has three placements
+(command-bar pill, Tools row and rail entry) behind AppCommand::AiAssistant, a
+connected conversation with question, answer, "Thinking..." plus Stop, an ask
+box with Ask/Enter, and page-citation chips that dispatch GoToPage(page - 1).
+Citations are parsed from answer text only (page 2, p. 2, [page 2], [p. 2]);
+a chip past the page count is disabled. One T-0251 session is reused per
+conversation and reset when the active tab changes, so messages never cross
+documents. Only the typed question is sent: the loopback stub test asserts the
+prompt body and that no document text, page text or file name is included.
+Stop cancels the worker flag and drops the late result. The UI thread only
+drains channels and repaints.
+
+Dead-control gate: the panel no longer calls mutating methods from click
+handlers. Six commands were added with stable labels - assistant-connect,
+assistant-ask, assistant-stop, assistant-disconnect, assistant-select-model and
+assistant-pair - and the Escape key handler dispatches AssistantStop instead of
+calling the method. tests/ui_controls.rs: repository_shell_has_no_dead_controls
+passes; the harness records the six variants in PENDING_COVERAGE (five can be
+promoted to proven with a status/active_rail proof; assistant-select-model
+needs a connected service). No allowlist entry was added.
+
+Gates: fmt --check, clippy -D warnings, rustdoc -D warnings, and
+cargo test -p pdfxi-app --features ui,pdfium (517 lib + 24 harness + 0
+doctests, 0 failed) all green. Four captures were taken from the release build
+against the real local OpenCode service (2.3.2, 57 models, test model
+opencode-go/hy4-flash-free) at
+docs/evidence/ui/t0253-assistant-{light,dark}-{windows,macos}.png. The capture
+question is a greeting because Round A sends no document text; an earlier
+"summarize" probe produced an invented absolute path and was discarded. The
+panel composer was rebuilt so a measured footer cannot be pushed over the
+storage meter; one Stop control remains.
+
+Limits: no locked session, attach_locked_mcp or BudgetedTools (Round B); no
+document text; no summary or key-insights presets; no streaming; SEC-013 not
+promoted; shell/help.rs privacy text and docs/book/src/privacy.md remain stale
+for the docs task. Session reuse and set_model are implemented but not yet
+tested (the stub answers one prompt); Round B covers them with the locked
+session. A-16 is only half served here: the ask/citation/stop UI is live, the
+document-grounded answer is Round B. Evidence lives at
+docs/evidence/ui/T-0253.md. T-0253 removed the T-0252 auto-probe, so T-0252's
+`--tool=ai` capture recipe is historical; its evidence file now says so.
+"""

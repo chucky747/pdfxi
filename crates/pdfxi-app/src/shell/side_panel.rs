@@ -29,7 +29,7 @@ impl PdfxiApp {
             RailItem::Starred => self.starred_panel_ui(ui, palette),
             RailItem::Shared => self.shared_panel_ui(ui, palette),
             RailItem::Comments => self.comments_panel_ui(ui, palette),
-            RailItem::AiAssistant => self.assistant_connect_panel_ui(ui, palette),
+            RailItem::AiAssistant => self.assistant_panel_ui(ui, palette),
         }
     }
 

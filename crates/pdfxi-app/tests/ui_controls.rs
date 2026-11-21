@@ -565,6 +565,34 @@ const PROVEN_LABELS: &[&str] = &[
 /// Each entry names the owning task and the concrete missing piece.
 const PENDING_COVERAGE: &[(&str, &str)] = &[
     (
+        "AssistantConnect",
+        "T-0253 assistant panel; starts a discovery/loopback probe, needs an isolated service",
+    ),
+    (
+        "AssistantAsk",
+        "T-0253 assistant panel; needs a connected loopback turn; assistant_chat lib tests cover it",
+    ),
+    (
+        "AssistantStop",
+        "T-0253 assistant panel; no-op when idle; assistant_chat lib tests cover the in-flight cancel",
+    ),
+    (
+        "AssistantDisconnect",
+        "T-0253 assistant panel; connection state only; assistant_chat/connect lib tests cover it",
+    ),
+    (
+        "AssistantPair",
+        "T-0253 assistant panel; explicit endpoint probe; assistant_connect lib tests cover it",
+    ),
+    (
+        "AssistantSelectModel",
+        "T-0253 assistant panel; needs a connected model list; assistant_chat lib tests cover it",
+    ),
+    (
+        "AssistantCitation",
+        "T-0253 assistant panel; citation chip navigation needs an open document and an answer; assistant_chat lib tests cover it",
+    ),
+    (
         "ToggleStar",
         "T-0221 library state; mutates persisted library state, needs an isolated library root",
     ),

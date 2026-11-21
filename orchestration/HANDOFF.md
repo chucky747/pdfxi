@@ -249,3 +249,46 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
 - **Fragment repair:** `orchestration/feature-updates/T-0204.toml` had an
   unterminated `notes` block that aborted every full `features apply`; it is
   repaired and committed in `cafc009`, and a full apply parses again.
+
+### T-0253A checkpoint (2026-11-20, assistant panel Round A)
+
+- **Commit:** `feat(app): add assistant panel with ask stop and citations
+  [T-0253]`, a direct child of `0111386` (T-0252). Linear history, not pushed,
+  no amend/rebase. HEAD after = that commit (`git log -1 --oneline`).
+- **Task state:** T-0253 stays `in_progress` for Round B. The fragment
+  `orchestration/feature-updates/T-0253.toml` carries empty `feature_rows` and
+  `promoted_rows`, so no matrix row changed and `docs/features.toml` is not in
+  the commit. SEC-013 is not claimed.
+- **Integrator gates** (`target/integration`, `PDFIUM_PATH` set, TEMP/TMP under
+  `target/tmp`): `cargo fmt -p pdfxi-app -- --check` EXIT=0;
+  `cargo clippy -p pdfxi-app --all-targets --features ui,pdfium -- -D warnings`
+  EXIT=0; `cargo test -p pdfxi-app --features ui,pdfium` EXIT=0 with
+  **517 lib + 24 harness + 0 doctests, 0 failed**;
+  `RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-app --no-deps` EXIT=0.
+  `cargo xtask features verify` reports `FEATURES OK: 145 rows, 32 verified`.
+- **Captures:** the four `docs/evidence/ui/t0253-assistant-{light,dark}-{windows,macos}.png`
+  were retaken from the final release binary
+  `target/lanes/app6/release/pdfxi-ui.exe` (22:22:07, 10,177,024 B), all
+  1920x1200 and 124-141 KB, reviewed with no user path or invented document
+  content. The first set predated that binary and was replaced.
+- **Evidence:** `docs/evidence/ui/T-0253.md` (517 in the Gates block);
+  `docs/evidence/ui/T-0252.md` records the removed auto-probe; ADR 0011 has the
+  credential-lifetime amendment. `orchestration/blockers/T-0253.md` and
+  `T-0253-harness-coverage.md` are resolved records kept for the permission gap.
+- **What landed:** three placements (command-bar pill, Tools row, rail) dispatch
+  `AppCommand::AiAssistant`; connected conversation with ask/Enter, "Thinking..."
+  and exactly one Stop; page-citation chips dispatch `AssistantCitation(page)` ->
+  `GoToPage(page - 1)` and disable past the page count; one session per
+  conversation reset on tab change; six panel commands routed through dispatch so
+  the T-0212 gate passes; the harness lists the six variants in `PENDING_COVERAGE`
+  with `all_commands()` unchanged.
+- **Round B queue:** locked session (`create_locked_session`, `attach_locked_mcp`,
+  `BudgetedTools`), document-grounded answers, summarize and key-insights
+  presets, streaming, a session-reuse + `set_model` test, explicit session delete
+  on stop/disconnect, SEC-013 promotion, then the docs refresh (`shell/help.rs`
+  privacy text, `docs/book/src/privacy.md`, `docs/book/src/security.md`) which
+  still describe the panel as inert.
+- **Carried limits:** no document text is sent yet (the captures use a greeting
+  on purpose); citations are text-only, not coordinate-based; the pending
+  harness reasons for connect/ask/stop/disconnect are stale and can be promoted
+  with a `status`/`active_rail` proof once a headless seam exists.

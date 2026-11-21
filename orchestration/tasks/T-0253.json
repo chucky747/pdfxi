@@ -3,7 +3,7 @@
     "lane":  "app",
     "title":  "Assistant panel: ask, summarize, key insights, citations",
     "priority":  "P0",
-    "status":  "queued",
+    "status": "in_progress",
     "depends_on":  [
                        "T-0252",
                        "T-0254"

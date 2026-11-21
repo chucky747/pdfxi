@@ -3,7 +3,7 @@
   "lane": "app",
   "title": "OpenCode Connect screen and model picker",
   "priority": "P0",
-  "status": "in_progress",
+  "status": "verified",
   "depends_on": [
     "T-0251"
   ],
@@ -13,6 +13,6 @@
     "orchestration/feature-updates/T-0252.toml"
   ],
   "acceptance": "cargo test -p pdfxi-app --features ui,pdfium; A-16 connection half works against the local service and against an unreachable service",
-  "notes": "App half of the assistant connection per ADR 0011, using the T-0251 client crate. Serves the connection half of acceptance item A-16 (AI Assistant through OpenCode) from docs/design/FEATURE_ACCEPTANCE.md. Connect screen that discovers the local OpenCode service or accepts a paired remote URL and password, lists providers and models from the service, defaults to `opencode-go/hy4-flash-free`, lets the user change and remembers the choice, disconnects, and shows a real connection status. Never displays or logs the service password. Calls the T-0251 API and does not change its semantics. Feature-matrix rows stay as the library leaves them until this task verifies them. Round A delivered: Connect screen, discovery, explicit-endpoint pairing, model picker/persistence, four captures; Round B (T-0253) pending: chat panel, streaming, summary/insights, citations, stop.",
+  "notes": "App half of the assistant connection per ADR 0011, using the T-0251 client crate. Serves the connection half of acceptance item A-16 (AI Assistant through OpenCode) from docs/design/FEATURE_ACCEPTANCE.md. Connect screen that discovers the local OpenCode service or accepts a paired remote URL and password, lists providers and models from the service, defaults to `opencode-go/hy4-flash-free`, lets the user change and remembers the choice, disconnects, and shows a real connection status. Never displays or logs the service password. Calls the T-0251 API and does not change its semantics. Feature-matrix rows stay as the library leaves them until this task verifies them. Connection half verified; the chat panel is the separate T-0253 task. Round A delivered: Connect screen, discovery, explicit-endpoint pairing, model picker/persistence, four captures; Round B (T-0253) pending: chat panel, streaming, summary/insights, citations, stop.",
   "evidence": "docs/evidence/ui/T-0252.md"
 }

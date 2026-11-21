@@ -341,9 +341,9 @@ impl LaunchPanel {
 /// A feature tool selected by `--tool=` for captures and deep links.
 ///
 /// The value names the tool a person would click, not a command variant: the
-/// shell maps it to the same [`crate::AppCommand`] the tools panel emits, so a
-/// deep link can never do more than the real control. Names are stable because
-/// the packaging and capture tasks use them.
+/// shell maps it to the same `AppCommand` the tools panel emits, so a deep
+/// link can never do more than the real control. Names are stable because the
+/// packaging and capture tasks use them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchTool {
     /// Edit PDF.
@@ -426,6 +426,12 @@ pub struct LaunchOptions {
     /// Used to prove the session edit path headlessly and to capture the dirty
     /// tab state; it performs the same `session.edit` call the UI would.
     pub title: Option<String>,
+    /// Question requested with `--assistant-question=...`.
+    ///
+    /// A capture/deep-link action: it explicitly connects to the OpenCode
+    /// service and asks this question once the connection is usable. Normal
+    /// panel opening never sets it.
+    pub assistant_question: Option<String>,
 }
 
 impl LaunchOptions {
@@ -437,13 +443,15 @@ impl LaunchOptions {
             && self.panel.is_none()
             && self.tool.is_none()
             && self.title.is_none()
+            && self.assistant_question.is_none()
     }
 }
 
 /// Parse viewer launch flags, ignoring everything else.
 ///
 /// Recognised forms are `--dark`, `--light`, `--controls=windows` or
-/// `--controls=macos`, `--rail=`/`--panel=`, `--tool=`, and `--set-title=`.
+/// `--controls=macos`, `--rail=`/`--panel=`, `--tool=`, `--set-title=`, and
+/// `--assistant-question=`.
 /// Unknown flags, bare `--controls`, and invalid values are ignored without
 /// panicking. When a flag repeats, the last one wins. Arguments that look like
 /// file paths are skipped so callers can pass the same list to the document
@@ -475,6 +483,11 @@ pub fn parse_launch_arguments(arguments: &[String]) -> LaunchOptions {
                 }
                 if let Some(value) = other.strip_prefix("--set-title=") {
                     options.title = Some(value.to_owned());
+                }
+                if let Some(value) = other.strip_prefix("--assistant-question=")
+                    && !value.trim().is_empty()
+                {
+                    options.assistant_question = Some(value.to_owned());
                 }
             }
         }
@@ -814,5 +827,20 @@ mod tests {
 
         assert_eq!(LaunchTool::Fill.as_str(), "fill");
         assert_eq!(LaunchTool::AiAssistant.as_str(), "ai-assistant");
+    }
+
+    #[test]
+    fn assistant_question_flag_is_a_capture_only_override() {
+        let parsed = parse_launch_arguments(&["--assistant-question=Summarize page 2.".to_owned()]);
+        assert_eq!(
+            parsed.assistant_question.as_deref(),
+            Some("Summarize page 2.")
+        );
+        assert!(!parsed.is_empty());
+        assert_eq!(parsed.tool, None, "the flag never changes the tool");
+
+        let empty = parse_launch_arguments(&["--assistant-question=".to_owned()]);
+        assert_eq!(empty.assistant_question, None);
+        assert!(empty.is_empty(), "an empty question is not an action");
     }
 }
