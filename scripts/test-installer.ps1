@@ -151,7 +151,14 @@ Write-Output "ISCC $iscc"
 $resolvedTarget = if ($TargetDir) {
     [System.IO.Path]::GetFullPath($TargetDir)
 } elseif ($env:CARGO_TARGET_DIR) {
-    [System.IO.Path]::GetFullPath((Join-Path $root $env:CARGO_TARGET_DIR))
+    # A lane environment sets an absolute CARGO_TARGET_DIR (for example
+    # target\lanes\orchestrator). Joining an absolute path onto $root produced
+    # "The given path's format is not supported"; resolve it directly instead.
+    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
+        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $root $env:CARGO_TARGET_DIR))
+    }
 } else {
     Join-Path $root 'target\integration'
 }
