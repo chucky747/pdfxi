@@ -1,0 +1,74 @@
+# T-0260 - final QA acceptance scenario, fuzz and budgets on real data
+#
+# Phase 4 acceptance. This task adds no shipping feature row: every feature it
+# exercises already has its own row and evidence from its owning task. Both row
+# lists are therefore intentionally empty; "verified" here means the campaign
+# section 6 end-to-end scenario was executed on real committed data and the
+# record exists under docs/evidence/acceptance/T-0260.md.
+#
+# Declared deviation: the multi-page document is the committed PowerPoint 16.0
+# fixture fixtures/realworld/powerpoint-slides.pdf, not a Word-produced file.
+# Word COM PDF save is blocked on this host
+# (orchestration/blockers/T-0215-word-com.md); no Word document is claimed.
+# The assistant summary step is recorded as skipped (local OpenCode service is
+# running but PDFXI has no established connection in the headless run), never
+# faked.
+
+task = "T-0260"
+lane = "qa"
+status = "verified"
+evidence = "docs/evidence/acceptance/T-0260.md"
+feature_rows = []
+promoted_rows = []
+docs = [
+    "docs/evidence/acceptance/T-0260.md",
+    "docs/evidence/acceptance/T-0260-scenario.rs",
+    "docs/evidence/acceptance/T-0260-pdfium-reopen.rs",
+    "docs/evidence/acceptance/T-0260-scenario.ps1",
+]
+acceptance_items = []
+
+tests = [
+    "realworld_corpus::opens_every_fixture_with_the_core_parser",
+    "fuzz_smoke::valid_seeds_exercise_real_parsers",
+    "fuzz_seed_corpus::generated_manifest_is_byte_stable_and_matches_committed",
+]
+
+notes = """
+T-0260 ran the campaign section 6 scenario through the shipping functions the
+shell calls, in the shell's own commit pattern (clone the parsed Document, run
+the library mutation, commit with DocumentSession::edit, save, reopen).
+
+Route: fixtures/realworld/powerpoint-slides.pdf, 3 pages, 119,341 bytes,
+producer powerpoint. Word COM PDF save is blocked on this host, so this record
+states the deviation and claims no Word document.
+
+Verbatim results (docs/evidence/acceptance/T-0260.md section 3):
+  open            3 pages, 208 text chars, session == Document::from_bytes
+  edit text       replace_object on text:0; save; reopen; marker present
+  highlight       highlight listed after save/reopen (pdfxi-highlight-79)
+  comment thread  note pdfxi-t0260-note-1 + reply pdfxi-reply-81 (/IRT), listed
+  fill form       XFDF import -> text-field = "T-0260 form value", after reopen
+  sign            status=Valid bytes_match=true covers_entire_file=true on the
+                  whole 214,603-byte file; PDFium reopens 3 pages at 720x405 pt
+  export to Word  ExportFormat::Docx, PK magic, 7,921 bytes, edited marker
+                  stored in the archive, unsupported=[]
+  assistant       skipped: local OpenCode not connected (service is up at
+                  127.0.0.1:28894, but no PDFXI pairing state exists); never
+                  faked
+
+Fuzz and budgets are cited, not rerun:
+  T-0260A  7 deterministic fuzz-runner tests, 4 seeds + 96 seeded-random +
+           2 empty + 2 oversized inputs; libFuzzer host-blocked in
+           orchestration/blockers/T-0260A-fuzz-toolchain.md
+  T-0260B  open worst 0.6685 ms and edit worst 0.5661 ms (pass); two derived
+           save breaches on record unweakened: browser-print 15.1668 ms vs
+           6.25 ms and excel-sample 10.4397 ms vs 10.0 ms, both under 1% of the
+           2000 ms absolute row; blocker T-0260B-budget.md
+
+Gates: cargo fmt --all --check exit 0; cargo test -p pdfxi-testkit 155 passed,
+0 failed across 10 binaries; cargo xtask docs exit 0 (DOCS OK). Scenario
+instrument rustfmt-clean.
+
+No app, core, xtask, matrix, manifest or git change. Claim left held.
+"""
