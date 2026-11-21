@@ -641,8 +641,8 @@ impl crate::ui::PdfxiApp {
                     self.active_rail = item;
                 }
             }
-            AppCommand::AddPage => self.not_available("Add page"),
-            AppCommand::PageMenu => self.not_available("Page menu"),
+            AppCommand::AddPage => self.handle_add_page_command(),
+            AppCommand::PageMenu => self.handle_page_menu_command(),
             AppCommand::OpenHelp => self.help_open = true,
             AppCommand::CloseHelp => self.help_open = false,
             AppCommand::ToggleNotifications => self.toggle_notifications(),

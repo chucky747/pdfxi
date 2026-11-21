@@ -1889,6 +1889,28 @@ fn organize_and_combine_commands_open_their_cards() {
 }
 
 #[test]
+fn add_page_and_page_menu_commands_act_on_a_real_document() {
+    let mut app = with_three_page_document();
+    app.dispatch(AppCommand::AddPage, None);
+    assert_eq!(
+        app.state().active_tab().map(|tab| tab.page_count()),
+        Some(4),
+        "AddPage inserts a blank page in the real document"
+    );
+    assert_eq!(
+        app.state().active_tab().map(|tab| tab.current_page()),
+        Some(1),
+        "the new blank page becomes current"
+    );
+    assert_eq!(app.status(), "Inserted a blank page after page 1");
+    assert!(!app.page_menu_open(), "AddPage does not open the page menu");
+
+    app.dispatch(AppCommand::PageMenu, None);
+    assert!(app.page_menu_open(), "PageMenu opens the page menu");
+    assert_eq!(app.status(), "Page menu: choose a page action");
+}
+
+#[test]
 fn edit_document_command_activates_the_edit_tool() {
     let mut app = PdfxiApp::new();
     assert!(!app.edit_tool_active(), "the edit tool starts inactive");
@@ -2133,7 +2155,11 @@ const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
     ),
     (
         "organize_card_ui",
-        "organize pages window: the six page buttons call organize_rotate/organize_delete/organize_move/organize_extract/organize_split, which are unit-tested on a real fixture without a window; the thumbnail selection comes from the Pages panel dispatch",
+        "organize pages window: the page buttons call organize_rotate/organize_delete/organize_move/organize_extract/organize_split and insert_blank_page_at, which are unit-tested on a real fixture without a window; the thumbnail selection comes from the Pages panel dispatch",
+    ),
+    (
+        "page_menu_ui",
+        "page menu window: each button selects a PageMenuAction and the function calls run_page_menu_action, which commits through edit_full; every menu action is unit-tested on a real fixture without a window",
     ),
     (
         "combine_card_ui",

@@ -205,15 +205,11 @@ pub fn active_tab_status(state: &AppState) -> String {
 /// Format the placeholder text displayed in the canvas area.
 ///
 /// With an active document this reports the one-based current page and the
-/// document's page count; without one it prompts the user to open a document.
-/// The function is pure and needs no GUI context.
+/// document's real page count. Without one it prompts the user to open a
+/// document. The function is pure and needs no GUI context.
 pub fn canvas_placeholder(state: &AppState) -> String {
     match state.active_tab() {
-        Some(tab) => format!(
-            "Page {} of {} - page rendering is not available in this shell yet",
-            tab.current_page() + 1,
-            tab.page_count(),
-        ),
+        Some(tab) => format!("Page {} of {}", tab.current_page() + 1, tab.page_count()),
         None => "Open a document to begin".to_string(),
     }
 }
@@ -617,6 +613,8 @@ pub struct PdfxiApp {
     organize: shell::organize_card::OrganizeUiState,
     /// Combine Files card state.
     combine: shell::organize_card::CombineUiState,
+    /// Pages-panel page menu state.
+    page_menu: shell::organize_card::PageMenuUiState,
     /// Protect PDF card state.
     protect: shell::protect_card::ProtectUiState,
     /// Redact and sanitize card state.
@@ -1854,6 +1852,7 @@ impl eframe::App for PdfxiApp {
         self.notifications_ui(ctx);
         self.convert_card_ui(ctx);
         self.organize_card_ui(ctx);
+        self.page_menu_ui(ctx);
         self.combine_card_ui(ctx);
         self.protect_card_ui(ctx);
         self.redact_card_ui(ctx);
@@ -2095,11 +2094,6 @@ impl PdfxiApp {
         }
     }
 
-    /// Report a capability-gated action that this build does not implement.
-    fn not_available(&mut self, feature: &str) {
-        self.status = format!("{feature} is not available in this build");
-    }
-
     /// Apply a custom zoom percentage from the bottom bar.
     fn set_zoom_percent(&mut self, percent: u32) {
         let zoom = Zoom::custom(percent as f32 / 100.0);
@@ -2274,6 +2268,23 @@ mod tests {
         assert_eq!(tab.page_count(), 3);
         assert!(app.find_state().matches().is_empty());
         assert!(app.selected_text().is_empty());
+    }
+
+    #[test]
+    fn canvas_placeholder_reports_the_real_page_and_count() {
+        let empty = PdfxiApp::new();
+        assert_eq!(
+            canvas_placeholder(empty.state()),
+            "Open a document to begin"
+        );
+
+        let mut app = app_with_pages(3);
+        let id = app.state.active_tab_id().expect("active tab");
+        app.state
+            .tab_mut(id)
+            .expect("active tab")
+            .set_current_page(1);
+        assert_eq!(canvas_placeholder(app.state()), "Page 2 of 3");
     }
 
     #[test]

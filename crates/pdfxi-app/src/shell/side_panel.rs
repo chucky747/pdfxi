@@ -212,7 +212,7 @@ impl PdfxiApp {
         }
     }
 
-    /// Shared folder placeholder until round B implements browsing.
+    /// Shared folder contents from the configured folder.
     fn shared_panel_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         ui.label(
             egui::RichText::new("Shared")

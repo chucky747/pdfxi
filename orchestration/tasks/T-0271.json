@@ -1,0 +1,19 @@
+{
+  "id": "T-0271",
+  "lane": "app",
+  "title": "Pages panel add-page, page menu and shipped-copy audit",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": [
+    "T-0231"
+  ],
+  "owns": [
+    "crates/pdfxi-app/src/**",
+    "crates/pdfxi-app/tests/**",
+    "docs/evidence/ui/T-0271.md",
+    "orchestration/feature-updates/T-0271.toml"
+  ],
+  "acceptance": "A-13 add-page works (a blank page is inserted at the current position and the panel count updates), the Pages panel page menu opens and performs real page actions, and no shipped surface shows placeholder wording for a capability that exists: `cargo test -p pdfxi-app --features ui,pdfium` passes and a grep for 'not available in this shell', 'until round B', 'placeholder' finds no reachable shipped copy.",
+  "notes": "Follow-up to T-0231 for the two remaining dead controls (`AppCommand::AddPage` and `AppCommand::PageMenu` still call not_available) and the stale shipped copy (`ui.rs::canvas_placeholder` says 'page rendering is not available in this shell yet'; `shell/side_panel.rs` doc comment says 'Shared folder placeholder until round B implements browsing'). Insert a blank page without a library Insert operation by composing extract/split and merge, or by adding a blank page document; the tab must become dirty and save must persist it. The page menu must reuse the organize-card page operations (rotate, delete, extract, insert blank before/after). No capture; T-0262 captures the installed build.",
+  "evidence": "docs/evidence/ui/T-0271.md"
+}

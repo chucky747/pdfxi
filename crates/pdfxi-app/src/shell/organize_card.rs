@@ -18,10 +18,11 @@
 //! `Shift` fills the range from the nearest selected page. Outside the card the
 //! same thumbnail click still navigates.
 //!
-//! Inserting a blank page is not offered: [`PageOperation`] has no insert or
-//! blank-page variant, and inventing page content in the shell would bypass the
-//! library's page-tree validation. The card says so instead of shipping a dead
-//! control.
+//! Inserting a blank page is composed from the existing planner operations: the
+//! shell parses a self-written one-page US-Letter template, extracts the pages
+//! before and after the insertion point, and merges the template back in with
+//! [`PagePlan::merge`]. The template is validated by the library parser on every
+//! use, so the shell still never writes page dictionaries by hand.
 //!
 //! [`PageOperation`]: pdfxi_core::pages::PageOperation
 
@@ -35,6 +36,14 @@ use thiserror::Error;
 
 use crate::TabId;
 use crate::ui::PdfxiApp;
+
+/// A minimal, self-written one-page US-Letter PDF used for blank-page insert.
+///
+/// The template is 612x792 points with an empty content stream, an empty
+/// resource dictionary and a correct cross-reference table. It is parsed by
+/// [`Document::from_bytes`] at use time and never written to a file on its own,
+/// so the shell cannot ship a malformed page dictionary silently.
+const BLANK_PAGE_PDF: &[u8] = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 0 >>\nstream\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000219 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n267\n%%EOF\n";
 
 /// State of the Organize Pages card and its thumbnail selection.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -62,6 +71,54 @@ pub(crate) struct CombineUiState {
     pub(crate) last_output: Option<PathBuf>,
     /// Typed combine or read error.
     pub(crate) error: Option<String>,
+}
+
+/// State of the Pages-panel page menu.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PageMenuUiState {
+    /// Whether the small page-actions window is visible.
+    pub(crate) open: bool,
+    /// Typed failure of the most recent menu action.
+    pub(crate) error: Option<String>,
+}
+
+/// One action from the Pages-panel page menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageMenuAction {
+    /// Insert a blank page before the current page.
+    InsertBefore,
+    /// Insert a blank page after the current page.
+    InsertAfter,
+    /// Rotate the current page one quarter turn counterclockwise.
+    RotateLeft,
+    /// Rotate the current page one quarter turn clockwise.
+    RotateRight,
+    /// Delete the current page.
+    Delete,
+    /// Extract the current page to `<stem>-page-N.pdf` and open it.
+    Extract,
+}
+
+/// Typed blank-page insertion failures.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub(crate) enum PageInsertError {
+    /// The blank-page template did not parse as a PDF.
+    #[error("The blank page template is not a usable PDF: {message}")]
+    BlankTemplate {
+        /// Parser message.
+        message: String,
+    },
+    /// The insertion point is outside the current page range.
+    #[error("Insert position {position} is outside the document (0..={count})")]
+    Position {
+        /// Requested zero-based insertion point.
+        position: usize,
+        /// Current page count.
+        count: usize,
+    },
+    /// Extracting the pages around the insertion point failed.
+    #[error("{0}")]
+    Planner(String),
 }
 
 /// Typed Combine Files failures.
@@ -107,6 +164,272 @@ impl PdfxiApp {
     #[must_use]
     pub fn organize_card_open(&self) -> bool {
         self.organize.open
+    }
+
+    /// Handle [`crate::ui::AppCommand::AddPage`]: insert a blank page after the
+    /// active page.
+    ///
+    /// With no document the command reports what is missing instead of opening
+    /// a card with nothing to edit.
+    pub(crate) fn handle_add_page_command(&mut self) {
+        let Some(page) = self.state.active_tab().map(|tab| tab.current_page()) else {
+            self.status = "Open a document to add a page".to_owned();
+            return;
+        };
+        match self.insert_blank_page_at(page + 1) {
+            Ok(_) => {
+                self.page_menu.error = None;
+                self.status = format!("Inserted a blank page after page {}", page + 1);
+            }
+            Err(error) => {
+                self.page_menu.error = Some(error.clone());
+                self.status = error;
+            }
+        }
+    }
+
+    /// Handle [`crate::ui::AppCommand::PageMenu`]: toggle the page-actions
+    /// window next to the Pages panel.
+    pub(crate) fn handle_page_menu_command(&mut self) {
+        if self.state.active_tab_id().is_none() {
+            self.page_menu.open = false;
+            self.status = "Open a document to manage pages".to_owned();
+            return;
+        }
+        self.page_menu.open = !self.page_menu.open;
+        self.page_menu.error = None;
+        self.status = if self.page_menu.open {
+            "Page menu: choose a page action".to_owned()
+        } else {
+            "Page menu closed".to_owned()
+        };
+    }
+
+    /// Whether the page menu is open (harness accessor).
+    #[must_use]
+    pub fn page_menu_open(&self) -> bool {
+        self.page_menu.open
+    }
+
+    /// Render the small Pages-panel page menu.
+    ///
+    /// Every entry performs a real document edit through the same
+    /// `edit_full` path as the Organize Pages card; no entry only sets status.
+    pub(crate) fn page_menu_ui(&mut self, ctx: &egui::Context) {
+        if !self.page_menu.open {
+            return;
+        }
+        let page_count = self.state.active_tab().map_or(0, |tab| tab.page_count());
+        let page = self.state.active_tab().map_or(0, |tab| tab.current_page());
+        let mut open = true;
+        let mut action = None;
+
+        egui::Window::new("Page")
+            .open(&mut open)
+            .resizable(false)
+            .default_width(220.0)
+            .show(ctx, |ui| {
+                ui.label(format!("Page {} of {}", page + 1, page_count));
+                ui.separator();
+                let enabled = page_count > 0;
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Insert blank page before"))
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    action = Some(PageMenuAction::InsertBefore);
+                }
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Insert blank page after"))
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    action = Some(PageMenuAction::InsertAfter);
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Rotate left"))
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    action = Some(PageMenuAction::RotateLeft);
+                }
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Rotate right"))
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    action = Some(PageMenuAction::RotateRight);
+                }
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Delete page"))
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    action = Some(PageMenuAction::Delete);
+                }
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Extract page"))
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    action = Some(PageMenuAction::Extract);
+                }
+                if let Some(error) = &self.page_menu.error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+            });
+
+        if let Some(action) = action {
+            self.run_page_menu_action(action);
+        }
+        if !open {
+            self.page_menu.open = false;
+        }
+    }
+
+    /// Run one page-menu action against the active page.
+    ///
+    /// This is the non-UI entry point used by the window and by the unit tests,
+    /// so every menu entry is provable without a GUI context.
+    pub(crate) fn run_page_menu_action(&mut self, action: PageMenuAction) {
+        let Some(page) = self.state.active_tab().map(|tab| tab.current_page()) else {
+            self.status = "Open a document to manage pages".to_owned();
+            return;
+        };
+        let result = match action {
+            PageMenuAction::InsertBefore => self
+                .insert_blank_page_at(page)
+                .map(|_| format!("Inserted a blank page before page {}", page + 1)),
+            PageMenuAction::InsertAfter => self
+                .insert_blank_page_at(page + 1)
+                .map(|_| format!("Inserted a blank page after page {}", page + 1)),
+            PageMenuAction::RotateLeft => self.rotate_active_page(page, -1),
+            PageMenuAction::RotateRight => self.rotate_active_page(page, 1),
+            PageMenuAction::Delete => self.delete_active_page(page),
+            PageMenuAction::Extract => self.extract_active_page(page),
+        };
+        match result {
+            Ok(message) => {
+                self.page_menu.error = None;
+                self.status = message;
+            }
+            Err(error) => {
+                self.page_menu.error = Some(error.clone());
+                self.status = error;
+            }
+        }
+    }
+
+    /// Insert the blank template at zero-based `position` and commit it.
+    ///
+    /// `position` is an insertion point: pages before it, the blank page, then
+    /// the remaining pages. The result is committed as one `edit_full` rewrite,
+    /// the tab's page count is updated explicitly and the new blank page becomes
+    /// current.
+    fn insert_blank_page_at(&mut self, position: usize) -> Result<usize, String> {
+        let (id, document) = self.page_edit_target()?;
+        let count = document.page_count().map_err(|error| error.to_string())?;
+        if position > count {
+            return Err(PageInsertError::Position { position, count }.to_string());
+        }
+        let blank = blank_page_document().map_err(|error| error.to_string())?;
+        let merged = if position == 0 {
+            // The blank page becomes the primary document so `merge` appends
+            // every original page after it.
+            blank.apply_page_plan(&PagePlan::merge(vec![document]))
+        } else if position == count {
+            let head =
+                extract_page_range(&document, 0, count).map_err(|error| error.to_string())?;
+            head.apply_page_plan(&PagePlan::merge(vec![blank]))
+        } else {
+            let head =
+                extract_page_range(&document, 0, position).map_err(|error| error.to_string())?;
+            let tail = extract_page_range(&document, position, count)
+                .map_err(|error| error.to_string())?;
+            head.apply_page_plan(&PagePlan::merge(vec![blank, tail]))
+        };
+        let bytes =
+            merged.map_err(|error| PageInsertError::Planner(error.to_string()).to_string())?;
+        let candidate = Document::from_bytes(bytes)
+            .map_err(|error| PageInsertError::Planner(error.to_string()).to_string())?;
+        let pages = candidate
+            .page_count()
+            .map_err(|error| PageInsertError::Planner(error.to_string()).to_string())?;
+        self.commit_page_candidate(id, candidate)?;
+        if let Some(tab) = self.state.tab_mut(id) {
+            tab.set_page_count(pages);
+            tab.set_current_page(position);
+        }
+        self.page_box = (position + 1).to_string();
+        self.pending_page_scroll = Some(position);
+        self.organize.selection.clear();
+        Ok(pages)
+    }
+
+    /// Rotate one page and report the action.
+    fn rotate_active_page(&mut self, page: usize, quarter_turns: i32) -> Result<String, String> {
+        let plan = PagePlan::rotate(RotationTarget::Indices(vec![page]), quarter_turns)
+            .map_err(|error| error.to_string())?;
+        let pages = self.apply_page_plan_edit(&plan)?;
+        if let Some(id) = self.state.active_tab_id()
+            && let Some(tab) = self.state.tab_mut(id)
+        {
+            tab.set_page_count(pages);
+        }
+        let direction = if quarter_turns < 0 { "left" } else { "right" };
+        Ok(format!(
+            "Rotated page {} {direction}; the document has {pages} page(s)",
+            page + 1
+        ))
+    }
+
+    /// Delete one page, refusing to remove the last page.
+    fn delete_active_page(&mut self, page: usize) -> Result<String, String> {
+        let count = self
+            .active_page_count()
+            .ok_or_else(|| "Open a document to manage pages".to_owned())?;
+        if count <= 1 {
+            return Err("Cannot delete the only page; at least one must remain".to_owned());
+        }
+        if page >= count {
+            return Err(format!(
+                "Page {} is outside the document (1..{count})",
+                page + 1
+            ));
+        }
+        let keep: Vec<usize> = (0..count).filter(|index| *index != page).collect();
+        let plan = PagePlan::extract(&keep).map_err(|error| error.to_string())?;
+        let pages = self.apply_page_plan_edit(&plan)?;
+        let next = page.min(pages.saturating_sub(1));
+        if let Some(id) = self.state.active_tab_id()
+            && let Some(tab) = self.state.tab_mut(id)
+        {
+            tab.set_page_count(pages);
+            tab.set_current_page(next);
+        }
+        self.page_box = (next + 1).to_string();
+        Ok(format!("Deleted page {}; {pages} page(s) remain", page + 1))
+    }
+
+    /// Extract one page to the document's directory and open the result.
+    fn extract_active_page(&mut self, page: usize) -> Result<String, String> {
+        let source = self.page_source()?;
+        let plan = PagePlan::extract(&[page]).map_err(|error| error.to_string())?;
+        let bytes = source
+            .apply_page_plan(&plan)
+            .map_err(|error| error.to_string())?;
+        let path = self.active_page_stem().map_or_else(
+            || PathBuf::from(format!("page-{}.pdf", page + 1)),
+            |stem| {
+                self.active_page_directory()
+                    .join(format!("{stem}-page-{}.pdf", page + 1))
+            },
+        );
+        write_pdf(&path, &bytes)?;
+        let _ = self.open_document(&path);
+        self.notify_real_event("Page extracted", &path.display().to_string());
+        Ok(format!("Extracted page {} to {}", page + 1, path.display()))
     }
 
     /// Apply a thumbnail click to the Organize selection.
@@ -158,9 +481,21 @@ impl PdfxiApp {
         let mut move_down = false;
         let mut extract = false;
         let mut split = false;
+        let mut insert_before = false;
+        let mut insert_after = false;
         let selection_count = self.organize.selection.len();
         let action_enabled = selection_count > 0;
         let page_count = self.state.active_tab().map_or(0, |tab| tab.page_count());
+        // Insert relative to the first selected page, or the active page when
+        // the selection is empty.
+        let target_page = self
+            .organize
+            .selection
+            .iter()
+            .next()
+            .copied()
+            .or_else(|| self.state.active_tab().map(|tab| tab.current_page()))
+            .unwrap_or(0);
 
         egui::Window::new("Organize Pages")
             .open(&mut open)
@@ -220,6 +555,26 @@ impl PdfxiApp {
                 });
                 ui.separator();
                 if ui
+                    .add_enabled(
+                        !self.is_empty_document(),
+                        egui::Button::new("Insert blank page before"),
+                    )
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    insert_before = true;
+                }
+                if ui
+                    .add_enabled(
+                        !self.is_empty_document(),
+                        egui::Button::new("Insert blank page after"),
+                    )
+                    .on_disabled_hover_text("Open a document with pages")
+                    .clicked()
+                {
+                    insert_after = true;
+                }
+                if ui
                     .add_enabled(action_enabled, egui::Button::new("Extract selected"))
                     .on_disabled_hover_text("Select at least one page")
                     .clicked()
@@ -236,14 +591,6 @@ impl PdfxiApp {
                 {
                     split = true;
                 }
-                ui.label(
-                    egui::RichText::new(
-                        "Insert blank page: not available in this build \
-                         (the page planner has no blank-page operation).",
-                    )
-                    .size(10.0)
-                    .weak(),
-                );
                 if let Some(path) = &self.organize.last_output {
                     ui.label(format!("Last output: {}", path.display()));
                 }
@@ -292,6 +639,28 @@ impl PdfxiApp {
         if split {
             let dir = self.active_page_directory();
             self.organize_split(&dir);
+        }
+        if insert_before {
+            match self.insert_blank_page_at(target_page) {
+                Ok(_) => {
+                    self.status = format!("Inserted a blank page before page {}", target_page + 1);
+                }
+                Err(error) => {
+                    self.organize.error = Some(error.clone());
+                    self.status = error;
+                }
+            }
+        }
+        if insert_after {
+            match self.insert_blank_page_at(target_page + 1) {
+                Ok(_) => {
+                    self.status = format!("Inserted a blank page after page {}", target_page + 1);
+                }
+                Err(error) => {
+                    self.organize.error = Some(error.clone());
+                    self.status = error;
+                }
+            }
         }
         if !open {
             self.organize.open = false;
@@ -852,6 +1221,28 @@ fn write_pdf(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("Could not write {}: {error}", path.display()))
 }
 
+/// Parse the blank-page template into a document.
+fn blank_page_document() -> Result<Document, PageInsertError> {
+    Document::from_bytes(BLANK_PAGE_PDF.to_vec()).map_err(|error| PageInsertError::BlankTemplate {
+        message: error.to_string(),
+    })
+}
+
+/// Keep pages `start..end` of `document` as a new document.
+fn extract_page_range(
+    document: &Document,
+    start: usize,
+    end: usize,
+) -> Result<Document, PageInsertError> {
+    let indices: Vec<usize> = (start..end).collect();
+    let plan =
+        PagePlan::extract(&indices).map_err(|error| PageInsertError::Planner(error.to_string()))?;
+    let bytes = document
+        .apply_page_plan(&plan)
+        .map_err(|error| PageInsertError::Planner(error.to_string()))?;
+    Document::from_bytes(bytes).map_err(|error| PageInsertError::Planner(error.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1163,5 +1554,190 @@ mod tests {
                 .any(|session| session.document().page_count().ok() == Some(source_pages))
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn active_bytes(app: &PdfxiApp) -> Vec<u8> {
+        let id = app.state.active_tab_id().expect("active tab");
+        app.sessions
+            .get(&id)
+            .expect("active session")
+            .bytes()
+            .to_vec()
+    }
+
+    fn open_temp_copy(tag: &str) -> (PathBuf, PdfxiApp) {
+        let dir = temp_dir(tag);
+        let path = dir.join("slides.pdf");
+        std::fs::copy(fixture("powerpoint-slides.pdf"), &path).expect("copy the fixture");
+        let mut app = PdfxiApp::new();
+        app.open_document(&path);
+        assert_eq!(
+            app.active_page_count(),
+            Some(3),
+            "the temporary three-page copy opens"
+        );
+        (dir, app)
+    }
+
+    #[test]
+    fn blank_page_template_is_a_valid_one_page_letter_pdf() {
+        let document = blank_page_document().expect("the blank template parses");
+        assert_eq!(document.page_count().expect("page count"), 1);
+        assert!(
+            page_text(&document, 0).trim().is_empty(),
+            "the template must have no text"
+        );
+    }
+
+    #[test]
+    fn add_page_inserts_a_blank_page_after_the_current_page() {
+        let dir = temp_dir("insert-after");
+        let mut app = open_fixture("powerpoint-slides.pdf");
+        let before = app
+            .sessions
+            .values()
+            .next()
+            .expect("active session")
+            .document()
+            .clone();
+        let old_first = page_text(&before, 0);
+        let old_second = page_text(&before, 1);
+
+        app.dispatch(crate::ui::AppCommand::AddPage, None);
+        assert_eq!(app.status(), "Inserted a blank page after page 1");
+        assert_eq!(
+            app.state.active_tab().map(|tab| tab.current_page()),
+            Some(1),
+            "the new blank page becomes current"
+        );
+        assert_eq!(app.active_page_count(), Some(4));
+
+        let path = dir.join("insert-after.pdf");
+        let document = save_and_reopen(&mut app, &path);
+        assert_eq!(document.page_count().expect("page count"), 4);
+        assert_eq!(page_text(&document, 0), old_first);
+        assert!(
+            page_text(&document, 1).trim().is_empty(),
+            "page 1 (zero-based) is the inserted blank page"
+        );
+        assert_eq!(
+            page_text(&document, 2),
+            old_second,
+            "the old second page moved to page 2"
+        );
+        assert!(!page_text(&document, 3).trim().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn insert_blank_page_before_page_zero_shifts_the_first_text() {
+        let dir = temp_dir("insert-before");
+        let mut app = open_fixture("powerpoint-slides.pdf");
+        let old_first = page_text(
+            &app.sessions
+                .values()
+                .next()
+                .expect("active session")
+                .document()
+                .clone(),
+            0,
+        );
+
+        app.run_page_menu_action(PageMenuAction::InsertBefore);
+        assert_eq!(app.status(), "Inserted a blank page before page 1");
+        assert_eq!(
+            app.state.active_tab().map(|tab| tab.current_page()),
+            Some(0),
+            "the new blank page becomes current"
+        );
+        assert_eq!(app.active_page_count(), Some(4));
+
+        let path = dir.join("insert-before.pdf");
+        let document = save_and_reopen(&mut app, &path);
+        assert_eq!(document.page_count().expect("page count"), 4);
+        assert!(page_text(&document, 0).trim().is_empty());
+        assert_eq!(
+            page_text(&document, 1),
+            old_first,
+            "the old first page moved to page 1 (zero-based)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn page_menu_dispatch_opens_the_menu_and_every_action_changes_the_document() {
+        let (dir, mut app) = open_temp_copy("page-menu-actions");
+        assert!(!app.page_menu_open(), "the menu starts closed");
+        app.dispatch(crate::ui::AppCommand::PageMenu, None);
+        assert!(app.page_menu_open(), "PageMenu opens the page menu");
+        assert_eq!(app.status(), "Page menu: choose a page action");
+
+        // Insert before the active page: one more page and different bytes.
+        let before = active_bytes(&app);
+        let count = app.active_page_count().expect("page count");
+        app.run_page_menu_action(PageMenuAction::InsertBefore);
+        assert_eq!(app.active_page_count(), Some(count + 1));
+        assert_ne!(
+            active_bytes(&app),
+            before,
+            "InsertBefore rewrites the document"
+        );
+
+        // Insert after the current (blank) page.
+        let before = active_bytes(&app);
+        let count = app.active_page_count().expect("page count");
+        let current = app.state.active_tab().expect("active tab").current_page();
+        app.run_page_menu_action(PageMenuAction::InsertAfter);
+        assert_eq!(app.active_page_count(), Some(count + 1));
+        assert_ne!(
+            active_bytes(&app),
+            before,
+            "InsertAfter rewrites the document"
+        );
+        assert_eq!(
+            app.state.active_tab().map(|tab| tab.current_page()),
+            Some(current + 1)
+        );
+
+        // Rotate right and left change the page bytes.
+        let before = active_bytes(&app);
+        app.run_page_menu_action(PageMenuAction::RotateRight);
+        assert_ne!(
+            active_bytes(&app),
+            before,
+            "RotateRight rewrites the document"
+        );
+        let before = active_bytes(&app);
+        app.run_page_menu_action(PageMenuAction::RotateLeft);
+        assert_ne!(
+            active_bytes(&app),
+            before,
+            "RotateLeft rewrites the document"
+        );
+
+        // Delete removes one page.
+        let count = app.active_page_count().expect("page count");
+        app.run_page_menu_action(PageMenuAction::Delete);
+        assert_eq!(app.active_page_count(), Some(count - 1));
+
+        // Extract writes a one-page PDF and opens it in a second tab.
+        let tabs = app.state.tabs().count();
+        let page = app.state.active_tab().expect("active tab").current_page();
+        let expected = dir.join(format!("slides-page-{}.pdf", page + 1));
+        app.run_page_menu_action(PageMenuAction::Extract);
+        assert!(expected.exists(), "Extract writes {}", expected.display());
+        assert_eq!(app.state.tabs().count(), tabs + 1);
+        assert_eq!(app.active_page_count(), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_page_and_page_menu_report_a_missing_document() {
+        let mut app = PdfxiApp::new();
+        app.dispatch(crate::ui::AppCommand::AddPage, None);
+        assert_eq!(app.status(), "Open a document to add a page");
+        app.dispatch(crate::ui::AppCommand::PageMenu, None);
+        assert_eq!(app.status(), "Open a document to manage pages");
+        assert!(!app.page_menu_open());
     }
 }

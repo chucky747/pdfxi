@@ -1,0 +1,64 @@
+# T-0271 - Pages add-page, page menu and shipped-copy audit
+#
+# Shell half of A-13 (insert a blank page) and A-26 (page menu). No feature row
+# is promoted; docs/features.toml is unchanged by this fragment.
+
+task = "T-0271"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0271.md"
+docs = [
+    "crates/pdfxi-app/src/shell/organize_card.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/ui/T-0271.md",
+]
+feature_rows = []
+promoted_rows = []
+acceptance_items = ["A-13", "A-26"]
+tests = [
+    "ui::shell::organize_card::tests::blank_page_template_is_a_valid_one_page_letter_pdf",
+    "ui::shell::organize_card::tests::add_page_inserts_a_blank_page_after_the_current_page",
+    "ui::shell::organize_card::tests::insert_blank_page_before_page_zero_shifts_the_first_text",
+    "ui::shell::organize_card::tests::page_menu_dispatch_opens_the_menu_and_every_action_changes_the_document",
+    "ui::shell::organize_card::tests::add_page_and_page_menu_report_a_missing_document",
+    "ui::tests::canvas_placeholder_reports_the_real_page_and_count",
+    "ui_controls::add_page_and_page_menu_commands_act_on_a_real_document",
+]
+notes = """
+A-13: AppCommand::AddPage now opens nothing dead. organize_card.rs keeps a
+self-written one-page US-Letter PDF (612x792, empty /Contents, correct xref) and
+parses it with Document::from_bytes at use time. There is still no PageOperation
+insert variant, so insertion is composed from PagePlan::extract for the pages
+before/after the insertion point plus PagePlan::merge for the blank page. The
+commit uses DocumentSession::edit_full and after_session_edit exactly like the
+other Organize card page operations. The tab is dirty, save persists the blank
+page, and reopening with pdfxi_core::Document gives the expected count and text.
+The Organize card's old "insert not available" copy is replaced with real
+before/after buttons.
+
+A-26: AppCommand::PageMenu toggles a small Page window with Insert blank page
+before, Insert blank page after, Rotate left, Rotate right, Delete page and
+Extract page. Each entry calls run_page_menu_action and performs a real
+document action through edit_full; none only sets status. The no-dead-controls
+scanner gets one named exemption for page_menu_ui, mirroring the existing card
+exemptions.
+
+Shipped copy: canvas_placeholder now returns "Page N of M" for an open document
+and keeps "Open a document to begin" with none; side_panel.rs's shared-folder
+doc comment now says "Shared folder contents from the configured folder."
+
+Gates (CARGO_TARGET_DIR=target/lanes/app10): cargo check -p pdfxi-app
+--features ui,pdfium exit 0; cargo fmt -p pdfxi-app exit 0 and --check exit 0;
+cargo clippy -p pdfxi-app --all-targets --features ui,pdfium -- -D warnings
+exit 0; cargo test -p pdfxi-app --features ui,pdfium = 612 lib passed / 0
+failed / 4 ignored (616 run), 35 ui_controls passed / 0 failed, 0 doctests.
+No capture is claimed; T-0262 captures the installed build.
+
+Mismatch recorded in the evidence: the brief's stated head/tail ranges insert
+before the active page while the requested status and new current page describe
+inserting after it. AddPage uses insertion point current + 1 with the same
+extract + merge composition; the generic helper supports both directions.
+"""
