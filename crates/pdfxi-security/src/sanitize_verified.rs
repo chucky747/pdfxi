@@ -5,7 +5,10 @@
 //! must not survive a redaction or a shared-file export:
 //!
 //! - the trailer `/Info` dictionary is replaced with an empty dictionary;
-//! - the catalog `/Metadata` XMP stream is detached;
+//! - XMP metadata is removed from the `/Metadata` entry of every dictionary in
+//!   the reachable object graph (catalog, pages, image and form XObjects,
+//!   annotations, patterns, and any other dictionary carrying one), and each
+//!   referenced XMP stream subtree is nulled;
 //! - `/Names /EmbeddedFiles` attachments, their file specifications and their
 //!   embedded-file streams are removed;
 //! - catalog, page and annotation `/AA` actions, `/OpenAction`, the
@@ -53,7 +56,7 @@ fn core(error: pdfxi_core::Error) -> SecurityError {
 pub enum SanitizeCategory {
     /// Trailer `/Info` fields (title, author, subject, and the rest).
     DocumentInfo,
-    /// Catalog `/Metadata` XMP stream.
+    /// XMP metadata streams reached through any dictionary's `/Metadata` entry.
     XmpMetadata,
     /// Embedded files, file specifications and embedded-file streams.
     Attachments,
@@ -383,9 +386,6 @@ pub fn sanitize_inventory(document: &Document) -> Result<BTreeSet<SanitizeCatego
     }
 
     let catalog = objects.get(&root).and_then(Object::as_dictionary);
-    if catalog.is_some_and(|dictionary| dictionary.contains_key("Metadata")) {
-        present.insert(SanitizeCategory::XmpMetadata);
-    }
     if catalog.is_some_and(|dictionary| dictionary.contains_key("OCProperties")) {
         present.insert(SanitizeCategory::OptionalContent);
     }
@@ -424,6 +424,16 @@ pub fn sanitize_inventory(document: &Document) -> Result<BTreeSet<SanitizeCatego
         let Some(dictionary) = object.as_dictionary() else {
             continue;
         };
+        // Every dictionary's `/Metadata` entry is XMP, regardless of the value's
+        // type. We deliberately do not inspect or validate that value: a present
+        // key is sufficient, so a direct stream/dictionary, an indirect
+        // reference, and a malformed or unreadable value all fail closed as
+        // "XMP present". `load_graph` resolves every reachable reference
+        // strictly, so an unreadable indirect `/Metadata` target makes this
+        // inventory call fail instead of reporting a false clean.
+        if dictionary.contains_key("Metadata") {
+            present.insert(SanitizeCategory::XmpMetadata);
+        }
         let type_name = dictionary.get("Type").and_then(Object::as_name);
         let action_name = dictionary.get("S").and_then(Object::as_name);
         if matches!(type_name, Some("Filespec" | "EmbeddedFile"))
@@ -477,7 +487,7 @@ fn apply_pass(
 
     let mut stage = Stage::new(objects);
     stage.apply_catalog(request, root);
-    stage.apply_object_categories(request);
+    stage.apply_object_categories(request, root);
 
     stage.write_back(document)?;
     for item in stage.removed {
@@ -550,14 +560,6 @@ impl Stage {
     }
 
     fn apply_catalog(&mut self, request: &SanitizeRequest, root: ObjectId) {
-        if request.contains(SanitizeCategory::XmpMetadata) {
-            self.remove_key(
-                root,
-                "Metadata",
-                "Catalog/Metadata",
-                SanitizeCategory::XmpMetadata,
-            );
-        }
         if request.contains(SanitizeCategory::Attachments) {
             self.remove_names_key(
                 root,
@@ -582,7 +584,7 @@ impl Stage {
         }
     }
 
-    fn apply_object_categories(&mut self, request: &SanitizeRequest) {
+    fn apply_object_categories(&mut self, request: &SanitizeRequest, root: ObjectId) {
         let ids: Vec<ObjectId> = self.objects.keys().copied().collect();
         for id in ids {
             if self.objects.get(&id) == Some(&Object::Null) {
@@ -594,6 +596,16 @@ impl Stage {
             let Some(dictionary) = object.as_dictionary() else {
                 continue;
             };
+            if request.contains(SanitizeCategory::XmpMetadata)
+                && dictionary.contains_key("Metadata")
+            {
+                let label = if id == root {
+                    "Catalog/Metadata".to_owned()
+                } else {
+                    format!("Object/{id}/Metadata")
+                };
+                self.remove_key(id, "Metadata", label, SanitizeCategory::XmpMetadata);
+            }
             let type_name = dictionary.get("Type").and_then(Object::as_name);
             let action_name = dictionary.get("S").and_then(Object::as_name);
 

@@ -5,9 +5,10 @@
 //! proves unrelated text survives. Synthetic documents add attachments, XMP,
 //! JavaScript actions, optional content, thumbnails and traversal names.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use pdfxi_core::Document;
+use pdfxi_core::{Document, Object, ObjectId};
 use pdfxi_security::{
     SanitizeCategory, SanitizeRequest, SanitizeSurvivorKind, SecurityError,
     is_safe_attachment_name, sanitize_document_full, sanitize_inventory, verify_sanitized,
@@ -136,6 +137,79 @@ fn hidden_layer_fixture() -> Vec<u8> {
     )
 }
 
+/// A small XMP packet whose `dc:title` carries a caller secret as literal
+/// UTF-8, so an unremoved packet is visible to the raw-byte, stream-byte and
+/// category checks of the independent verifier.
+fn xmp_with_title(secret: &str) -> Vec<u8> {
+    format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+         <rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+         <dc:title>{secret}</dc:title>\
+         </rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+    .into_bytes()
+}
+
+/// Classic document whose only XMP lives in a page and an image XObject, never
+/// in the catalog. Object numbers: 1 catalog, 2 pages, 3 page, 4 content,
+/// 5 image XObject, 6 font, 7 page XMP, 8 image XMP, 9 Info.
+fn non_catalog_xmp_fixture() -> Vec<u8> {
+    build_pdf(
+        &[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> /XObject << /Im0 5 0 R >> >> /Contents 4 0 R /Metadata 7 0 R >>".to_vec(),
+            stream("", b"BT /F1 12 Tf 72 720 Td (Visible unrelated text) Tj ET"),
+            stream(
+                "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Metadata 8 0 R",
+                &[0],
+            ),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            stream("/Type /Metadata /Subtype /XML", &xmp_with_title("SECRET-XMP-PAGE")),
+            stream("/Type /Metadata /Subtype /XML", &xmp_with_title("SECRET-XMP-IMAGE")),
+            b"<< /Title (SECRET-INFO-TITLE) /Author (SECRET-INFO-AUTHOR) >>".to_vec(),
+        ],
+        1,
+        9,
+    )
+}
+
+/// Stage a page-level `/Metadata` XMP stream carrying `secret` on a real
+/// `Document` and return its object number. The next free number is just past
+/// the trailer `/Size`, so the classic xref table stays compact.
+fn stage_page_xmp(document: &mut Document, secret: &str) -> ObjectId {
+    let page_id = document.pages().expect("pages").first().expect("a page").id;
+    let mut number = document.trailer_size().ok().flatten().unwrap_or(1).max(2);
+    while document.object(ObjectId::new(number, 0)).is_ok() {
+        number += 1;
+    }
+    let xmp_id = ObjectId::new(number, 0);
+
+    let mut page = document.object(page_id).expect("load page object");
+    match &mut page {
+        Object::Dictionary(dictionary) | Object::Stream { dictionary, .. } => {
+            dictionary.insert("Metadata".to_owned(), Object::Reference(xmp_id));
+        }
+        other => panic!("page object is not a dictionary: {other:?}"),
+    }
+    document
+        .set_object(page_id, page)
+        .expect("stage page /Metadata");
+
+    let stream = Object::Stream {
+        dictionary: BTreeMap::from([
+            ("Type".to_owned(), Object::Name("Metadata".to_owned())),
+            ("Subtype".to_owned(), Object::Name("XML".to_owned())),
+        ]),
+        data: xmp_with_title(secret),
+    };
+    document
+        .set_object(xmp_id, stream)
+        .expect("stage XMP stream");
+    xmp_id
+}
+
 fn survival_probe(text: &str) -> String {
     text.split_whitespace()
         .find(|word| {
@@ -157,6 +231,9 @@ fn real_fixture_is_sanitized_saved_and_reopens_with_text() {
     info.title = Some("SECRET-INFO-FIXTURE".to_owned());
     info.author = Some("SECRET-AUTHOR-FIXTURE".to_owned());
     source.set_info(&info).expect("stage identifying info");
+    // The real fixture already carries catalog XMP; add an XMP packet whose only
+    // reference is from a page dictionary, with a secret title in literal UTF-8.
+    stage_page_xmp(&mut source, "SECRET-XMP-TITLE-FIXTURE");
 
     let before = sanitize_inventory(&source).expect("source inventory");
     assert!(before.contains(&SanitizeCategory::DocumentInfo));
@@ -205,7 +282,11 @@ fn real_fixture_is_sanitized_saved_and_reopens_with_text() {
 
     let verification = verify_sanitized(
         sanitized.bytes(),
-        &["SECRET-INFO-FIXTURE", "SECRET-AUTHOR-FIXTURE"],
+        &[
+            "SECRET-INFO-FIXTURE",
+            "SECRET-AUTHOR-FIXTURE",
+            "SECRET-XMP-TITLE-FIXTURE",
+        ],
     )
     .expect("independent verification");
     assert!(
@@ -213,17 +294,24 @@ fn real_fixture_is_sanitized_saved_and_reopens_with_text() {
         "verification survivors: {:?}",
         verification.survivors
     );
-    assert_eq!(verification.secrets_checked, 2);
+    assert_eq!(verification.secrets_checked, 3);
     assert_eq!(
         verification.pages_checked,
         reopened.page_count().expect("count")
     );
-    assert!(
-        !sanitized
-            .bytes()
-            .windows(b"SECRET-INFO-FIXTURE".len())
-            .any(|window| window == b"SECRET-INFO-FIXTURE")
-    );
+    for secret in [
+        "SECRET-INFO-FIXTURE",
+        "SECRET-AUTHOR-FIXTURE",
+        "SECRET-XMP-TITLE-FIXTURE",
+    ] {
+        assert!(
+            !sanitized
+                .bytes()
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()),
+            "removed secret survived in saved bytes: {secret}"
+        );
+    }
     assert!(artifact.exists());
 }
 
@@ -282,6 +370,98 @@ fn synthetic_document_loses_all_categories_and_verifies_clean() {
     assert!(
         verification.clean,
         "verification survivors: {:?}",
+        verification.survivors
+    );
+}
+
+#[test]
+fn xmp_in_image_xobject_and_page_is_inventoried_and_removed() {
+    let source = Document::from_bytes(non_catalog_xmp_fixture()).expect("fixture parses");
+    let before = sanitize_inventory(&source).expect("source inventory");
+    // The catalog has no /Metadata. Without cross-dictionary detection this
+    // assertion fails: XMP can only be found on the page and image XObject.
+    assert!(
+        before.contains(&SanitizeCategory::XmpMetadata),
+        "non-catalog XMP was not detected: {before:?}"
+    );
+
+    let sanitized = sanitize_document_full(&source, &SanitizeRequest::all()).expect("sanitize");
+    let report = sanitized.report();
+    assert!(report.is_clean(), "residuals: {:?}", report.residuals());
+    assert!(report.before.contains(&SanitizeCategory::XmpMetadata));
+    assert!(!report.after.contains(&SanitizeCategory::XmpMetadata));
+    let xmp_removals = report
+        .removed
+        .iter()
+        .filter(|item| item.category() == SanitizeCategory::XmpMetadata)
+        .count();
+    assert!(
+        xmp_removals >= 2,
+        "expected page and image XObject removals, got {xmp_removals}"
+    );
+
+    let reopened = Document::from_bytes(sanitized.bytes().to_vec()).expect("output parses");
+    let after = sanitize_inventory(&reopened).expect("output inventory");
+    assert!(
+        !after.contains(&SanitizeCategory::XmpMetadata),
+        "XMP remained after sanitize: {after:?}"
+    );
+    assert_eq!(
+        reopened.page_text(0).expect("page text"),
+        "Visible unrelated text",
+        "unrelated text must survive"
+    );
+
+    let secrets = ["SECRET-XMP-PAGE", "SECRET-XMP-IMAGE", "SECRET-INFO-TITLE"];
+    for secret in secrets {
+        assert!(
+            !sanitized
+                .bytes()
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()),
+            "removed secret survived in saved bytes: {secret}"
+        );
+    }
+    let verification = verify_sanitized(sanitized.bytes(), &secrets).expect("verification");
+    assert!(
+        verification.clean,
+        "verification survivors: {:?}",
+        verification.survivors
+    );
+}
+
+#[test]
+fn xmp_outside_selected_categories_keeps_inventory_and_verification_dirty() {
+    let source = Document::from_bytes(non_catalog_xmp_fixture()).expect("fixture parses");
+    // Leave XMP unselected: a caller that only clears /Info must still see the
+    // unremoved image/page XMP reported as present, not as a false clean.
+    let request = SanitizeRequest::new([SanitizeCategory::DocumentInfo]);
+    let sanitized = sanitize_document_full(&source, &request).expect("sanitize");
+    assert!(
+        sanitized.report().is_clean(),
+        "residuals are scoped to the request"
+    );
+
+    let reopened = sanitized.document().expect("reparse sanitized bytes");
+    let after = sanitize_inventory(&reopened).expect("output inventory");
+    assert!(
+        after.contains(&SanitizeCategory::XmpMetadata),
+        "unselected XMP must remain detectable: {after:?}"
+    );
+
+    let verification =
+        verify_sanitized(sanitized.bytes(), &["SECRET-XMP-PAGE", "SECRET-XMP-IMAGE"])
+            .expect("verification");
+    assert!(
+        !verification.clean,
+        "the verifier must not be always-true for unremoved XMP"
+    );
+    assert!(
+        verification
+            .survivors
+            .iter()
+            .any(|survivor| survivor.kind == SanitizeSurvivorKind::XmpMetadata),
+        "expected an XmpMetadata survivor, got {:?}",
         verification.survivors
     );
 }

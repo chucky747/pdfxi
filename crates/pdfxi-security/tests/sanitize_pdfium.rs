@@ -7,14 +7,16 @@
 
 #![cfg(feature = "pdfium")]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::{PdfDocumentMetadataTagType, Pdfium, PdfiumError};
-use pdfxi_core::Document;
+use pdfxi_core::{Document, Object, ObjectId};
 use pdfxi_security::{SanitizeRequest, sanitize_document_full, verify_sanitized};
 
 const SECRET_TITLE: &str = "PDFXI T-0257 SECRET TITLE";
 const SECRET_AUTHOR: &str = "PDFXI T-0257 SECRET AUTHOR";
+const SECRET_XMP_TITLE: &str = "PDFXI T-0257 SECRET XMP TITLE";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +71,46 @@ fn excel_fixture() -> Document {
     Document::from_bytes(bytes).expect("fixture parses")
 }
 
+/// Stage a page-level `/Metadata` XMP stream whose `dc:title` carries a secret.
+fn stage_page_xmp(document: &mut Document, secret: &str) {
+    let page_id = document.pages().expect("pages").first().expect("a page").id;
+    let mut number = document.trailer_size().ok().flatten().unwrap_or(1).max(2);
+    while document.object(ObjectId::new(number, 0)).is_ok() {
+        number += 1;
+    }
+    let xmp_id = ObjectId::new(number, 0);
+
+    let mut page = document.object(page_id).expect("load page object");
+    match &mut page {
+        Object::Dictionary(dictionary) | Object::Stream { dictionary, .. } => {
+            dictionary.insert("Metadata".to_owned(), Object::Reference(xmp_id));
+        }
+        other => panic!("page object is not a dictionary: {other:?}"),
+    }
+    document
+        .set_object(page_id, page)
+        .expect("stage page /Metadata");
+
+    let packet = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+         <rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+         <dc:title>{secret}</dc:title>\
+         </rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+    .into_bytes();
+    let stream = Object::Stream {
+        dictionary: BTreeMap::from([
+            ("Type".to_owned(), Object::Name("Metadata".to_owned())),
+            ("Subtype".to_owned(), Object::Name("XML".to_owned())),
+        ]),
+        data: packet,
+    };
+    document
+        .set_object(xmp_id, stream)
+        .expect("stage XMP stream");
+}
+
 fn normalize(value: &str) -> String {
     value
         .chars()
@@ -91,16 +133,21 @@ fn pdfium_reopens_sanitized_bytes_and_sees_no_identifying_metadata() {
     info.title = Some(SECRET_TITLE.to_owned());
     info.author = Some(SECRET_AUTHOR.to_owned());
     source.set_info(&info).expect("stage identifying info");
+    stage_page_xmp(&mut source, SECRET_XMP_TITLE);
 
     let sanitized =
         sanitize_document_full(&source, &SanitizeRequest::all()).expect("sanitize fixture");
-    let verification = verify_sanitized(sanitized.bytes(), &[SECRET_TITLE, SECRET_AUTHOR])
-        .expect("independent verifier");
+    let verification = verify_sanitized(
+        sanitized.bytes(),
+        &[SECRET_TITLE, SECRET_AUTHOR, SECRET_XMP_TITLE],
+    )
+    .expect("independent verifier");
     assert!(
         verification.clean,
         "verification survivors: {:?}",
         verification.survivors
     );
+    assert_eq!(verification.secrets_checked, 3);
 
     let pdfium = load_pdfium();
     let document = pdfium

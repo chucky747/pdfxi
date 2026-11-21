@@ -23,6 +23,8 @@ acceptance_items = ["O-06", "A-30"]
 tests = [
     "crates/pdfxi-security/tests/sanitize_verified.rs::real_fixture_is_sanitized_saved_and_reopens_with_text",
     "crates/pdfxi-security/tests/sanitize_verified.rs::synthetic_document_loses_all_categories_and_verifies_clean",
+    "crates/pdfxi-security/tests/sanitize_verified.rs::xmp_in_image_xobject_and_page_is_inventoried_and_removed",
+    "crates/pdfxi-security/tests/sanitize_verified.rs::xmp_outside_selected_categories_keeps_inventory_and_verification_dirty",
     "crates/pdfxi-security/tests/sanitize_verified.rs::secret_outside_the_sanitized_categories_makes_verification_dirty",
     "crates/pdfxi-security/tests/sanitize_verified.rs::default_hidden_optional_content_fails_closed",
     "crates/pdfxi-security/tests/sanitize_verified.rs::attachment_name_validator_rejects_traversal_and_absolute_paths",
@@ -31,7 +33,13 @@ tests = [
 ]
 notes = """
 Library scope: `sanitize_document_full(&Document, &SanitizeRequest)` clears the
-trailer `/Info`, detaches catalog `/Metadata`, removes `/Names /EmbeddedFiles`
+trailer `/Info`, detaches `/Metadata` from every dictionary in the reachable
+object graph (catalog, pages, image/form XObjects, annotations, patterns and
+other metadata-carrying dictionaries, including header-discovered objects) and
+nulls each referenced XMP stream subtree. A present `/Metadata` key is treated as
+XMP regardless of the value type, so direct streams/dictionaries, indirect
+references and malformed or unreadable values fail closed. It also removes
+`/Names /EmbeddedFiles`
 attachments with their file specs and embedded streams, removes catalog/page/
 annotation `/AA`, `/OpenAction`, `/Names /JavaScript` and every JavaScript
 action object, flattens visible `/OCProperties` (default-hidden layers fail
@@ -44,13 +52,17 @@ nulled before keys are detached, so removed bytes do not remain in the output.
 `verify_sanitized(bytes, secrets)` is independent of the removal code: it
 reparses, re-extracts page text, scans the whole file and every text-candidate
 stored/Flate stream in UTF-8 and UTF-16LE, reports undecodable candidates as
-`UnreadableStream`, and re-derives the category inventory. Survivors identify a
-page, object number, category and secret index, never secret text or document
-content. PDFium is a second reader through the optional `pdfium` feature; it
-reopens the sanitized real fixture, extracts the surviving text and sees no
-title or author. A negative test proves an outside secret makes verification
-dirty. Round A limits: hidden optional-content layers need a content rewrite and
-fail closed; visible layers are flattened; untyped unreferenced streams are not
-detectable attachments. No UI/CLI entry point; SEC-008/SEC-009 stay `library`
-until T-0263.
+`UnreadableStream`, and re-derives the category inventory (including XMP from a
+`/Metadata` key on any dictionary, so unselected or residual XMP keeps
+verification dirty). Survivors identify a page, object number, category and
+secret index, never secret text or document content. PDFium is a second reader
+through the optional `pdfium` feature; it reopens the sanitized real fixture
+(with a staged page XMP secret title), extracts the surviving text and sees no
+title or author. Negative tests prove an outside secret and unselected XMP both
+make verification dirty. Verifier limits: UTF-16BE and secrets split across
+streams or filter stages are not covered; XMP detection keys on the `/Metadata`
+entry, not on XMP syntax. Round A limits: hidden optional-content layers need a
+content rewrite and fail closed; visible layers are flattened; untyped
+unreferenced streams are not detectable attachments. No UI/CLI entry point;
+SEC-008/SEC-009 stay `library` until T-0263.
 """
