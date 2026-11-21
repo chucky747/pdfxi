@@ -457,6 +457,7 @@ fn app_icon() -> egui::IconData {
 /// readable message so the host can log it and show it to the user instead of
 /// writing to a console the GUI subsystem does not have.
 pub fn run() -> Result<(), String> {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(app_name())
@@ -470,8 +471,7 @@ pub fn run() -> Result<(), String> {
     eframe::run_native(
         app_name(),
         options,
-        Box::new(|_creation_context| {
-            let arguments: Vec<String> = std::env::args().skip(1).collect();
+        Box::new(move |_creation_context| {
             let print_requested = arguments.iter().any(|argument| argument == "--print");
             // View-only deep link: open the Nth annotation's thread at startup.
             let open_annotation = arguments.iter().find_map(|argument| {
@@ -487,6 +487,7 @@ pub fn run() -> Result<(), String> {
             app.apply_launch_panel(launch.panel);
             app.apply_launch_tool(launch.tool);
             app.apply_launch_help(launch.open_help);
+            app.apply_launch_presentation(launch.presentation);
             if let Some(question) = launch.assistant_question {
                 app.request_launch_question(question);
             }
@@ -540,6 +541,12 @@ pub struct PdfxiApp {
     theme_preference: ThemePreference,
     /// Which window controls the custom title bar draws.
     window_controls: WindowControlStyle,
+    /// Full-screen presentation mode: only the page is drawn.
+    presentation: bool,
+    /// Whether presentation mode still needs its initial fit-to-window.
+    presentation_needs_fit: bool,
+    /// Whether presentation mode still needs to switch the window to full screen.
+    presentation_needs_fullscreen: bool,
     /// Settings as persisted on disk (launch flags never modify this).
     settings: settings::Settings,
     /// Where settings are saved; `None` for viewers that never touch disk.
@@ -817,6 +824,31 @@ impl PdfxiApp {
         if open_help {
             self.help_open = true;
         }
+    }
+
+    /// Start the full-screen presentation mode requested with `--present`.
+    ///
+    /// Presentation mode draws only the current page on a black canvas. The
+    /// document is fitted to the window, panels and the tool panel are hidden,
+    /// and `update` handles the navigation keys; `Escape` leaves the mode and
+    /// restores the window decorations.
+    pub fn apply_launch_presentation(&mut self, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        self.presentation = true;
+        self.presentation_needs_fit = true;
+        self.presentation_needs_fullscreen = true;
+        self.tools_open = false;
+        self.find_open = false;
+        self.help_open = false;
+        self.fit_page();
+    }
+
+    /// Whether presentation mode is active.
+    #[must_use]
+    pub fn is_presenting(&self) -> bool {
+        self.presentation
     }
 
     /// The theme preference currently in effect.
@@ -1834,8 +1866,78 @@ impl PdfxiApp {
         self.open_errors.clear();
     }
 }
+impl PdfxiApp {
+    /// Draw and drive the full-screen presentation mode.
+    ///
+    /// Only the page is drawn on a black canvas. `Right`/`Down`/`Space`/
+    /// `PageDown` advance, `Left`/`Up`/`PageUp` go back, and `Escape` leaves the
+    /// mode and restores the window decoration.
+    fn presentation_update(&mut self, ctx: &egui::Context) {
+        if self.presentation_needs_fullscreen {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            self.presentation_needs_fullscreen = false;
+            // Fit on the next frame, once the window reports its full-screen size.
+            ctx.request_repaint();
+            return;
+        }
+        if self.presentation_needs_fit {
+            let has_pages = self
+                .state
+                .active_tab()
+                .is_some_and(|tab| tab.page_count() > 0);
+            if has_pages {
+                let page = self
+                    .page_sizes
+                    .first()
+                    .copied()
+                    .unwrap_or(PageSize::new(612.0, 792.0));
+                let viewport = ctx.content_rect();
+                let width = viewport.width().max(1.0);
+                let height = viewport.height().max(1.0);
+                let scale = ((width * 0.94) / page.width_pt.max(1.0))
+                    .min((height * 0.94) / page.height_pt.max(1.0));
+                let percent = (scale * 100.0).clamp(10.0, 800.0).round() as u32;
+                self.set_zoom_percent(percent);
+                self.presentation_needs_fit = false;
+            }
+        }
+        let (next, previous, exit) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::ArrowRight)
+                    || input.key_pressed(egui::Key::ArrowDown)
+                    || input.key_pressed(egui::Key::Space)
+                    || input.key_pressed(egui::Key::PageDown),
+                input.key_pressed(egui::Key::ArrowLeft)
+                    || input.key_pressed(egui::Key::ArrowUp)
+                    || input.key_pressed(egui::Key::PageUp),
+                input.key_pressed(egui::Key::Escape),
+            )
+        });
+        if exit {
+            self.presentation = false;
+            self.fit_page();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            return;
+        }
+        if next {
+            self.step_page(1);
+        }
+        if previous {
+            self.step_page(-1);
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(egui::Color32::BLACK))
+            .show(ctx, |ui| self.canvas_ui(ui));
+        ctx.request_repaint();
+    }
+}
+
 impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.presentation {
+            self.presentation_update(ctx);
+            return;
+        }
         self.window_resize_handles(ctx);
         self.handle_keyboard(ctx);
         self.pump_text_extraction();

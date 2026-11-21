@@ -2,7 +2,7 @@
 //!
 //! The shell keeps two user preferences: which theme to use and which window
 //! control style the custom title bar draws. They are stored as TOML in the
-//! per-user configuration directory — `%APPDATA%\PDFXI\settings.toml` on
+//! per-user configuration directory â€” `%APPDATA%\PDFXI\settings.toml` on
 //! Windows, `$XDG_CONFIG_HOME/PDFXI/settings.toml` (or
 //! `~/.config/PDFXI/settings.toml`) on Linux, and
 //! `~/Library/Application Support/PDFXI/settings.toml` on macOS.
@@ -442,6 +442,11 @@ pub struct LaunchOptions {
     /// cannot be reached through synthesised window messages, so a launch flag
     /// is the only headless way to open it in the real viewer (A-03).
     pub open_help: bool,
+    /// Presentation mode requested with `--present` or `--presentation`.
+    ///
+    /// Starts the viewer full screen with only the page on screen; arrows,
+    /// space and PageUp/PageDown move between pages, Escape leaves the mode.
+    pub presentation: bool,
 }
 
 impl LaunchOptions {
@@ -455,6 +460,7 @@ impl LaunchOptions {
             && self.title.is_none()
             && self.assistant_question.is_none()
             && !self.open_help
+            && !self.presentation
     }
 }
 
@@ -462,7 +468,8 @@ impl LaunchOptions {
 ///
 /// Recognised forms are `--dark`, `--light`, `--controls=windows` or
 /// `--controls=macos`, `--rail=`/`--panel=`, `--tool=`, `--set-title=`,
-/// `--assistant-question=`, `--open-help`, and `--help-window`.
+/// `--assistant-question=`, `--open-help`, `--help-window`, `--present` and
+/// `--presentation`.
 /// Unknown flags, bare `--controls`, and invalid values are ignored without
 /// panicking. When a flag repeats, the last one wins. Arguments that look like
 /// file paths are skipped so callers can pass the same list to the document
@@ -475,6 +482,7 @@ pub fn parse_launch_arguments(arguments: &[String]) -> LaunchOptions {
             "--dark" => options.theme = Some(ThemePreference::Dark),
             "--light" => options.theme = Some(ThemePreference::Light),
             "--open-help" | "--help-window" => options.open_help = true,
+            "--present" | "--presentation" => options.presentation = true,
             other => {
                 if let Some(value) = other.strip_prefix("--controls=")
                     && let Some(style) = WindowControlStyle::parse(value)
@@ -857,6 +865,26 @@ mod tests {
         let empty = parse_launch_arguments(&["--assistant-question=".to_owned()]);
         assert_eq!(empty.assistant_question, None);
         assert!(empty.is_empty(), "an empty question is not an action");
+    }
+
+    #[test]
+    fn presentation_flags_are_bare_switches_and_ignore_lookalikes() {
+        for flag in ["--present", "--presentation"] {
+            let parsed = parse_launch_arguments(&[flag.to_owned()]);
+            assert!(parsed.presentation, "{flag} starts presentation mode");
+            assert!(!parsed.is_empty(), "{flag} must be a real override");
+            assert_eq!(
+                parsed,
+                LaunchOptions {
+                    presentation: true,
+                    ..LaunchOptions::default()
+                }
+            );
+        }
+        let bad =
+            parse_launch_arguments(&["--present=1".to_owned(), "--presentation-mode".to_owned()]);
+        assert!(!bad.presentation, "only the bare switches are recognised");
+        assert!(bad.is_empty());
     }
 
     #[test]
