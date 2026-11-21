@@ -23,7 +23,7 @@ in `docs/evidence/release/T-0262.md`.
 |---|---|---|---|---|---|
 | A-01 | Title bar: tabs, new tab, window controls | Already shipped; still works in both control styles | regression | pass | docs/evidence/ui/final/light-windows-main.png, docs/evidence/ui/final/dark-macos-main.png |
 | A-02 | Bell (notifications) | Lists real local events; empty state when none | T-0246 | pass | docs/evidence/ui/T-0246.md |
-| A-03 | Help | Opens the bundled user guide | T-0221 | pass | docs/evidence/release/T-0262.md (installed docs payload; Help window path docs/evidence/ui/T-0221.md) |
+| A-03 | Help | Opens the bundled user guide | T-0221 | pass | docs/evidence/release/T-0262.md (installed docs payload + resolved docs path + tested Help content; Help-window screenshot not obtainable, stated there) |
 | A-04 | User avatar | Shows initials from a local display name used as comment author and signer name | T-0221 | pass | docs/evidence/ui/T-0221.md |
 | A-05 | Undo / redo | Reverts and reapplies every document mutation; disabled when nothing to undo | T-0222 | pass | docs/evidence/ui/T-0222.md |
 | A-06 | Command bar: Edit, Comment, Highlight, Sign, Organize, Export, AI Assistant | Each activates its working tool | T-0242, T-0243, T-0244, T-0245, T-0231, T-0266, T-0253 | pass | docs/evidence/ui/final/light-windows-main.png, docs/evidence/ui/T-0272.md |
@@ -61,3 +61,4 @@ in `docs/evidence/release/T-0262.md`.
 | O-05 | Form filling | Fill, tab order, save with appearances, FDF/XFDF, flatten | T-0243 | pass | docs/evidence/ui/T-0243.md, docs/evidence/ui/final/light-windows-fill-forms.png |
 | O-06 | Redaction | Content is removed, verified by re-extraction and a byte scan | T-0237, T-0257, T-0263 | pass | docs/evidence/ui/T-0263.md |
 | O-07 | No dead controls | Automated test: every enabled control emits a working command | T-0212 | pass | docs/evidence/hardening/T-0212.md |
+
