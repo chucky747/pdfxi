@@ -120,3 +120,40 @@ two libFuzzer binaries call.
 same `cargo check` failed on the untouched manifest. The new code adds no
 dependency that worsens this; `pdfxi-fuzz-entry` deliberately has no
 `libfuzzer-sys` dependency so the deterministic runner builds.
+## Close-out attempt (2026-11-21): every software path tried, elevation is the limit
+
+The orchestrator installed the missing tooling and retried:
+
+1. `cargo install cargo-fuzz --locked` first failed with `Access is denied
+   (os error 5)`; it succeeded after pointing `TEMP`/`TMP` at
+   `target\tmp\cargo-install-temp` (the same host temp policy that broke the
+   Inno installer). `cargo-fuzz 0.13.2` is now installed.
+2. `rustup toolchain install nightly-x86_64-pc-windows-gnu --profile minimal`
+   succeeded (rustc 1.102.0-nightly).
+3. `CC=clang CXX=clang++ cargo +nightly-x86_64-pc-windows-gnu fuzz build
+   redaction` fails in rustc, not in PDFXI:
+
+```text
+error: address sanitizer is not supported for this target
+Error: failed to build fuzz script: "cargo" "build" ... --target x86_64-pc-windows-gnu
+```
+
+AddressSanitizer/libFuzzer on Windows requires the MSVC target.
+4. The MSVC target needs `link.exe` and the Windows SDK, and this host has
+   neither: no `cl.exe`/`link.exe`, no Visual Studio, no Windows Kits. Installing
+   them was attempted:
+
+```text
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+Installer failed with exit code: 5
+```
+
+Exit code 5 is access denied: the VS Build Tools installer requires elevation,
+which this session does not have and must not request.
+
+Conclusion: the remaining fuzz blocker is **administrator-level toolchain
+installation**, not a PDFXI or test problem. The deterministic runner remains the
+accepted evidence (7/7 targets pass, 104 seeded invocations) and no target is
+weakened. On a host with MSVC Build Tools, `cargo +nightly fuzz build` and
+`cargo +nightly fuzz run redaction` should be run before release, as the plan
+already requires for the 24-hour campaign.

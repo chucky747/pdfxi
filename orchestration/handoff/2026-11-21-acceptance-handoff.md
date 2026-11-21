@@ -63,8 +63,7 @@ Still open as recorded product limits (not blockers):
 
 - `orchestration/blockers/T-0215-word-com.md`: Word COM PDF save/export hangs
   (route uses the committed PowerPoint fixture; no Word-produced PDF claimed).
-- `orchestration/blockers/T-0260A-fuzz-toolchain.md`: libFuzzer is host-blocked;
-  deterministic runner 7/7, no target weakened.
+- `orchestration/blockers/T-0260A-fuzz-toolchain.md`: libFuzzer is host-blocked; `cargo-fuzz` and a nightly GNU toolchain are now installed, but ASAN is unsupported for `x86_64-pc-windows-gnu` and the MSVC target needs Build Tools, whose installer requires elevation (exit 5). Deterministic runner 7/7, no target weakened.
 - `orchestration/blockers/T-0260B-budget.md`: two derived save-budget breaches,
   unweakened.
 - Signed installer: no certificate (T-0202); no signature claimed.
@@ -72,3 +71,5 @@ Still open as recorded product limits (not blockers):
 - AI assistant: connection panel verified; no live prompt sent.
 - mdbook not installed; `cargo xtask docs` and the link pass are green.
 - VIEW-009, VIEW-011 and PLAT-002 remain outside this campaign's surface.
+
+
