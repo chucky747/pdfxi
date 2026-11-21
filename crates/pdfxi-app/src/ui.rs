@@ -1925,6 +1925,30 @@ impl PdfxiApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(egui::Color32::BLACK))
             .show(ctx, |ui| self.canvas_ui(ui));
+        // Fit after drawing so the custom zoom wins over any fit-on-resize
+        // reapplication; the next frame renders with it. A 6% margin keeps a
+        // black border around the slide instead of letting it touch the edges.
+        if let Some(page) = self.page_sizes.first().copied()
+            && self
+                .state
+                .active_tab()
+                .is_some_and(|tab| tab.page_count() > 0)
+        {
+            // Layout units are points; the window reports physical pixels, so
+            // divide by the pixel ratio before fitting.
+            let pixels = ctx.content_rect();
+            let ratio = ctx.pixels_per_point().max(0.1);
+            let width_pt = pixels.width() / ratio;
+            let height_pt = pixels.height() / ratio;
+            let scale = ((width_pt * 0.94) / page.width_pt.max(1.0))
+                .min((height_pt * 0.94) / page.height_pt.max(1.0));
+            let percent = (scale * 100.0).clamp(10.0, 800.0).round() as u32;
+            self.set_zoom_percent(percent);
+            // Centre the slide: a new zoom keeps the old continuous-scroll
+            // offset, which would push a single page off to the right.
+            self.scroll_x = (width_pt - page.width_pt * scale) / 2.0;
+            self.scroll_y = 0.0;
+        }
         ctx.request_repaint();
     }
 }

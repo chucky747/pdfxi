@@ -74,3 +74,30 @@ Add a temporary debug overlay (or a unit test) that prints
 the `CanvasLayout` level rather than in `ui.rs`. Do not call VIEW-012 verified
 until a full-screen capture shows the whole page with black margins and arrow
 navigation changes the slide.
+
+## Attempts 7-9 (instrumented; fit fixed, centring and key proof remain)
+
+Debug overlay printed `vp=2560x1440 ppp=1.50 page=720x405 zoom=...`. The fixture
+pages are 720x405, so a pixel-ratio-corrected fit is
+`min((2560/1.5)*0.94/720, (1440/1.5)*0.94/405) = 2.23`.
+
+- Applying the ratio-corrected custom zoom **fixes the clipping**: the whole
+  slide is visible (`target\tmp\present-final2.png`).
+- The slide is **right-aligned** (page starts at x≈730, flush to the right
+  edge). Setting `scroll_x` positive is clamped and does not centre it, and
+  `pad_x` in `canvas_ui` still centres against a wider content box.
+- Arrow-key navigation could not be proven end to end: `SetForegroundWindow`
+  from this process does not take focus (same host restriction as the Help
+  window), so injected Right/Left keystrokes never reach the egui input. The
+  capture after two Right presses is still slide 1.
+
+## Remaining work for VIEW-012
+
+1. Centre the slide horizontally (fix `pad_x`/content width for `SinglePage`,
+   or set the scroll offset in the same units the canvas expects).
+2. Prove key navigation without OS focus: extract the key decision into a pure
+   helper and unit-test it (Right/Space/PageDown -> next, Left/PageUp ->
+   previous, Escape -> exit), and/or post `WM_KEYDOWN` to the window.
+3. Only then add captures for slide 1 -> 2 -> 1 and the VIEW-012 fragment.
+
+The row stays `model`; nothing is claimed.
