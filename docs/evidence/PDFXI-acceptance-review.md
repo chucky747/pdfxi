@@ -18,9 +18,9 @@ appear inline with their descriptors.
 | --- | --- |
 | Acceptance items (A-/O- matrix) | 40 pass, 0 open |
 | Feature rows (canonical matrix) | 145 |
-| Reachable and tested (`verified`) | 60 |
+| Reachable and tested (`verified`) | 61 |
 | `library` (byte-level code, no user path) | 9 |
-| `model` (model, contract or stub) | 74 |
+| `model` (model, contract or stub) | 73 |
 | `replaced` | 2 |
 | Installed build | `%LOCALAPPDATA%\Programs\PDFXI\pdfxi-ui.exe`, SHA-256 `6787a129f8321e2c08aea07f1532d9e349306a0daffabd461351f27914ca77dc` |
 | Captures | 57 PNG files, embedded below |
@@ -429,19 +429,19 @@ the descriptor names another file.
 
 ## Feature status register
 
-Counts from `docs/features.toml`: 145 rows - 60 verified,
-9 library, 74 model, 2 replaced.
+Counts from `docs/features.toml`: 145 rows - 61 verified,
+9 library, 73 model, 2 replaced.
 The meanings come from ADR 0009.
 
 | Status | Rows | Meaning |
 | --- | --- | --- |
-| erified | 60 | Runs on real document bytes and a user can reach it through the GUI or the CLI. |
+| erified | 61 | Runs on real document bytes and a user can reach it through the GUI or the CLI. |
 | library | 9 | Real byte-level implementation over PDF documents and tested, but no user-reachable path or narrower than the product row. |
-| model | 74 | In-memory model, plan, contract, or host-boundary stub; not a working product feature. |
+| model | 73 | In-memory model, plan, contract, or host-boundary stub; not a working product feature. |
 | eplaced | 2 | Superseded by another row. |
 | **total** | **145** | Canonical matrix: docs/features.toml |
 
-### Verified rows (60)
+### Verified rows (61)
 
 | ID | Title | Domain |
 | --- | --- | --- |
@@ -502,11 +502,12 @@ The meanings come from ADR 0009.
 | `VIEW-006` | Split and tile document windows | View & Navigate |
 | `VIEW-007` | Page thumbnails and navigation pane | View & Navigate |
 | `VIEW-008` | Bookmarks destinations and article threads | View & Navigate |
+| `VIEW-011` | Links and named destinations | View & Navigate |
 | `VIEW-016` | Open PDF and render pages in the viewer | View & Navigate |
 | `VIEW-017` | Find text in a document and select copy text | View & Navigate |
 | `VIEW-019` | Window controls, title bar settings, and persisted theme | View & Navigate |
 
-### Not verified (85)
+### Not verified (84)
 
 These rows exist in the matrix but are not reachable product features yet.
 
@@ -589,7 +590,6 @@ These rows exist in the matrix but are not reachable product features yet.
 | `STD-006` | Tagged PDF and structure tree | `model` | Standards |
 | `VIEW-009` | Attachments and embedded files | `model` | View & Navigate |
 | `VIEW-010` | Optional content layers | `model` | View & Navigate |
-| `VIEW-011` | Links and named destinations | `model` | View & Navigate |
 | `VIEW-012` | Full screen and presentation mode | `model` | View & Navigate |
 | `VIEW-013` | Reflow and read aloud | `model` | View & Navigate |
 | `VIEW-014` | PDF Portfolio browsing | `model` | View & Navigate |
