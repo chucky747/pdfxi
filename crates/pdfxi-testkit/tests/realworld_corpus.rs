@@ -16,6 +16,10 @@
 //! layer yet, so the encrypted content stream is parsed as plaintext.
 //!
 //! The suite is deterministic, offline, and reads only files in the repository.
+//!
+//! It also smoke-checks any cached external corpus files pinned in
+//! `corpus/manifest.toml` (T-0051). Absent files are reported as skips; the
+//! test never fetches, so `cargo xtask corpus smoke` stays network-free.
 
 use std::fs;
 use std::path::PathBuf;
@@ -256,4 +260,34 @@ fn extracts_marker_words_or_asserts_the_recorded_limitation() {
             );
         }
     }
+}
+
+/// External, checksum-pinned corpus files are part of the smoke path driven by
+/// `cargo xtask corpus smoke`. A pinned file that has not been fetched is a
+/// skip; a cached file whose digest, page count, or extracted text disagrees
+/// with the manifest fails the test. This test never uses the network.
+#[test]
+fn external_corpus_smoke_checks_cached_files() {
+    let entries =
+        pdfxi_testkit::external_corpus::load_manifest().expect("external corpus manifest parses");
+    let summary = pdfxi_testkit::external_corpus::smoke_cached(&entries);
+    for id in &summary.skipped {
+        println!("SKIP external corpus {id}: not cached (run the fetch command)");
+    }
+    for report in &summary.checked {
+        println!(
+            "SMOKE external corpus {} pages={} path={}",
+            report.id,
+            report.pages,
+            report.path.display()
+        );
+    }
+    for (id, error) in &summary.failures {
+        println!("FAIL external corpus {id}: {error}");
+    }
+    assert!(
+        summary.failures.is_empty(),
+        "cached external corpus failed verification or smoke: {:?}",
+        summary.failures
+    );
 }

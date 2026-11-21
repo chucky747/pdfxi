@@ -1,21 +1,44 @@
 # Corpus descriptors for checksum-verified, on-demand fetches.
 #
-# No corpus data is committed. Each [[corpus]] entry records where an archive
-# could be fetched and the SHA-256 digest/size it must match before use. A fetch
-# tool must fail closed: an entry whose `sha256` is empty is documentation only
-# and must NOT be downloaded. For M1 every descriptor below is unapproved and
-# carries an empty digest, so no tool will initiate a download based on this
-# file. See corpus/README.md for the full policy.
+# No corpus data is committed. Every fetchable entry pins an exact HTTPS URL,
+# a lowercase SHA-256 digest, and the expected byte size. A fetch must fail
+# closed: an entry whose `sha256` is empty or whose `status` is not `approved`
+# is documentation only and must NOT be downloaded. Fast tests never use the
+# network; they only verify files that are already cached. See corpus/README.md
+# for the full policy and the fetch command.
 
 version = 1
 
-# Optional external corpora considered for later milestones (M4/M7). These are
-# descriptors only: no license has been cleared, no URL has been resolved, and
-# no digest has been verified, so they are deliberately unfetchable in M1.
-# Populating a real `sha256`, `bytes`, and reachable `url` is a separate,
-# reviewed change that must also relax the `corpus_manifest_triggers_no_downloads`
-# test in crates/pdfxi-testkit/tests/committed_fixtures.rs.
+# Apache PDFBox test resources, Apache License 2.0. Both URLs are pinned to the
+# immutable commit for release 3.0.8, so the bytes cannot drift upstream. The
+# two PDFs are tiny (<2 KiB total) and were checked with the real core parser:
+# each opens as 1 page and yields the marker text recorded below.
+[[corpus]]
+id = "pdfbox-5002"
+url = "https://raw.githubusercontent.com/apache/pdfbox/9286e47d89d6877005c9d2d0f2fd38793a62519a/pdfbox/src/test/resources/input/PDFBOX-5002.pdf"
+file = "PDFBOX-5002.pdf"
+sha256 = "401586241a33742d6c562ac18859d4fb3f7d078c828c2eca9db3d3a8dff5fcb1"
+bytes = 941
+pages = 1
+markers = ["Title in a big font", "on multiple lines"]
+license = "Apache-2.0"
+source = "Apache PDFBox test resources, tag 3.0.8 (commit 9286e47d89d6877005c9d2d0f2fd38793a62519a)"
+status = "approved"
 
+[[corpus]]
+id = "pdfbox-table-document"
+url = "https://raw.githubusercontent.com/apache/pdfbox/9286e47d89d6877005c9d2d0f2fd38793a62519a/examples/src/test/resources/org/apache/pdfbox/examples/pdmodel/document.pdf"
+file = "document.pdf"
+sha256 = "a31f3b5fc79e6ae2703f9d2817af088f29aef4937e370b173512d820a9972c35"
+bytes = 1042
+pages = 1
+markers = ["Cell with colspan 3", "row 1; cell 1"]
+license = "Apache-2.0"
+source = "Apache PDFBox examples test resources, tag 3.0.8 (commit 9286e47d89d6877005c9d2d0f2fd38793a62519a)"
+status = "approved"
+
+# Documentation-only descriptor: no license clearance, no resolved URL and no
+# digest. It must stay unfetchable so the fail-closed path is exercised by tests.
 [[corpus]]
 id = "verapdf-test-suite"
 url = "https://example.invalid/verapdf/corpus.tar.zst"
@@ -23,22 +46,4 @@ sha256 = ""
 bytes = 0
 license = "Apache-2.0 (upstream project; verify before use)"
 source = "veraPDF test suite (candidate for PDF/A conformance testing)"
-status = "unapproved"
-
-[[corpus]]
-id = "public-domain-pdfs"
-url = "https://example.invalid/public-domain/sample-pdfs.tar.zst"
-sha256 = ""
-bytes = 0
-license = "Public domain (verify per document before use)"
-source = "Assorted public-domain documents (candidate for render smoke tests)"
-status = "unapproved"
-
-[[corpus]]
-id = "fuzz-seed-archive"
-url = "https://example.invalid/pdfxi/fuzz-seeds.tar.zst"
-sha256 = ""
-bytes = 0
-license = "MIT OR Apache-2.0 (locally generated seeds)"
-source = "PDFXI-generated malformed-PDF seeds (candidate for fuzz campaigns)"
 status = "unapproved"

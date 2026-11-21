@@ -44,6 +44,13 @@
 //! be recreated on any host with an env-gated example, so no binary blobs need
 //! to be committed by hand (see that module for the exact command).
 //!
+//! # External corpus
+//!
+//! [`external_corpus`] parses the checksum-pinned descriptors in `corpus/`,
+//! fetches approved entries into an out-of-tree cache with a bounded, verified
+//! download, and smoke-checks cached files with the real core parser. Fast
+//! tests never use the network (see that module for the exact commands).
+//!
 //! # Performance budgets
 //!
 //! [`budget`] parses the documented budget descriptor and scales the tracked
@@ -55,6 +62,7 @@
 pub mod authoring;
 pub mod bench;
 pub mod budget;
+pub mod external_corpus;
 pub mod fixtures;
 pub mod fuzz;
 pub mod golden;

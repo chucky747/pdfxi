@@ -7,7 +7,7 @@
                  "crates/pdfxi-testkit/**",
                  "orchestration/feature-updates/T-0051.toml"
              ],
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0024"
                    ],

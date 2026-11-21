@@ -9,6 +9,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+thiserror = { workspace = true }
 # The fuzz entry points in `src/fuzz.rs` are plain library functions that call
 # the real parsers, filters, form loaders, and crypto primitives. They must be
 # reachable from the `fuzz_smoke` example and from integration tests, so these

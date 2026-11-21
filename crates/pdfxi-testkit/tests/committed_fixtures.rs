@@ -336,43 +336,36 @@ fn total_corpus_size_is_within_budget() {
 }
 
 #[test]
-fn corpus_manifest_triggers_no_downloads() {
-    // The external-corpus descriptors are documentation only for M1. A fetch
-    // tool must refuse them because none carries a verified digest. This keeps
+fn corpus_manifest_is_fail_closed() {
+    // External-corpus descriptors are either fully pinned and fetchable, or
+    // documentation only. An entry with a partial digest, an unapproved status,
+    // or a placeholder URL must stay unfetchable. This keeps
     // `cargo test -p pdfxi-testkit` network-free and fail-closed.
-    let source = fs::read_to_string(workspace_root().join("corpus/manifest.toml"))
-        .expect("corpus/manifest.toml exists");
-    let mut in_corpus = false;
-    let mut descriptors = 0usize;
-    for raw in source.lines() {
-        let line = raw.trim();
-        if line.starts_with('#') || line.is_empty() {
-            continue;
-        }
-        if line == "[[corpus]]" {
-            in_corpus = true;
-            descriptors += 1;
-            continue;
-        }
-        if line.starts_with('[') {
-            in_corpus = false;
-            continue;
-        }
-        if in_corpus && line.starts_with("sha256") {
-            let value = line
-                .split_once('=')
-                .map(|(_, v)| unquote(v))
-                .unwrap_or_default();
+    let entries =
+        pdfxi_testkit::external_corpus::load_manifest().expect("corpus/manifest.toml parses");
+    assert!(
+        !entries.is_empty(),
+        "expected at least one corpus descriptor"
+    );
+    for entry in entries {
+        if entry.is_pinned() {
+            assert_eq!(entry.sha256.len(), 64, "{}: pinned digest", entry.id);
+            assert!(entry.bytes > 0, "{}: pinned size", entry.id);
             assert!(
-                value.is_empty(),
-                "corpus descriptor has a fetch-ready digest; downloads are disabled for M1"
+                entry.url.starts_with("https://") && !entry.url.contains("example.invalid"),
+                "{}: pinned URL must resolve",
+                entry.id
             );
+        } else {
+            assert!(
+                entry.sha256.is_empty(),
+                "{}: unpinned digest must be empty",
+                entry.id
+            );
+            assert_eq!(entry.bytes, 0, "{}: unpinned size must be zero", entry.id);
+            assert_eq!(entry.status, "unapproved", "{}: unpinned status", entry.id);
         }
     }
-    assert!(
-        descriptors > 0,
-        "expected at least one documented corpus descriptor"
-    );
 }
 
 /// The generated fuzz seeds are part of the smoke corpus. Verify each listed
