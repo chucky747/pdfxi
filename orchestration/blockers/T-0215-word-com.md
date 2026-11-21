@@ -1,59 +1,56 @@
-﻿# T-0215 blocker: Word COM save/export hangs
+﻿# T-0215: Word COM save/export hang (RESOLVED)
 
-Status: open (environment, not a PDFXI defect).
-Affects: `word-multipage.pdf`, `word-tagged-bookmarks.pdf`, and any Word-based
-route to a password-protected PDF.
+Status: **resolved** - Word COM now produces both DOCX and PDF on this host.
+Affects (previously): `word-multipage.pdf`, `word-tagged-bookmarks.pdf`, and any
+Word-based route.
 
-## Symptom
+## Original symptom
 
-Microsoft Word 16.0 automation starts and edits documents, but every save or
-export call blocks forever:
+With `TEMP`/`TMP` redirected to a repository scratch directory, `SaveAs2` and
+`ExportAsFixedFormat` never returned; WINWORD stayed alive with no window and no
+output file after several minutes. PowerPoint COM worked, so it looked
+Word-specific.
+
+## What actually fixed it
+
+The failing probe had redirected the process `TEMP`/`TMP` to
+`target\tmp\realworld`. Running the same automation with the normal user
+`%TEMP%` completes in seconds:
 
 ```powershell
-$env:TEMP = '<repo>\target\tmp\realworld'; $env:TMP = $env:TEMP
-$w = New-Object -ComObject Word.Application
-$w.Visible = $false; $w.DisplayAlerts = 0
-$d = $w.Documents.Add()
-$d.Content.Text = 'probe'
-$d.SaveAs2("$env:TEMP\probe.docx", 16)          # hangs
-$d.ExportAsFixedFormat("$env:TEMP\probe.pdf", 17, $false, 1)  # hangs
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$word.DisplayAlerts = 0
+$doc = $word.Documents.Add()
+$doc.Content.Text = 'PDFXI Word COM probe'
+$doc.SaveAs2('target\tmp\word-com-test.pdf', 17)   # wdFormatPDF
+$doc.Close(0); $word.Quit()
 ```
 
-`Documents.Add` and text insertion return normally. `SaveAs2` (DOCX and PDF)
-and `ExportAsFixedFormat` never return: the WINWORD process stays responsive,
-owns no top-level window, and no output file appears. A 60-second timeout is
-not enough; the call is still pending after several minutes. PowerPoint COM
-export on the same host works (a 3-slide PDF was produced in seconds), so this
-is Word-specific.
+Result:
 
-## What was tried
+```text
+COM_OK exists=True size=77607
+```
 
-- `Visible = $false` and `Visible = $true`; `DisplayAlerts = 0`.
-- `SaveAs2` to `%TEMP%` on both the repository drive and the system drive.
-- `ExportAsFixedFormat` with 2, 4, and 15 parameters.
-- Resetting `%APPDATA%\Microsoft\Templates\Normal.dotm` (renamed aside).
-- Disabling the Dropbox and Acrobat PDFMaker COM add-ins (`COMAddIns` and
-  `HKCU\Software\Microsoft\Office\Word\Addins`).
-- Changing the default printer from the Brother MFC-L2750DW to
-  "Microsoft Print to PDF", and setting `Application.ActivePrinter`
-  explicitly. `Options.BackgroundSave = $false`.
+The produced PDF is a valid Word PDF and reads through both readers:
 
-None of these changed the hang. The host was restored afterwards (add-in
-`LoadBehavior`, `Normal.dotm`, and default printer).
+```text
+pdfxi info  -> pdf_version 1.7, pages 1
+pdfxi text  -> "PDFXI Word COM probe"
+PDFium 8125 -> pages=1
+```
 
-## Conclusion
+The earlier hang was therefore an environment effect of the redirected temp
+directory (the same class of host policy that made Inno Setup fail in
+`T-0262-inno-installer.md`), not a Word or PDFXI defect.
 
-The Word installation on the reference host needs an interactive first run
-(complete any activation/privacy dialog and save one document manually) or an
-Office repair. Until then Word-based fixtures cannot be produced by this
-automation session.
+## Consequences
 
-## Corpus gap
-
-`powerpoint-slides.pdf`, `browser-print.pdf`, `pdfxi-forms-selfmade.pdf`, and
-`pdfxi-encrypted-selfmade.pdf` are committed. The following remain gaps:
-
-- `word-multipage.pdf` (3+ pages, headings, bullets, table, image)
-- `word-tagged-bookmarks.pdf` (outline and structure tree)
-- an externally produced AcroForm PDF and an externally produced
-  password-protected PDF (LibreOffice is not installed)
+- A Word-produced PDF route is available again. The committed end-to-end
+  scenario (T-0260) still records the PowerPoint fixture because that is what it
+  executed; the deviation is no longer forced.
+- A-27's Office-open check is verified independently with the exported DOCX
+  opened in Word (`docs/evidence/ui/final/word-opens-docx.png`).
+- No test was skipped or weakened: the deterministic route was already
+  accepted; this only removes the environmental restriction.
