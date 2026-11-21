@@ -1,5 +1,10 @@
 # PDFXI handoff - 2026-11-20
 
+> The `Current state` section below is the Phase 1 snapshot and is kept for
+> history. The live state is the last checkpoint section (currently
+> `T-0253B checkpoint`): 145 feature rows with 33 `verified`, HEAD moving with
+> each checkpoint.
+
 ## Current state
 
 - Repository: https://github.com/chucky747/pdfxi (public), branch `main`, no branches.
@@ -292,3 +297,70 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
   on purpose); citations are text-only, not coordinate-based; the pending
   harness reasons for connect/ask/stop/disconnect are stale and can be promoted
   with a `status`/`active_rail` proof once a headless seam exists.
+
+### T-0253B checkpoint (2026-11-20, assistant document grounding)
+
+- **Commit:** `feat(app): ground the assistant with a fenced document excerpt
+  [T-0253]`, a direct child of `35e721c` (T-0253A). Linear history, not pushed,
+  no amend/rebase. HEAD after = that commit (`git log -1 --oneline`).
+- **Task state:** T-0253 is `verified`; its claim is released. T-0270 stays
+  `verified` - its diagnostic probe is deleted from the tree and the captured
+  probe output lives in `target/tmp/t0253-visibility.txt`, summarised in
+  `orchestration/blockers/T-0253-grounding.md`. T-0245 (signature UI, E-signed
+  badge, request-signature tracker) is the next app task.
+- **ADR 0013 (accepted):** assistant grounding does not use OpenCode's
+  client-MCP tool route. Live on OpenCode 2.3.2 with `opencode-go/hy4-flash-free`
+  the attach completes and the service lists all five tools, but the model never
+  receives their schemas (`tool_names=[]`, `tool_calls=[]`), with prefixed
+  allows, unprefixed allows, attach-before-session and a second prompt. The app
+  therefore sends a bounded, fenced prompt excerpt: `DocumentSnapshot` plus
+  `prompt_excerpt(24_000)` built on the UI thread at Ask time, an
+  untrusted-document instruction, an `<untrusted-document-text>` fence with a
+  neutralised terminator, the included page range and a truncation marker. The
+  session stays locked deny-all with an exact read-back and no MCP, shell, file,
+  network or edit tool wired. `BudgetedTools` and the MCP attach stay library
+  capabilities in `pdfxi-assistant` that the app does not call.
+- **Matrix:** `cargo xtask features verify` reports `FEATURES OK: 145 rows,
+  33 verified`. `cargo xtask features apply --clean --task T-0253` merged 0
+  `[[feature]]` rows because the fragment's `feature_rows` list is empty; the
+  fragment carries the decision, tests and captures, and the integrator promoted
+  **SEC-013** to `verified` directly against the ADR 0013 design (locked session
+  plus bounded fenced excerpt - never active pdfxi tools). No other row changed
+  (row-by-row diff: only SEC-013).
+- **Integrator gates** (`target/integration`, `PDFIUM_PATH` set): `cargo fmt
+  --all --check` EXIT=0; `cargo clippy --workspace --all-targets --all-features
+  -- -D warnings` EXIT=0; `cargo test -p pdfxi-app --features ui,pdfium` EXIT=0
+  with **537 lib + 24 harness, 0 failed**; `RUSTDOCFLAGS=-D warnings cargo doc
+  -p pdfxi-app --no-deps` EXIT=0; `cargo build --release -p pdfxi-app --bin
+  pdfxi-ui --features ui,pdfium` EXIT=0.
+- **`cargo xtask verify` is red at this checkpoint for an environment reason, not
+  code:** the workspace suites and the app/PDFium suites pass, then
+  `cargo test -p pdfxi-assistant --doc` exits 101 immediately after "all
+  doctests ran" - the host blocks executing the merged doctest binary from the
+  default `%TEMP%` (the documented `TEMP`/`TMP` restriction in the project
+  memory). That crate was not touched by this checkpoint. The T-0253B commit is
+  therefore made on the green app gates that the orchestrator also ran
+  independently; re-run `cargo xtask verify` with `TEMP`/`TMP` under
+  `target/tmp` at quiescence.
+- **`cargo deny check`:** not re-run here for this checkpoint (no dependency,
+  `Cargo.lock` or `Cargo.toml` change; green at `35e721c`).
+- **Captures:** the four `docs/evidence/ui/t0253-assistant-{light,dark}-{windows,macos}.png`
+  were retaken with the B2 presets against the local OpenCode 2.3.2 service and
+  `opencode-go/hy4-flash-free`, and reviewed by the orchestrator. All four are
+  1920x1200 and 161-182 KB; light/macos shows Page 1 and Page 2 citation chips.
+  The grounded proof is the page-1 sentence "amber compass lantern", which exists
+  only in the fixture.
+- **What landed:** `assistant_tools.rs` (snapshot, page text, search, selection,
+  outline, fenced 24K excerpt with a neutralised terminator), the locked-session
+  turn in `assistant_chat.rs` (version gate, deny-all ruleset, exact read-back,
+  session reuse, summarize and key-insights presets), a locked-session stub in
+  `assistant_stub.rs`, command and help text updates, and the harness coverage in
+  `tests/ui_controls.rs`.
+- **Docs:** `docs/decisions/0013-assistant-document-grounding-fallback.md`,
+  `docs/evidence/ui/T-0253.md` (Round B section), and the privacy/security pages
+  now state that the question plus a bounded excerpt go to the local service and
+  nothing else.
+- **Limits:** the excerpt is 24K chars, so very large documents are partially
+  grounded and the prompt says which pages were included; there is no on-demand
+  page fetch. If a later OpenCode build exposes client-MCP tools to the model,
+  revisit ADR 0013.

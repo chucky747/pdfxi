@@ -9,11 +9,13 @@
 //! a mutating method directly: [`AppCommand::AssistantConnect`] (probe),
 //! [`AppCommand::AssistantAsk`], [`AppCommand::AssistantStop`],
 //! [`AppCommand::AssistantDisconnect`], [`AppCommand::AssistantSelectModel`]
-//! (carries the `provider/model` label), [`AppCommand::AssistantPair`] and
-//! [`AppCommand::AssistantCitation`] (a one-based page cited in an answer), with
-//! the stable labels `assistant-connect`, `assistant-ask`, `assistant-stop`,
-//! `assistant-disconnect`, `assistant-select-model`, `assistant-pair` and
-//! `assistant-citation`.
+//! (carries the `provider/model` label), [`AppCommand::AssistantPair`],
+//! [`AppCommand::AssistantCitation`] (a one-based page cited in an answer) and
+//! the two grounded presets [`AppCommand::AssistantSummarize`] and
+//! [`AppCommand::AssistantKeyInsights`], with the stable labels
+//! `assistant-connect`, `assistant-ask`, `assistant-stop`,
+//! `assistant-disconnect`, `assistant-select-model`, `assistant-pair`,
+//! `assistant-citation`, `assistant-summarize` and `assistant-key-insights`.
 //!
 //! `tests/ui_controls.rs` currently records the assistant variants in
 //! `PENDING_COVERAGE` with a per-variant reason, not in `all_commands()` or
@@ -165,6 +167,10 @@ pub enum AppCommand {
     AssistantPair,
     /// Navigate the active document to a one-based page cited in an answer.
     AssistantCitation(u32),
+    /// Ask the connected assistant to summarize the open document in one sentence.
+    AssistantSummarize,
+    /// Ask the connected assistant for short bullets of the open document's key insights.
+    AssistantKeyInsights,
     /// Show or hide the right tools panel.
     ToggleTools,
     /// Toggle the page-thumbnail grid/list layout.
@@ -404,6 +410,8 @@ impl AppCommand {
             Self::AssistantSelectModel(_) => "assistant-select-model",
             Self::AssistantPair => "assistant-pair",
             Self::AssistantCitation(_) => "assistant-citation",
+            Self::AssistantSummarize => "assistant-summarize",
+            Self::AssistantKeyInsights => "assistant-key-insights",
             Self::ToggleTools => "toggle-tools",
             Self::ToggleGrid => "toggle-grid",
             Self::ToggleFullscreen => "toggle-fullscreen",
@@ -581,6 +589,14 @@ impl crate::ui::PdfxiApp {
             AppCommand::AssistantSelectModel(label) => self.select_assistant_model(label),
             AppCommand::AssistantPair => self.start_assistant_pair(),
             AppCommand::AssistantCitation(page) => self.follow_assistant_citation(page),
+            AppCommand::AssistantSummarize => {
+                self.begin_assistant_preset("Summarize this document in one sentence.");
+            }
+            AppCommand::AssistantKeyInsights => {
+                self.begin_assistant_preset(
+                    "List the key insights in this document as short bullets.",
+                );
+            }
             AppCommand::ToggleTools => self.toggle_tools(),
             AppCommand::ToggleGrid => self.grid_view = !self.grid_view,
             AppCommand::ToggleFullscreen => {

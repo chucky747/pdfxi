@@ -593,6 +593,14 @@ const PENDING_COVERAGE: &[(&str, &str)] = &[
         "T-0253 assistant panel; citation chip navigation needs an open document and an answer; assistant_chat lib tests cover it",
     ),
     (
+        "AssistantSummarize",
+        "T-0253 assistant panel; preset sends a fixed prompt with the grounded excerpt; assistant_chat lib tests cover it",
+    ),
+    (
+        "AssistantKeyInsights",
+        "T-0253 assistant panel; preset sends a fixed prompt with the grounded excerpt; assistant_chat lib tests cover it",
+    ),
+    (
         "ToggleStar",
         "T-0221 library state; mutates persisted library state, needs an isolated library root",
     ),

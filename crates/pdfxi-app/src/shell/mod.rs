@@ -11,6 +11,7 @@ pub(crate) mod assistant_chat;
 pub(crate) mod assistant_connect;
 #[cfg(test)]
 pub(crate) mod assistant_stub;
+pub(crate) mod assistant_tools;
 
 pub mod bottom_bar;
 pub mod capabilities;

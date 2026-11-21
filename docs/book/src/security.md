@@ -20,7 +20,7 @@ implemented": the tests cited here run on real PDF bytes, not on mocks.
 | Sign and verify | **Sign** reports that it is not available | CMS/PKCS#7 over the byte range, independently verified | `SEC-005`, [T-0241](../../evidence/hardening/T-0241.md) |
 | Redaction marks | **Protect PDF** reports that it is not available | Text, annotation/form/link and image-pixel removal plus a verifier | `EDIT-013`, [T-0237](../../evidence/hardening/T-0237.md) |
 | Sanitize hidden information | Not available | Category-plan model over a real `Document` | `SEC-008`, `SEC-009` |
-| Assistant | Panel is present and inert | Locked OpenCode session client | `SEC-013`, [T-0254](../../evidence/hardening/T-0254.md) — see [Privacy and local data](privacy.md) |
+| Assistant | Live: asks about the open document; question plus bounded fenced excerpt sent only at Ask time | Locked OpenCode session client; excerpt grounding | `SEC-013`, [T-0254](../../evidence/hardening/T-0254.md), [ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md) — see [Privacy and local data](privacy.md) |
 
 The "not available" messages are the shell's honest placeholder
 (`crates/pdfxi-app/src/shell/commands.rs`); these commands report a status
@@ -291,9 +291,11 @@ has not landed. The redaction API above does not invoke the sanitizer; its own
   only script engine is the bounded JavaScript subset above. The CLI action
   executor is a staging-only adapter and mutates no document
   (`crates/pdfxi-cli/src/action.rs`).
-- **Assistant sessions are restricted to five read-only document tools.** See
+- **Assistant runs in a locked, deny-all session with no tool execution path.**
+  Grounding uses a bounded, fenced excerpt of the open document, not tool calls;
+  the client-MCP tool route is not used in this build. See
   [Privacy and local data](privacy.md) for the session ruleset, the version
-  gate, the text caps and the live hostile-document result.
+  gate, the excerpt cap and the live hostile-document result.
 
 ## Related pages
 

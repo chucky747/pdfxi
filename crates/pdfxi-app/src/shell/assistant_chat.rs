@@ -1,29 +1,45 @@
 //! Per-document assistant conversation, ask/stop flow and page citations
-//! (T-0253, Round A).
+//! (T-0253).
 //!
 //! The panel is the app half of ADR 0011. It owns nothing about HTTP: one turn
 //! is handed to a [`TurnRunner`], which by default calls the T-0251 client's
-//! session and `prompt`/`ask` routes on a worker thread. The UI thread only
-//! drains a channel and repaints, so a slow or cancelled turn never blocks a
-//! frame.
+//! locked-session and `prompt`/`ask` routes on a worker thread. The UI thread
+//! only drains a channel and repaints, so a slow or cancelled turn never blocks
+//! a frame.
 //!
-//! Round A never reads or sends document text. The prompt is exactly the
-//! question the user typed; citations are found in the answer text and only
-//! navigate the open document. The locked session, MCP attachment and
-//! `BudgetedTools` wrapper are Round B.
+//! A turn is grounded by sending a bounded, fenced excerpt of the document in
+//! the prompt (T-0253 fallback decision). The client-MCP route cannot expose
+//! document tools to the model in OpenCode 2.3.2, so the app does not attach a
+//! tool server at all:
+//!
+//! 1. [`PdfxiApp::begin_assistant_ask`] captures
+//!    [`super::assistant_tools::DocumentSnapshot`] on the UI thread and turns it
+//!    into `excerpt + "\n\nQuestion: " + question`;
+//! 2. the first turn creates the session with
+//!    [`pdfxi_assistant::Assistant::create_locked_session`], which checks the
+//!    service version, sends the deny-`*` ruleset and verifies the read-back;
+//! 3. only then is `/prompt` sent, with no tool available to the model.
+//!
+//! The locked session is the security boundary: the excerpt is untrusted data
+//! and the session has no shell, file or network tool. Nothing is sent before
+//! the user presses Ask; opening the panel only draws state.
+//!
+//! The snapshot is captured on the UI thread per turn. A document change resets
+//! the conversation and cancels the turn.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
 
 use pdfxi_assistant::{
-    Assistant, AssistantError, CancelFlag, ModelRef, ServiceEndpoint, SessionRequest,
+    Assistant, AssistantError, CancelFlag, LockedSession, ModelRef, ServiceEndpoint, SessionRequest,
 };
 
 use crate::design::Palette;
 use crate::ui::{AppCommand, PdfxiApp};
 
 use super::assistant_connect::state_color;
+use super::assistant_tools::MAX_EXCERPT_CHARS;
 use super::capabilities::Capability;
 
 /// Hard cap on a prompt typed into the ask box, in characters.
@@ -88,23 +104,23 @@ impl ChatMessage {
 }
 
 /// One turn handed to a [`TurnRunner`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct TurnRequest {
-    /// Existing session for this conversation, when one was created.
-    pub(crate) session: Option<String>,
+    /// Verified locked session for this conversation, when one was created.
+    pub(crate) session: Option<LockedSession>,
     /// Model the existing session was last set to.
     pub(crate) session_model: Option<ModelRef>,
     /// Model selected in the connection screen.
     pub(crate) model: ModelRef,
-    /// The user's question. Round A sends no document text.
+    /// The bounded document excerpt followed by `Question: <question>`.
     pub(crate) prompt: String,
 }
 
 /// A completed turn.
 #[derive(Debug, Clone)]
 pub(crate) struct TurnOutcome {
-    /// Session the answer belongs to.
-    pub(crate) session: String,
+    /// Verified locked session the answer belongs to.
+    pub(crate) session: LockedSession,
     /// Model used for the turn.
     pub(crate) model: ModelRef,
     /// Answer text, reasoning excluded by the T-0251 client.
@@ -126,11 +142,12 @@ pub(crate) trait TurnRunner: Send + Sync {
     ) -> Result<TurnOutcome, AssistantError>;
 }
 
-/// The shipped runner: one T-0251 session per conversation, then `ask`.
+/// The shipped runner: one locked session per conversation, then `ask`.
 ///
-/// Round A creates a plain session because the locked-session constructor is
-/// deliberately deferred to Round B. No document text and no MCP server are
-/// attached, so a document cannot drive a tool call. The panel says so.
+/// The session is created with [`Assistant::create_locked_session`] (version
+/// gate, deny-all ruleset, read-back verification) and no tool server is
+/// attached, so the model can only read the excerpt in the prompt.
+#[derive(Default)]
 pub(crate) struct ServiceTurnRunner;
 
 impl TurnRunner for ServiceTurnRunner {
@@ -141,12 +158,12 @@ impl TurnRunner for ServiceTurnRunner {
         cancel: &CancelFlag,
     ) -> Result<TurnOutcome, AssistantError> {
         let assistant = Assistant::connect(endpoint.clone());
-        let session = match request.session.clone() {
-            Some(id) => {
+        let locked = match request.session.clone() {
+            Some(locked) => {
                 if request.session_model.as_ref() != Some(&request.model) {
-                    assistant.set_model(&id, &request.model, cancel)?;
+                    assistant.set_model(locked.id(), &request.model, cancel)?;
                 }
-                id
+                locked
             }
             None => {
                 let create = SessionRequest::new(
@@ -154,14 +171,16 @@ impl TurnRunner for ServiceTurnRunner {
                     request.model.clone(),
                     std::env::temp_dir(),
                 )?;
-                assistant.create_session(&create, cancel)?.id
+                // Version gate, deny-all ruleset and read-back verification all
+                // happen inside this call; a failure returns before any prompt.
+                assistant.create_locked_session(&create, cancel)?
             }
         };
-        let answer = assistant.ask(&session, &request.prompt, cancel)?;
+        let answer = assistant.ask(locked.id(), &request.prompt, cancel);
         Ok(TurnOutcome {
-            session,
+            session: locked,
             model: request.model,
-            answer: answer.text,
+            answer: answer?.text,
         })
     }
 }
@@ -180,7 +199,7 @@ pub(crate) struct AssistantChat {
     input: String,
     state: ChatState,
     job: Option<ChatJob>,
-    session: Option<String>,
+    locked: Option<LockedSession>,
     session_model: Option<ModelRef>,
     runner: Arc<dyn TurnRunner>,
     error: Option<String>,
@@ -202,7 +221,7 @@ impl Default for AssistantChat {
             input: String::new(),
             state: ChatState::Idle,
             job: None,
-            session: None,
+            locked: None,
             session_model: None,
             runner: Arc::new(ServiceTurnRunner),
             error: None,
@@ -276,7 +295,7 @@ impl AssistantChat {
         self.messages.clear();
         self.input.clear();
         self.state = ChatState::Idle;
-        self.session = None;
+        self.locked = None;
         self.session_model = None;
         self.error = None;
         self.focus_input = false;
@@ -285,24 +304,27 @@ impl AssistantChat {
     /// Send the typed question on a worker thread.
     ///
     /// Returns `false` for an empty question or a turn already in flight, so the
-    /// Ask control can stay disabled instead of sending a duplicate.
+    /// Ask control can stay disabled instead of sending a duplicate. `prompt` is
+    /// the complete turn text (the fenced document excerpt followed by
+    /// `Question: <question>`); the panel message keeps only the typed question.
     pub(crate) fn begin(
         &mut self,
         endpoint: ServiceEndpoint,
         model: ModelRef,
         document: Option<crate::TabId>,
+        prompt: String,
     ) -> bool {
-        let prompt = self.input.trim().to_owned();
-        if prompt.is_empty() || self.is_thinking() {
+        let question = self.input.trim().to_owned();
+        if question.is_empty() || self.is_thinking() {
             return false;
         }
         self.sync_document(document);
         self.input.clear();
         self.error = None;
         self.focus_input = false;
-        self.messages.push(ChatMessage::question(prompt.clone()));
+        self.messages.push(ChatMessage::question(question));
         let request = TurnRequest {
-            session: self.session.clone(),
+            session: self.locked.clone(),
             session_model: self.session_model.clone(),
             model,
             prompt,
@@ -344,15 +366,18 @@ impl AssistantChat {
         };
         match job.receiver.try_recv() {
             Ok(Ok(outcome)) => {
+                let (session, model) = (outcome.session, outcome.model);
+                job.cancel.cancel();
                 self.job = None;
-                self.session = Some(outcome.session);
-                self.session_model = Some(outcome.model);
+                self.locked = Some(session);
+                self.session_model = Some(model);
                 self.messages.push(ChatMessage::answer(outcome.answer));
                 self.state = ChatState::Idle;
                 self.focus_input = true;
                 true
             }
             Ok(Err(error)) => {
+                job.cancel.cancel();
                 self.job = None;
                 self.state = ChatState::Idle;
                 if !error.is_cancelled() {
@@ -362,6 +387,7 @@ impl AssistantChat {
             }
             Err(TryRecvError::Empty) => false,
             Err(TryRecvError::Disconnected) => {
+                job.cancel.cancel();
                 self.job = None;
                 self.state = ChatState::Idle;
                 self.error = Some("the assistant turn ended unexpectedly".to_owned());
@@ -379,7 +405,7 @@ impl AssistantChat {
     /// The current session id, for tests and status.
     #[cfg(test)]
     pub(crate) fn session(&self) -> Option<&str> {
-        self.session.as_deref()
+        self.locked.as_ref().map(LockedSession::id)
     }
 }
 
@@ -539,6 +565,10 @@ impl PdfxiApp {
         ui.add_space(6.0);
 
         let thinking = self.assistant_chat.is_thinking();
+        // Presets are document-grounded: they stay disabled until there is a
+        // document to read, a usable service to answer and no turn in flight.
+        let presets_enabled =
+            self.state.active_tab_id().is_some() && self.assistant.is_usable() && !thinking;
         let page_count = self.state.active_tab().map_or(0, |tab| tab.page_count());
         // The composer is pinned to the bottom of the panel and sized from the
         // widgets it actually draws, so the growing message list can never push
@@ -562,11 +592,28 @@ impl PdfxiApp {
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(
-                        "Only your question is sent; this build sends no document text.",
+                        "When you ask, your question and a bounded excerpt of this document's \
+                         text are sent to the local OpenCode service. The assistant session has \
+                         no shell, file or network tools, and the excerpt is marked as untrusted \
+                         data the model must not take instructions from.",
                     )
                     .size(9.0)
                     .color(palette.text_muted),
                 );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(presets_enabled, egui::Button::new("Summarize").small())
+                        .clicked()
+                    {
+                        self.dispatch(AppCommand::AssistantSummarize, Some(ui.ctx()));
+                    }
+                    if ui
+                        .add_enabled(presets_enabled, egui::Button::new("Key insights").small())
+                        .clicked()
+                    {
+                        self.dispatch(AppCommand::AssistantKeyInsights, Some(ui.ctx()));
+                    }
+                });
                 let focus = self.assistant_chat.take_focus_input();
                 let mut input = self.assistant_chat.take_input();
                 let response = ui.add(
@@ -684,6 +731,9 @@ impl PdfxiApp {
     }
 
     /// Send the typed question; no-op without a usable service or a model label.
+    ///
+    /// The prompt is `excerpt + "\n\nQuestion: <question>"`, built only here, so
+    /// nothing about the document leaves the app before the user presses Ask.
     pub(crate) fn begin_assistant_ask(&mut self) -> bool {
         if !self.assistant.is_usable() {
             self.status = "Connect to OpenCode before asking".to_owned();
@@ -699,12 +749,36 @@ impl PdfxiApp {
             return false;
         };
         let document = self.state.active_tab_id();
-        if self.assistant_chat.begin(endpoint, model, document) {
+        // Capture on the UI thread, then fence the excerpt for the prompt. The
+        // session itself receives no tools; the excerpt is untrusted data.
+        let question = self.assistant_chat.input().trim().to_owned();
+        let snapshot = self.assistant_document_snapshot();
+        let prompt = format!(
+            "{}\n\nQuestion: {question}",
+            snapshot.prompt_excerpt(MAX_EXCERPT_CHARS)
+        );
+        if self.assistant_chat.begin(endpoint, model, document, prompt) {
             self.status = "Asking OpenCode".to_owned();
             true
         } else {
             false
         }
+    }
+
+    /// Fill the ask box with a grounded preset and send it through the ask path.
+    ///
+    /// Both presets are about the open document, so they stay inert without one
+    /// instead of sending an empty excerpt. Everything else — the service gate,
+    /// the locked session, the fenced excerpt — is the normal
+    /// [`Self::begin_assistant_ask`] path; this helper only supplies the text and
+    /// the document guard.
+    pub(crate) fn begin_assistant_preset(&mut self, question: &str) -> bool {
+        if self.state.active_tab_id().is_none() {
+            self.status = "Open a document before using an assistant preset".to_owned();
+            return false;
+        }
+        self.assistant_chat.set_input(question);
+        self.begin_assistant_ask()
     }
 
     /// Cancel the running turn.
@@ -840,6 +914,8 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use pdfxi_document::DocumentSession;
+
     use crate::ui::shell::assistant_stub::{INFO, PASSWORD, Stub};
 
     /// Connect a fresh app to the stub through the real explicit-endpoint probe.
@@ -864,10 +940,20 @@ mod tests {
         app
     }
 
+    /// Open the real two-page fixture in `app` under a real session.
+    fn open_fixture(app: &mut PdfxiApp) {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/realworld/microsoft-excel-2019-sample.pdf");
+        let id = app.state.open_tab("microsoft-excel-2019-sample.pdf");
+        app.sessions
+            .insert(id, DocumentSession::open(&path).expect("the fixture opens"));
+        app.finish_new_tab(id);
+    }
+
     /// Poll the chat until an answer or an error replaces the question.
     fn wait_for_answer(app: &mut PdfxiApp) {
         let context = egui::Context::default();
-        for _ in 0..1_500 {
+        for _ in 0..2_000 {
             app.poll_assistant_chat(&context);
             if app.assistant_chat.error().is_some() {
                 panic!(
@@ -886,6 +972,13 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         panic!("the assistant turn did not finish");
+    }
+
+    fn request_paths(stub: &Stub) -> Vec<String> {
+        stub.requests()
+            .into_iter()
+            .map(|request| request.path)
+            .collect()
     }
 
     #[test]
@@ -911,12 +1004,14 @@ mod tests {
     }
 
     #[test]
-    fn ask_sends_only_after_the_click_and_never_document_text() {
+    fn ask_sends_the_excerpt_and_question_only_after_the_click() {
         let stub = Stub::start(INFO);
         let mut app = connected_app(&stub);
+        open_fixture(&mut app);
         app.dispatch(AppCommand::AiAssistant, None);
         stub.clear_requests();
-        app.assistant_chat.set_input("What is on page 2?");
+        app.assistant_chat
+            .set_input("What is the verification sentence on page 1?");
 
         assert!(stub.requests().is_empty(), "typing must send nothing");
         app.begin_assistant_ask();
@@ -943,8 +1038,19 @@ mod tests {
             .iter()
             .map(|request| request.path.as_str())
             .collect();
-        assert_eq!(requests[0].method, "POST");
-        assert_eq!(paths[0], "/api/session");
+        // The locked path checks the service version before it creates a
+        // session, then reads the ruleset back before any prompt is sent.
+        assert_eq!(paths[0], "/api/info", "paths: {paths:?}");
+        assert!(
+            paths.contains(&"/api/session"),
+            "the conversation must create a session: {paths:?}"
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.method == "GET" && request.path == "/api/session/ses_test1"),
+            "the ruleset must be read back: {paths:?}"
+        );
         assert!(
             paths
                 .iter()
@@ -957,15 +1063,40 @@ mod tests {
                 .any(|path| path.starts_with("/api/session/ses_test1/message")),
             "the answer is polled from the message route: {paths:?}"
         );
+        assert!(
+            !paths.iter().any(|path| path.contains("mcp")),
+            "no tool server is attached any more: {paths:?}"
+        );
+
         let prompt = requests
             .iter()
             .find(|request| request.path.ends_with("/prompt"))
             .expect("a prompt request");
-        assert_eq!(
-            prompt.body, r#"{"text":"What is on page 2?"}"#,
-            "Round A sends the typed question and no document text"
+        assert!(
+            prompt.body.contains("amber compass lantern"),
+            "the prompt must carry the real page 1 text: {:?}",
+            prompt.body
         );
-        assert!(!prompt.body.contains("test.pdf"));
+        assert_eq!(
+            prompt.body.matches("<untrusted-document-text").count(),
+            1,
+            "one open fence: {:?}",
+            prompt.body
+        );
+        assert_eq!(
+            prompt.body.matches("</untrusted-document-text>").count(),
+            1,
+            "one close fence: {:?}",
+            prompt.body
+        );
+        assert!(
+            prompt
+                .body
+                .contains("Question: What is the verification sentence on page 1?"),
+            "the typed question follows the excerpt: {:?}",
+            prompt.body
+        );
+        assert!(prompt.body.contains("--- page 1 ---"));
         assert!(!prompt.body.contains("The relevant text"));
     }
 
@@ -1116,5 +1247,256 @@ mod tests {
         let third = app.state.open_tab("third.pdf");
         app.finish_new_tab(third);
         assert!(app.assistant_chat.messages().is_empty());
+    }
+
+    #[test]
+    fn the_session_is_created_locked_with_the_selected_model() {
+        let stub = Stub::start(INFO);
+        let mut app = connected_app(&stub);
+        app.assistant_chat.set_input("What is on page 2?");
+        app.begin_assistant_ask();
+        wait_for_answer(&mut app);
+
+        let create = stub
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/api/session")
+            .expect("a session create");
+        let body: serde_json::Value =
+            serde_json::from_str(&create.body).expect("the create body is JSON");
+
+        let permissions = body["permissions"]
+            .as_array()
+            .expect("the create body carries a ruleset");
+        assert_eq!(permissions.len(), 6);
+        assert_eq!(
+            permissions[0],
+            serde_json::json!({"action": "*", "resource": "*", "effect": "deny"}),
+            "the wildcard deny must come first"
+        );
+        let allowed: Vec<&str> = permissions[1..]
+            .iter()
+            .map(|rule| rule["action"].as_str().expect("an action"))
+            .collect();
+        assert_eq!(
+            allowed,
+            vec![
+                "pdfxi_document_info",
+                "pdfxi_page_text",
+                "pdfxi_search",
+                "pdfxi_selection",
+                "pdfxi_outline"
+            ]
+        );
+        assert!(
+            permissions[1..]
+                .iter()
+                .all(|rule| rule["resource"] == "*" && rule["effect"] == "allow")
+        );
+        assert_eq!(body["model"]["providerID"], "opencode-go");
+        assert_eq!(body["model"]["id"], "hy4-flash-free");
+    }
+
+    #[test]
+    fn ask_without_a_document_sends_an_honest_empty_excerpt() {
+        let stub = Stub::start(INFO);
+        let mut app = connected_app(&stub);
+        app.assistant_chat.set_input("What does this say?");
+
+        assert!(app.begin_assistant_ask());
+        wait_for_answer(&mut app);
+
+        let prompt = stub
+            .requests()
+            .into_iter()
+            .find(|request| request.path.ends_with("/prompt"))
+            .expect("a prompt request");
+        assert!(prompt.body.contains("No document is open."));
+        assert!(prompt.body.contains("[No document is open.]"));
+        assert!(prompt.body.contains("Question: What does this say?"));
+        assert_eq!(prompt.body.matches("</untrusted-document-text>").count(), 1);
+    }
+
+    #[test]
+    fn a_second_ask_reuses_the_locked_session() {
+        let stub = Stub::start(INFO);
+        let mut app = connected_app(&stub);
+
+        app.assistant_chat.set_input("What is on page 2?");
+        app.begin_assistant_ask();
+        wait_for_answer(&mut app);
+        let first_session = app.assistant_chat.session().map(str::to_owned);
+
+        app.assistant_chat.set_input("And page 3?");
+        app.begin_assistant_ask();
+        wait_for_answer(&mut app);
+
+        assert_eq!(app.assistant_chat.session(), first_session.as_deref());
+        let paths = request_paths(&stub);
+        assert_eq!(
+            paths.iter().filter(|path| *path == "/api/session").count(),
+            1,
+            "a second ask must not create another session: {paths:?}"
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| path.ends_with("/prompt"))
+                .count(),
+            2,
+            "both questions reach the session: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn a_model_change_is_posted_before_the_prompt() {
+        let stub = Stub::start(INFO);
+        let mut app = connected_app(&stub);
+
+        app.assistant_chat.set_input("What is on page 2?");
+        app.begin_assistant_ask();
+        wait_for_answer(&mut app);
+        assert_eq!(app.assistant_chat.session(), Some("ses_test1"));
+
+        assert!(
+            app.assistant
+                .select_model("opencode-go/deepseek-v4.1-flash"),
+            "the model list must offer the second model"
+        );
+        stub.clear_requests();
+        app.assistant_chat.set_input("Summarize page 1.");
+        app.begin_assistant_ask();
+        wait_for_answer(&mut app);
+
+        let requests = stub.requests();
+        let model_index = requests
+            .iter()
+            .position(|request| {
+                request.method == "POST" && request.path == "/api/session/ses_test1/model"
+            })
+            .expect("a model switch");
+        let prompt_index = requests
+            .iter()
+            .position(|request| request.path.ends_with("/prompt"))
+            .expect("a prompt");
+        assert!(
+            model_index < prompt_index,
+            "the model switch must precede the prompt: {requests:?}"
+        );
+        assert!(
+            requests[model_index].body.contains("deepseek-v4.1-flash"),
+            "the model body was {:?}",
+            requests[model_index].body
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.path == "/api/session")
+                .count(),
+            0,
+            "a model change must not create a new session"
+        );
+    }
+
+    #[test]
+    fn summarize_preset_goes_through_the_normal_ask_path() {
+        let stub = Stub::start(INFO);
+        let mut app = connected_app(&stub);
+        open_fixture(&mut app);
+        app.dispatch(AppCommand::AiAssistant, None);
+        stub.clear_requests();
+
+        app.dispatch(AppCommand::AssistantSummarize, None);
+
+        assert_eq!(
+            AppCommand::AssistantSummarize.label(),
+            "assistant-summarize"
+        );
+        assert!(app.assistant_chat.is_thinking());
+        let asked = app.assistant_chat.messages().first().expect("a question");
+        assert!(asked.is_question());
+        assert_eq!(asked.text(), "Summarize this document in one sentence.");
+
+        wait_for_answer(&mut app);
+        let prompt = stub
+            .requests()
+            .into_iter()
+            .find(|request| request.path.ends_with("/prompt"))
+            .expect("a prompt request");
+        assert!(
+            prompt
+                .body
+                .contains("Question: Summarize this document in one sentence."),
+            "the preset question must reach the prompt: {:?}",
+            prompt.body
+        );
+        assert!(
+            prompt.body.contains("amber compass lantern"),
+            "the preset must still carry the grounded excerpt: {:?}",
+            prompt.body
+        );
+    }
+
+    #[test]
+    fn key_insights_preset_goes_through_the_normal_ask_path() {
+        let stub = Stub::start(INFO);
+        let mut app = connected_app(&stub);
+        open_fixture(&mut app);
+        app.dispatch(AppCommand::AiAssistant, None);
+        stub.clear_requests();
+
+        app.dispatch(AppCommand::AssistantKeyInsights, None);
+
+        assert_eq!(
+            AppCommand::AssistantKeyInsights.label(),
+            "assistant-key-insights"
+        );
+        assert!(app.assistant_chat.is_thinking());
+        let asked = app.assistant_chat.messages().first().expect("a question");
+        assert!(asked.is_question());
+        assert_eq!(
+            asked.text(),
+            "List the key insights in this document as short bullets."
+        );
+
+        wait_for_answer(&mut app);
+        let prompt = stub
+            .requests()
+            .into_iter()
+            .find(|request| request.path.ends_with("/prompt"))
+            .expect("a prompt request");
+        assert!(
+            prompt
+                .body
+                .contains("Question: List the key insights in this document as short bullets."),
+            "the preset question must reach the prompt: {:?}",
+            prompt.body
+        );
+        assert!(
+            prompt.body.contains("amber compass lantern"),
+            "the preset must still carry the grounded excerpt: {:?}",
+            prompt.body
+        );
+    }
+
+    #[test]
+    fn a_preset_without_a_document_does_not_send() {
+        let stub = Stub::start(INFO);
+        let mut app = connected_app(&stub);
+        app.dispatch(AppCommand::AiAssistant, None);
+        stub.clear_requests();
+
+        app.dispatch(AppCommand::AssistantSummarize, None);
+        app.dispatch(AppCommand::AssistantKeyInsights, None);
+
+        assert!(!app.assistant_chat.is_thinking());
+        assert!(
+            app.assistant_chat.messages().is_empty(),
+            "a preset with no document must not enter the conversation"
+        );
+        assert!(
+            stub.requests().is_empty(),
+            "a preset with no document must not send anything"
+        );
     }
 }

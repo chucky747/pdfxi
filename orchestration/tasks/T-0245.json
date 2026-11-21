@@ -9,6 +9,7 @@
                    ],
     "owns":  [
                  "crates/pdfxi-app/src/**",
+        "crates/pdfxi-document/src/**",
                  "docs/evidence/ui/T-0245.md",
                  "orchestration/feature-updates/T-0245.toml"
              ],

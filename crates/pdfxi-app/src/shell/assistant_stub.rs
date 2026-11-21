@@ -1,9 +1,10 @@
 //! Loopback OpenCode stub shared by the assistant UI tests (T-0252/T-0253).
 //!
-//! The stub answers the metadata routes used by the connect probe and the
-//! session, prompt and message routes used by one assistant turn. It records
-//! every request (method, path, credential and body) so tests can prove what
-//! was and was not sent. It is compiled only for tests.
+//! The stub answers the metadata routes used by the connect probe, the locked
+//! session create/read-back used by T-0254, and the session, prompt and message
+//! routes used by every assistant turn. It records every request (method, path,
+//! credential and body) so tests can prove what was and was not sent. It is
+//! compiled only for tests.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -40,7 +41,7 @@ pub(crate) const MODELS: &str = r#"{"data":[
      "name":"DeepSeek V4.1 Flash","enabled":true,
      "limit":{"context":262144}}]}"#;
 
-/// The answer the stub returns for the first prompt of a session.
+/// The answer the stub returns for every prompt of a session.
 pub(crate) const ANSWER: &str = "The relevant text is on page 2.";
 
 /// One request received by the stub.
@@ -56,14 +57,16 @@ pub(crate) struct Recorded {
     pub(crate) body: String,
 }
 
-/// Per-session prompt state used to answer exactly one turn.
-#[derive(Debug, Clone, Copy, Default)]
+/// Per-session prompt state used to answer every turn.
+#[derive(Debug, Clone, Default)]
 struct SessionState {
     prompts: u32,
     created: u64,
+    /// Raw `permissions` array echoed from the create body.
+    permissions: String,
 }
 
-/// An in-process loopback stub for the connect probe and one assistant turn.
+/// An in-process loopback stub for the connect probe and assistant turns.
 pub(crate) struct Stub {
     /// Base URL, for example `http://127.0.0.1:12345`.
     pub(crate) url: String,
@@ -177,8 +180,27 @@ fn respond(
     }
     if request.method == "POST" && path == "/api/session" {
         let id = format!("ses_test{}", sessions.len() + 1);
-        sessions.push((id.clone(), SessionState::default()));
+        let permissions = extract_array(&request.body, "permissions").unwrap_or_default();
+        sessions.push((
+            id.clone(),
+            SessionState {
+                permissions,
+                ..SessionState::default()
+            },
+        ));
         return ("200 OK", format!(r#"{{"data":{{"id":"{id}"}}}}"#));
+    }
+    // Read-back for the locked-session check: echo the exact ruleset the
+    // create request sent. An app that widened the request or a service that
+    // dropped a rule would fail verification here.
+    if request.method == "POST" && path.ends_with("/model") {
+        let Some(id) = session_id(path, "/model") else {
+            return ("404 Not Found", String::new());
+        };
+        if !sessions.iter().any(|(session, _)| session == &id) {
+            return ("404 Not Found", String::new());
+        }
+        return ("204 No Content", String::new());
     }
     if request.method == "POST" && path.ends_with("/prompt") {
         let Some(id) = session_id(path, "/prompt") else {
@@ -206,12 +228,6 @@ fn respond(
         let Some((_, state)) = sessions.iter().find(|(session, _)| session == &id) else {
             return ("404 Not Found", String::new());
         };
-        if state.prompts != 1 {
-            // Only the first turn of a session completes. A second prompt has
-            // no idle item, which keeps an assistant turn visibly in flight for
-            // the stop and capture tests.
-            return ("200 OK", r#"{"data":[]}"#.to_owned());
-        }
         let created = state.created;
         return (
             "200 OK",
@@ -222,9 +238,30 @@ fn respond(
                      "content":[{{"type":"text","text":"{ANSWER}"}}],"finish":"stop"}},
                    {{"id":"msg_user1","type":"user","time":{{"created":{created}}},
                      "payload":{{"text":"prompt"}}}}]}}"#,
-                created + 2,
+                created + 1,
                 created + 1
             ),
+        );
+    }
+    // Read-back for the locked-session check: echo the exact ruleset the
+    // create request sent. An app that widened the request or a service that
+    // dropped a rule would fail verification here. This is after the message
+    // route so `/api/session/{id}/message?...` is not mistaken for an id.
+    if request.method == "GET" && path.starts_with("/api/session/") {
+        let Some(id) = session_id(path, "") else {
+            return ("404 Not Found", String::new());
+        };
+        let Some((_, state)) = sessions.iter().find(|(session, _)| session == &id) else {
+            return ("404 Not Found", String::new());
+        };
+        let permissions = if state.permissions.is_empty() {
+            "[]"
+        } else {
+            &state.permissions
+        };
+        return (
+            "200 OK",
+            format!(r#"{{"data":{{"id":"{id}","permissions":{permissions}}}}}"#),
         );
     }
     if request.method == "DELETE" && path.starts_with("/api/session/") {
@@ -239,6 +276,31 @@ fn session_id(path: &str, suffix: &str) -> Option<String> {
     let rest = path.strip_prefix("/api/session/")?;
     let id = rest.strip_suffix(suffix)?;
     (!id.is_empty() && !id.contains('/')).then(|| id.to_owned())
+}
+
+/// Extract the raw JSON array stored under `key` from a request body.
+///
+/// The permission ruleset is echoed back byte for byte, so a widened or
+/// reordered request is not silently normalized by the stub.
+fn extract_array(body: &str, key: &str) -> Option<String> {
+    let marker = format!("\"{key}\"");
+    let start = body.find(&marker)?;
+    let rest = &body[start + marker.len()..];
+    let open = rest.find('[')?;
+    let mut depth = 0usize;
+    for (offset, character) in rest[open..].char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(rest[open..open + offset + 1].to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Milliseconds since the Unix epoch, matching the service's message times.

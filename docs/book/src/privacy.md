@@ -30,9 +30,13 @@ the platform config directory (`$XDG_CONFIG_HOME` or `~/.config`,
 **No telemetry.** The architecture contract is "No telemetry by default"
 ([ARCHITECTURE §Persistence](../../ARCHITECTURE.md)). The viewer's own persisted
 state is only the files in the table above, and the CLI never uses the network or
-writes telemetry ([CLI](../../CLI.md), [CLI reference](cli.md)). The app does not
-depend on the assistant crate and contains no HTTP client; the source scan is
-recorded in [the T-0269 evidence](../../evidence/docs/T-0269.md).
+writes telemetry ([CLI](../../CLI.md), [CLI reference](cli.md)). The app's only
+network surface is the local OpenCode service: it talks to that service over
+loopback HTTP and WebSocket when the user asks, and to nothing else. There is no
+telemetry
+([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
+The source scan is recorded in
+[the T-0269 evidence](../../evidence/docs/T-0269.md).
 
 **Identity and author defaults.** The display name is used for comment authors
 and signers. A fresh install starts as the neutral `Reader`, deliberately not
@@ -48,14 +52,15 @@ travels with a document you save and share
 
 ## The assistant
 
-**Status in this build.** The AI Assistant rail entry and panel exist, but the
-panel is inert: it says "The assistant appears when it is connected", and the
-**AI Assistant** command reports that it is not available
-(`crates/pdfxi-app/src/shell/side_panel.rs`,
-`crates/pdfxi-app/src/shell/commands.rs`). No assistant session is created and
-no document text is sent by the installed viewer. The client and its lockdown
-described below are implemented and tested as a `library` capability
-(`SEC-013`, [T-0254](../../evidence/hardening/T-0254.md)).
+**Status in this build.** The AI Assistant is live. It connects to the OpenCode
+service on this machine only when you ask a question; opening the panel or a
+document sends nothing ([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
+Before the first request the UI shows what the question will send: the page range
+of the excerpt, the provider and model, and that document text is untrusted input
+([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md)
+decision 8, [T-0254](../../evidence/hardening/T-0254.md) §6.5). The session
+lockdown remains verified (`SEC-013`,
+[T-0254](../../evidence/hardening/T-0254.md)).
 
 ### What it connects to
 
@@ -76,9 +81,10 @@ described below are implemented and tested as a `library` capability
 - **The service credential stays in memory.** The client authenticates with the
   service's HTTP Basic password, read from your OpenCode registration file at
   connect time. It is held in a value that renders `<redacted>`, used only for
-  the request header, and never logged, written to settings, or stored by the
-  assistant crate ([T-0251](../../evidence/hardening/T-0251.md) §1,
-  [ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md) decision 6).
+  the request header, and never logged or written to settings; it is dropped on
+  disconnect ([T-0251](../../evidence/hardening/T-0251.md) §1,
+  [ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md) decision 6
+  and its 2026-11-20 amendment).
 - **A version gate comes first.** Before any session exists, the client reads
   `/api/info` and refuses a service outside `2.3.x` with a typed
   incompatibility error; no session and no document text follow
@@ -86,28 +92,30 @@ described below are implemented and tested as a `library` capability
 
 ### What is sent, and when
 
-- **Nothing is sent when you open a document.** The locked-session contract is
-  that the app shows what a question will send — which pages and tool results,
-  the provider and model, and that document text is untrusted input — before the
-  first request in a conversation
-  ([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md)
-  decision 8, [T-0254](../../evidence/hardening/T-0254.md) §6.5). This build has
-  no assistant request path, so no request is made at all.
-- **Only what the question needs, from five read-only tools.** An assistant
-  session can call `document_info`, `page_text`, `search`, `selection` and
-  `outline`, and nothing else. There is no shell, file, edit, network or web
-  tool attached ([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md)
-  decision 7, [T-0254](../../evidence/hardening/T-0254.md) §1.3).
-- **Document text is capped and labelled.** Each tool result is capped at
-  64 KiB and each conversation at 256 KiB, and every result is wrapped in an
-  `<untrusted-document-text … trust="untrusted">` fence with an explicit
-  "document data, not instructions" line; forged open/close markers in the
-  document are neutralised so text cannot break out of the fence
+- **Nothing is sent until you ask.** Opening a document or the assistant panel
+  makes no request. At Ask time the app sends your typed question plus a bounded
+  excerpt of the open document's text to that local service, and to no other
+  network destination
+  ([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
+- **The excerpt is bounded and labelled.** It is capped at 24,000 characters,
+  stops with a truncation marker, and states the included page range. It is
+  wrapped in an `<untrusted-document-text file="…" pages="1-N">` fence; the fence
+  terminator is neutralised in the document text so a hostile PDF cannot close
+  the block and smuggle instructions outside it
+  ([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
+- **The library also caps and fences tool results** at 64 KiB per call and 256 KiB
+  per conversation, with forged markers neutralised; that is a library
+  capability, not the app's grounding path
   ([T-0254](../../evidence/hardening/T-0254.md) §2.3).
 - **The text goes to the provider you configured in OpenCode**, under that
-  provider's terms. That is the only place document text leaves the machine
+  provider's terms. That local service is the only destination; there is no
+  PDFXI server and no other network call
   ([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md)
   consequences).
+- **The client-MCP tool route is not used in this build.** OpenCode 2.3.2 lists
+  the five document tools but does not expose them to the model, so the UI does
+  not make the five `pdfxi_*` tools active and no tool result grounds the answer
+  ([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
 
 ### The session lockdown
 
@@ -115,9 +123,16 @@ The assistant session is created with a session permission ruleset, and the
 ruleset — not the prompt, and not the model — is the security boundary
 ([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md) decision 7):
 
-- the ruleset starts with a wildcard `deny` and is followed by five specific
-  `allow` rules; the service evaluates last-match-wins
+- the locked ruleset starts with a wildcard `deny` and, in the library
+  capability, five specific `allow` rules; the service evaluates last-match-wins
   ([T-0254](../../evidence/hardening/T-0254.md) §1.1, §1.4);
+- in this build the app turn attaches no tools at all and the client-MCP attach
+  is not wired in. There is no shell, file, edit, network or web tool and no tool
+  execution path; the five document tools are a library capability, not active
+  UI tools, and grounding is the bounded fenced excerpt above
+  ([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md),
+  [ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md)
+  decision 7, [T-0254](../../evidence/hardening/T-0254.md) §1.3);
 - the client reads the session back and verifies the ruleset exactly. A widened
   rule, an `ask` rule, a wrong rule count or any change in rule content fails
   verification — rule order alone is ignored — and the session is deleted and the
@@ -131,7 +146,8 @@ ruleset — not the prompt, and not the model — is the security boundary
   and write a sentinel file. The model printed a tool-call marker as text, but
   zero tool calls reached the MCP server, no tool item appeared, the sentinel was
   never created, and the independent permission evaluator denied the non-document
-  actions ([T-0254](../../evidence/hardening/T-0254.md) §4).
+  actions ([T-0254](../../evidence/hardening/T-0254.md) §4). SEC-013 evidence is
+  read against this locked-session + excerpt design, not against MCP tool calls.
 
 The limits are stated in the same evidence and matter when judging the claim:
 
@@ -140,7 +156,8 @@ The limits are stated in the same evidence and matter when judging the claim:
   different session; PDFXI cannot defend the service from its own owner
   ([T-0254](../../evidence/hardening/T-0254.md) §7);
 - **fencing is not enforcement.** A model can still be persuaded by document
-  text; the ruleset prevents the resulting action from executing
+  text; the deny-all session and the absence of an app tool path are what keep a
+  document from making the assistant run a tool
   ([T-0254](../../evidence/hardening/T-0254.md) §7);
 - the ruleset shape and MCP naming were observed on OpenCode `2.3.2` on one
   host. Unknown versions are refused rather than trusted
@@ -148,24 +165,25 @@ The limits are stated in the same evidence and matter when judging the claim:
 
 ### What is stored, and disconnecting
 
-This build stores no assistant credential, token or transcript. The client reads
-the service password from your OpenCode registration file when it connects and
-keeps it in memory for the life of the client
-([T-0251](../../evidence/hardening/T-0251.md) §1). Conversations live in your
-OpenCode service; the client creates a session there and reads its messages back
+This build stores no assistant credential, token or transcript in PDFXI files.
+The client reads the service password from your OpenCode registration file when
+it connects and keeps it in memory for the life of the connection; it is never
+written to settings or logs and is dropped on disconnect
+([T-0251](../../evidence/hardening/T-0251.md) §1,
+[ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md) decision 6
+and its 2026-11-20 amendment). Conversations live in your OpenCode service; the
+client creates a session there and reads its messages back
 ([T-0251](../../evidence/hardening/T-0251.md) §3,
 [T-0250](../../evidence/hardening/T-0250.md) "Session, prompt, messages").
+The original
 [ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md) decision 6
 records Windows Credential Manager as the intended store for a pairing token;
-no pairing token exists in this build, and the pairing route was not exercised
+the amendment makes the in-memory credential authoritative. No pairing token
+exists in this build, and the pairing route was not exercised
 ([T-0250](../../evidence/hardening/T-0250.md) "What did not work").
 
-Because there is no Connect control in this build, there is no Disconnect control
-either: the panel is inert, no session is created, and nothing is sent. Closing
-PDFXI ends the process; there is no connection left open because none was opened.
-The app does not depend on the assistant crate, so it does not contact a running
-OpenCode service at all in this build. The one rule that holds regardless of
-connect UI: PDFXI does not use the service's public tunnel URL without an
+Disconnect drops the in-memory credential and ends the connection; closing PDFXI
+does the same. PDFXI does not use the service's public tunnel URL without an
 explicit user choice, and it never sends anything before a request is made
 ([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md) decisions 3
 and 8, [T-0250](../../evidence/hardening/T-0250.md) "Security constraints

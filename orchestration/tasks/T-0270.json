@@ -1,0 +1,15 @@
+{
+  "id": "T-0270",
+  "lane": "automation",
+  "title": "Assistant grounding diagnosis: client-MCP tool visibility",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": [],
+  "owns": [
+    "crates/pdfxi-assistant/src/**",
+    "crates/pdfxi-assistant/tests/**"
+  ],
+  "acceptance": "cargo test -p pdfxi-assistant; a temporary ignored probe reports whether the model calls the client-MCP tools under (a) unprefixed-name allows and (b) the current locked ruleset on a second prompt, with the McpReport and answer pasted; no production change without orchestrator approval",
+  "notes": "Diagnostic split out of T-0253 after attach-first failed to ground the answer. Evidence in orchestration/blockers/T-0253-grounding.md and target/tmp/t0253-visibility.txt: the client-MCP attach completes (initialize, tools/list, five tools) but tool_calls is empty and the model says no pdfxi tool exists. Result: prefixed allows, unprefixed allows, attach-before-session and a second prompt all fail; the service lists the client-MCP tools but does not expose them to the model in OpenCode 2.3.2. No production change; T-0253 adopts the bounded fenced excerpt (ADR 0013).",
+  "evidence": "orchestration/blockers/T-0253-grounding.md"
+}

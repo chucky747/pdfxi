@@ -2401,29 +2401,44 @@ docs = [
     "crates/pdfxi-assistant/src/client.rs",
     "crates/pdfxi-assistant/tests/service.rs",
     "crates/pdfxi-assistant/tests/lockdown_live.rs",
+    "crates/pdfxi-app/src/shell/assistant_tools.rs",
+    "crates/pdfxi-app/src/shell/assistant_chat.rs",
+    "docs/decisions/0013-assistant-document-grounding-fallback.md",
     "docs/evidence/hardening/T-0254.md",
+    "docs/evidence/ui/T-0253.md",
 ]
 domain = "Security"
-evidence = "docs/evidence/hardening/T-0254.md"
+evidence = "docs/evidence/ui/T-0253.md (Round B: real service on 2.3.2 with opencode-go/hy4-flash-free answered from the fixture's page-1 sentence; app suite 537 lib + 24 harness, 0 failed) and docs/evidence/hardening/T-0254.md (lockdown ruleset, version gate, ignored live hostility test)."
 id = "SEC-013"
 notes = """
-Session-scoped assistant lockdown and untrusted-document handling. The session
-ruleset is a wildcard deny followed by five read-only document allows, verified
-by exact read-back; create_locked_session refuses a service outside 2.3.x with
-IncompatibleVersion before any session exists. BudgetedTools caps per-call and
-per-conversation document text and fences it as untrusted data, with forged
-fence markers neutralized. Offline stub tests cover the ruleset, the version
-gate, and delete-on-mismatch; the ignored live test on 2.3.2 proves the deny
-matrix and that an injected document cannot run a non-document tool or write a
-sentinel file. Library only; the UI contract is in the evidence.
+Assistant tool lockdown and untrusted-document handling per ADR 0013. Every
+assistant turn creates a locked session: the client refuses a service outside
+2.3.x with IncompatibleVersion before POST /api/session, sends a wildcard deny
+ahead of the five read-only document allows, verifies the ruleset by exact
+read-back and deletes the session on any mismatch. The app wires no shell, file,
+network, edit or MCP tool, so no tool execution path exists in the turn.
+Grounding does not use the client-MCP tool route: on OpenCode 2.3.2 the attach
+completes and the service lists all five tools, but the model never receives
+their schemas (tool_names=[], tool_calls=[]), so the app sends a bounded, fenced
+prompt excerpt instead - a 24,000-character cap, an untrusted-document
+instruction, an <untrusted-document-text> fence whose forged terminator is
+neutralized, explicit included pages and a truncation marker. The excerpt is
+built only at Ask time; opening the panel or typing sends nothing. BudgetedTools
+and the MCP attach remain library capabilities in pdfxi-assistant that the app
+does not call.
 """
 priority = "P0"
-status = "library"
+status = "verified"
 tests = [
     "crates/pdfxi-assistant/tests/service.rs::locked_session_is_read_back_and_verified",
     "crates/pdfxi-assistant/tests/service.rs::locked_session_refuses_an_incompatible_service_before_creating_a_session",
     "crates/pdfxi-assistant/tests/service.rs::widened_read_back_deletes_the_session_and_fails_closed",
     "crates/pdfxi-assistant/tests/lockdown_live.rs::hostile_document_cannot_escape_the_five_read_only_tools",
+    "shell::assistant_tools::tests::a_hostile_terminator_cannot_escape_the_excerpt_fence",
+    "shell::assistant_tools::tests::the_excerpt_cap_truncates_mid_page_and_names_the_pages",
+    "shell::assistant_tools::tests::a_page_past_the_snapshot_cap_is_not_silently_included_in_the_excerpt",
+    "shell::assistant_chat::tests::the_session_is_created_locked_with_the_selected_model",
+    "shell::assistant_chat::tests::ask_sends_the_excerpt_and_question_only_after_the_click",
 ]
 title = "Assistant tool lockdown and hostile-document hardening"
 
