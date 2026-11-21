@@ -33,6 +33,10 @@ public interface into existence.
 - Report evidence, not claims. Paste command output, test names, file paths, and
   benchmark numbers.
 - Keep status updates short. The board is the durable state, not the chat.
+- **Subagent model restriction.** Dispatch subagents only with
+  `opencode-go/hy4-flash-free` or `opencode-go/deepseek-v4.1-flash`. Never
+  dispatch a Claude model as a subagent, and never omit the model on a dispatch
+  where the runtime could pick one.
 
 ## 3. One workspace, no checkouts
 
