@@ -603,6 +603,8 @@ pub struct PdfxiApp {
     forms: shell::forms::FormsUiState,
     /// Certificate signing card and signature verification readout.
     signing: shell::signing::SigningUiState,
+    /// Fill & Sign typed/drawn/image signature placement card.
+    signature_place: shell::signature_place::SignaturePlaceState,
     /// Pre-print panel, progress and worker state.
     print_ui: shell::print_dialog::PrintUiState,
     /// Revision of the active session bound to the renderer.
@@ -1819,6 +1821,7 @@ impl eframe::App for PdfxiApp {
         self.note_draft_ui(ctx);
         self.forms_panel_ui(ctx);
         self.signing_dialog_ui(ctx);
+        self.place_signature_dialog_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);

@@ -11,14 +11,17 @@ impl PdfxiApp {
     ///
     /// A capability alone is not enough: Fill & Sign is listed only when the
     /// active document actually carries an AcroForm, so the panel never offers
-    /// a tool that could only report "no form fields". Every other row is
-    /// filtered by capability and by the search query.
+    /// a tool that could only report "no form fields". Place signature needs an
+    /// open document for the same reason: placement edits the active page.
+    /// Every other row is filtered by capability and by the search query.
     #[must_use]
     pub fn tools_panel_rows(&self) -> Vec<ToolRow> {
         let forms_available = self.forms_available();
+        let document_open = self.state.active_tab_id().is_some();
         tool_rows_for(self.capabilities, &self.tools_search)
             .into_iter()
             .filter(|row| forms_available || row.command.label() != "fill-and-sign")
+            .filter(|row| document_open || row.command.label() != "place-signature")
             .collect()
     }
 

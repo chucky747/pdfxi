@@ -314,6 +314,12 @@ pub fn tool_rows() -> Vec<ToolRow> {
             command: AppCommand::FillAndSign,
         },
         ToolRow {
+            label: "Place signature",
+            capability: Capability::Signing,
+            icon: Icon::Sign,
+            command: AppCommand::PlaceSignature,
+        },
+        ToolRow {
             label: "Organize Pages",
             capability: Capability::Export,
             icon: Icon::Organize,

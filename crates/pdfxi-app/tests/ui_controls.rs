@@ -335,6 +335,7 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
         ("Highlight", AppCommand::Highlight),
         ("FillAndSign", AppCommand::FillAndSign),
         ("Sign", AppCommand::Sign),
+        ("PlaceSignature", AppCommand::PlaceSignature),
         ("Organize", AppCommand::Organize),
         ("Export", AppCommand::Export),
         ("ConvertToPdf", AppCommand::ConvertToPdf),
@@ -511,6 +512,7 @@ const PROVEN_LABELS: &[&str] = &[
     "highlight",
     "fill-and-sign",
     "sign",
+    "place-signature",
     "organize",
     "export",
     "convert-to-pdf",
@@ -735,6 +737,7 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("highlight", "highlight"),
         ("fill-and-sign", "fill-and-sign"),
         ("sign", "sign"),
+        ("place-signature", "place-signature"),
         ("organize", "organize"),
         ("export", "export"),
         ("convert-to-pdf", "convert-to-pdf"),
@@ -1783,6 +1786,7 @@ fn dispatched_capability_commands_report_unavailable() {
         AppCommand::Highlight,
         AppCommand::FillAndSign,
         AppCommand::Sign,
+        AppCommand::PlaceSignature,
         AppCommand::Organize,
         AppCommand::Export,
         AppCommand::ConvertToPdf,
@@ -1794,6 +1798,26 @@ fn dispatched_capability_commands_report_unavailable() {
     ] {
         assert_dispatch_acts(command.label(), &mut app, command);
     }
+}
+
+#[test]
+fn place_signature_tool_row_appears_with_a_document_and_opens_the_card() {
+    let app = PdfxiApp::new();
+    assert!(
+        !app.tools_panel_rows()
+            .iter()
+            .any(|row| row.command.label() == "place-signature"),
+        "Place signature must not be offered without an open document"
+    );
+
+    let mut app = with_excel_document();
+    let row = app
+        .tools_panel_rows()
+        .into_iter()
+        .find(|row| row.command.label() == "place-signature")
+        .expect("the Place signature row is offered for an open document");
+    app.dispatch(row.command, None);
+    assert_eq!(app.status(), "Place signature: choose Type, Draw or Image");
 }
 
 #[test]
@@ -1930,6 +1954,10 @@ struct Function {
 /// Allowing them by name (rather than by return type) keeps the exemption
 /// narrow: a new factory needs an explicit entry and a reason.
 const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "place_signature_dialog_ui",
+        "placement dialog: the typed/drawn/image buttons call the methods the PlaceSignature command proof covers; the mode selector is state only and the draw pad is a gesture",
+    ),
     (
         "shell_icon_button",
         "control factory: returns egui::Response; the caller dispatches the action",

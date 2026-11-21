@@ -1,8 +1,9 @@
 # T-0245 - Certificate signing shell (Round B)
 #
-# Partial: A-20 is served, A-25 (drawn/typed/image placement) and A-31
-# (request/track) are still open, and SEC-006 (timestamps/revocation) belongs to
-# T-0267. No feature row is promoted.
+# Partial: A-20 (certificate signing and badge) and A-25 (Fill & Sign typed,
+# drawn and image placement) are served; A-31 (request/track) is still open,
+# and SEC-006 (timestamps/revocation) belongs to T-0267. No feature row is
+# promoted and no capture is claimed for A-25.
 
 task = "T-0245"
 lane = "app"
@@ -10,6 +11,7 @@ status = "partial"
 evidence = "docs/evidence/ui/T-0245.md"
 docs = [
     "crates/pdfxi-app/src/shell/signing.rs",
+    "crates/pdfxi-app/src/shell/signature_place.rs",
     "crates/pdfxi-app/src/shell/mod.rs",
     "crates/pdfxi-app/src/shell/commands.rs",
     "crates/pdfxi-app/src/shell/capabilities.rs",
@@ -20,7 +22,7 @@ docs = [
 ]
 feature_rows = []
 promoted_rows = []
-acceptance_items = ["A-20"]
+acceptance_items = ["A-20", "A-25"]
 
 tests = [
     "ui::shell::signing::tests::sign_command_opens_the_card_and_close_closes_it",
@@ -36,6 +38,9 @@ tests = [
     "ui::shell::signing::tests::signed_badge_and_readout_are_scoped_to_the_signing_tab",
     "ui::shell::signing::tests::signature_is_verified_when_the_signed_document_opens",
     "ui::shell::signing::tests::write_signed_capture_fixture",
+    "ui::shell::signature_place::tests::typed_signature_stamp_persists_through_save_and_reopen",
+    "ui::shell::signature_place::tests::drawn_signature_adds_ink_and_persists",
+    "ui::shell::signature_place::tests::image_signature_adds_page_content_and_persists",
 ]
 
 notes = """
@@ -75,11 +80,29 @@ target/tmp/signing/capture-signed.pdf (111330 bytes, SHA-256
 B2D99AD720BAC8D4CC9E9ED1061C078285351556B25BAA1D7831C4C687BFCACD) for the
 reviewer's four captures. No screenshots are committed yet.
 
-Not promoted: SEC-005/FORMS-010 stay as they are because A-25 (drawn/typed/image
-placement plus drag placement) and A-31 (request signature by email and the
-returned-copy tracker) are still open; SEC-006 (timestamps/revocation) is T-0267.
-Other limits: only a typed text-note appearance, invisible signature widget,
-verification not re-run after save, no multi-signature list, PFX read and signing
-synchronous on the UI thread (~0.1 s for the fixture), encrypted documents refuse
-signing.
+Not promoted: SEC-005/FORMS-010 stay as they are because A-31 (request
+signature by email and the returned-copy tracker) is still open; SEC-006
+(timestamps/revocation) is T-0267. Other limits: verification not re-run after
+save, no multi-signature list, PFX read and signing synchronous on the UI
+thread (~0.1 s for the fixture), encrypted documents refuse signing.
+
+A-25 (Fill & Sign placement, not a certificate signature): a separate Place
+signature card and AppCommand::PlaceSignature ("place-signature"), with its own
+signature_place state, so it never loads a PFX or calls DocumentSession::sign.
+Type commits an "Approved" stamp 220x56 pt at the bottom-right of the active
+page (add_stamp, contents = typed name, author = display name). Draw maps the
+260x80 pt pad's normalized points into that rect as one /Ink stroke (add_ink,
+width 1.5, contents "Signature"; read back as AnnotationKind::Pencil). Image
+magic-detects PNG (89 50 4E 47) or JPEG (FF D8) bytes and embeds them with
+content_edit::add_image; PNG alpha is ignored (library behavior). Each placement
+is one session edit, so it is undoable, marks the document dirty, and survives
+save/reopen. Placement is fixed at the bottom-right: no drag-to-place, free
+position, resize or multi-page placement. Tests:
+typed_signature_stamp_persists_through_save_and_reopen,
+drawn_signature_adds_ink_and_persists,
+image_signature_adds_page_content_and_persists (3 passed, 0 failed with
+cargo test -p pdfxi-app --features ui,pdfium signature_place). Entry is the
+command only: no Fill & Sign panel button or --tool alias dispatches
+place-signature yet. A-31 remains open; no capture is claimed for this card and
+no feature row is promoted.
 """
