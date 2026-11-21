@@ -3488,12 +3488,38 @@ struct BlockMark {
     key: String,
 }
 
+/// An inline image (`BI ... ID ... EI`) retained by the tokenizer.
+///
+/// `dictionary` holds the direct key/value pairs between `BI` and `ID`.
+/// `sample_start..sample_end` is the exact byte range of the image samples: it
+/// begins immediately after `ID` and its single white-space character and ends
+/// immediately before the white-space that precedes `EI`. `object_end` is just
+/// past `EI`, so a caller can replace the whole object in place.
+#[derive(Clone, Debug)]
+pub(crate) struct InlineImage {
+    /// Direct dictionary entries written between `BI` and `ID`.
+    pub(crate) dictionary: Vec<(String, Operand)>,
+    /// Byte offset of the first sample byte.
+    pub(crate) sample_start: usize,
+    /// Byte offset just past the last sample byte.
+    pub(crate) sample_end: usize,
+    /// Byte offset just past the `EI` keyword.
+    pub(crate) object_end: usize,
+    /// `false` when the sample span could not be delimited with certainty and a
+    /// caller must fail closed rather than guess where the data ends.
+    pub(crate) sample_confident: bool,
+}
+
 /// A tokenized operator with its byte span.
+#[derive(Debug)]
 pub(crate) struct Operator {
     pub(crate) name: String,
     pub(crate) operands: Vec<Operand>,
     pub(crate) start: usize,
     pub(crate) end: usize,
+    /// Populated only for `BI`: the retained inline-image dictionary and sample
+    /// span. `None` for every other operator.
+    pub(crate) inline: Option<InlineImage>,
 }
 
 /// Scan a content stream into text-showing runs with geometry.
@@ -3842,16 +3868,18 @@ pub(crate) fn tokenize(content: &[u8]) -> Result<Vec<Operator>, TextEditError> {
             ParsedToken::Operator(name) => {
                 let end = parser.position;
                 let start = first_operand.take().unwrap_or(token_start);
-                let inline_image = name == "BI";
+                let inline = if name == "BI" {
+                    Some(parser.parse_inline_image()?)
+                } else {
+                    None
+                };
                 operators.push(Operator {
                     name,
                     operands: std::mem::take(&mut operands),
                     start,
                     end,
+                    inline,
                 });
-                if inline_image {
-                    parser.skip_inline_image()?;
-                }
             }
             ParsedToken::Operand(value) => {
                 if first_operand.is_none() {
@@ -4125,47 +4153,188 @@ impl<'a> ContentParser<'a> {
         }
     }
 
-    fn skip_inline_image(&mut self) -> Result<(), TextEditError> {
-        // Find the `ID` operator after the image dictionary, then the first
-        // whitespace-delimited `EI`.
+    /// Parse an inline image whose `BI` keyword has just been consumed.
+    ///
+    /// The dictionary key/value pairs are read with the normal content lexer up
+    /// to the `ID` operator. When the dictionary gives enough information to
+    /// compute an unfiltered sample length, that length is authoritative: the
+    /// bytes before `EI` are fixed and a binary byte that merely spells `EI`
+    /// cannot shift the span. For filtered images (notably `DCTDecode`) the
+    /// length is not derivable, so `EI` is located with the PDF terminator rules
+    /// — whitespace before `EI`, and whitespace, a delimiter or end of data
+    /// after it — which keeps embedded `EI`-like bytes from being mistaken for
+    /// the terminator.
+    fn parse_inline_image(&mut self) -> Result<InlineImage, TextEditError> {
+        let mut dictionary = Vec::new();
         loop {
             self.skip_whitespace();
-            let start = self.position;
-            while let Some(byte) = self.byte() {
-                if is_delimiter(byte) || byte.is_ascii_whitespace() {
-                    break;
+            match self.parse_operand()? {
+                Some(ParsedToken::Operator(name)) if name == "ID" => break,
+                Some(ParsedToken::Operand(Operand::Name(key))) => {
+                    let value = match self.parse_operand()? {
+                        Some(ParsedToken::Operand(value)) => value,
+                        _ => {
+                            return Err(TextEditError::MalformedContent(
+                                "inline image dictionary value is missing".to_owned(),
+                            ));
+                        }
+                    };
+                    dictionary.push((key, value));
                 }
-                self.position += 1;
-            }
-            if start == self.position {
-                return Err(TextEditError::MalformedContent(
-                    "inline image header is truncated".to_owned(),
-                ));
-            }
-            if &self.data[start..self.position] == b"ID" {
-                if self.byte().is_some() {
-                    self.position += 1;
+                _ => {
+                    return Err(TextEditError::MalformedContent(
+                        "inline image dictionary is malformed".to_owned(),
+                    ));
                 }
-                break;
             }
         }
-        while self.position + 1 < self.data.len() {
-            if self.data[self.position].is_ascii_whitespace()
-                && &self.data[self.position + 1..self.position + 3] == b"EI"
+
+        // The spec requires exactly one white-space character after `ID`, and
+        // it is not part of the sample data.
+        if !self.byte().is_some_and(is_pdf_whitespace) {
+            return Err(TextEditError::MalformedContent(
+                "inline image ID is not followed by white space".to_owned(),
+            ));
+        }
+        self.position += 1;
+        let sample_start = self.position;
+
+        let (sample_end, object_end, confident) = match unfiltered_sample_length(&dictionary) {
+            Some(length) => {
+                let candidate = sample_start.saturating_add(length);
+                match self.ei_terminator_at(candidate) {
+                    Some(after) => (candidate, after, true),
+                    None => {
+                        // The declared dimensions disagree with the bytes. The
+                        // scanner still finds a boundary, but it is not certain.
+                        let (end, after) = self.scan_ei(sample_start)?;
+                        (end, after, false)
+                    }
+                }
+            }
+            None => {
+                let (end, after) = self.scan_ei(sample_start)?;
+                (end, after, true)
+            }
+        };
+        self.position = object_end;
+        Ok(InlineImage {
+            dictionary,
+            sample_start,
+            sample_end,
+            object_end,
+            sample_confident: confident,
+        })
+    }
+
+    /// Return the offset just past `EI` when the bytes at `at` are a conforming
+    /// terminator: optional white space followed by `EI` and then white space,
+    /// a delimiter or the end of the data.
+    fn ei_terminator_at(&self, at: usize) -> Option<usize> {
+        if at > self.data.len() {
+            return None;
+        }
+        let mut cursor = at;
+        while cursor < self.data.len() && is_pdf_whitespace(self.data[cursor]) {
+            cursor += 1;
+        }
+        if self.data.get(cursor..cursor + 2) == Some(b"EI")
+            && self
+                .data
+                .get(cursor + 2)
+                .is_none_or(|byte| is_pdf_whitespace(*byte) || is_delimiter(*byte))
+        {
+            Some(cursor + 2)
+        } else {
+            None
+        }
+    }
+
+    /// Find the first PDF-conforming `EI` terminator at or after `from`, and
+    /// return `(sample_end, object_end)`. `sample_end` excludes the white-space
+    /// that separates the samples from `EI`.
+    fn scan_ei(&self, from: usize) -> Result<(usize, usize), TextEditError> {
+        let mut cursor = from;
+        while cursor + 1 < self.data.len() {
+            if self.data.get(cursor..cursor + 2) == Some(b"EI")
+                && (cursor == from || is_pdf_whitespace(self.data[cursor - 1]))
                 && self
                     .data
-                    .get(self.position + 3)
-                    .is_none_or(|byte| is_delimiter(*byte) || byte.is_ascii_whitespace())
+                    .get(cursor + 2)
+                    .is_none_or(|byte| is_pdf_whitespace(*byte) || is_delimiter(*byte))
             {
-                self.position += 3;
-                return Ok(());
+                let sample_end = if cursor > from && is_pdf_whitespace(self.data[cursor - 1]) {
+                    cursor - 1
+                } else {
+                    cursor
+                };
+                return Ok((sample_end, cursor + 2));
             }
-            self.position += 1;
+            cursor += 1;
         }
         Err(TextEditError::MalformedContent(
             "unterminated inline image".to_owned(),
         ))
     }
+}
+
+/// Return the expected length of an unfiltered inline image's samples, when the
+/// dictionary provides enough information to compute it exactly.
+fn unfiltered_sample_length(dictionary: &[(String, Operand)]) -> Option<usize> {
+    let get = |key: &str| -> Option<&Operand> {
+        dictionary
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value)
+    };
+    // A filter changes the encoded length, so dimensions no longer bound it.
+    if get("F").is_some() || get("Filter").is_some() {
+        return None;
+    }
+    let integer = |key: &str| -> Option<usize> {
+        let value = get(key)?.as_number()?;
+        if value.is_finite() && value >= 0.0 && value.fract() == 0.0 {
+            usize::try_from(value as u64).ok()
+        } else {
+            None
+        }
+    };
+    let width = integer("W")?;
+    let height = integer("H")?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let bits = integer("BPC").unwrap_or(8);
+    let components = inline_color_components(get("CS")?)?;
+    let row_bits = width.checked_mul(components)?.checked_mul(bits)?;
+    let row_bytes = row_bits.checked_add(7)? / 8;
+    row_bytes.checked_mul(height)
+}
+
+/// Number of colour components declared by an inline `/CS` value, when known.
+fn inline_color_components(value: &Operand) -> Option<usize> {
+    match value {
+        Operand::Name(name) => match name.as_str() {
+            "G" | "DeviceGray" | "I" => Some(1),
+            "RGB" | "DeviceRGB" => Some(3),
+            "CMYK" | "DeviceCMYK" => Some(4),
+            _ => None,
+        },
+        Operand::Array(items) => match items.first().and_then(Operand::as_name)? {
+            "Indexed" | "I" => Some(1),
+            "DeviceGray" | "G" | "CalGray" => Some(1),
+            "DeviceRGB" | "RGB" | "CalRGB" | "Lab" => Some(3),
+            "DeviceCMYK" | "CMYK" => Some(4),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// PDF white-space bytes, used for inline-image terminator detection. Comments
+/// are not white space in binary sample data, so they are deliberately absent.
+fn is_pdf_whitespace(byte: u8) -> bool {
+    matches!(byte, 0 | b'\t' | b'\n' | 0x0C | b'\r' | b' ')
 }
 
 /// Return `true` for a PDF delimiter byte.
@@ -5900,5 +6069,39 @@ mod tests {
             b = (b + a) % 65_521;
         }
         (b << 16) | a
+    }
+
+    #[test]
+    fn tokenizer_keeps_inline_dictionary_and_exact_sample_span() {
+        // 4 x 1 RGB samples = 12 bytes. Byte 3..7 spells a whitespace-delimited
+        // `EI`, which must not be mistaken for the image terminator.
+        let samples: [u8; 12] = [1, 2, 3, b' ', b'E', b'I', b' ', 7, 8, 9, 10, 11];
+        let mut content = b"q 1 0 0 1 0 0 cm BI /W 4 /H 1 /BPC 8 /CS /RGB ID\n".to_vec();
+        content.extend_from_slice(&samples);
+        content.extend_from_slice(b"\nEI\nQ\n");
+
+        let operators = tokenize(&content).expect("tokenize inline image");
+        assert_eq!(operators.len(), 4, "operators: {operators:?}");
+        let bi = &operators[2];
+        let inline = bi.inline.as_ref().expect("BI carries inline image data");
+        assert_eq!(bi.name, "BI");
+        assert!(inline.sample_confident, "length-based span must be certain");
+        assert_eq!(content[inline.sample_start..inline.sample_end], samples);
+        let find = |key: &str| -> Option<&Operand> {
+            inline
+                .dictionary
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value)
+        };
+        assert_eq!(find("W").and_then(Operand::as_number), Some(4.0));
+        assert_eq!(find("H").and_then(Operand::as_number), Some(1.0));
+        assert_eq!(find("BPC").and_then(Operand::as_number), Some(8.0));
+        assert_eq!(find("CS").and_then(Operand::as_name), Some("RGB"));
+        assert_eq!(
+            &content[inline.object_end..],
+            b"\nQ\n",
+            "object_end must be just past EI"
+        );
     }
 }

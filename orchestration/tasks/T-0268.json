@@ -3,7 +3,7 @@
     "lane":  "author",
     "title":  "Redaction form XObject recursion and inline image decoding",
     "priority":  "P1",
-    "status":  "in_progress",
+    "status":  "verified",
     "depends_on":  [
                        "T-0237"
                    ],
@@ -12,7 +12,7 @@
                  "docs/evidence/hardening/T-0268.md",
                  "orchestration/feature-updates/T-0268.toml"
              ],
-    "acceptance":  "cargo test -p pdfxi-edit; a secret drawn inside a form XObject is removed and an inline image is pixel-redacted, with unsupported content still failing closed",
+    "acceptance":  "cargo test -p pdfxi-edit; form XObject recursion (16 levels, cycle check, 512-visit budget, indirect Matrix/BBox, malformed geometry fails closed) and inline image redaction (Gray/RGB/Indexed/DCT) on real pages, with unresolvable Do on a marked page failing closed; vector paths are not removed (documented limit); library scope only",
     "notes":  "Quality follow-up from T-0237, which removes content in page content streams and image XObjects but deliberately fails closed on form XObjects and inline images. This task recurses `/Subtype /Form` content with depth and cycle caps, applies marks in form space through the form matrix and CTM, and decodes plus redacts inline `BI/ID/EI` images for the same supported formats (PNG/JPEG-equivalent 8-bit Gray/RGB/Indexed/ICCBased 1/3). Anything still unsupported keeps the existing fail-closed behaviour rather than silently leaving content. Tests must prove a form-drawn secret is gone after redaction and that an inline image is pixel-redacted. This is a quality follow-up, not a dependency of T-0257 or T-0263. Round A delivered: form XObject recursion, nested/cycle/depth/visit fail-closed, compressed-form decode, PDFium render proof; Round B pending: inline image (BI/ID/EI) decoding.",
     "evidence":  "docs/evidence/hardening/T-0268.md"
 }

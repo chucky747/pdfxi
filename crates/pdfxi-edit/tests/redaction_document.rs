@@ -1238,3 +1238,626 @@ fn unresolvable_xobject_under_a_mark_fails_closed() {
         report.surviving_spans
     );
 }
+
+// ---------------------------------------------------------------------------
+// Inline image redaction (T-0268 Round B)
+// ---------------------------------------------------------------------------
+
+/// Where the staged inline images paint: page space (300,400)-(340,440).
+const INLINE_PLACEMENT: &str = "q 40 0 0 40 300 400 cm ";
+
+/// Round B artifacts, in the lane target directory named by the task.
+fn inline_output_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("workspace root")
+        .join("target/lanes/author6/t0268-out")
+        .join(name)
+}
+
+/// A mark covering the middle of the staged inline image placement.
+fn inline_mark() -> Rect {
+    rect(305.0, 405.0, 325.0, 425.0)
+}
+
+fn write_artifact(name: &str, bytes: &[u8]) {
+    let path = inline_output_path(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create inline output directory");
+    }
+    std::fs::write(&path, bytes).expect("write inline artifact");
+}
+
+/// A page whose only added content is one inline image painted under a `cm`.
+fn staged_inline_document(image: &[u8]) -> Document {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let page = document.page(0).expect("page");
+    let mut page_dictionary = page_dictionary(&document);
+    let content_id = document.allocate_object_number().expect("content number");
+    let mut content = INLINE_PLACEMENT.as_bytes().to_vec();
+    content.extend_from_slice(image);
+    content.extend_from_slice(b" Q\n");
+    document
+        .set_object(
+            ObjectId::new(content_id, 0),
+            Object::Stream {
+                dictionary: Dictionary::new(),
+                data: content,
+            },
+        )
+        .expect("stage inline content");
+    let mut contents = page.contents.clone();
+    contents.push(ObjectId::new(content_id, 0));
+    page_dictionary.insert(
+        "Contents".to_owned(),
+        Object::Array(contents.into_iter().map(Object::Reference).collect()),
+    );
+    document
+        .set_object(page.id, Object::Dictionary(page_dictionary))
+        .expect("stage page");
+    document
+}
+
+/// Build an unfiltered `BI ... EI` inline image with a constant sample value.
+fn raw_inline_image(width: u32, height: u32, color_space: &str, value: [u8; 3]) -> Vec<u8> {
+    let mut image = b"BI /W ".to_vec();
+    image.extend_from_slice(width.to_string().as_bytes());
+    image.extend_from_slice(b" /H ");
+    image.extend_from_slice(height.to_string().as_bytes());
+    image.extend_from_slice(b" /BPC 8 /CS /");
+    image.extend_from_slice(color_space.as_bytes());
+    image.extend_from_slice(b" ID\n");
+    for _ in 0..width * height {
+        image.extend_from_slice(&value[..if color_space == "G" { 1 } else { 3 }]);
+    }
+    image.extend_from_slice(b"\nEI");
+    image
+}
+
+/// Build a DCTDecode `BI ... EI` inline image from an encoded JPEG.
+fn jpeg_inline_image(width: u32, height: u32, jpeg: &[u8]) -> Vec<u8> {
+    let mut image = b"BI /W ".to_vec();
+    image.extend_from_slice(width.to_string().as_bytes());
+    image.extend_from_slice(b" /H ");
+    image.extend_from_slice(height.to_string().as_bytes());
+    image.extend_from_slice(b" /BPC 8 /CS /RGB /F /DCTDecode ID\n");
+    image.extend_from_slice(jpeg);
+    image.extend_from_slice(b"\nEI");
+    image
+}
+
+/// Locate the first inline image's raw samples in a content byte slice.
+fn find_inline_samples(content: &[u8]) -> Vec<u8> {
+    let id = content
+        .windows(3)
+        .position(|window| window == b"ID\n")
+        .expect("ID delimiter");
+    let start = id + 3;
+    let end = content[start..]
+        .windows(3)
+        .position(|window| window == b"\nEI")
+        .expect("EI terminator");
+    content[start..start + end].to_vec()
+}
+
+/// Count bright-red pixels in a page-space rectangle on a 1:1 PDFium render.
+fn red_pixels_in(page: &RenderedPage, rect: Rect) -> usize {
+    let width = page.width() as usize;
+    let height = page.height() as usize;
+    let scale_x = page.width() as f32 / 612.0;
+    let scale_y = page.height() as f32 / 792.0;
+    let left = ((rect.x0().max(0.0) * scale_x) as usize).min(width);
+    let right = ((rect.x1().clamp(0.0, 612.0) * scale_x) as usize).min(width);
+    let top = (((792.0 - rect.y1().clamp(0.0, 792.0)) * scale_y) as usize).min(height);
+    let bottom = (((792.0 - rect.y0().clamp(0.0, 792.0)) * scale_y) as usize).min(height);
+    if left >= right || top >= bottom {
+        return 0;
+    }
+    let pixels = page.pixels();
+    let mut count = 0usize;
+    for y in top..bottom {
+        for x in left..right {
+            let index = (y * width + x) * 4;
+            if let Some(pixel) = pixels.get(index..index + 4)
+                && pixel[0] > 200
+                && pixel[1] < 60
+                && pixel[2] < 60
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn render_red_pixels(bytes: Vec<u8>, rect: Rect) -> usize {
+    let renderer = PdfiumRenderer::from_bytes(bytes).expect("PDFium must open the document");
+    let page = renderer
+        .render_page(
+            PageIndex::new(0),
+            1.0,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .expect("PDFium must rasterize the page");
+    red_pixels_in(&page, rect)
+}
+
+#[test]
+fn inline_rgb_image_under_a_mark_is_refilled_and_rerendered() {
+    let image = raw_inline_image(16, 16, "RGB", [255, 0, 0]);
+    let mut document = staged_inline_document(&image);
+    let before_text = document.page_text(0).expect("text before");
+    let probe = survival_probe(&before_text);
+    let before_bytes = document.save().expect("save before redaction");
+    let source = document.bytes().to_vec();
+
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("apply inline redaction");
+    assert_eq!(document.bytes(), source.as_slice(), "source bytes mutated");
+    assert!(report.clean, "survivors: {:?}", report.surviving_spans);
+
+    let bytes = document.save().expect("full rewrite");
+    write_artifact("inline-rgb-redacted.pdf", &bytes);
+    let reopened = Document::from_bytes(bytes.clone()).expect("reparse redacted file");
+    let content = reopened.page_content(0).expect("content after redaction");
+    let samples = find_inline_samples(&content);
+    assert_eq!(samples.len(), 16 * 16 * 3, "unexpected sample length");
+    assert_eq!(
+        pixel(&samples, 16, 8, 8),
+        [0, 0, 0],
+        "marked pixels not black"
+    );
+    assert_eq!(
+        pixel(&samples, 16, 15, 2),
+        [255, 0, 0],
+        "pixels outside the mark changed"
+    );
+    assert!(
+        !String::from_utf8_lossy(&content).contains("DCTDecode"),
+        "the re-encoded inline image must be unfiltered"
+    );
+    assert!(
+        reopened.page_text(0).expect("text after").contains(&probe),
+        "unrelated page text {probe:?} was lost"
+    );
+
+    let verification = verify_redaction(&reopened, &[], &report).expect("verify inline redaction");
+    assert!(
+        verification.clean,
+        "survivors: {:?}",
+        verification.survivors
+    );
+
+    let before_red = render_red_pixels(before_bytes, inline_mark());
+    let after_red = render_red_pixels(bytes, inline_mark());
+    assert!(
+        before_red > 50,
+        "the inline image did not render red: {before_red}"
+    );
+    assert_eq!(
+        after_red, 0,
+        "PDFium still paints red ink after redaction: {before_red} -> {after_red}"
+    );
+}
+
+#[test]
+fn inline_gray_image_under_a_mark_is_refilled() {
+    let image = raw_inline_image(16, 16, "G", [200, 200, 200]);
+    let mut document = staged_inline_document(&image);
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("apply gray inline redaction");
+    assert!(report.clean, "survivors: {:?}", report.surviving_spans);
+
+    let bytes = document.save().expect("full rewrite");
+    write_artifact("inline-gray-redacted.pdf", &bytes);
+    let reopened = Document::from_bytes(bytes).expect("reparse");
+    let content = reopened.page_content(0).expect("content after");
+    let samples = find_inline_samples(&content);
+    assert_eq!(samples.len(), 16 * 16, "gray sample length");
+    assert_eq!(samples[8 * 16 + 8], 0, "marked gray pixel is not black");
+    assert_eq!(samples[2 * 16 + 15], 200, "outside gray pixel changed");
+    assert!(
+        content.windows(3).any(|window| window == b"/G "),
+        "CS not rewritten to /G"
+    );
+}
+
+#[test]
+fn inline_jpeg_image_under_a_mark_is_decoded_refilled_and_reencoded() {
+    let jpeg = rgb_jpeg(255, 0, 0, 16);
+    let image = jpeg_inline_image(16, 16, &jpeg);
+    let mut document = staged_inline_document(&image);
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("apply JPEG inline redaction");
+    assert!(report.clean, "survivors: {:?}", report.surviving_spans);
+
+    let bytes = document.save().expect("full rewrite");
+    write_artifact("inline-jpeg-redacted.pdf", &bytes);
+    let reopened = Document::from_bytes(bytes).expect("reparse");
+    let content = reopened.page_content(0).expect("content after");
+    assert!(
+        !String::from_utf8_lossy(&content).contains("DCTDecode"),
+        "JPEG filter survived in the rewritten content"
+    );
+    let samples = find_inline_samples(&content);
+    assert_eq!(samples.len(), 16 * 16 * 3, "JPEG sample length");
+    assert_eq!(
+        pixel(&samples, 16, 8, 8),
+        [0, 0, 0],
+        "marked JPEG pixel not black"
+    );
+    let outside = pixel(&samples, 16, 15, 2);
+    assert!(
+        outside[0] > 200 && outside[1] < 40 && outside[2] < 40,
+        "outside JPEG colour was lost: {outside:?}"
+    );
+    let verification = verify_redaction(&reopened, &[], &report).expect("verify JPEG inline");
+    assert!(
+        verification.clean,
+        "survivors: {:?}",
+        verification.survivors
+    );
+}
+
+#[test]
+fn unsupported_inline_filter_fails_closed_without_saving() {
+    let image = b"BI /W 2 /H 2 /BPC 8 /CS /RGB /F /JPXDecode ID\n\x01\x02\x03\x04 EI".to_vec();
+    let mut document = staged_inline_document(&image);
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        keep_images: false,
+        ..RedactionRequest::default()
+    };
+    match apply_redaction(&mut document, &request) {
+        Err(DocumentRedactionError::UnsupportedImage { detail, .. }) => {
+            assert!(detail.contains("JPXDecode"), "unexpected detail: {detail}");
+        }
+        other => panic!("expected UnsupportedImage, got {other:?}"),
+    }
+    assert!(
+        !inline_output_path("inline-jpx.pdf").exists(),
+        "a failed redaction must not write an artifact"
+    );
+
+    let mut opt_out = staged_inline_document(&image);
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        keep_images: true,
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut opt_out, &request).expect("opt-out succeeds");
+    assert!(!report.clean, "opt-out did not report a survivor");
+    assert!(
+        report
+            .surviving_spans
+            .iter()
+            .any(|span| span.text == "<inline image>"),
+        "no inline-image survivor: {:?}",
+        report.surviving_spans
+    );
+}
+
+#[test]
+fn inline_image_with_a_mismatched_sample_span_fails_closed() {
+    // The dictionary claims 100x100 RGB (30,000 bytes) but only four sample
+    // bytes are present, so the declared length cannot delimit the data.
+    let image = b"BI /W 100 /H 100 /BPC 8 /CS /RGB ID\n\x01\x02\x03\x04 EI".to_vec();
+    let mut document = staged_inline_document(&image);
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        keep_images: false,
+        ..RedactionRequest::default()
+    };
+    match apply_redaction(&mut document, &request) {
+        Err(DocumentRedactionError::UnsupportedImage { detail, .. }) => {
+            assert!(
+                detail.contains("no clear sample span"),
+                "unexpected detail: {detail}"
+            );
+        }
+        other => panic!("expected UnsupportedImage, got {other:?}"),
+    }
+    assert!(
+        !inline_output_path("inline-span.pdf").exists(),
+        "a failed redaction must not write an artifact"
+    );
+}
+
+#[test]
+fn keep_images_true_survives_an_inline_image() {
+    let image = raw_inline_image(16, 16, "RGB", [255, 0, 0]);
+    let mut document = staged_inline_document(&image);
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        keep_images: true,
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("opt-out succeeds");
+    assert!(
+        !report.clean,
+        "an opted-out inline image must make clean false"
+    );
+    assert!(
+        report
+            .surviving_spans
+            .iter()
+            .any(|span| span.text == "<inline image>" && span.page == 0),
+        "inline survivor missing: {:?}",
+        report.surviving_spans
+    );
+    let bytes = document.save().expect("full rewrite");
+    assert!(
+        bytes
+            .windows(image.len())
+            .any(|window| window == image.as_slice()),
+        "the opted-out inline image was modified"
+    );
+}
+
+#[test]
+fn inline_image_outside_every_mark_is_untouched() {
+    let image = raw_inline_image(16, 16, "RGB", [255, 0, 0]);
+    let mut document = staged_inline_document(&image);
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, rect(2.0, 2.0, 12.0, 12.0))],
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("apply unmarked redaction");
+    assert!(report.clean, "survivors: {:?}", report.surviving_spans);
+    assert!(
+        report.removed_runs.is_empty(),
+        "an unrelated image was edited"
+    );
+
+    let bytes = document.save().expect("full rewrite");
+    assert!(
+        bytes
+            .windows(image.len())
+            .any(|window| window == image.as_slice()),
+        "the unmarked inline image's bytes changed"
+    );
+    let reopened = Document::from_bytes(bytes).expect("reparse");
+    let samples = find_inline_samples(&reopened.page_content(0).expect("content"));
+    assert!(
+        samples
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|pixel| pixel == &[255, 0, 0]),
+        "unmarked image colour changed: {samples:?}"
+    );
+}
+
+/// A form whose `/Matrix` maps the inline image's unit square onto 40x40 units.
+fn form_with_inline_image(image: &[u8]) -> Object {
+    let mut dictionary = Dictionary::new();
+    dictionary.insert("Type".to_owned(), Object::Name("XObject".to_owned()));
+    dictionary.insert("Subtype".to_owned(), Object::Name("Form".to_owned()));
+    dictionary.insert(
+        "BBox".to_owned(),
+        Object::Array(vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(1),
+            Object::Integer(1),
+        ]),
+    );
+    dictionary.insert(
+        "Matrix".to_owned(),
+        Object::Array(vec![
+            Object::Integer(40),
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(40),
+            Object::Integer(0),
+            Object::Integer(0),
+        ]),
+    );
+    Object::Stream {
+        dictionary,
+        data: image.to_vec(),
+    }
+}
+
+/// Replace one key of a form stream and stage it, returning its object id.
+fn staged_form_with(
+    document: &mut Document,
+    mut form: Object,
+    key: &str,
+    value: Object,
+) -> ObjectId {
+    let Object::Stream { dictionary, .. } = &mut form else {
+        panic!("form builder must return a stream");
+    };
+    dictionary.insert(key.to_owned(), value);
+    stage_object(document, form)
+}
+
+#[test]
+fn indirect_form_matrix_is_resolved_before_the_intersection_test() {
+    // The page CTM is identity, so an identity-matrix fallback would place the
+    // form at (0,0)-(120,40), outside the mark, and skip it. The real indirect
+    // /Matrix translates it to (72,30)-(192,70), inside the mark.
+    let mut document = staged_form_document("q 1 0 0 1 0 0 cm /FormDo Do Q", |document| {
+        let matrix_id = document.allocate_object_number().expect("matrix number");
+        document
+            .set_object(
+                ObjectId::new(matrix_id, 0),
+                Object::Array(vec![
+                    Object::Integer(1),
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(1),
+                    Object::Integer(72),
+                    Object::Integer(30),
+                ]),
+            )
+            .expect("stage indirect matrix");
+        staged_form_with(
+            document,
+            form_with_text("INDIRECT-MATRIX-SECRET"),
+            "Matrix",
+            Object::Reference(ObjectId::new(matrix_id, 0)),
+        )
+    });
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, form_mark())],
+        keep_images: false,
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("apply indirect-matrix redaction");
+    assert!(
+        report
+            .removed_runs
+            .iter()
+            .any(|run| run.text.contains("INDIRECT-MATRIX-SECRET")),
+        "the form hidden by the indirect matrix was not removed: {:?}",
+        report.removed_runs
+    );
+    let bytes = document.save().expect("full rewrite");
+    let reopened = Document::from_bytes(bytes).expect("reparse");
+    assert!(
+        !reopened
+            .page_text(0)
+            .expect("text after")
+            .contains("INDIRECT-MATRIX-SECRET"),
+        "the indirect-matrix form secret survived"
+    );
+    let verification =
+        verify_redaction(&reopened, &["INDIRECT-MATRIX-SECRET"], &report).expect("verify");
+    assert!(
+        verification.clean,
+        "survivors: {:?}",
+        verification.survivors
+    );
+}
+
+#[test]
+fn malformed_form_bbox_under_a_mark_is_never_skipped() {
+    // A malformed /BBox has no trustworthy geometry. The old unit-square
+    // fallback placed it at (0,0)-(1,1), outside the mark, and skipped it.
+    let mut document = staged_form_document("q 1 0 0 1 0 0 cm /FormDo Do Q", |document| {
+        let mut fonts = Dictionary::new();
+        fonts.insert("F1".to_owned(), helvetica_font());
+        let mut resources = Dictionary::new();
+        resources.insert("Font".to_owned(), Object::Dictionary(fonts));
+        let mut dictionary = Dictionary::new();
+        dictionary.insert("Type".to_owned(), Object::Name("XObject".to_owned()));
+        dictionary.insert("Subtype".to_owned(), Object::Name("Form".to_owned()));
+        dictionary.insert(
+            "BBox".to_owned(),
+            Object::Array(vec![Object::Integer(0), Object::Name("bad".to_owned())]),
+        );
+        dictionary.insert("Resources".to_owned(), Object::Dictionary(resources));
+        stage_object(
+            document,
+            Object::Stream {
+                dictionary,
+                // Painted at page space (77,45) under the identity CTM, so the
+                // only thing that could skip it is the broken /BBox.
+                data: b"BT /F1 12 Tf 77 45 Td (MALFORMED-BBOX-SECRET) Tj ET".to_vec(),
+            },
+        )
+    });
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, form_mark())],
+        keep_images: false,
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("apply malformed-bbox redaction");
+    assert!(
+        report
+            .removed_runs
+            .iter()
+            .any(|run| run.text.contains("MALFORMED-BBOX-SECRET")),
+        "the form with malformed /BBox was silently skipped: {:?}",
+        report.removed_runs
+    );
+    let bytes = document.save().expect("full rewrite");
+    let reopened = Document::from_bytes(bytes).expect("reparse");
+    assert!(
+        !reopened
+            .page_text(0)
+            .expect("text after")
+            .contains("MALFORMED-BBOX-SECRET")
+    );
+    let verification =
+        verify_redaction(&reopened, &["MALFORMED-BBOX-SECRET"], &report).expect("verify");
+    assert!(
+        verification.clean,
+        "survivors: {:?}",
+        verification.survivors
+    );
+}
+
+#[test]
+fn malformed_form_matrix_fails_closed() {
+    let mut document = staged_form_document("q 1 0 0 1 0 0 cm /FormDo Do Q", |document| {
+        staged_form_with(
+            document,
+            form_with_text("BAD-MATRIX-SECRET"),
+            "Matrix",
+            Object::Array(vec![Object::Integer(1), Object::Name("bad".to_owned())]),
+        )
+    });
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, form_mark())],
+        keep_images: false,
+        ..RedactionRequest::default()
+    };
+    match apply_redaction(&mut document, &request) {
+        Err(DocumentRedactionError::UnsupportedForm { detail, .. }) => {
+            assert!(
+                detail.contains("finite six-number array"),
+                "unexpected detail: {detail}"
+            );
+        }
+        other => panic!("expected UnsupportedForm, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_image_inside_a_form_is_redacted_through_the_composed_ctm() {
+    let image = raw_inline_image(16, 16, "RGB", [255, 0, 0]);
+    let mut document = staged_form_document("q 1 0 0 1 300 400 cm /FormDo Do Q", |document| {
+        stage_object(document, form_with_inline_image(&image))
+    });
+    let request = RedactionRequest {
+        marks: vec![RedactionMark::new(0, inline_mark())],
+        ..RedactionRequest::default()
+    };
+    let report = apply_redaction(&mut document, &request).expect("apply form inline redaction");
+    assert!(report.clean, "survivors: {:?}", report.surviving_spans);
+
+    let bytes = document.save().expect("full rewrite");
+    write_artifact("inline-form-redacted.pdf", &bytes);
+    let reopened = Document::from_bytes(bytes).expect("reparse");
+    let (dictionary, data) = image_xobject(&reopened, "FormDo");
+    assert!(
+        !dictionary.contains_key("Filter"),
+        "the rewritten form must be stored unfiltered"
+    );
+    let samples = find_inline_samples(&data);
+    assert_eq!(samples.len(), 16 * 16 * 3, "form inline sample length");
+    assert_eq!(
+        pixel(&samples, 16, 8, 8),
+        [0, 0, 0],
+        "marked form pixel not black"
+    );
+    assert_eq!(
+        pixel(&samples, 16, 15, 2),
+        [255, 0, 0],
+        "form pixels outside the mark changed"
+    );
+}

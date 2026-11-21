@@ -26,10 +26,16 @@
 //! into the redacted area. The implicit line move of `'` and `"` is preserved
 //! with `T*`, and `"` also re-emits its word and character spacing operands.
 //!
-//! Inline images (`BI ... ID ... EI`) are still fail-closed: an intersecting
-//! inline image is a typed error when images are being redacted, because the
-//! tokenizer does not retain its dictionary and sample span. This is the
-//! remaining round-B gap.
+//! Inline images (`BI ... ID ... EI`) keep their dictionary and exact sample
+//! span in the token stream. An intersecting inline image is decoded and
+//! pixel-refilled through the same image path as an XObject, then its bytes are
+//! replaced in place inside the surrounding content stream. The `EI` terminator
+//! is delimited with the PDF white-space/delimiter rules, and an unfiltered
+//! image's length is also derived from its dimensions so binary sample bytes
+//! that spell `EI` cannot move the span. Filtered images, an unclear sample
+//! span, an unsupported colour space/filter or a non-invertible placement fail
+//! closed with [`RedactionError::UnsupportedImage`]; an inline image outside
+//! every mark is left byte-for-byte untouched.
 //!
 //! # Form XObjects
 //!
@@ -98,7 +104,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use pdfxi_core::{Dictionary, Document, Filter, FlateParams, Object, ObjectId, decode_stream};
 use thiserror::Error;
 
-use crate::content_edit::{FontInfo, Matrix, Operand, TextEditError, load_fonts, tokenize};
+use crate::content_edit::{
+    FontInfo, InlineImage, Matrix, Operand, TextEditError, load_fonts, tokenize,
+};
 use crate::geometry::{GeometryError, Rect};
 
 /// A page-scoped rectangle to redact.
@@ -816,6 +824,7 @@ fn rewrite_content(
 
     for operator in &operators {
         let mut replacement: Option<Vec<u8>> = None;
+        let mut replaced_span: Option<(usize, usize)> = None;
         let mut pending_entry: Option<RemovedTextRun> = None;
         match operator.name.as_str() {
             "q" => saved.push(state.clone()),
@@ -847,7 +856,25 @@ fn rewrite_content(
                 }
             }
             "BI" => {
-                if let Some(span) = handle_inline_image(page_index, state.ctm, marks, keep_images)?
+                if let Some(inline) = operator.inline.as_ref() {
+                    match handle_inline_image(
+                        page_index,
+                        effective,
+                        content,
+                        inline,
+                        state.ctm,
+                        marks,
+                        keep_images,
+                    )? {
+                        InlineOutcome::Untouched => {}
+                        InlineOutcome::Survivor(span) => surviving_spans.push(span),
+                        InlineOutcome::Edit(bytes) => {
+                            replacement = Some(bytes);
+                            replaced_span = Some((operator.start, inline.object_end));
+                        }
+                    }
+                } else if let Some(span) =
+                    inline_without_span(page_index, state.ctm, marks, keep_images)?
                 {
                     surviving_spans.push(span);
                 }
@@ -975,11 +1002,18 @@ fn rewrite_content(
         }
 
         if let Some(replacement) = replacement {
-            out.extend_from_slice(&content[cursor..operator.start]);
-            out.push(b' ');
+            let (start, end) = replaced_span.unwrap_or((operator.start, operator.end));
+            out.extend_from_slice(&content[cursor..start]);
+            if replaced_span.is_none() {
+                // Text replacements need separator tokens; an inline image is
+                // emitted as a complete, self-delimited BI..EI object.
+                out.push(b' ');
+            }
             out.extend_from_slice(&replacement);
-            out.push(b'\n');
-            cursor = operator.end;
+            if replaced_span.is_none() {
+                out.push(b'\n');
+            }
+            cursor = end;
             changed = true;
             if let Some(mut entry) = pending_entry {
                 entry.page = page_index;
@@ -1561,7 +1595,12 @@ fn handle_xobject(
     let placement = unit_square_rect(ctm);
     let intersects = marks.iter().any(|mark| placement.intersects(mark));
     let unhandled = |object: Option<ObjectId>, detail: String, label: String| {
-        if intersects {
+        // An unresolved or direct XObject has no trustworthy bounding box: the
+        // unit square is only the placement of a *resolved* image. When the
+        // page is marked, or the CTM cannot be inverted, we cannot prove the
+        // name lies outside every mark, so fail closed instead of skipping it.
+        let unknown_placement = !marks.is_empty() || invert(ctm).is_none();
+        if intersects || unknown_placement {
             xobject_fail_closed(page_index, object, keep_images, placement, detail, label)
         } else {
             Ok(None)
@@ -1694,17 +1733,23 @@ fn handle_form_xobject(
     image_regions: &mut BTreeMap<ObjectId, (usize, Vec<ImageRegion>)>,
     forms: &mut FormRecursion,
 ) -> Result<Option<SurvivingSpan>, RedactionError> {
-    let matrix = matrix_from_object(dictionary.get("Matrix")).unwrap_or_else(Matrix::identity);
+    let matrix = form_matrix(effective, page_index, id, dictionary)?;
     let full = Matrix::multiply(matrix, ctm);
-    let placement = form_placement(full, dictionary);
-    if !marks.iter().any(|mark| placement.intersects(mark)) {
+    let bbox = form_bbox(effective, dictionary)?;
+    let placement = form_placement(full, bbox);
+    if let Some(rect) = &placement
+        && !marks.iter().any(|mark| rect.intersects(mark))
+    {
         return Ok(None);
     }
+    // A form with no usable `/BBox` has no trustworthy geometry. It must never
+    // be skipped: recurse into it and let its content decide, or fail closed on
+    // anything unsupported inside.
     if keep_images {
         return Ok(Some(SurvivingSpan {
             page: page_index,
             text: format!("<form XObject {name}>"),
-            rect: placement,
+            rect: placement.unwrap_or_else(|| unit_square_rect(full)),
         }));
     }
     if forms.active.contains(&id) {
@@ -1851,42 +1896,86 @@ fn form_content_filters(
     }
 }
 
-/// Build a matrix from a PDF six-number array.
-fn matrix_from_object(value: Option<&Object>) -> Option<Matrix> {
-    let items = value?.as_array()?;
+/// Resolve and parse a form `/Matrix`.
+///
+/// An absent `/Matrix` is the identity, as the specification requires. An
+/// indirect value is resolved through the effective document. A present value
+/// that is not a finite six-number array fails closed: substituting the
+/// identity could silently skip a form that really lies under a mark.
+fn form_matrix(
+    effective: &Document,
+    page: usize,
+    object: ObjectId,
+    dictionary: &Dictionary,
+) -> Result<Matrix, RedactionError> {
+    let Some(value) = dictionary.get("Matrix") else {
+        return Ok(Matrix::identity());
+    };
+    let resolved = match value {
+        Object::Reference(id) => effective.object(*id).map_err(RedactionError::Core)?,
+        other => other.clone(),
+    };
+    let invalid = || RedactionError::UnsupportedForm {
+        page,
+        object: Some(object),
+        detail: "form /Matrix is present but not a finite six-number array".to_owned(),
+    };
+    let Some(items) = resolved.as_array() else {
+        return Err(invalid());
+    };
     if items.len() < 6 {
-        return None;
+        return Err(invalid());
     }
     let values: Option<Vec<f64>> = items.iter().take(6).map(Object::as_f64).collect();
-    let values = values?;
-    Some(Matrix([
+    let Some(values) = values else {
+        return Err(invalid());
+    };
+    if !values.iter().all(|value| value.is_finite()) {
+        return Err(invalid());
+    }
+    Ok(Matrix([
         values[0], values[1], values[2], values[3], values[4], values[5],
     ]))
 }
 
-/// Return the page-space rectangle a form paints: its `/BBox` under `matrix`,
-/// or the unit square when no usable box is present.
-fn form_placement(matrix: Matrix, dictionary: &Dictionary) -> Rect {
-    let bbox = dictionary
-        .get("BBox")
-        .and_then(Object::as_array)
-        .and_then(|items| {
-            let values: Option<Vec<f64>> = items.iter().map(Object::as_f64).collect();
-            let values = values?;
-            if values.len() < 4 {
-                return None;
-            }
-            Some((
-                values[0].min(values[2]),
-                values[1].min(values[3]),
-                values[0].max(values[2]),
-                values[1].max(values[3]),
-            ))
-        });
-    match bbox {
-        Some((x0, y0, x1, y1)) => corners_rect(matrix, x0, y0, x1, y1),
-        None => unit_square_rect(matrix),
+/// Resolve a form `/BBox`. Absent, malformed or non-finite values yield `None`,
+/// which callers treat as "possibly intersecting" — never as a reason to skip.
+fn form_bbox(
+    effective: &Document,
+    dictionary: &Dictionary,
+) -> Result<Option<(f64, f64, f64, f64)>, RedactionError> {
+    let Some(value) = dictionary.get("BBox") else {
+        return Ok(None);
+    };
+    let resolved = match value {
+        Object::Reference(id) => effective.object(*id).map_err(RedactionError::Core)?,
+        other => other.clone(),
+    };
+    let Some(items) = resolved.as_array() else {
+        return Ok(None);
+    };
+    if items.len() < 4 {
+        return Ok(None);
     }
+    let values: Option<Vec<f64>> = items.iter().map(Object::as_f64).collect();
+    let Some(values) = values else {
+        return Ok(None);
+    };
+    if !values.iter().all(|value| value.is_finite()) {
+        return Ok(None);
+    }
+    Ok(Some((
+        values[0].min(values[2]),
+        values[1].min(values[3]),
+        values[0].max(values[2]),
+        values[1].max(values[3]),
+    )))
+}
+
+/// Page-space placement of a form with a usable `/BBox`. `None` means the
+/// geometry is unknown and the form must be treated as possibly intersecting.
+fn form_placement(matrix: Matrix, bbox: Option<(f64, f64, f64, f64)>) -> Option<Rect> {
+    bbox.map(|(x0, y0, x1, y1)| corners_rect(matrix, x0, y0, x1, y1))
 }
 
 /// Fail closed or record a survivor for an intersecting non-image XObject.
@@ -1913,8 +2002,19 @@ fn xobject_fail_closed(
     }
 }
 
-/// Inline images cannot be decoded by this round; fail closed when intersecting.
-fn handle_inline_image(
+/// Outcome of examining one inline image against the redaction marks.
+enum InlineOutcome {
+    /// No mark intersects the image; its bytes are kept verbatim.
+    Untouched,
+    /// `keep_images` opted out; report the survivor.
+    Survivor(SurvivingSpan),
+    /// A complete, re-encoded `BI ... EI` object replacing the original bytes.
+    Edit(Vec<u8>),
+}
+
+/// Fail closed for a `BI` whose dictionary/sample span the tokenizer could not
+/// retain (defensive: well-formed streams always carry the inline data).
+fn inline_without_span(
     page_index: usize,
     ctm: Matrix,
     marks: &[Rect],
@@ -1934,8 +2034,344 @@ fn handle_inline_image(
     Err(RedactionError::UnsupportedImage {
         page: page_index,
         object: None,
-        detail: "inline images (BI/ID/EI) are not decoded in round B1".to_owned(),
+        detail: "inline image has no retained dictionary or sample span".to_owned(),
     })
+}
+
+/// Decode and pixel-redact one intersecting inline image, then rebuild its
+/// `BI ... EI` bytes in place inside the surrounding content stream.
+fn handle_inline_image(
+    page_index: usize,
+    effective: &Document,
+    content: &[u8],
+    inline: &InlineImage,
+    ctm: Matrix,
+    marks: &[Rect],
+    keep_images: bool,
+) -> Result<InlineOutcome, RedactionError> {
+    let placement = unit_square_rect(ctm);
+    if !marks.iter().any(|mark| placement.intersects(mark)) {
+        return Ok(InlineOutcome::Untouched);
+    }
+    if keep_images {
+        return Ok(InlineOutcome::Survivor(SurvivingSpan {
+            page: page_index,
+            text: "<inline image>".to_owned(),
+            rect: placement,
+        }));
+    }
+    if !inline.sample_confident || inline.sample_end <= inline.sample_start {
+        return Err(RedactionError::UnsupportedImage {
+            page: page_index,
+            object: None,
+            detail: "inline image has no clear sample span".to_owned(),
+        });
+    }
+    let inverse = invert(ctm).ok_or_else(|| RedactionError::UnsupportedImage {
+        page: page_index,
+        object: None,
+        detail: "inline image placement transform is not invertible".to_owned(),
+    })?;
+    let regions: Vec<ImageRegion> = marks
+        .iter()
+        .filter_map(|mark| mark_image_region(*mark, inverse))
+        .collect();
+    if regions.is_empty() {
+        return Ok(InlineOutcome::Untouched);
+    }
+
+    let dictionary = inline_dictionary(page_index, &inline.dictionary)?;
+    let sample_len = inline.sample_end - inline.sample_start;
+    let _support = validate_image_support(page_index, None, effective, &dictionary, sample_len)?;
+    let data = content
+        .get(inline.sample_start..inline.sample_end)
+        .ok_or_else(|| RedactionError::UnsupportedImage {
+            page: page_index,
+            object: None,
+            detail: "inline image sample span is out of bounds".to_owned(),
+        })?;
+    let mut decoded = decode_inline_samples(effective, page_index, &dictionary, data)?;
+    fill_image_regions(
+        &mut decoded.samples,
+        decoded.width,
+        decoded.height,
+        decoded.components,
+        0,
+        &regions,
+    );
+    if decoded.components != 1 && decoded.components != 3 {
+        return Err(RedactionError::UnsupportedImage {
+            page: page_index,
+            object: None,
+            detail: format!(
+                "inline image has {} components after decode",
+                decoded.components
+            ),
+        });
+    }
+    let replacement = build_inline_image(
+        decoded.width,
+        decoded.height,
+        decoded.components,
+        &decoded.samples,
+    );
+    Ok(InlineOutcome::Edit(replacement))
+}
+
+/// One decoded inline image, with Indexed palettes already expanded to RGB.
+struct DecodedInline {
+    width: u32,
+    height: u32,
+    components: usize,
+    samples: Vec<u8>,
+}
+
+/// Decode inline image samples to 8-bit components using the same filter and
+/// colour-space path as image XObjects. Indexed images are expanded to RGB so
+/// the rebuilt dictionary stays simple and the black fill is unambiguous.
+fn decode_inline_samples(
+    effective: &Document,
+    page: usize,
+    dictionary: &Dictionary,
+    data: &[u8],
+) -> Result<DecodedInline, RedactionError> {
+    let width = dictionary
+        .get("Width")
+        .and_then(Object::as_i64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| RedactionError::UnsupportedImage {
+            page,
+            object: None,
+            detail: "inline image has no usable /W".to_owned(),
+        })?;
+    let height = dictionary
+        .get("Height")
+        .and_then(Object::as_i64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| RedactionError::UnsupportedImage {
+            page,
+            object: None,
+            detail: "inline image has no usable /H".to_owned(),
+        })?;
+    let filters = image_filter_names(dictionary);
+    let (mut components, mut samples, color_space) = if filters == ["DCTDecode"] {
+        let (components, samples, color_space) = decode_jpeg(data, width, height, page, None)?;
+        (components, samples, color_space)
+    } else if filters.is_empty() || filters == ["FlateDecode"] {
+        let raw = if filters.is_empty() {
+            data.to_vec()
+        } else {
+            let params =
+                flate_params(dictionary).ok_or_else(|| RedactionError::UnsupportedImage {
+                    page,
+                    object: None,
+                    detail: "inline image has unsupported /DecodeParms".to_owned(),
+                })?;
+            decode_stream(data, &[Filter::FlateDecode(params)]).map_err(|error| {
+                RedactionError::UnsupportedImage {
+                    page,
+                    object: None,
+                    detail: format!("inline image Flate decode failed: {error}"),
+                }
+            })?
+        };
+        let (components, color_space, _fill) = raw_color_layout(effective, dictionary, page, None)?;
+        check_sample_budget(page, None, u64::from(width) * u64::from(height), components)?;
+        let expected = width as usize * height as usize * components;
+        if raw.len() < expected {
+            return Err(RedactionError::UnsupportedImage {
+                page,
+                object: None,
+                detail: format!(
+                    "inline image sample buffer is {} bytes, expected {expected}",
+                    raw.len()
+                ),
+            });
+        }
+        (components, raw[..expected].to_vec(), color_space)
+    } else {
+        return Err(RedactionError::UnsupportedImage {
+            page,
+            object: None,
+            detail: format!("unsupported inline image filter chain {filters:?}"),
+        });
+    };
+    if let Object::Array(items) = &color_space
+        && items.first().and_then(Object::as_name) == Some("Indexed")
+    {
+        samples = expand_indexed_samples(page, &samples, items)?;
+        components = 3;
+    }
+    Ok(DecodedInline {
+        width,
+        height,
+        components,
+        samples,
+    })
+}
+
+/// Expand one 8-bit Indexed palette into RGB samples.
+fn expand_indexed_samples(
+    page: usize,
+    indices: &[u8],
+    items: &[Object],
+) -> Result<Vec<u8>, RedactionError> {
+    let base = items
+        .get(1)
+        .and_then(Object::as_name)
+        .unwrap_or("DeviceRGB");
+    let lookup = match items.get(3) {
+        Some(Object::String(bytes)) => bytes.as_slice(),
+        _ => {
+            return Err(RedactionError::UnsupportedImage {
+                page,
+                object: None,
+                detail: "Indexed inline image has no direct lookup table".to_owned(),
+            });
+        }
+    };
+    let stride = if base == "DeviceGray" || base == "G" {
+        1
+    } else {
+        3
+    };
+    let mut out = Vec::with_capacity(indices.len() * 3);
+    for &index in indices {
+        let start = index as usize * stride;
+        let pixel =
+            lookup
+                .get(start..start + stride)
+                .ok_or_else(|| RedactionError::UnsupportedImage {
+                    page,
+                    object: None,
+                    detail: "Indexed inline sample is outside the palette".to_owned(),
+                })?;
+        if stride == 1 {
+            out.extend_from_slice(&[pixel[0], pixel[0], pixel[0]]);
+        } else {
+            out.extend_from_slice(pixel);
+        }
+    }
+    Ok(out)
+}
+
+/// Translate an inline dictionary into the core dictionary shape used by the
+/// image decode helpers, mapping inline abbreviations to standard names.
+fn inline_dictionary(
+    page: usize,
+    entries: &[(String, Operand)],
+) -> Result<Dictionary, RedactionError> {
+    let mut out = Dictionary::new();
+    for (key, value) in entries {
+        match key.as_str() {
+            "W" => {
+                out.insert("Width".to_owned(), inline_object(value)?);
+            }
+            "H" => {
+                out.insert("Height".to_owned(), inline_object(value)?);
+            }
+            "BPC" => {
+                out.insert("BitsPerComponent".to_owned(), inline_object(value)?);
+            }
+            "CS" => {
+                out.insert("ColorSpace".to_owned(), inline_color_space(page, value)?);
+            }
+            "F" => {
+                out.insert("Filter".to_owned(), inline_object(value)?);
+            }
+            "DP" => {
+                out.insert("DecodeParms".to_owned(), inline_object(value)?);
+            }
+            "D" | "IM" => {
+                return Err(RedactionError::UnsupportedImage {
+                    page,
+                    object: None,
+                    detail: format!("inline image /{key} is not supported"),
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Convert one inline operand into a core object.
+fn inline_object(value: &Operand) -> Result<Object, RedactionError> {
+    match value {
+        Operand::Number(number) => {
+            if number.fract() == 0.0 && *number >= i64::MIN as f64 && *number <= i64::MAX as f64 {
+                Ok(Object::Integer(*number as i64))
+            } else {
+                Ok(Object::Real(*number))
+            }
+        }
+        Operand::Name(name) => Ok(Object::Name(name.clone())),
+        Operand::Text(bytes) => Ok(Object::String(bytes.clone())),
+        Operand::Array(items) => items
+            .iter()
+            .map(inline_object)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Object::Array),
+        Operand::Dictionary(items) => {
+            let mut dictionary = Dictionary::new();
+            for (key, value) in items {
+                dictionary.insert(key.clone(), inline_object(value)?);
+            }
+            Ok(Object::Dictionary(dictionary))
+        }
+        Operand::Other => Ok(Object::Null),
+    }
+}
+
+/// Convert an inline `/CS` value, expanding the inline abbreviations.
+fn inline_color_space(page: usize, value: &Operand) -> Result<Object, RedactionError> {
+    let canonical = |name: &str| -> Object {
+        let standard = match name {
+            "G" => "DeviceGray",
+            "RGB" => "DeviceRGB",
+            "CMYK" => "DeviceCMYK",
+            "I" => "Indexed",
+            other => other,
+        };
+        Object::Name(standard.to_owned())
+    };
+    match value {
+        Operand::Name(name) => Ok(canonical(name)),
+        Operand::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                out.push(match item {
+                    Operand::Name(name) if index <= 1 => canonical(name),
+                    other => inline_object(other)?,
+                });
+            }
+            Ok(Object::Array(out))
+        }
+        _ => Err(RedactionError::UnsupportedImage {
+            page,
+            object: None,
+            detail: "inline image /CS is not a name or array".to_owned(),
+        }),
+    }
+}
+
+/// Build a deterministic, unfiltered inline image with the redacted samples.
+///
+/// An unfiltered image lets a conforming reader derive the exact sample length
+/// from `/W`, `/H`, `/BPC` and `/CS`, so sample bytes that happen to spell `EI`
+/// cannot confuse the terminator. No `/F`, `/DP` or `/D` entry is emitted.
+fn build_inline_image(width: u32, height: u32, components: usize, samples: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(samples.len() + 96);
+    out.extend_from_slice(b"BI /W ");
+    out.extend_from_slice(format_number(f64::from(width)).as_bytes());
+    out.extend_from_slice(b" /H ");
+    out.extend_from_slice(format_number(f64::from(height)).as_bytes());
+    out.extend_from_slice(b" /BPC 8 /CS ");
+    out.extend_from_slice(if components == 1 { b"/G" } else { b"/RGB" });
+    out.extend_from_slice(b" ID\n");
+    out.extend_from_slice(samples);
+    out.extend_from_slice(b"\nEI");
+    out
 }
 
 /// The page-space rectangle covered by the unit square under `ctm`.
