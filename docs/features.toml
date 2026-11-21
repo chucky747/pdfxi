@@ -1331,21 +1331,27 @@ tests = [
 title = "Flatten annotations and form fields"
 
 [[feature]]
-docs = "docs/evidence/hardening/T-0237.md"
+docs = "docs/evidence/hardening/T-0268.md"
 domain = "Edit"
-evidence = "docs/evidence/hardening/T-0237.md"
+evidence = "docs/evidence/hardening/T-0268.md"
 id = "EDIT-013"
 notes = """
 Document-level redaction on a real Document: glyph-level content removal with
 partial-run splitting and TJ advance preservation, in-place content-stream
-rewrite, annotation/appearance removal, link and widget gating, AcroForm /Fields
-and /CO filtering, optional /Info and XMP clearing, and a fail-closed verifier
-that checks extracted text, stored and Flate-decompressed stream bytes in UTF-8
-and UTF-16LE, and surviving annotation/field rectangles. Image pixel redaction
-is implemented for 8-bit DeviceGray/RGB/Indexed and DCTDecode JPEG; unsupported
-images fail closed. Intersecting form XObjects and unresolved Do names are also
-fail-closed (`UnsupportedImage`) rather than silently skipped; form recursion
-and inline-image decoding remain follow-up work; no app shell is exposed.
+rewrite, annotation/appearance removal, link and widget gating, AcroForm
+/Fields and /CO filtering, optional /Info and XMP clearing, image pixel
+redaction for 8-bit DeviceGray/RGB/Indexed and DCTDecode JPEG, and a
+fail-closed verifier that checks extracted text, stored and Flate-decompressed
+stream bytes in UTF-8 and UTF-16LE, and surviving annotation/field rectangles.
+Form XObjects are now recursed: a form whose BBox under its Matrix and the
+current CTM intersects a mark is decoded and rewritten with the same glyph and
+image logic, nested forms are followed to 16 levels with cycle and visit caps,
+and a rewritten form is staged copy-on-write. `UnsupportedForm` fails closed on
+a cycle, depth/visit overflow, undecodable form stream or unsupported filter.
+`keep_images = true` reports an intersecting form as a survivor. Unresolved Do
+names and unsupported non-form XObjects stay fail-closed. Form vector graphics
+are not removed, matching page content. Inline images (BI/ID/EI) remain
+fail-closed (Round B), and no app shell is exposed.
 """
 priority = "P1"
 status = "library"
@@ -1357,7 +1363,9 @@ tests = [
     "redaction_document::image_pixels_under_a_mark_are_black_and_metadata_is_gone",
     "redaction_document::jpeg_image_under_a_mark_is_decoded_refilled_and_flated",
     "redaction_document::intersecting_jpx_image_fails_closed_without_saving",
-    "redaction_document::form_xobject_under_a_mark_fails_closed",
+    "redaction_document::form_xobject_text_under_a_mark_is_removed",
+    "redaction_document::form_xobject_opt_out_is_a_survivor",
+    "redaction_document::cyclic_form_xobject_fails_closed",
     "redaction_document::unresolvable_xobject_under_a_mark_fails_closed",
 ]
 title = "Redaction marks and permanent removal"

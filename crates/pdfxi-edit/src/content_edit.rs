@@ -3158,11 +3158,21 @@ pub(crate) fn load_fonts(
     document: &Document,
     page: &pdfxi_core::Page,
 ) -> Result<BTreeMap<String, FontInfo>, TextEditError> {
+    let resources = page_resources(document, page)?;
+    load_fonts_from_resources(document, resources.as_ref())
+}
+
+/// Load every `/Font` entry from an already resolved resource dictionary.
+///
+/// Form XObjects carry their own `/Resources`; when they do, those resources
+/// replace (not merge with) the parent page's. Callers pass the form's resolved
+/// `/Resources` value here, or pass `None` to inherit the parent's font map.
+pub(crate) fn load_fonts_from_resources(
+    document: &Document,
+    resources: Option<&Object>,
+) -> Result<BTreeMap<String, FontInfo>, TextEditError> {
     let mut fonts = BTreeMap::new();
-    let Some(resources) = page_resources(document, page)? else {
-        return Ok(fonts);
-    };
-    let Some(resources) = resources.as_dictionary() else {
+    let Some(resources) = resources.and_then(Object::as_dictionary) else {
         return Ok(fonts);
     };
     let font_dictionary = match resolve(document, resources.get("Font"))? {

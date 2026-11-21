@@ -26,11 +26,31 @@
 //! into the redacted area. The implicit line move of `'` and `"` is preserved
 //! with `T*`, and `"` also re-emits its word and character spacing operands.
 //!
-//! Inline images (`BI ... ID ... EI`) are fail-closed in round B1: an
-//! intersecting inline image is a typed error when images are being redacted,
-//! because the tokenizer does not retain its dictionary and sample span. Form
-//! XObject content is not recursed into yet (round B2); a mark that lands on
-//! text inside a form must therefore be treated as unresolved by the caller.
+//! Inline images (`BI ... ID ... EI`) are still fail-closed: an intersecting
+//! inline image is a typed error when images are being redacted, because the
+//! tokenizer does not retain its dictionary and sample span. This is the
+//! remaining round-B gap.
+//!
+//! # Form XObjects
+//!
+//! A `Do` naming a `/Subtype /Form` XObject is recursed into when its painted
+//! region (its `/BBox` under the current CTM and the form `/Matrix`) intersects
+//! a mark. The form content is decoded and rewritten with the same glyph and
+//! image logic as a page, with the form matrix composed into the CTM so glyph
+//! and image rectangles stay in page space. Nested forms are followed to a
+//! depth of sixteen levels, with a cycle check on the active object ids and a
+//! total visit budget. A cycle, a depth or visit overflow, an
+//! undecodable form stream or an unsupported nested XObject fails closed with
+//! [`RedactionError::UnsupportedForm`] before anything is staged. A rewritten
+//! form is stored copy-on-write in its own object; the source page dictionary
+//! and the original bytes are never mutated. A form whose placement does not
+//! intersect a mark is not read or rewritten. Form vector graphics are outside
+//! this pass, exactly as they are for page content: only text and image
+//! XObjects are removed.
+//!
+//! With [`RedactionRequest::keep_images`] set to `true`, an intersecting form is
+//! not recursed into: it becomes a `<form XObject ...>` survivor and `clean` is
+//! false, so an opt-out can never produce a silently clean result.
 //!
 //! # Image XObjects
 //!
@@ -263,6 +283,16 @@ pub enum RedactionError {
         /// Stable explanation naming the unsupported filter or layout.
         detail: String,
     },
+    /// An intersecting form XObject cannot be recursed into safely.
+    #[error("unsupported form XObject on page {page}: {detail}")]
+    UnsupportedForm {
+        /// Zero-based page index.
+        page: usize,
+        /// The form XObject that could not be processed.
+        object: Option<ObjectId>,
+        /// Stable explanation naming the cycle, limit or unsupported content.
+        detail: String,
+    },
     /// An image exceeded the pixel or decoded-sample budget.
     #[error("image limit exceeded on page {page}: {detail}")]
     ImageLimitExceeded {
@@ -326,6 +356,7 @@ pub fn apply_redaction(
     };
     let mut removed_widgets: BTreeSet<ObjectId> = BTreeSet::new();
     let mut image_regions: BTreeMap<ObjectId, (usize, Vec<ImageRegion>)> = BTreeMap::new();
+    let mut forms = FormRecursion::default();
 
     // Phase 1: read and rewrite every marked page in memory. Nothing is staged
     // yet, so an unsupported image or a failed decode returns without a partial
@@ -337,15 +368,22 @@ pub fn apply_redaction(
             .page_content(*page_index)
             .map_err(RedactionError::Core)?;
         let fonts = load_fonts(&effective, &page)?;
+        let resources = crate::content_edit::page_resources(&effective, &page)?;
+        let xobjects = xobject_dictionary(&effective, resources.as_ref())?;
+        let content_resources = ContentResources {
+            fonts: &fonts,
+            xobjects: xobjects.as_ref(),
+        };
         let outcome = rewrite_content(
             *page_index,
             &effective,
-            &page,
             &content,
-            &fonts,
+            &content_resources,
+            Matrix::identity(),
             page_marks,
             request.keep_images,
             &mut image_regions,
+            &mut forms,
         )?;
         report
             .removed_runs
@@ -360,16 +398,40 @@ pub fn apply_redaction(
             outcome,
         });
     }
+    report
+        .removed_runs
+        .extend(forms.removed_runs.iter().cloned());
+    report
+        .surviving_spans
+        .extend(forms.surviving_spans.iter().cloned());
 
     // Decode and fill every intersecting image before staging any page change.
     let image_edits = prepare_image_edits(&effective, &image_regions)?;
 
-    // Phase 2: stage the already-validated page content and image objects.
+    // Phase 2: stage the already-validated page content, image objects and
+    // rewritten forms.
     for edit in image_edits {
         document.set_object(edit.object, edit.base)?;
         if let Some((id, stream)) = edit.smask {
             document.set_object(id, stream)?;
         }
+    }
+
+    for (id, entry) in &forms.store {
+        if !entry.changed {
+            continue;
+        }
+        let mut dictionary = entry.dictionary.clone();
+        dictionary.remove("Filter");
+        dictionary.remove("DecodeParms");
+        dictionary.remove("Length");
+        document.set_object(
+            *id,
+            Object::Stream {
+                dictionary,
+                data: entry.content.clone(),
+            },
+        )?;
     }
 
     for work in &page_work {
@@ -699,17 +761,46 @@ struct Analysis {
     advance_ok: bool,
 }
 
+/// Fonts and XObjects that name the resources of one content stream.
+struct ContentResources<'a> {
+    fonts: &'a BTreeMap<String, FontInfo>,
+    xobjects: Option<&'a Dictionary>,
+}
+
+/// One form XObject whose content is being (or has been) rewritten.
+struct FormEntry {
+    dictionary: Dictionary,
+    content: Vec<u8>,
+    changed: bool,
+}
+
+/// Shared recursion state for form XObjects across every marked page.
+#[derive(Default)]
+struct FormRecursion {
+    active: Vec<ObjectId>,
+    visits: usize,
+    store: BTreeMap<ObjectId, FormEntry>,
+    removed_runs: Vec<RemovedTextRun>,
+    surviving_spans: Vec<SurvivingSpan>,
+}
+
+/// Maximum form XObject nesting depth followed from one page.
+const MAX_FORM_DEPTH: usize = 16;
+/// Maximum form XObject visits (including repeats) in one redaction call.
+const MAX_FORM_VISITS: usize = 512;
+
 /// Tokenize, scan and rewrite one content stream.
 #[allow(clippy::too_many_arguments)]
 fn rewrite_content(
     page_index: usize,
     effective: &Document,
-    page: &pdfxi_core::Page,
     content: &[u8],
-    fonts: &BTreeMap<String, FontInfo>,
+    resources: &ContentResources<'_>,
+    initial_ctm: Matrix,
     marks: &[Rect],
     keep_images: bool,
     image_regions: &mut BTreeMap<ObjectId, (usize, Vec<ImageRegion>)>,
+    forms: &mut FormRecursion,
 ) -> Result<RewriteOutcome, RedactionError> {
     let operators = tokenize(content)?;
     let mut out = Vec::with_capacity(content.len());
@@ -718,11 +809,10 @@ fn rewrite_content(
     let mut removed_runs = Vec::new();
     let mut surviving_spans = Vec::new();
     let mut state = State::new();
+    state.ctm = initial_ctm;
     let mut saved = Vec::new();
     let mut text_matrix = Matrix::identity();
     let mut line_matrix = Matrix::identity();
-    let resources = crate::content_edit::page_resources(effective, page)?;
-    let xobjects = xobject_dictionary(effective, resources.as_ref())?;
 
     for operator in &operators {
         let mut replacement: Option<Vec<u8>> = None;
@@ -741,15 +831,16 @@ fn rewrite_content(
             }
             "Do" => {
                 if let Some(Operand::Name(name)) = operator.operands.last()
-                    && let Some(span) = handle_image_xobject(
+                    && let Some(span) = handle_xobject(
                         page_index,
                         effective,
-                        xobjects.as_ref(),
+                        resources,
                         name,
                         state.ctm,
                         marks,
                         keep_images,
                         image_regions,
+                        forms,
                     )?
                 {
                     surviving_spans.push(span);
@@ -822,8 +913,13 @@ fn rewrite_content(
             }
             "Tj" | "TJ" => {
                 if let Some(text) = text_operand(&operator.operands) {
-                    let analysis =
-                        analyze_text(text, fonts.get(&state.font), &state, text_matrix, marks)?;
+                    let analysis = analyze_text(
+                        text,
+                        resources.fonts.get(&state.font),
+                        &state,
+                        text_matrix,
+                        marks,
+                    )?;
                     advance_analysis(&analysis, &state, &mut text_matrix);
                     if let Some((bytes, entry)) = reemit(&analysis, &state, None)? {
                         replacement = Some(bytes);
@@ -835,8 +931,13 @@ fn rewrite_content(
                 line_matrix = Matrix::multiply(Matrix::translate(0.0, -state.leading), line_matrix);
                 text_matrix = line_matrix;
                 if let Some(text) = text_operand(&operator.operands) {
-                    let analysis =
-                        analyze_text(text, fonts.get(&state.font), &state, text_matrix, marks)?;
+                    let analysis = analyze_text(
+                        text,
+                        resources.fonts.get(&state.font),
+                        &state,
+                        text_matrix,
+                        marks,
+                    )?;
                     advance_analysis(&analysis, &state, &mut text_matrix);
                     if let Some((bytes, entry)) = reemit(&analysis, &state, Some(Quote::Single))? {
                         replacement = Some(bytes);
@@ -856,8 +957,13 @@ fn rewrite_content(
                 line_matrix = Matrix::multiply(Matrix::translate(0.0, -state.leading), line_matrix);
                 text_matrix = line_matrix;
                 if let Some(text) = text_operand(&operator.operands) {
-                    let analysis =
-                        analyze_text(text, fonts.get(&state.font), &state, text_matrix, marks)?;
+                    let analysis = analyze_text(
+                        text,
+                        resources.fonts.get(&state.font),
+                        &state,
+                        text_matrix,
+                        marks,
+                    )?;
                     advance_analysis(&analysis, &state, &mut text_matrix);
                     if let Some((bytes, entry)) = reemit(&analysis, &state, Some(Quote::Double))? {
                         replacement = Some(bytes);
@@ -885,7 +991,13 @@ fn rewrite_content(
 
     let bytes = if changed { out } else { content.to_vec() };
     if changed {
-        surviving_spans.extend(scan_survivors(page_index, &bytes, fonts, marks)?);
+        surviving_spans.extend(scan_survivors(
+            page_index,
+            &bytes,
+            resources.fonts,
+            initial_ctm,
+            marks,
+        )?);
     }
     Ok(RewriteOutcome {
         bytes,
@@ -1282,10 +1394,12 @@ fn scan_survivors(
     page_index: usize,
     content: &[u8],
     fonts: &BTreeMap<String, FontInfo>,
+    initial_ctm: Matrix,
     marks: &[Rect],
 ) -> Result<Vec<SurvivingSpan>, RedactionError> {
     let operators = tokenize(content)?;
     let mut state = State::new();
+    state.ctm = initial_ctm;
     let mut saved = Vec::new();
     let mut text_matrix = Matrix::identity();
     let mut line_matrix = Matrix::identity();
@@ -1428,28 +1542,32 @@ fn xobject_dictionary(
 
 /// Handle one `Do` XObject placement.
 ///
-/// A supported image under a mark is scheduled for pixel redaction. Any other
-/// intersecting XObject — a form, a direct object, an unresolvable reference or
-/// a missing name — fails closed instead of being silently skipped.
+/// A supported image under a mark is scheduled for pixel redaction; a form is
+/// recursed into; any other intersecting XObject — a direct object, an
+/// unresolvable reference or a missing name — fails closed instead of being
+/// silently skipped.
 #[allow(clippy::too_many_arguments)]
-fn handle_image_xobject(
+fn handle_xobject(
     page_index: usize,
     effective: &Document,
-    xobjects: Option<&Dictionary>,
+    resources: &ContentResources<'_>,
     name: &str,
     ctm: Matrix,
     marks: &[Rect],
     keep_images: bool,
     image_regions: &mut BTreeMap<ObjectId, (usize, Vec<ImageRegion>)>,
+    forms: &mut FormRecursion,
 ) -> Result<Option<SurvivingSpan>, RedactionError> {
     let placement = unit_square_rect(ctm);
-    if !marks.iter().any(|mark| placement.intersects(mark)) {
-        return Ok(None);
-    }
+    let intersects = marks.iter().any(|mark| placement.intersects(mark));
     let unhandled = |object: Option<ObjectId>, detail: String, label: String| {
-        xobject_fail_closed(page_index, object, keep_images, placement, detail, label)
+        if intersects {
+            xobject_fail_closed(page_index, object, keep_images, placement, detail, label)
+        } else {
+            Ok(None)
+        }
     };
-    let Some(xobjects) = xobjects else {
+    let Some(xobjects) = resources.xobjects else {
         return unhandled(
             None,
             "the page has no /Resources /XObject dictionary".to_owned(),
@@ -1487,10 +1605,19 @@ fn handle_image_xobject(
     match dictionary.get("Subtype").and_then(Object::as_name) {
         Some("Image") => {}
         Some("Form") => {
-            return unhandled(
-                Some(id),
-                "form XObject content is not recursed in this round".to_owned(),
-                format!("<form XObject {name}>"),
+            return handle_form_xobject(
+                page_index,
+                effective,
+                id,
+                name,
+                &dictionary,
+                &data,
+                resources,
+                ctm,
+                marks,
+                keep_images,
+                image_regions,
+                forms,
             );
         }
         Some(other) => {
@@ -1507,6 +1634,9 @@ fn handle_image_xobject(
                 format!("<unresolved XObject {name}>"),
             );
         }
+    }
+    if !intersects {
+        return Ok(None);
     }
     if keep_images {
         return Ok(Some(SurvivingSpan {
@@ -1542,6 +1672,221 @@ fn handle_image_xobject(
         .1
         .extend(regions);
     Ok(None)
+}
+
+/// Recursively rewrite one intersecting form XObject.
+///
+/// The form `/Matrix` is composed with the current CTM, so the rewritten content
+/// is analysed in page space. A form that is placed more than once is rewritten
+/// cumulatively: the second pass starts from the bytes produced by the first.
+#[allow(clippy::too_many_arguments)]
+fn handle_form_xobject(
+    page_index: usize,
+    effective: &Document,
+    id: ObjectId,
+    name: &str,
+    dictionary: &Dictionary,
+    data: &[u8],
+    parent: &ContentResources<'_>,
+    ctm: Matrix,
+    marks: &[Rect],
+    keep_images: bool,
+    image_regions: &mut BTreeMap<ObjectId, (usize, Vec<ImageRegion>)>,
+    forms: &mut FormRecursion,
+) -> Result<Option<SurvivingSpan>, RedactionError> {
+    let matrix = matrix_from_object(dictionary.get("Matrix")).unwrap_or_else(Matrix::identity);
+    let full = Matrix::multiply(matrix, ctm);
+    let placement = form_placement(full, dictionary);
+    if !marks.iter().any(|mark| placement.intersects(mark)) {
+        return Ok(None);
+    }
+    if keep_images {
+        return Ok(Some(SurvivingSpan {
+            page: page_index,
+            text: format!("<form XObject {name}>"),
+            rect: placement,
+        }));
+    }
+    if forms.active.contains(&id) {
+        return Err(RedactionError::UnsupportedForm {
+            page: page_index,
+            object: Some(id),
+            detail: "form XObject cycle detected".to_owned(),
+        });
+    }
+    if forms.active.len() >= MAX_FORM_DEPTH {
+        return Err(RedactionError::UnsupportedForm {
+            page: page_index,
+            object: Some(id),
+            detail: format!("form nesting exceeds {MAX_FORM_DEPTH} levels"),
+        });
+    }
+    forms.visits = forms.visits.saturating_add(1);
+    if forms.visits > MAX_FORM_VISITS {
+        return Err(RedactionError::UnsupportedForm {
+            page: page_index,
+            object: Some(id),
+            detail: format!("form XObject budget of {MAX_FORM_VISITS} visits exceeded"),
+        });
+    }
+
+    // Reuse the current rewritten bytes when a shared form is placed twice, so
+    // marks from every placement accumulate instead of the last one winning.
+    let (content, dictionary) = match forms.store.get(&id) {
+        Some(entry) => (entry.content.clone(), entry.dictionary.clone()),
+        None => (
+            decode_form_content(page_index, id, dictionary, data)?,
+            dictionary.clone(),
+        ),
+    };
+
+    // A form's own `/Resources` replaces the parent's; without one it inherits
+    // the parent page's fonts and XObjects.
+    let form_resources = match dictionary.get("Resources") {
+        None | Some(Object::Null) => None,
+        Some(Object::Reference(resources_id)) => Some(effective.object(*resources_id)?),
+        Some(value) => Some(value.clone()),
+    };
+    let form_fonts = match &form_resources {
+        Some(resources) => {
+            crate::content_edit::load_fonts_from_resources(effective, Some(resources))?
+        }
+        None => parent.fonts.clone(),
+    };
+    let form_xobjects = match &form_resources {
+        Some(resources) => xobject_dictionary(effective, Some(resources))?,
+        None => parent.xobjects.cloned(),
+    };
+    let resources = ContentResources {
+        fonts: &form_fonts,
+        xobjects: form_xobjects.as_ref(),
+    };
+
+    forms.active.push(id);
+    let outcome = rewrite_content(
+        page_index,
+        effective,
+        &content,
+        &resources,
+        full,
+        marks,
+        keep_images,
+        image_regions,
+        forms,
+    );
+    forms.active.pop();
+    let outcome = outcome?;
+
+    forms.removed_runs.extend(outcome.removed_runs);
+    forms.surviving_spans.extend(outcome.surviving_spans);
+    let entry = forms.store.entry(id).or_insert_with(|| FormEntry {
+        dictionary: dictionary.clone(),
+        content: content.clone(),
+        changed: false,
+    });
+    if outcome.changed {
+        entry.content = outcome.bytes;
+        entry.changed = true;
+    }
+    Ok(None)
+}
+
+/// Decode a form XObject's content stream, failing closed on any filter this
+/// pass cannot decode safely.
+fn decode_form_content(
+    page: usize,
+    object: ObjectId,
+    dictionary: &Dictionary,
+    data: &[u8],
+) -> Result<Vec<u8>, RedactionError> {
+    let filters = form_content_filters(page, object, dictionary)?;
+    if filters.is_empty() {
+        return Ok(data.to_vec());
+    }
+    decode_stream(data, &filters).map_err(|error| RedactionError::UnsupportedForm {
+        page,
+        object: Some(object),
+        detail: format!("form content stream cannot be decoded: {error}"),
+    })
+}
+
+/// Return the decode filter chain for a form content stream.
+///
+/// Only an absent filter or a single `FlateDecode` is supported. A multi-filter
+/// chain is rejected rather than guessed, because `/DecodeParms` array
+/// alignment cannot be validated here.
+fn form_content_filters(
+    page: usize,
+    object: ObjectId,
+    dictionary: &Dictionary,
+) -> Result<Vec<Filter>, RedactionError> {
+    let unsupported = |detail: String| RedactionError::UnsupportedForm {
+        page,
+        object: Some(object),
+        detail,
+    };
+    match dictionary.get("Filter") {
+        None | Some(Object::Null) => Ok(Vec::new()),
+        Some(Object::Name(name)) if name == "FlateDecode" => {
+            let params = flate_params(dictionary)
+                .ok_or_else(|| unsupported("unsupported form /DecodeParms".to_owned()))?;
+            Ok(vec![Filter::FlateDecode(params)])
+        }
+        Some(Object::Name(name)) => Err(unsupported(format!(
+            "unsupported form content filter /{name}"
+        ))),
+        Some(Object::Array(items)) if items.is_empty() => Ok(Vec::new()),
+        Some(Object::Array(items)) => match items.as_slice() {
+            [Object::Name(name)] if name == "FlateDecode" => {
+                let params = flate_params(dictionary)
+                    .ok_or_else(|| unsupported("unsupported form /DecodeParms".to_owned()))?;
+                Ok(vec![Filter::FlateDecode(params)])
+            }
+            _ => Err(unsupported(
+                "form content filter arrays other than a single FlateDecode are not supported"
+                    .to_owned(),
+            )),
+        },
+        Some(_) => Err(unsupported("unsupported form /Filter value".to_owned())),
+    }
+}
+
+/// Build a matrix from a PDF six-number array.
+fn matrix_from_object(value: Option<&Object>) -> Option<Matrix> {
+    let items = value?.as_array()?;
+    if items.len() < 6 {
+        return None;
+    }
+    let values: Option<Vec<f64>> = items.iter().take(6).map(Object::as_f64).collect();
+    let values = values?;
+    Some(Matrix([
+        values[0], values[1], values[2], values[3], values[4], values[5],
+    ]))
+}
+
+/// Return the page-space rectangle a form paints: its `/BBox` under `matrix`,
+/// or the unit square when no usable box is present.
+fn form_placement(matrix: Matrix, dictionary: &Dictionary) -> Rect {
+    let bbox = dictionary
+        .get("BBox")
+        .and_then(Object::as_array)
+        .and_then(|items| {
+            let values: Option<Vec<f64>> = items.iter().map(Object::as_f64).collect();
+            let values = values?;
+            if values.len() < 4 {
+                return None;
+            }
+            Some((
+                values[0].min(values[2]),
+                values[1].min(values[3]),
+                values[0].max(values[2]),
+                values[1].max(values[3]),
+            ))
+        });
+    match bbox {
+        Some((x0, y0, x1, y1)) => corners_rect(matrix, x0, y0, x1, y1),
+        None => unit_square_rect(matrix),
+    }
 }
 
 /// Fail closed or record a survivor for an intersecting non-image XObject.
