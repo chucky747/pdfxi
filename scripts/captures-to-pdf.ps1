@@ -5,9 +5,10 @@
 #   powershell -NoProfile -File scripts/captures-to-pdf.ps1 -Source docs/evidence/ui/final -Out docs/evidence/ui/PDFXI-installed-captures.pdf
 #
 # The sheet groups files by their name prefix (light-windows, light-macos,
-# dark-windows, dark-macos, extras), puts four captures on each A4-landscape
-# page with the file name as a caption, and prints it with Microsoft Edge in
-# headless mode. No network access and no external tools beyond Edge.
+# dark-windows, dark-macos, extras), opens with a one-page overview of every
+# capture, then a numbered index, then six captures per A4-landscape page with
+# the file name as a caption. It prints with Chrome or Edge in headless mode.
+# No network access and no external tools beyond the browser.
 
 param(
     [string]$Source = 'docs/evidence/ui/final',
@@ -26,21 +27,12 @@ if (-not (Test-Path -LiteralPath $sourceDir -PathType Container)) {
     throw "capture directory not found: $sourceDir"
 }
 
-$edgeCandidates = @(
-    (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
-    (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe')
-)
-$edge = $edgeCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-if (-not $edge) {
-    throw 'Microsoft Edge was not found; it is required for headless PDF printing'
-}
-
 $images = Get-ChildItem -LiteralPath $sourceDir -File -Filter '*.png' | Sort-Object Name
 if ($images.Count -eq 0) {
     throw "no PNG captures in $sourceDir"
 }
 
-# Keep the scratch HTML and the Edge profile inside the repository target
+# Keep the scratch HTML and the browser profile inside the repository target
 # directory: some locked-down hosts deny writes or execution in %TEMP%.
 $scratch = Join-Path $root 'target\tmp\captures-pdf'
 New-Item -ItemType Directory -Force -Path $scratch | Out-Null
@@ -51,6 +43,12 @@ $builder = New-Object System.Text.StringBuilder
 [void]$builder.AppendLine('h2{font-size:13px;margin:10px 0 6px;color:#444}')
 [void]$builder.AppendLine('.page{page-break-after:always;padding:10px 14px;box-sizing:border-box}')
 [void]$builder.AppendLine('.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}')
+[void]$builder.AppendLine('.overview{display:grid;grid-template-columns:repeat(8,1fr);gap:5px}')
+[void]$builder.AppendLine('.thumb{border:1px solid #ddd;border-radius:4px;padding:3px}')
+[void]$builder.AppendLine('.thumb img{width:100%;display:block}')
+[void]$builder.AppendLine('.thumb .cap{font-size:6px;line-height:1.1;word-break:break-all}')
+[void]$builder.AppendLine('.index{column-count:3;column-gap:18px;font-size:11px}')
+[void]$builder.AppendLine('.index div{font-family:Consolas,monospace;margin-bottom:3px;break-inside:avoid}')
 [void]$builder.AppendLine('.cell{border:1px solid #ddd;border-radius:6px;padding:6px}')
 [void]$builder.AppendLine('.cell img{width:100%;display:block}')
 [void]$builder.AppendLine('.cap{font-size:10px;color:#555;margin-top:3px;font-family:Consolas,monospace}')
@@ -74,13 +72,36 @@ foreach ($image in $images) {
     $groups[$group] += $image
 }
 
+[void]$builder.AppendLine("<div class='page'><h2>Overview - all $($images.Count) captures on one sheet</h2><div class='overview'>")
+$number = 0
+foreach ($group in $groups.Keys) {
+    foreach ($item in $groups[$group]) {
+        $number++
+        $url = 'file:///' + ($item.FullName -replace '\\', '/')
+        [void]$builder.AppendLine("<div class='thumb'><img src='$url'><div class='cap'>$number. $($item.Name)</div></div>")
+    }
+}
+[void]$builder.AppendLine('</div></div>')
+
+[void]$builder.AppendLine("<div class='page'><h2>Capture index - $($images.Count) files</h2><div class='index'>")
+$number = 0
+foreach ($group in $groups.Keys) {
+    foreach ($item in $groups[$group]) {
+        $number++
+        [void]$builder.AppendLine("<div>$number. $($item.Name)</div>")
+    }
+}
+[void]$builder.AppendLine('</div></div>')
+
 foreach ($group in $groups.Keys) {
     $items = $groups[$group]
     if (-not $items -or $items.Count -eq 0) { continue }
-    for ($i = 0; $i -lt $items.Count; $i += 4) {
+    $pageCount = [int][Math]::Ceiling($items.Count / 6)
+    for ($i = 0; $i -lt $items.Count; $i += 6) {
+        $pageNo = [int]($i / 6) + 1
         [void]$builder.AppendLine('<div class="page">')
-        [void]$builder.AppendLine("<h2>$group - page $([int]($i / 4) + 1)</h2><div class='grid'>")
-        for ($j = $i; $j -lt [Math]::Min($i + 4, $items.Count); $j++) {
+        [void]$builder.AppendLine("<h2>$group - $($items.Count) captures - page $pageNo of $pageCount</h2><div class='grid'>")
+        for ($j = $i; $j -lt [Math]::Min($i + 6, $items.Count); $j++) {
             $item = $items[$j]
             $url = 'file:///' + ($item.FullName -replace '\\', '/')
             [void]$builder.AppendLine("<div class='cell'><img src='$url'><div class='cap'>$($item.Name)</div></div>")
@@ -96,11 +117,21 @@ if ($outDir -and -not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Dir
 Remove-Item -LiteralPath $outPath -ErrorAction SilentlyContinue
 
 $url = 'file:///' + ($htmlPath -replace '\\', '/')
-# A dedicated profile avoids colliding with a running Edge instance; Edge often
-# exits non-zero after a successful print, so the file check below decides.
-$profile = Join-Path $scratch 'edge-profile'
+# Chrome first, then Edge; a fresh profile per run avoids singleton locks and
+# the watchdog stops a stuck headless print from hanging the build.
+$browserCandidates = New-Object System.Collections.Generic.List[string]
+$browserCandidates.Add((Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'))
+$browserCandidates.Add((Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'))
+if (${env:ProgramFiles(x86)}) {
+    $browserCandidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'))
+    $browserCandidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'))
+}
+$browser = $browserCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (-not $browser) { throw 'Neither Chrome nor Edge was found; one is required for headless PDF printing' }
+
+$profile = Join-Path $scratch ('browser-profile-' + (Get-Date -Format 'HHmmssfff'))
 New-Item -ItemType Directory -Force -Path $profile | Out-Null
-$edgeArgs = @(
+$browserArgs = @(
     '--headless=new',
     '--disable-gpu',
     '--no-first-run',
@@ -110,13 +141,14 @@ $edgeArgs = @(
     "--print-to-pdf=$outPath",
     $url
 )
-$edgeProcess = Start-Process -FilePath $edge -ArgumentList $edgeArgs -Wait -PassThru -NoNewWindow
-if ($edgeProcess.ExitCode -ne 0) {
-    Write-Output "EDGE exit $($edgeProcess.ExitCode) (continuing; the file check decides)"
+$process = Start-Process -FilePath $browser -ArgumentList $browserArgs -PassThru -NoNewWindow
+if (-not $process.WaitForExit(240000)) {
+    Get-Process chrome, msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    throw 'headless print did not finish within 240 s; the browser was stopped'
 }
 
 if (-not (Test-Path -LiteralPath $outPath -PathType Leaf)) {
-    throw "Edge did not produce $outPath"
+    throw "$browser did not produce $outPath (exit $($process.ExitCode))"
 }
 
 $info = Get-Item -LiteralPath $outPath

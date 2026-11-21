@@ -1,13 +1,16 @@
 ﻿# Build one review PDF for the acceptance campaign: plan, matrix, evidence,
-# blockers, handoff and every installed-build capture.
+# blockers, handoff, a generated feature status register and every
+# installed-build capture.
 #
 # Usage:
 #   powershell -NoProfile -File scripts/build-review-pdf.ps1
 #   powershell -NoProfile -File scripts/build-review-pdf.ps1 -Out docs/evidence/PDFXI-acceptance-review.pdf
 #
-# The script needs only Microsoft Edge (headless print). It converts a fixed,
-# ordered list of repository documents from Markdown to HTML, appends a labelled
-# contact sheet of docs/evidence/ui/final/*.png, and prints the result to PDF.
+# The script needs Chrome or Edge (headless print, Chrome preferred). It
+# converts a fixed, ordered list of repository documents from Markdown to HTML,
+# generates the feature register from docs/features.toml, adds a one-page
+# overview, a numbered index and 6-per-page detail pages for
+# docs/evidence/ui/final/*.png, and prints the result to PDF.
 
 param(
     [string]$Out = 'docs/evidence/PDFXI-acceptance-review.pdf'
@@ -21,7 +24,6 @@ $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $
 $scratch = Join-Path $root 'target\tmp\review-pdf'
 New-Item -ItemType Directory -Force -Path $scratch | Out-Null
 $htmlPath = Join-Path $scratch 'review.html'
-$profile = Join-Path $scratch 'edge-profile'
 
 function Convert-MarkdownToHtml {
     param([string]$Markdown, [string]$BaseDir)
@@ -230,15 +232,25 @@ pre code { background: none; padding: 0; font-size: 8pt; }
 table { width: 100%; border-collapse: collapse; margin: 0 0 3mm 0; font-size: 8.4pt; }
 th, td { border: 1px solid #cfcfcf; padding: 1.4mm 2mm; vertical-align: top; text-align: left; }
 th { background: #f2f2f2; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+.status-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 blockquote { border-left: 3px solid #b3261e; margin: 0 0 2mm 0; padding: 1mm 3mm; color: #444; background: #fafafa; }
 hr { border: none; border-top: 1px solid #ddd; margin: 3mm 0; }
 a { color: #0b57d0; text-decoration: none; }
 img { max-width: 100%; }
 .gallery .page { page-break-after: always; }
-.gallery .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
-.gallery .cell { border: 1px solid #ddd; border-radius: 2mm; padding: 1.5mm; }
+.gallery .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2.5mm; }
+.gallery .cell { border: 1px solid #ddd; border-radius: 2mm; padding: 1.2mm; }
 .gallery .cell img { width: 100%; display: block; }
 .gallery .cap { font-family: Consolas, monospace; font-size: 7pt; color: #555; margin-top: 1mm; }
+.gallery .overview { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1.6mm; }
+.gallery .thumb { border: 1px solid #ddd; border-radius: 1.5mm; padding: 0.8mm; }
+.gallery .thumb img { width: 100%; display: block; }
+.gallery .thumb .cap { font-size: 5.4pt; margin-top: 0.5mm; line-height: 1.15; word-break: break-all; }
+.gallery .index { column-count: 3; column-gap: 6mm; font-size: 7.6pt; }
+.gallery .index .entry { break-inside: avoid; margin: 0 0 1mm 0; font-family: Consolas, monospace; }
+.gallery .index .entry .n { display: inline-block; width: 6mm; color: #888; }
 '@
 
 $builder = New-Object System.Text.StringBuilder
@@ -253,16 +265,53 @@ $images = Get-ChildItem 'docs/evidence/ui/final' -File -Filter '*.png' | Sort-Ob
 $installed = "$env:LOCALAPPDATA\Programs\PDFXI\pdfxi-ui.exe"
 $installedHash = if (Test-Path -LiteralPath $installed) { (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLower() } else { 'not installed' }
 
+# Read the canonical feature matrix once so the cover, the register section and
+# the gate summary all state the same numbers.
+$featuresRaw = Get-Content 'docs/features.toml' -Raw -Encoding utf8
+$featuresRaw = [regex]::Replace($featuresRaw, '(?s)notes\s*=\s*""".*?"""', '')
+$featureRows = New-Object System.Collections.Generic.List[object]
+foreach ($block in ([regex]::Split($featuresRaw, '(?m)^\[\[feature\]\]\s*$') | Where-Object { $_.Trim() })) {
+    $idMatch = [regex]::Match($block, '(?m)^id\s*=\s*"([^"]+)"')
+    if (-not $idMatch.Success) { continue }
+    $titleMatch = [regex]::Match($block, '(?m)^title\s*=\s*"([^"]*)"')
+    $statusMatch = [regex]::Match($block, '(?m)^status\s*=\s*"([^"]*)"')
+    $domainMatch = [regex]::Match($block, '(?m)^domain\s*=\s*"([^"]*)"')
+    $featureRows.Add([pscustomobject]@{
+            Id     = $idMatch.Groups[1].Value
+            Title  = if ($titleMatch.Success) { $titleMatch.Groups[1].Value } else { '' }
+            Status = if ($statusMatch.Success) { $statusMatch.Groups[1].Value } else { '' }
+            Domain = if ($domainMatch.Success) { $domainMatch.Groups[1].Value } else { '' }
+        })
+}
+$statusOrder = @('verified', 'library', 'model', 'replaced')
+$statusCounts = [ordered]@{}
+foreach ($status in $statusOrder) {
+    $statusCounts[$status] = @($featureRows | Where-Object { $_.Status -eq $status }).Count
+}
+$verifiedRows = @($featureRows | Where-Object { $_.Status -eq 'verified' } | Sort-Object Domain, Id)
+$unverifiedRows = @($featureRows | Where-Object { $_.Status -ne 'verified' } | Sort-Object Status, Domain, Id)
+$featureTotal = $featureRows.Count
+$verifiedTotal = $statusCounts['verified']
+$unverifiedTotal = $unverifiedRows.Count
+$matrixSummary = "$featureTotal rows: $verifiedTotal verified, $($statusCounts['library']) library, $($statusCounts['model']) model, $($statusCounts['replaced']) replaced"
+
+function ConvertTo-HtmlText([string]$text) {
+    $text = $text -replace '&', '&amp;'
+    $text = $text -replace '<', '&lt;'
+    $text = $text -replace '>', '&gt;'
+    return $text
+}
+
 [void]$builder.AppendLine('<div class="cover">')
 [void]$builder.AppendLine('<h1>PDFXI acceptance campaign</h1>')
 [void]$builder.AppendLine('<div class="sub">Phases 0-4 - acceptance evidence, blockers, handoff and every installed-build capture</div>')
 [void]$builder.AppendLine('<table>')
-[void]$builder.AppendLine("<tr><td class='k'>Repository HEAD</td><td>$head</td></tr>")
+[void]$builder.AppendLine("<tr><td class='k'>Repository HEAD (at build)</td><td>$head</td></tr>")
 [void]$builder.AppendLine("<tr><td class='k'>Acceptance items</td><td>$passCount pass, $openCount open (docs/design/FEATURE_ACCEPTANCE.md)</td></tr>")
-[void]$builder.AppendLine("<tr><td class='k'>Feature matrix</td><td>145 rows, 54 verified; 89 outside this campaign's acceptance surface</td></tr>")
+[void]$builder.AppendLine("<tr><td class='k'>Feature matrix</td><td>$matrixSummary<br>$verifiedTotal of $featureTotal rows are reachable and tested; $unverifiedTotal are not</td></tr>")
 [void]$builder.AppendLine("<tr><td class='k'>Installed viewer</td><td>%LOCALAPPDATA%\Programs\PDFXI\pdfxi-ui.exe<br>$installedHash</td></tr>")
-[void]$builder.AppendLine("<tr><td class='k'>Gates</td><td>cargo xtask verify: VERIFY OK (no-dead-controls green)<br>cargo deny check: advisories ok, bans ok, licenses ok, sources ok<br>cargo xtask goal-verify --all: 145 rows / 54 verified / 89 unverified (exit 1, expected)</td></tr>")
-[void]$builder.AppendLine("<tr><td class='k'>Captures</td><td>$($images.Count) installed-build PNGs, contact sheet at the end of this PDF</td></tr>")
+[void]$builder.AppendLine("<tr><td class='k'>Gates</td><td>cargo xtask verify: VERIFY OK (no-dead-controls green)<br>cargo deny check: advisories ok, bans ok, licenses ok, sources ok<br>cargo xtask goal-verify --all: $featureTotal rows / $verifiedTotal verified / $unverifiedTotal not verified or replaced (exit 1, expected by ADR 0009)</td></tr>")
+[void]$builder.AppendLine("<tr><td class='k'>Captures</td><td>$($images.Count) installed-build PNGs: one overview sheet, a numbered index, then 6 per page in the detail pages at the end</td></tr>")
 [void]$builder.AppendLine("<tr><td class='k'>Assistant</td><td>Live turns on OpenCode 2.3.2 with model opencode-go/hy4-flash-free (A-16)</td></tr>")
 [void]$builder.AppendLine('</table></div>')
 
@@ -270,7 +319,9 @@ $installedHash = if (Test-Path -LiteralPath $installed) { (Get-FileHash -Literal
 $n = 0
 foreach ($section in $sections) { $n++; [void]$builder.AppendLine("<li>$n. $($section.Title)</li>") }
 $n++
-[void]$builder.AppendLine("<li>$n. Installed-build captures ($($images.Count) images)</li>")
+[void]$builder.AppendLine("<li>$n. Feature status register ($featureTotal rows, $verifiedTotal verified)</li>")
+$n++
+[void]$builder.AppendLine("<li>$n. Installed-build captures ($($images.Count) images: overview, index, details)</li>")
 [void]$builder.AppendLine('</ol></div>')
 
 foreach ($section in $sections) {
@@ -282,6 +333,39 @@ foreach ($section in $sections) {
     [void]$builder.AppendLine('</section>')
 }
 
+[void]$builder.AppendLine('<section class="doc">')
+[void]$builder.AppendLine("<h1 class='doctitle'>Feature status register</h1>")
+[void]$builder.AppendLine("<p>Acceptance and implementation are two different measures. The acceptance matrix in this campaign passes $passCount of $($passCount + $openCount) items, because those items cover the surfaces the campaign set out to accept. The canonical feature matrix is larger: $featureTotal rows, of which <strong>$verifiedTotal are verified</strong> and <strong>$unverifiedTotal are not</strong>. A verified row runs on real document bytes and a user can reach it through the GUI or the CLI (ADR 0009). Everything else is listed below so no reader has to guess.</p>")
+[void]$builder.AppendLine('<h2>Counts and what each status means</h2>')
+[void]$builder.AppendLine("<table class='status-table'><thead><tr><th>Status</th><th>Rows</th><th>Meaning (ADR 0009)</th></tr></thead><tbody>")
+$statusMeaning = [ordered]@{
+    'verified' = 'Runs on real document bytes and a user can reach it through the GUI or the CLI.'
+    'library'  = 'Real byte-level implementation over PDF documents and tested, but no user-reachable path or narrower than the product row.'
+    'model'    = 'In-memory model, plan, contract, or host-boundary stub; not a working product feature.'
+    'replaced' = 'Superseded by another row.'
+}
+foreach ($status in $statusOrder) {
+    [void]$builder.AppendLine("<tr><td><code>$status</code></td><td class='num'>$($statusCounts[$status])</td><td>$($statusMeaning[$status])</td></tr>")
+}
+[void]$builder.AppendLine("<tr><td><strong>total</strong></td><td class='num'><strong>$featureTotal</strong></td><td>Canonical matrix: <code>docs/features.toml</code></td></tr>")
+[void]$builder.AppendLine('</tbody></table>')
+
+[void]$builder.AppendLine("<h2>Verified rows ($verifiedTotal)</h2>")
+[void]$builder.AppendLine('<table><thead><tr><th>ID</th><th>Title</th><th>Domain</th></tr></thead><tbody>')
+foreach ($row in $verifiedRows) {
+    [void]$builder.AppendLine("<tr><td><code>$(ConvertTo-HtmlText $row.Id)</code></td><td>$(ConvertTo-HtmlText $row.Title)</td><td>$(ConvertTo-HtmlText $row.Domain)</td></tr>")
+}
+[void]$builder.AppendLine('</tbody></table>')
+
+[void]$builder.AppendLine("<h2>Not verified ($unverifiedTotal)</h2>")
+[void]$builder.AppendLine("<p>These rows exist in the matrix but are not reachable product features yet. <code>library</code> and <code>model</code> are honest statuses, not synonyms for done. Two save-budget breaches remain on record (blocker T-0260B), and the installed build is the acceptance surface, not a feature-complete product.</p>")
+[void]$builder.AppendLine('<table><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Domain</th></tr></thead><tbody>')
+foreach ($row in $unverifiedRows) {
+    [void]$builder.AppendLine("<tr><td><code>$(ConvertTo-HtmlText $row.Id)</code></td><td>$(ConvertTo-HtmlText $row.Title)</td><td><code>$(ConvertTo-HtmlText $row.Status)</code></td><td>$(ConvertTo-HtmlText $row.Domain)</td></tr>")
+}
+[void]$builder.AppendLine('</tbody></table>')
+[void]$builder.AppendLine('</section>')
+
 [void]$builder.AppendLine('<section class="doc gallery"><h1 class="doctitle">Installed-build captures</h1>')
 $groups = [ordered]@{ 'light-windows' = @(); 'light-macos' = @(); 'dark-windows' = @(); 'dark-macos' = @(); 'extras' = @() }
 foreach ($image in $images) {
@@ -291,13 +375,40 @@ foreach ($image in $images) {
     }
     $groups[$group] += $image
 }
+
+# Page 1 of the capture part: every image on one sheet. Page 2: a numbered
+# index. Then the readable 6-per-page detail pages. Whoever opens this must be
+# able to confirm the full count without scrolling through the whole document.
+[void]$builder.AppendLine("<div class='page'><h2>Overview - all $($images.Count) captures on one sheet</h2><div class='overview'>")
+$number = 0
+foreach ($group in $groups.Keys) {
+    foreach ($item in $groups[$group]) {
+        $number++
+        $url = 'file:///' + ($item.FullName -replace '\\', '/')
+        [void]$builder.AppendLine("<div class='thumb'><img src='$url'><div class='cap'>$number. $($item.Name)</div></div>")
+    }
+}
+[void]$builder.AppendLine('</div></div>')
+
+[void]$builder.AppendLine("<div class='page'><h2>Capture index - $($images.Count) files</h2><div class='index'>")
+$number = 0
+foreach ($group in $groups.Keys) {
+    foreach ($item in $groups[$group]) {
+        $number++
+        [void]$builder.AppendLine("<div class='entry'><span class='n'>$number</span>$($item.Name)</div>")
+    }
+}
+[void]$builder.AppendLine('</div></div>')
+
 foreach ($group in $groups.Keys) {
     $items = $groups[$group]
     if (-not $items -or $items.Count -eq 0) { continue }
-    for ($i = 0; $i -lt $items.Count; $i += 4) {
+    $pageCount = [int][Math]::Ceiling($items.Count / 6)
+    for ($i = 0; $i -lt $items.Count; $i += 6) {
+        $pageNo = [int]($i / 6) + 1
         [void]$builder.AppendLine('<div class="page">')
-        [void]$builder.AppendLine("<h2>$group - page $([int]($i / 4) + 1)</h2><div class='grid'>")
-        for ($j = $i; $j -lt [Math]::Min($i + 4, $items.Count); $j++) {
+        [void]$builder.AppendLine("<h2>$group - $($items.Count) captures - page $pageNo of $pageCount</h2><div class='grid'>")
+        for ($j = $i; $j -lt [Math]::Min($i + 6, $items.Count); $j++) {
             $item = $items[$j]
             $url = 'file:///' + ($item.FullName -replace '\\', '/')
             [void]$builder.AppendLine("<div class='cell'><img src='$url'><div class='cap'>$($item.Name)</div></div>")
@@ -309,27 +420,37 @@ foreach ($group in $groups.Keys) {
 
 Set-Content -LiteralPath $htmlPath -Value $builder.ToString() -Encoding utf8
 
-$edgeCandidates = @(
-    (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
-    (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe')
-)
-$edge = $edgeCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-if (-not $edge) { throw 'Microsoft Edge was not found; it is required for headless PDF printing' }
+$browserCandidates = New-Object System.Collections.Generic.List[string]
+$browserCandidates.Add((Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'))
+$browserCandidates.Add((Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'))
+if (${env:ProgramFiles(x86)}) {
+    $browserCandidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'))
+    $browserCandidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'))
+}
+$browser = $browserCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (-not $browser) { throw 'Neither Chrome nor Edge was found; one is required for headless PDF printing' }
 
+# A fresh profile per run avoids singleton locks, and the watchdog stops a
+# stuck headless print from hanging the build forever.
+$profile = Join-Path $scratch ('browser-profile-' + (Get-Date -Format 'HHmmssfff'))
 New-Item -ItemType Directory -Force -Path $profile | Out-Null
 $outDir = Split-Path $outPath -Parent
 if ($outDir -and -not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
 Remove-Item -LiteralPath $outPath -ErrorAction SilentlyContinue
 
 $url = 'file:///' + ($htmlPath -replace '\\', '/')
-$edgeArgs = @(
+$browserArgs = @(
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-pdf-header-footer',
     '--allow-file-access-from-files', "--user-data-dir=$profile",
     "--print-to-pdf=$outPath", $url
 )
-$process = Start-Process -FilePath $edge -ArgumentList $edgeArgs -Wait -PassThru -NoNewWindow
+$process = Start-Process -FilePath $browser -ArgumentList $browserArgs -PassThru -NoNewWindow
+if (-not $process.WaitForExit(240000)) {
+    Get-Process chrome, msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    throw "headless print did not finish within 240 s; the browser was stopped"
+}
 if (-not (Test-Path -LiteralPath $outPath -PathType Leaf)) {
-    throw "Edge did not produce $outPath (exit $($process.ExitCode))"
+    throw "$browser did not produce $outPath (exit $($process.ExitCode))"
 }
 $info = Get-Item -LiteralPath $outPath
 Write-Output ("REVIEW PDF {0} sections={1} images={2} bytes={3}" -f $outPath, $sections.Count, $images.Count, $info.Length)

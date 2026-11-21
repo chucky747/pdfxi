@@ -1,10 +1,14 @@
 # FEATURES
 
-`docs/features.toml` is the canonical parity matrix. It contains 143 feature
+`docs/features.toml` is the canonical parity matrix. It contains 145 feature
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 26 verified, 18 library, 96 model, 3 replaced, 0 in-progress (143 rows; see ADR 0009).
+Current status: 54 verified, 13 library, 76 model, 2 replaced, 0 in-progress
+(145 rows; see ADR 0009). A `verified` row runs on real document bytes and a
+user can reach it through the GUI or the CLI. `library` and `model` are honest
+statuses for code that exists but is not a reachable product feature, so 91
+rows are not verified.
 
 ## Detailed feature pages
 
