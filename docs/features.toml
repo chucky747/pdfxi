@@ -235,35 +235,31 @@ title = "Attachments and embedded files"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-app/src/layers.rs",
-    "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0167.md",
+    "crates/pdfxi-core/src/layers.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/layers.rs",
+    "docs/evidence/cli/T-0280.md",
 ]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0167.md"
+evidence = "`pdfxi layers layers-demo.pdf` on a three-layer document printed `layer: 1 Background visible: yes`, `layer: 2   Watermark visible: no` and `layer: 3   Notes visible: yes`, `layers: 3`, exit 0. The JSON form carries index/name/visible/depth with Watermark depth 1 and visible false. The core tests assert /OFF, /ON and /BaseState behaviour plus nesting, and an empty result for a document without /OCProperties. cargo test -p pdfxi-core --lib layers: 2 passed; cargo test -p pdfxi-cli --test cli layers: 2 passed. Pasted output in docs/evidence/cli/T-0280.md."
 id = "VIEW-010"
 notes = """
-Model-level closure. Fixed the real display-order vs declaration-index bug: LayerModel::position
-now returns the display index into `layers` (the index LayerState uses), while a separate
-declaration_index map preserves deterministic "first declared" radio tie-breaking, so a reordered
-/Order can no longer alias viewing-state slots. Added ordered_ids(), deterministic OcGroupPlan /
-OcGroupEntry output, and a validated copy-on-write, all-or-nothing LayerPropertyEdit model for
-name/visibility/lock edits (LayerRegistry::apply_property_edits). Radio exclusivity is preserved
-after reorder; three tests fail on the old indexing code. Host UI boundary: actual per-group
-rasterization still needs a renderer optional-content API; OcGroupPlan/VisibilityPlan are the
-data a host passes to such a backend. Verified for the model/plan only.
+VIEW-010 is reachable through `pdfxi layers`. The reader covers /OCGs names,
+the default configuration's /OFF, /ON and /BaseState, and nested /Order entries
+with a reported depth; OCGs missing from /Order are appended at depth 0 so none
+disappear.
+
+Honest scope: default configuration only (alternate /Configs and the /AS usage
+dictionary are not exposed), visibility is reported but layers are not toggled,
+rewritten or rendered with hidden layers, and unknown OCGs are skipped.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
-    "layers::tests::position_is_display_index_after_reordered_order",
-    "layers::tests::set_visible_after_reorder_affects_the_correct_layer",
-    "layers::tests::locked_check_after_reorder_uses_the_correct_layer",
-    "layers::tests::radio_exclusivity_survives_a_reordered_order",
-    "layers::tests::property_edits_rename_visibility_and_lock",
-    "layers::tests::property_edits_validate_names_and_locked_layers",
-    "layers::tests::property_edits_are_all_or_nothing",
-    "layers::tests::oc_group_plan_is_deterministic_in_display_order",
+    "layers::tests::layers_report_names_visibility_and_nesting",
+    "layers::tests::documents_without_ocproperties_have_no_layers",
+    "layers_report_visibility_and_nesting",
+    "layers_json_has_stable_fields",
 ]
 title = "Optional content layers"
 

@@ -13,8 +13,8 @@
 //!
 //! Object numbers are assigned deterministically:
 //!
-//! - object `1` â€” the document catalog;
-//! - object `2` â€” the page tree root (`/Pages`);
+//! - object `1` Ã¢â‚¬â€ the document catalog;
+//! - object `2` Ã¢â‚¬â€ the page tree root (`/Pages`);
 //! - for page `i` (zero-based): object `3 + 2*i` is the `/Page` and object
 //!   `4 + 2*i` is its content stream;
 //! - the final object, `3 + 2*n` where `n` is the page count, is the shared
@@ -277,6 +277,37 @@ pub fn annotated_pdf() -> Vec<u8> {
     out.into_bytes()
 }
 
+/// Build a one-page PDF with three optional-content layers.
+///
+/// `/BaseState /ON`, `Watermark` in `/OFF`, `Notes` in `/ON`, and a nested
+/// `/Order` entry so nesting depth is observable.
+pub fn layered_pdf() -> Vec<u8> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R 6 0 R] /D << /BaseState /ON /OFF [5 0 R] /ON [6 0 R] /Order [4 0 R [5 0 R 6 0 R]] >> >> >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+        "<< /Type /OCG /Name (Background) >>".to_owned(),
+        "<< /Type /OCG /Name (Watermark) >>".to_owned(),
+        "<< /Type /OCG /Name (Notes) >>".to_owned(),
+    ];
+    let mut out = String::from("%PDF-1.7\n%PDFXI\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
+    }
+    let xref = out.len();
+    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    out.push_str("0000000000 65535 f \n");
+    for offset in &offsets {
+        out.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    out.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    out.into_bytes()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

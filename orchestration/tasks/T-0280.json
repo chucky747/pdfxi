@@ -1,0 +1,21 @@
+{
+  "id": "T-0280",
+  "lane": "core",
+  "title": "Read optional-content layers and default visibility through pdfxi layers",
+  "priority": "P1",
+  "status": "queued",
+  "depends_on": ["T-0279"],
+  "owns": [
+    "crates/pdfxi-core/src/layers.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/layers.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "crates/pdfxi-testkit/src/lib.rs",
+    "docs/evidence/cli/T-0280.md",
+    "orchestration/feature-updates/T-0280.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core --lib layers and cargo test -p pdfxi-cli pass; pdfxi layers reports OCG names, /OFF and /ON visibility, /BaseState and nested /Order depth on a real document; VIEW-010 moves to verified.",
+  "notes": "Parses /OCProperties, /OCGs, the default configuration /OFF, /ON, /BaseState and nested /Order, and exposes a typed Layer list with visible and depth; the CLI prints text with indentation or stable JSON.",
+  "evidence": "docs/evidence/cli/T-0280.md"
+}

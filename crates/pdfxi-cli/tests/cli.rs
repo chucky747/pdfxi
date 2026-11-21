@@ -2777,3 +2777,32 @@ fn attachments_extract_writes_the_embedded_file() {
     assert_eq!(fs::read(&extracted).expect("read extracted file"), b"hello");
     let _ = fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn layers_report_visibility_and_nesting() {
+    let pdf = TempPdf::new(&pdfxi_testkit::layered_pdf());
+    let output = run(&["layers", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("layers: 3"), "{text}");
+    assert!(text.contains("Background  visible: yes"), "{text}");
+    assert!(text.contains("Watermark  visible: no"), "{text}");
+    assert!(text.contains("Notes  visible: yes"), "{text}");
+    assert!(
+        text.contains("layer: 2    Watermark"),
+        "nesting must indent: {text}"
+    );
+}
+
+#[test]
+fn layers_json_has_stable_fields() {
+    let pdf = TempPdf::new(&pdfxi_testkit::layered_pdf());
+    let output = run(&["layers", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["count"], 3);
+    let layers = value["layers"].as_array().expect("layers array");
+    assert_eq!(layers[1]["name"], "Watermark");
+    assert_eq!(layers[1]["visible"], false);
+    assert_eq!(layers[1]["depth"], 1);
+}

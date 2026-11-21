@@ -82,6 +82,8 @@ mod printer;
 mod pages;
 // Link annotations and embedded-file attachments (`links`, `attachments`).
 mod links;
+// Optional-content layers (`layers`).
+mod layers;
 mod repair;
 
 use std::path::{Path, PathBuf};
@@ -101,7 +103,11 @@ const MAX_RENDER_SCALE: f32 = 8.0;
 
 /// PDFXI command-line interface.
 #[derive(Debug, Parser)]
-#[command(name = "pdfxi", version, about = "PDFXI Ã¢â‚¬â€ a Rust PDF workbench")]
+#[command(
+    name = "pdfxi",
+    version,
+    about = "PDFXI ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a Rust PDF workbench"
+)]
 struct Cli {
     /// The command to run.
     #[command(subcommand)]
@@ -202,6 +208,14 @@ enum Command {
         /// The page operation to perform.
         #[command(subcommand)]
         command: PagesCommand,
+    },
+    /// List optional-content layers and whether the default view shows them.
+    Layers {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// List link annotations and where they point.
     Links {
@@ -774,6 +788,7 @@ fn main() -> anyhow::Result<()> {
             out,
             format,
         } => render(&file, page, scale, &out, format),
+        Command::Layers { file, json } => layers::run_layers(&file, json),
         Command::Links { file, json } => links::run_links(&file, json),
         Command::Attachments {
             file,
