@@ -2,7 +2,7 @@
 
 PDFXI treats every PDF as hostile input. Security status is stated per
 capability: some operations are reachable in the installed viewer, others are
-implemented and tested on real documents but have no viewer control in this
+implemented and tested on real documents but have no viewer command in this
 build. A row is `verified` only when an end user can reach it
 ([ADR 0009](../../decisions/0009-feature-status-honesty.md)); every capability
 below names its feature row, so the status is checkable in the
@@ -16,15 +16,16 @@ implemented": the tests cited here run on real PDF bytes, not on mocks.
 | Open an encrypted PDF | Masked password modal; wrong password retries with a typed message; Cancel opens no tab | Decrypt through `pdfxi-document` and `pdfxi_security::open_encrypted` | `SEC-001`, [T-0222](../../evidence/ui/T-0222.md) |
 | Honour read-only rights | The tab is read-only when `/P` denies `MODIFY` | Permission mask decoded from the handler | `SEC-001`, [T-0222](../../evidence/ui/T-0222.md) |
 | Save an encrypted PDF | Refused with a typed message; the tab stays open | `SessionError::EncryptedSaveUnsupported` | [T-0222](../../evidence/ui/T-0222.md), [ADR 0010](../../decisions/0010-document-session-and-write-path.md) |
-| Apply or remove password protection | **Protect PDF** reports that it is not available | `protect_document` / `remove_protection`, PDFium reopen | `SEC-012`, [T-0238](../../evidence/hardening/T-0238.md), [T-0256](../../evidence/hardening/T-0256.md) |
-| Sign and verify | **Sign** reports that it is not available | CMS/PKCS#7 over the byte range, independently verified | `SEC-005`, [T-0241](../../evidence/hardening/T-0241.md) |
-| Redaction marks | **Protect PDF** reports that it is not available | Text, annotation/form/link and image-pixel removal plus a verifier | `EDIT-013`, [T-0237](../../evidence/hardening/T-0237.md) |
-| Sanitize hidden information | Not available | Category-plan model over a real `Document` | `SEC-008`, `SEC-009` |
-| Assistant | Live: asks about the open document; question plus bounded fenced excerpt sent only at Ask time | Locked OpenCode session client; excerpt grounding | `SEC-013`, [T-0254](../../evidence/hardening/T-0254.md), [ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md) — see [Privacy and local data](privacy.md) |
+| Sign and verify | **Live**: **Tools → Sign** card (also reachable from the command bar); `.pfx`/`.p12` import; typed bottom-right note with a visible overlay block; incremental signature; verification readout; green `✓ E-signed` chip when the badge predicate holds; encrypted documents refused | CMS/PKCS#7 over the byte range, independently verified | `SEC-005`, [T-0241](../../evidence/hardening/T-0241.md) — see [Signatures](security/signatures.md) |
+| Apply or remove password protection | **Protect PDF** reports that it is not available; T-0263 is pending | `protect_document` / `remove_protection`, PDFium reopen | `SEC-012`, [T-0238](../../evidence/hardening/T-0238.md), [T-0256](../../evidence/hardening/T-0256.md) |
+| Redaction marks | **Redact** / **Protect PDF** reports that it is not available; T-0263 is pending | Text, annotation/form/link and image-pixel removal plus a verifier | `EDIT-013`, [T-0237](../../evidence/hardening/T-0237.md) — see [Redaction](security/redaction.md) |
+| Sanitize hidden information | Not available; library-level until T-0257/T-0263 | Category-plan model over a real `Document` | `SEC-008`, `SEC-009` — see [Redaction](security/redaction.md) |
+| Assistant | Live: asks about the open document; question plus bounded fenced excerpt sent only at Ask time; no tool server attached | Locked OpenCode session client; excerpt grounding | `SEC-013`, [T-0254](../../evidence/hardening/T-0254.md), [ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md) — see [What the assistant sends](security/assistant-data.md) |
 
-The "not available" messages are the shell's honest placeholder
-(`crates/pdfxi-app/src/shell/commands.rs`); these commands report a status
-message instead of silently doing nothing.
+The "not available" messages for protection and redaction are the shell's
+honest placeholder (`crates/pdfxi-app/src/shell/commands.rs`); those commands
+report a status message instead of silently doing nothing. The **Sign** command
+is no longer one of them.
 
 ## Passwords and encryption
 
@@ -61,17 +62,26 @@ so, and it does not pretend the file is cryptographically read-only
 encrypted file through the password modal, marks a document read-only when
 `MODIFY` is denied, and refuses to save an encrypted document because
 re-encryption on save does not exist in this build
-([T-0222](../../evidence/ui/T-0222.md)).
+([T-0222](../../evidence/ui/T-0222.md)). Signing an encrypted document is
+refused for the same reason: the signature is a write, and the session cannot
+re-encrypt the result.
 
 **Full rewrite.** Protect and remove-protection are full rewrites. They flatten
 incremental revisions and invalidate any signature that covered earlier bytes;
 [ADR 0010](../../decisions/0010-document-session-and-write-path.md) point 5
-requires the UI to say so before the operation. An already-encrypted document
-is rejected as input, and a plaintext document is rejected by
-`remove_protection`, so ciphertext is never encrypted twice and no silent
-downgrade is possible ([T-0238](../../evidence/hardening/T-0238.md)).
+requires the UI to say so before the operation. No viewer command exposes them
+in this build (T-0263). An already-encrypted document is rejected as input, and
+a plaintext document is rejected by `remove_protection`, so ciphertext is never
+encrypted twice and no silent downgrade is possible
+([T-0238](../../evidence/hardening/T-0238.md)).
 
 ## Signatures: integrity is not identity
+
+The certificate **Sign** card is live. It imports a PKCS#12 bundle (`.pfx` or
+`.p12`), signs the open document incrementally, and shows the verification
+readout. It is separate from Fill & Sign; see [Signing and verification](signing.md)
+for the workflow and [Signatures: integrity and identity](security/signatures.md)
+for the guarantees and limits.
 
 `pdfxi-security` produces a real detached CMS/PKCS#7 signature over the PDF byte
 range: `SignedData` version 1, SHA-256 digest, `sha256WithRSAEncryption`,
@@ -100,142 +110,110 @@ signature, the subject, and the SHA-256 fingerprint
 **It does not prove who signed, or that the signer should be trusted:**
 
 - certificate-chain trust is `None` — the PDF signature path consults no trust
-  anchors, so it does not return `Some(true)`;
+  anchors, so the readout says **identity not verified**;
 - no revocation source is checked: no CRL, no OCSP;
 - `signingTime` is asserted by the signer; there is no RFC 3161 timestamp token,
   so backdating is undetectable;
-- the identity is a caller-supplied PEM key — there is no PFX/PKCS#12 import, no
-  Windows certificate store and no user-facing key protection;
-- there is no `/Perms`/DocMDP certification, no field lock, one signature per
-  revision, and no visible signature appearance;
+- the signing identity is the imported PKCS#12 bundle. There is no Windows
+  certificate-store picker and no HSM integration;
+- there is no `/Perms`/DocMDP certification, no field lock, and one signature
+  per revision;
 - the test identity is self-signed (`CN=PDFXI Test Signer, O=PDFXI`), not a
   public certificate.
 
-All of this is stated in [T-0241 §4](../../evidence/hardening/T-0241.md);
-`SEC-005` is the row. A verification result therefore has two separate parts:
-integrity, which PDFXI can assert when the digest matches, and identity/trust,
-which this build cannot assert and which is therefore unverified. There is no
-signature panel in the viewer — the **Sign** command reports that it is not
-available — so nothing in this build presents a signer as trusted or identified.
-Timestamp and revocation support are not claimed for this build: `SEC-006` and
-`SEC-007` remain `model` rows, and the trust-anchor, Windows-store, RFC 3161 and
-revocation work is scoped in T-0267, which has not landed. PFX/PKCS#12 identity
-is scoped in T-0249; it is not available in this build, its task is still
-`queued`, and it has no committed evidence file.
+The **Sign** card is the signature panel. It shows **Status**, **Signer**,
+**SHA-256 fingerprint**, **asserted time**, **whole-file coverage**,
+**appended-after-signature**, and **Chain**. A green **`✓ E-signed`** chip is
+shown only when all of these are true:
+
+```text
+Valid && bytes_match && covers_entire_file && !appended
+```
+
+The badge is a statement about integrity and coverage, not about identity. Edit
+the document, undo, redo, or switch tabs and the badge clears, because the result
+no longer describes the current bytes. The readout is scoped to its tab, and
+opening a document re-runs verification on its existing signatures.
+
+The page shows a visible overlay block at the bottom-right, but the PDF itself
+carries a typed `/Text` annotation as the signature appearance. Another reader
+may show that object as a note rather than as a signature block; do not treat the
+overlay as a portable appearance. See
+[Signatures: integrity and identity](security/signatures.md).
 
 **What later edits do to a signature.** A mutation is an incremental append, so
 the earlier revision's byte range is never rewritten and an existing signature
-stays verifiable. Redaction, sanitize, optimize, protect and remove-protection
-are full rewrites; they invalidate signatures by construction and the UI must
-say so ([ADR 0010](../../decisions/0010-document-session-and-write-path.md)
-point 3 and its consequences,
-[T-0238 §5](../../evidence/hardening/T-0238.md)). Verify a signature in an
-independent reader when identity or trust matters; PDFXI's own result is an
-integrity result.
+stays verifiable. Appended bytes are reported, and the full-coverage condition
+fails, so the `✓ E-signed` chip is not shown. Redaction, sanitize, optimize,
+protect and remove-protection are full rewrites; they invalidate signatures by
+construction and the UI must say so
+([ADR 0010](../../decisions/0010-document-session-and-write-path.md) point 3 and
+its consequences, [T-0238 §5](../../evidence/hardening/T-0238.md)). Verify a
+signature in an independent reader when identity or trust matters; PDFXI's own
+result is an integrity result.
 
 ## Redaction: removal, not covering
 
 `pdfxi_edit::redact_document` operates on a real `pdfxi_core::Document`. A mark
 is a page and a rectangle; removal is by content, not by painting a box over it
-([T-0237](../../evidence/hardening/T-0237.md)).
+([T-0237](../../evidence/hardening/T-0237.md)). **Redaction is not reachable in
+the viewer in this build**: Redact and Protect PDF report that they are not
+available, and T-0263 is pending. The library below is real and tested, but no
+user command invokes it. The full guarantees, recovery surface, and limits are
+in [Redaction](security/redaction.md).
 
-**Text operators are rewritten glyph by glyph.** Each marked page's decoded
-content stream is tokenized, text state (`q`/`Q`, `cm`, `BT`/`ET`, `Tm`/`Td`/
-`TD`/`T*`, `Tf`, `TL`, `Tc`, `Tw`, `Tz`) is tracked, and `Tj`, `TJ`, `'` and `"`
-are analysed with the page's real font resources and widths. A glyph is removed
-when its transformed text-space box shares positive area with the mark. Kept
-glyphs keep their original encoded bytes inside a `TJ` array; removed glyphs
-become numeric adjustments of the same advance, so surviving text does not slide
-into the redacted area and no font is re-encoded. A partial run splits at glyph
-boundaries, and the test marks the middle of `ABCDEFGHIJ`, leaving `ABCJ`. If the
-font resource is missing, the size or horizontal scale is zero, or an advance is
-non-finite, the whole operator is neutralised and reported `whole: true,
-fallback: true` rather than leaving part of a secret
-([T-0237](../../evidence/hardening/T-0237.md)).
+- **Text operators are rewritten glyph by glyph.** A glyph intersecting the mark
+  is removed; kept glyphs keep their encoded bytes inside `TJ` adjustments, so
+  surviving text does not slide into the redacted area. A missing or unusable
+  font neutralises the whole operator rather than leaving part of a secret.
+- **Annotations, links, form widgets, their appearance streams and — when asked —
+  metadata are removed.** An annotation whose `/Rect` intersects a mark is
+  nulled, and emptied form and `/CO` entries are cleaned up.
+- **Supported image pixels are destroyed in place.** The sample buffer is
+  re-encoded with the covered pixels filled, replacing the original compressed
+  bytes. Unsupported image formats fail the whole request closed instead of
+  silently leaving the image.
+- **The operation is a full rewrite, never an incremental append.** The old
+  content stream is overwritten and additional streams are nulled, so the
+  previous bytes are not left reachable through an unreferenced object.
 
-**Annotations, links, fields and metadata are removed.** An annotation whose
-`/Rect` intersects a mark is replaced with `null` when its class is enabled:
-ordinary annotations by `remove_annotations`, `/Link` by `remove_links`, form
-widgets by `remove_form_fields`. Indirect objects reachable from `/AP` are also
-nulled, so appearance streams do not survive. Removed widgets are filtered out
-of `/AcroForm /Fields`, emptied parent fields are nulled, and `/AcroForm /CO`
-drops references to removed fields and widgets. `remove_metadata` clears the
-`/Info` title, author, subject, keywords, creator and producer and removes the
-catalog `/Metadata` XMP stream
-([T-0237](../../evidence/hardening/T-0237.md)).
+`verify_redaction` saves, reparses the saved bytes, re-extracts page text for
+every secret, scans the stored file and every text-candidate stream in UTF-8 and
+UTF-16LE with Flate decompression, and checks surviving annotation and field
+rectangles against the marks. `clean` is true only when there are no survivors.
+A text-candidate stream that cannot be decompressed is `UnreadableStream`, so
+the result is fail-closed. The caller must pass the real secrets and require
+`clean`. A redaction mark alone is not proof of erasure.
 
-**Image pixels are destroyed in place.** For each `Do` naming an image XObject
-that intersects a mark, the mark is mapped into the image's normalised square
-through the inverse CTM and converted to a pixel rectangle. Covered pixels are
-filled opaque black and an `/SMask` has its alpha set to 255 in the same region;
-the sample buffer is re-encoded as Flate in the same object, replacing the
-original compressed bytes. Covered formats at 8 bits per component are
-DeviceGray, DeviceRGB, Indexed and DCTDecode JPEG; ICCBased profiles with one or
-three components are accepted and filled with zero samples. A 4-component
-ICCBased CMYK profile is rejected because zero samples mean no ink, not black
-([T-0237](../../evidence/hardening/T-0237.md)).
+Known limits, also in [Redaction](security/redaction.md):
 
-**Unsupported content fails closed.** With `keep_images = false` — the default —
-the whole request returns `UnsupportedImage` before anything is staged for:
-JPXDecode, CCITTFaxDecode, JBIG2Decode and unknown filters; Separation,
-DeviceN, ImageMask, `/Decode` and non-8-bit samples; ICCBased with more than
-four components or a 4-component CMYK profile; an inline image (`BI … ID … EI`);
-an intersecting form XObject; a missing resource name, an unresolvable
-reference, a direct object or a non-stream object; corrupt sample buffers; and
-an image over 100 megapixels or 64 MiB of decoded samples
-(`ImageLimitExceeded`). Validation, decoding, filling and re-encoding all happen
-in a preparation phase before any page content or image object is staged, so a
-rejected request does not write a half-redacted stream. With `keep_images =
-true` an intersecting image or form is reported in `surviving_spans` and `clean`
-is false; no error is returned, so the caller must read the report
-([T-0237](../../evidence/hardening/T-0237.md)).
-
-**The operation is a full rewrite, never an incremental append.** The first
-existing `/Contents` stream object is overwritten with the rewritten combined
-stream and additional content streams are staged as `null`; leaving the old
-stream unreferenced would still leak its bytes. Saving writes every live object.
-This is [ADR 0010](../../decisions/0010-document-session-and-write-path.md)
-point 5: a redacted byte range must not remain recoverable, so history is
-cleared and the revision lineage starts again.
-
-**You must verify before treating a file as clean.** `verify_redaction` performs
-a full save, reparses the saved bytes and checks three independent surfaces:
-page text re-extraction for every secret, a byte scan of the stored file and of
-every text-candidate stream in UTF-8 and UTF-16LE with Flate decompression, and
-surviving annotation/field rectangles against the marks. A text-candidate Flate
-stream that cannot be decompressed is reported `UnreadableStream`, so the result
-is fail-closed. `clean` is true only when there are no survivors, and a test
-places a secret outside the mark to prove the verifier is not always-true
-([T-0237](../../evidence/hardening/T-0237.md)). The caller must pass the real
-secrets and require `clean`, and must treat an `UnsupportedImage` error as "not
-redacted", not as a warning.
-
-Known limits of this implementation, all recorded in
-[T-0237](../../evidence/hardening/T-0237.md):
-
+- **vector paths and graphics under a mark are not removed**; only text,
+  annotations/forms/links, metadata and supported image samples are addressed;
+- content outside the mark, and annotations/forms/images that do not intersect
+  it, remain by design;
 - form XObjects are not recursed and inline images are not decoded; both fail
-  closed. Recursion and inline-image decoding are T-0268, which has not landed,
-  so the fail-closed behaviour is what this build does;
-- the byte scan deliberately excludes image streams, so image redaction rests
-  on the supported-format checks and the image tests, not on the secret scan;
-- ICCBased and Indexed handling is narrow (no indirect Indexed lookup, no
-  CMYK fill) and fails closed rather than guessing;
+  closed (T-0268 pending);
+- the byte scan deliberately excludes image streams, so image redaction rests on
+  the supported-format checks and the image tests;
 - broader sanitisation — thumbnails, optional content, revision remnants,
   embedded files — and independent second-reader verification are T-0257, which
-  has not landed;
+  has not landed. Sanitize is library-level until T-0257/T-0263 and is not
+  invoked by redaction;
 - there is no viewer or CLI entry point; `EDIT-013` is a `library` row.
 
 ## Digital IDs
 
-`SEC-004` is a `model` row for local digital-ID handling: a validated PKCS#8 key
-shape, a key/certificate algorithm match, a deterministic label-keyed store with
-caller-clocked validity (`Expired` / `NotYetValid` / `Valid`), duplicate
-rejection, rotation, and a password-protected store envelope built from the
-existing AES-256-CBC and SHA-256 primitives with a constant-time HMAC check. A
-wrong password is indistinguishable from tampering. It performs no filesystem,
-network or wall-clock access. PKCS#12/PFX bundle parsing, an OS keystore or HSM
-key handle, and any management UI are outside this row and not available in this
-build ([T-0143](../../evidence/security/T-0143.md), `SEC-004`).
+`SEC-004` is a `model` row for a managed local digital-ID store: a validated
+PKCS#8 key shape, a key/certificate algorithm match, a deterministic
+label-keyed store with caller-clocked validity (`Expired` / `NotYetValid` /
+`Valid`), duplicate rejection, rotation, and a password-protected store
+envelope built from the existing AES-256-CBC and SHA-256 primitives with a
+constant-time HMAC check. A wrong password is indistinguishable from tampering.
+It performs no filesystem, network or wall-clock access. The **Sign** card's
+PKCS#12 import is a signing-identity import, not this managed store: it has no
+labels, rotation, or SEC-004 store envelope. A Windows certificate-store
+picker, an HSM key handle, and management UI remain unavailable
+([T-0143](../../evidence/security/T-0143.md), `SEC-004`).
 
 ## Sanitization
 
@@ -245,20 +223,20 @@ and strict/permissive verification, but it has no caller. `SEC-009` scrubs the
 `/Info` dictionary and XMP metadata copy-on-write as a model; real object and
 stream deletion is not wired to a document writer. Removing hidden information
 as an end-user operation, and verifying it with a second reader, is T-0257, which
-has not landed. The redaction API above does not invoke the sanitizer; its own
-`remove_metadata` flag is the only metadata removal it performs
-([T-0237](../../evidence/hardening/T-0237.md)).
+has not landed; the end-user surface is T-0263. The redaction API above does not
+invoke the sanitizer; its own `remove_metadata` flag is the only metadata removal
+it performs ([T-0237](../../evidence/hardening/T-0237.md)).
 
 ## Untrusted input and runtime policy
 
 - **Every PDF is hostile.** The parser, filters, content streams, forms and
-  crypto code have bounds and typed errors, and five fuzz targets exercise the
-  same entry points: `parser`, `filters`, `content`, `forms` and `crypto`. Inputs
-  are capped at 16 KiB, decompression at 64 KiB, and no target panics or uses
-  `unsafe`. The committed deterministic smoke runner runs them in the fast suite;
-  a clean 24-hour run of every target is a release requirement, not something
-  this build records ([fuzz/README.md](../../../fuzz/README.md),
-  [RULES §8](../../../RULES.md)).
+  crypto code have bounds and typed errors, and seven fuzz targets exercise the
+  same entry points: `parser`, `filters`, `content`, `forms`, `crypto`,
+  `redaction` and `edit`. Inputs are capped at 16 KiB, decompression at 64 KiB,
+  and no target panics or uses `unsafe`. The committed deterministic smoke runner
+  runs them in the fast suite; a clean 24-hour run of every target is a release
+  requirement, not something this build records
+  ([fuzz/README.md](../../../fuzz/README.md), [RULES §8](../../../RULES.md)).
 - **Input size cap.** A document larger than 2 GiB is rejected before loading,
   in the viewer and in the renderer, so a hostile or accidental huge file cannot
   cause an unbounded whole-file allocation
@@ -292,13 +270,18 @@ has not landed. The redaction API above does not invoke the sanitizer; its own
   executor is a staging-only adapter and mutates no document
   (`crates/pdfxi-cli/src/action.rs`).
 - **Assistant runs in a locked, deny-all session with no tool execution path.**
-  Grounding uses a bounded, fenced excerpt of the open document, not tool calls;
-  the client-MCP tool route is not used in this build. See
-  [Privacy and local data](privacy.md) for the session ruleset, the version
-  gate, the excerpt cap and the live hostile-document result.
+  Grounding uses a bounded, fenced `<untrusted-document-text>` excerpt of the
+  open document, not tool calls. The app turn attaches no tool server in this
+  build, so the five `pdfxi_*` allow rules remain a library capability, not an
+  execution path. See [What the assistant sends](security/assistant-data.md) and
+  [Privacy and local data](privacy.md) for the ruleset, version gate, excerpt
+  bounds and live hostile-document result.
 
 ## Related pages
 
-[Privacy and local data](privacy.md) · [Forms](forms.md) ·
-[Authoring](authoring.md) · [Feature matrix](../../FEATURES.md) ·
-[Installing PDFXI](install.md)
+[Signing and verification](signing.md) ·
+[Signatures: integrity and identity](security/signatures.md) ·
+[What the assistant sends](security/assistant-data.md) ·
+[Redaction](security/redaction.md) · [Privacy and local data](privacy.md) ·
+[Forms](forms.md) · [Authoring](authoring.md) ·
+[Feature matrix](../../FEATURES.md) · [Installing PDFXI](install.md)

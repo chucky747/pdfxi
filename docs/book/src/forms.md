@@ -1,9 +1,12 @@
 # Forms
 
 PDFXI models AcroForms in `pdfxi-forms` and keeps field values, appearances, and
-exchange formats deterministic and testable. Rows `FORMS-006` and `FORMS-007`
-are verified; the fill and appearance rows remain in progress because writing a
-regenerated `/AP` back into a concrete `/AcroForm` is not wired yet.
+exchange formats deterministic and testable. The viewer workflow that fills
+existing fields, resets, flattens, and exchanges XFDF/FDF is
+[Fill & Sign](fill-and-sign.md); this page documents the library underneath it.
+Rows `FORMS-006` and `FORMS-007` are verified; the fill and appearance rows
+remain in progress because writing a regenerated `/AP` back into a concrete
+`/AcroForm` is not wired yet.
 
 ## Form model
 
@@ -65,5 +68,6 @@ operation) remains planned.
 
 ## Related pages
 
-[Getting started](getting-started.md) · [Authoring](authoring.md) ·
-[Security](security.md) · [Feature matrix](../../FEATURES.md)
+[Getting started](getting-started.md) · [Fill & Sign](fill-and-sign.md) ·
+[Authoring](authoring.md) · [Security](security.md) ·
+[Feature matrix](../../FEATURES.md)

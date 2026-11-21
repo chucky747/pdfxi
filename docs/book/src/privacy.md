@@ -54,13 +54,16 @@ travels with a document you save and share
 
 **Status in this build.** The AI Assistant is live. It connects to the OpenCode
 service on this machine only when you ask a question; opening the panel or a
-document sends nothing ([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
-Before the first request the UI shows what the question will send: the page range
-of the excerpt, the provider and model, and that document text is untrusted input
+document sends nothing
+([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
+The panel does **not** show the excerpt's page range before the first request.
+The range first appears in the sent payload's `pages` attribute and page-range
+trailer at Ask time, and the session is locked before any document text is sent
 ([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md)
 decision 8, [T-0254](../../evidence/hardening/T-0254.md) §6.5). The session
 lockdown remains verified (`SEC-013`,
-[T-0254](../../evidence/hardening/T-0254.md)).
+[T-0254](../../evidence/hardening/T-0254.md)). The task-oriented description is
+[Assistant](assistant.md).
 
 ### What it connects to
 
@@ -191,5 +194,6 @@ confirmed by the spike").
 
 ## Related pages
 
-[Security](security.md) · [Desktop viewer](gui.md) · [CLI reference](cli.md) ·
+[Security](security.md) · [Desktop viewer](gui.md) ·
+[Assistant](assistant.md) · [CLI reference](cli.md) ·
 [Feature matrix](../../FEATURES.md)

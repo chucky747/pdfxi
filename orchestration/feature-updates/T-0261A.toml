@@ -1,0 +1,77 @@
+# T-0261A - user guide and security pages for shipped tools
+#
+# Documentation-only task split from T-0261. It proposes no feature-row status
+# changes; it documents the surfaces that are actually reachable in the current
+# build and marks the rest as unavailable. The claim stays held for the
+# integrator.
+
+task = "T-0261A"
+lane = "docs"
+status = "verified"
+evidence = "docs/evidence/acceptance/T-0261A.md"
+docs = [
+    "docs/book/src/README.md",
+    "docs/book/src/SUMMARY.md",
+    "docs/book/src/gui.md",
+    "docs/book/src/open-save-print.md",
+    "docs/book/src/library.md",
+    "docs/book/src/pages-panel.md",
+    "docs/book/src/comments.md",
+    "docs/book/src/fill-and-sign.md",
+    "docs/book/src/signing.md",
+    "docs/book/src/search.md",
+    "docs/book/src/assistant.md",
+    "docs/book/src/notices.md",
+    "docs/book/src/privacy.md",
+    "docs/book/src/forms.md",
+    "docs/book/src/security.md",
+    "docs/book/src/security/signatures.md",
+    "docs/book/src/security/assistant-data.md",
+    "docs/book/src/security/redaction.md",
+    "docs/evidence/acceptance/T-0261A.md",
+]
+feature_rows = []
+promoted_rows = []
+acceptance_items = []
+
+notes = """
+T-0261A adds one task page per shipped viewer surface: open/save/print, the
+library (Files/Recent/Starred plus the Shared placeholder), the pages panel,
+comments, Fill & Sign, signing, search, and the assistant, with a nested
+SUMMARY and a rewritten gui.md overview. It also adds notices.md for Courier
+Prime (SIL OFL 1.1) and the seven assistant crates (ureq, rustls,
+rustls-native-certs, tungstenite, url, base64, http), which docs/THIRD_PARTY.md
+does not yet list; the book records that gap because THIRD_PARTY.md is outside
+this claim.
+
+The pages state what the code does, not what the plan intends: Ctrl+N is the
+bound Open shortcut and the Home/Help Ctrl+O hint is called stale; the 2 GiB
+input cap, atomic save, the exact encrypted-save refusal, the 8 MiB XFDF/FDF
+cap, the 10,000 search match cap (shown with +), the 24,000-character fenced
+assistant excerpt from a 64-page/256 KiB snapshot, and the E-signed badge
+condition (Valid && bytes_match && covers_entire_file && !appended) are written
+down.
+
+The second slice rewrites security.md against the live Sign card and adds
+security/signatures.md, security/assistant-data.md, and security/redaction.md.
+Sign is live: Tools -> Sign, PKCS#12 import, typed bottom-right /Text note plus
+a viewer overlay block, green E-signed chip, incremental signature, per-tab
+verification on open. It proves integrity, not identity: no trust anchor,
+identity not verified, no revocation or RFC 3161 timestamp, and encrypted
+documents are refused (as is encrypted save). Protect PDF and Redact remain
+unavailable with T-0263 pending, and sanitize stays library-level until
+T-0257/T-0263. Redaction pages name the recovery surface explicitly: vector
+paths under a mark are not removed; verification is by re-extraction, byte scan
+and surviving-rectangle checks requiring clean.
+
+Privacy was corrected: the panel does not show the excerpt page range before the
+first request; the range appears only in the sent payload's fence and trailer.
+forms.md now points at Fill & Sign. The assistant is documented as a locked
+deny-all session with five pdfxi_* allow rules and no tool server attached
+(ADR 0013), and as sending nothing before Ask.
+
+Verification: cargo xtask docs prints DOCS OK (the seven required root pages).
+A recursive relative-link pass over docs/book/src prints ALL LOCAL LINKS
+RESOLVE. No feature matrix row changed; no git command was run. The claim is
+held.
+"""

@@ -558,3 +558,45 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
   `queued`.
 - **Next:** finish T-0245 (A-25 placement and A-31 request/tracker), then T-0261A
   docs, T-0255, and T-0262 final package/install/captures/handoff.
+
+### T-0261A checkpoint (2026-11-21, shipped-tool guides and security pages)
+
+- **HEAD before:** `fc59072` (`checkpoint(acceptance): signing card, verification
+  and E-signed badge [T-0245B]`). **HEAD after:** this checkpoint commit
+  (`checkpoint(docs): shipped-tool guides and security pages [T-0261A]`;
+  `git log -1 --oneline`). Linear history on `main`, not pushed, no amend/rebase.
+- **Task state:** T-0261A is `verified`; its claim is released after this
+  checkpoint. T-0245 stays `in_progress` with its app claim held and untouched;
+  T-0245 round C has not started. T-0261 stays `queued` as the final close-out
+  that will re-check these pages against the installed build. The regenerated
+  board shows T-0261A `verified`, T-0245 `in_progress`.
+- **What landed:** a task page per viewer surface reachable in the current build
+  (open/save/print, library, pages panel, comments, Fill & Sign, signing, search,
+  assistant), nested under a rewritten `SUMMARY.md` and `gui.md` overview; a
+  rewritten `security.md` plus `security/signatures.md`,
+  `security/assistant-data.md` and `security/redaction.md`; `notices.md` for the
+  bundled Courier Prime font and the seven assistant crates; and corrections to
+  `privacy.md` and `forms.md`. The pages describe the shipped code, not the plan:
+  the stale `Ctrl+O` hint, 2 GiB input cap, atomic save, exact encrypted-save
+  refusal, 8 MiB XFDF/FDF cap, 10,000 search-match cap, 24,000-character fenced
+  assistant excerpt, and the `Valid && bytes_match && covers_entire_file &&
+  !appended` E-signed badge condition. Signing proves integrity, not identity;
+  vector paths under a redaction mark are a named limit.
+- **Integrator gates:** `cargo xtask board` regenerated `orchestration/BOARD.md`
+  and confirms T-0261A `verified`. `cargo xtask features verify` reports
+  `FEATURES OK: 145 rows, 33 verified` (unchanged; three non-test `tests`
+  citations skipped). `cargo xtask docs` was run by the lane in
+  `target/integration` and printed `DOCS OK` (exit 0); the lane's recursive
+  relative-link pass over `docs/book/src` printed `ALL LOCAL LINKS RESOLVE`.
+  Both are cited from the lane and its evidence; the workspace was not rerun.
+- **Matrix:** the T-0261A fragment carries empty `feature_rows` and
+  `promoted_rows`; no feature-row status changed and `docs/features.toml` is not
+  in the commit.
+- **Evidence:** `docs/evidence/acceptance/T-0261A.md` (full verification block);
+  fragment `orchestration/feature-updates/T-0261A.toml`.
+- **Scope discipline:** only the approved paths were staged. No `crates/**`,
+  `fuzz/**` or `docs/evidence/ui/**` path was staged; `git status` before staging
+  showed nothing staged at all. The T-0245 app work stays uncommitted with its
+  claim held.
+- **Next:** T-0245 round C (A-25 placement, A-31 request/tracker) on the app
+  lane, then T-0261 close-out and T-0262 final package/install/captures/handoff.
