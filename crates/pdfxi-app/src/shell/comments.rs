@@ -593,7 +593,7 @@ impl PdfxiApp {
     }
 
     /// Selected spans converted to page-local PDF rectangles, grouped by page.
-    fn selection_quads(&self) -> Vec<(usize, Vec<Rect>)> {
+    pub(crate) fn selection_quads(&self) -> Vec<(usize, Vec<Rect>)> {
         let Some(selection) = self.selection.selection() else {
             return Vec::new();
         };

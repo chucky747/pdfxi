@@ -343,6 +343,7 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
         ("ConvertToPdf", AppCommand::ConvertToPdf),
         ("CombineFiles", AppCommand::CombineFiles),
         ("Protect", AppCommand::Protect),
+        ("Redact", AppCommand::Redact),
         ("AiAssistant", AppCommand::AiAssistant),
         ("ToggleTools", AppCommand::ToggleTools),
         ("ToggleGrid", AppCommand::ToggleGrid),
@@ -523,6 +524,7 @@ const PROVEN_LABELS: &[&str] = &[
     "convert-to-pdf",
     "combine-files",
     "protect",
+    "redact",
     "ai-assistant",
     "toggle-fullscreen",
     "set-zoom-percent",
@@ -751,6 +753,7 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("convert-to-pdf", "convert-to-pdf"),
         ("combine-files", "combine-files"),
         ("protect", "protect"),
+        ("redact", "redact"),
         ("ai-assistant", "ai-assistant"),
         ("toggle-tools", "toggle-tools"),
         ("toggle-grid", "toggle-grid"),
@@ -1469,6 +1472,32 @@ fn convert_to_pdf_opens_the_card_without_a_document() {
 }
 
 #[test]
+fn protect_command_opens_the_card_with_a_document_and_explains_without_one() {
+    let mut app = PdfxiApp::new();
+    app.dispatch(AppCommand::Protect, None);
+    assert_eq!(app.status(), "Open a document to protect");
+    assert!(!app.protect_card_open());
+
+    let mut app = with_excel_document();
+    app.dispatch(AppCommand::Protect, None);
+    assert!(app.protect_card_open());
+    assert!(app.status().starts_with("Protect PDF:"));
+}
+
+#[test]
+fn redact_command_opens_the_card_with_a_document_and_explains_without_one() {
+    let mut app = PdfxiApp::new();
+    app.dispatch(AppCommand::Redact, None);
+    assert_eq!(app.status(), "Open a document to redact");
+    assert!(!app.redact_card_open());
+
+    let mut app = with_excel_document();
+    app.dispatch(AppCommand::Redact, None);
+    assert!(app.redact_card_open());
+    assert!(app.status().starts_with("Redact:"));
+}
+
+#[test]
 fn set_display_name_and_document_title_act() {
     let mut app = with_excel_document();
 
@@ -1832,6 +1861,7 @@ fn dispatched_capability_commands_report_unavailable() {
         AppCommand::ConvertToPdf,
         AppCommand::CombineFiles,
         AppCommand::Protect,
+        AppCommand::Redact,
         AppCommand::AiAssistant,
         AppCommand::AddPage,
         AppCommand::PageMenu,
@@ -2052,6 +2082,14 @@ struct Function {
 /// Allowing them by name (rather than by return type) keeps the exemption
 /// narrow: a new factory needs an explicit entry and a reason.
 const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "redact_card_ui",
+        "redact and sanitize window: the checkbox state is read by the redaction request and the two buttons call redact_quads_to_path and sanitize_to_path, which are unit-tested without a window",
+    ),
+    (
+        "protect_card_ui",
+        "protect PDF window: the two password fields and permission checkboxes are state only; the save/open dialogs call protect_to_path and remove_protection_from, which the Protect command proof and unit tests cover",
+    ),
     (
         "convert_card_ui",
         "convert to PDF window: Add files/Choose output call the rfd-backed methods and Convert calls convert_to_path; source loading and conversion are unit-tested without a window",

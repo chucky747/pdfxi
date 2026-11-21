@@ -356,6 +356,12 @@ pub fn tool_rows() -> Vec<ToolRow> {
             command: AppCommand::Protect,
         },
         ToolRow {
+            label: "Redact",
+            capability: Capability::Protect,
+            icon: Icon::Protect,
+            command: AppCommand::Redact,
+        },
+        ToolRow {
             label: "AI Assistant",
             capability: Capability::AssistantConnect,
             icon: Icon::Sparkle,

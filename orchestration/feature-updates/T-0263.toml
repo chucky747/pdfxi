@@ -1,0 +1,74 @@
+# T-0263 - Protect PDF and Redact UI
+#
+# App surface for A-30 (Protect PDF: set/change/remove password and
+# permissions, redact, sanitize), the save half of O-04 (passwords and
+# permissions round-trip through the security reader) and O-06 (redaction
+# removes content, verified by re-extraction and a byte scan). The matrices'
+# rows stay as the libraries left them (`library`/`model`): no row is promoted
+# here. T-0262 captures the installed build.
+
+task = "T-0263"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0263.md"
+docs = [
+    "crates/pdfxi-app/src/shell/protect_card.rs",
+    "crates/pdfxi-app/src/shell/redact_card.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/comments.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/tools_panel.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/ui/T-0263.md",
+]
+feature_rows = ["SEC-012", "SEC-001", "EDIT-013", "SEC-008", "SEC-009"]
+promoted_rows = []
+acceptance_items = ["A-30", "O-04", "O-06"]
+tests = [
+    "ui::shell::protect_card::tests::protects_with_passwords_and_permission_restrictions",
+    "ui::shell::protect_card::tests::removal_writes_a_copy_that_opens_without_a_password",
+    "ui::shell::protect_card::tests::empty_passwords_are_a_typed_error",
+    "ui::shell::protect_card::tests::selected_permissions_follow_the_checkboxes",
+    "ui::shell::redact_card::tests::redacting_the_whole_page_removes_the_secret_text",
+    "ui::shell::redact_card::tests::empty_selection_is_typed_and_writes_nothing",
+    "ui::shell::redact_card::tests::sanitizing_removes_info_metadata_and_keeps_the_pages",
+    "ui_controls::protect_command_opens_the_card_with_a_document_and_explains_without_one",
+    "ui_controls::redact_command_opens_the_card_with_a_document_and_explains_without_one",
+]
+notes = """
+Protect card (shell/protect_card.rs): ProtectUiState and
+handle_protect_command. AppCommand::Protect ("protect") opens the Protect PDF
+window with masked user/owner password fields, permission checkboxes
+(print/copy/annotate/forms), "Protect and save as..." and a Remove protection
+section. protect_to_path calls pdfxi_security::protect_document with
+ProtectOptions built from the fields (permissions mapped from the checkboxes,
+owner password only when non-empty) and writes the bytes; the result is checked
+with open_encrypted for the correct role, source page count and exactly the
+selected permission grants. remove_protection_from removes with the supplied
+password and writes/opens a <stem>-unprotected.pdf copy.
+
+Redact card (shell/redact_card.rs): RedactUiState and handle_redact_command.
+AppCommand::Redact ("redact") opens the Redact and sanitize window. Redaction
+is gated on a non-empty selection: each selection quad becomes a RedactionMark,
+apply_redaction runs on a cloned document, verify_redaction must report clean,
+and the candidate is saved with save() (full rewrite, never incremental) to a
+new <stem>-redacted.pdf that is opened as a new tab; the source is never
+overwritten. Sanitize calls
+pdfxi_security::sanitize_verified::sanitize_document_full with
+SanitizeRequest::all() and writes/opens <stem>-sanitized.pdf.
+
+Gates (target/lanes/app9): cargo fmt -p pdfxi-app exit 0; cargo clippy
+-p pdfxi-app --all-targets --features ui,pdfium -- -D warnings exit 0;
+cargo test -p pdfxi-app --features ui,pdfium = lib 585 passed / 0 failed /
+4 ignored, ui_controls 32 passed, protect_card filter 4 passed, redact_card
+filter 3 passed. Harness dispatch tests cover Protect and Redact with and
+without a document; both commands stay in all_commands, the proven labels, the
+label snapshot and the capability loop.
+
+Matrix rows are listed for review only (promoted_rows = []): SEC-012 protection
+stays `library`, SEC-001 open/permissions stays `library`, EDIT-013 redaction
+stays `library`, SEC-008 sanitize stays `library`, SEC-009 XMP scrub stays
+`model`. No row is promoted by this slice. No capture and no git by the lane.
+"""

@@ -157,6 +157,8 @@ pub enum AppCommand {
     CombineFiles,
     /// Open Protect PDF (capability-gated).
     Protect,
+    /// Open the Redact and sanitize window (capability-gated).
+    Redact,
     /// Open the AI assistant (capability-gated).
     AiAssistant,
     /// Open the Connect screen and start the OpenCode metadata probe.
@@ -413,6 +415,7 @@ impl AppCommand {
             Self::ConvertToPdf => "convert-to-pdf",
             Self::CombineFiles => "combine-files",
             Self::Protect => "protect",
+            Self::Redact => "redact",
             Self::AiAssistant => "ai-assistant",
             Self::AssistantConnect => "assistant-connect",
             Self::AssistantAsk => "assistant-ask",
@@ -593,7 +596,8 @@ impl crate::ui::PdfxiApp {
             AppCommand::Export => self.handle_export_command(),
             AppCommand::ConvertToPdf => self.handle_convert_command(),
             AppCommand::CombineFiles => self.not_available("Combine Files"),
-            AppCommand::Protect => self.not_available("Protect PDF"),
+            AppCommand::Protect => self.handle_protect_command(),
+            AppCommand::Redact => self.handle_redact_command(),
             AppCommand::AiAssistant => self.open_assistant_connect(),
             AppCommand::AssistantConnect => self.begin_assistant_connect(),
             AppCommand::AssistantAsk => {

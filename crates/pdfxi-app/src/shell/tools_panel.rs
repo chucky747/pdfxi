@@ -24,6 +24,7 @@ impl PdfxiApp {
             .filter(|row| document_open || row.command.label() != "place-signature")
             .filter(|row| document_open || row.command.label() != "request-signature")
             .filter(|row| document_open || row.command.label() != "document-properties")
+            .filter(|row| document_open || row.command.label() != "redact")
             .collect()
     }
 

@@ -613,6 +613,10 @@ pub struct PdfxiApp {
     notifications: shell::notifications::NotificationsUiState,
     /// Convert to PDF card state.
     convert: shell::convert_card::ConvertUiState,
+    /// Protect PDF card state.
+    protect: shell::protect_card::ProtectUiState,
+    /// Redact and sanitize card state.
+    redact: shell::redact_card::RedactUiState,
     /// Export card state.
     export_ui: shell::export_card::ExportUiState,
     /// Pre-print panel, progress and worker state.
@@ -1843,6 +1847,8 @@ impl eframe::App for PdfxiApp {
         self.document_properties_ui(ctx);
         self.notifications_ui(ctx);
         self.convert_card_ui(ctx);
+        self.protect_card_ui(ctx);
+        self.redact_card_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);
