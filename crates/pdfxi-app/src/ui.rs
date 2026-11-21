@@ -547,6 +547,8 @@ pub struct PdfxiApp {
     presentation_needs_fit: bool,
     /// Whether presentation mode still needs to switch the window to full screen.
     presentation_needs_fullscreen: bool,
+    /// View mode to restore when presentation mode ends.
+    presentation_previous_mode: Option<ViewMode>,
     /// Settings as persisted on disk (launch flags never modify this).
     settings: settings::Settings,
     /// Where settings are saved; `None` for viewers that never touch disk.
@@ -839,6 +841,8 @@ impl PdfxiApp {
         self.presentation = true;
         self.presentation_needs_fit = true;
         self.presentation_needs_fullscreen = true;
+        self.presentation_previous_mode = self.state.active_tab().map(|tab| tab.view_mode());
+        self.set_view_mode(ViewMode::SinglePage);
         self.tools_open = false;
         self.find_open = false;
         self.help_open = false;
@@ -1886,18 +1890,8 @@ impl PdfxiApp {
                 .active_tab()
                 .is_some_and(|tab| tab.page_count() > 0);
             if has_pages {
-                let page = self
-                    .page_sizes
-                    .first()
-                    .copied()
-                    .unwrap_or(PageSize::new(612.0, 792.0));
-                let viewport = ctx.content_rect();
-                let width = viewport.width().max(1.0);
-                let height = viewport.height().max(1.0);
-                let scale = ((width * 0.94) / page.width_pt.max(1.0))
-                    .min((height * 0.94) / page.height_pt.max(1.0));
-                let percent = (scale * 100.0).clamp(10.0, 800.0).round() as u32;
-                self.set_zoom_percent(percent);
+                self.fit_page();
+
                 self.presentation_needs_fit = false;
             }
         }
@@ -1915,6 +1909,9 @@ impl PdfxiApp {
         });
         if exit {
             self.presentation = false;
+            if let Some(mode) = self.presentation_previous_mode.take() {
+                self.set_view_mode(mode);
+            }
             self.fit_page();
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             return;

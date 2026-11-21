@@ -51,3 +51,26 @@ instead of reusing `canvas_ui`.
 No feature row changes. `cargo xtask goal-verify --all` still reports
 `FEATURES OK: 145 rows, 63 verified`. The campaign continues on other rows while
 this one is reworked.
+
+## Attempt 5-6 (single-page layout and per-frame fit)
+
+- Forced `ViewMode::SinglePage` on entry (restored on exit) and applied a custom
+  zoom from `ctx.content_rect()` and `page_sizes[0]` on every presentation frame.
+- Result: `target\tmp\present-7.png` (real screen capture, not PrintWindow) is
+  pixel-identical to the earlier captures: one page, scale ≈ 2560/792 ≈ 3.23,
+  clipped at the right edge.
+- `fmt`/`clippy -D warnings` pass. The zoom call compiles and runs (the guard is
+  satisfied because a page is painted, so `layout_for_state` has page sizes).
+- The scale matches fit-**width**, not fit-page, so the suspicion is now inside
+  `CanvasLayout::with_rotation`/`Zoom` resolution: either the viewport passed to
+  the layout is wider than the window, or `Zoom::FitPage` resolves the width
+  constraint first.
+
+## Next diagnostic
+
+Add a temporary debug overlay (or a unit test) that prints
+`canvas.viewport`, `zoom`, the resolved scale and `layout.pages()[0].rect` for
+`ViewMode::SinglePage` at the presentation viewport, then fix the resolution at
+the `CanvasLayout` level rather than in `ui.rs`. Do not call VIEW-012 verified
+until a full-screen capture shows the whole page with black margins and arrow
+navigation changes the slide.
