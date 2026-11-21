@@ -65,13 +65,17 @@ use std::path::{Path, PathBuf};
 
 use crate::OpenError;
 use crate::design::{self, Palette, ThemeMode, TitlePalette, metrics};
+use crate::presentation::{
+    AdvanceState, FitMode, PresentationCommand, PresentationKey, PresentationModel,
+    PresentationOutcome, map_presentation_key,
+};
 use crate::settings::{self, LaunchOptions, LaunchPanel, ThemePreference, WindowControlStyle};
 use egui::Key;
 
 use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
     DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, OpenOutcome, OwnedSpan,
-    OwnedTextPage, PageSize, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
+    OwnedTextPage, PageSize, Rotation, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
     ThumbnailPaneState, Toolset, ViewCommand, ViewMode, Zoom, app_name, map_shortcut,
 };
 
@@ -543,12 +547,10 @@ pub struct PdfxiApp {
     window_controls: WindowControlStyle,
     /// Full-screen presentation mode: only the page is drawn.
     presentation: bool,
-    /// Whether presentation mode still needs its initial fit-to-window.
-    presentation_needs_fit: bool,
     /// Whether presentation mode still needs to switch the window to full screen.
     presentation_needs_fullscreen: bool,
-    /// View mode to restore when presentation mode ends.
-    presentation_previous_mode: Option<ViewMode>,
+    /// Slide state while presenting; `None` outside presentation mode.
+    presentation_model: Option<PresentationModel>,
     /// Settings as persisted on disk (launch flags never modify this).
     settings: settings::Settings,
     /// Where settings are saved; `None` for viewers that never touch disk.
@@ -831,22 +833,20 @@ impl PdfxiApp {
     /// Start the full-screen presentation mode requested with `--present`.
     ///
     /// Presentation mode draws only the current page on a black canvas. The
-    /// document is fitted to the window, panels and the tool panel are hidden,
-    /// and `update` handles the navigation keys; `Escape` leaves the mode and
-    /// restores the window decorations.
+    /// window goes full screen on the first frame, the page is letterboxed into
+    /// the window by [`PresentationModel::layout`], and `update` handles the
+    /// navigation keys; `Escape` leaves the mode and restores the window
+    /// decorations.
     pub fn apply_launch_presentation(&mut self, enabled: bool) {
         if !enabled {
             return;
         }
         self.presentation = true;
-        self.presentation_needs_fit = true;
         self.presentation_needs_fullscreen = true;
-        self.presentation_previous_mode = self.state.active_tab().map(|tab| tab.view_mode());
-        self.set_view_mode(ViewMode::SinglePage);
+        self.presentation_model = None;
         self.tools_open = false;
         self.find_open = false;
         self.help_open = false;
-        self.fit_page();
     }
 
     /// Whether presentation mode is active.
@@ -1870,86 +1870,233 @@ impl PdfxiApp {
         self.open_errors.clear();
     }
 }
+/// Translate an `egui` key press into a presentation command.
+///
+/// Pure so the host keymap is testable without a window. `PageDown`, `Enter`,
+/// and the down arrow behave like `Space`; `PageUp` and the up arrow behave like
+/// `Left`. Unmapped keys and modifier combinations return `None` so focused
+/// widgets keep them.
+#[must_use]
+pub fn presentation_command_for(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> Option<PresentationCommand> {
+    let navigation = match key {
+        egui::Key::Space
+        | egui::Key::Enter
+        | egui::Key::PageDown
+        | egui::Key::ArrowRight
+        | egui::Key::ArrowDown => PresentationKey::Space,
+        egui::Key::ArrowLeft | egui::Key::ArrowUp | egui::Key::PageUp => PresentationKey::ArrowLeft,
+        egui::Key::Home => PresentationKey::Home,
+        egui::Key::End => PresentationKey::End,
+        egui::Key::Escape => PresentationKey::Escape,
+        egui::Key::A => PresentationKey::A,
+        _ => return None,
+    };
+    map_presentation_key(
+        navigation,
+        crate::presentation::PresentationModifiers {
+            ctrl: modifiers.ctrl,
+            shift: modifiers.shift,
+            alt: modifiers.alt,
+        },
+    )
+}
+
 impl PdfxiApp {
     /// Draw and drive the full-screen presentation mode.
     ///
-    /// Only the page is drawn on a black canvas. `Right`/`Down`/`Space`/
-    /// `PageDown` advance, `Left`/`Up`/`PageUp` go back, and `Escape` leaves the
-    /// mode and restores the window decoration.
+    /// Only the slide is drawn, letterboxed on black by
+    /// [`PresentationModel::layout`]. `Right`/`Down`/`Space`/`PageDown`/`Enter`
+    /// advance, `Left`/`Up`/`PageUp` go back, `Home`/`End` jump to the ends, `A`
+    /// toggles auto-advance, and `Escape` leaves the mode and restores the
+    /// window decoration.
     fn presentation_update(&mut self, ctx: &egui::Context) {
         if self.presentation_needs_fullscreen {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
             self.presentation_needs_fullscreen = false;
-            // Fit on the next frame, once the window reports its full-screen size.
+            // The window is not at its full-screen size yet; draw next frame.
             ctx.request_repaint();
             return;
         }
-        if self.presentation_needs_fit {
-            let has_pages = self
-                .state
-                .active_tab()
-                .is_some_and(|tab| tab.page_count() > 0);
-            if has_pages {
-                self.fit_page();
 
-                self.presentation_needs_fit = false;
-            }
-        }
-        let (next, previous, exit) = ctx.input(|input| {
-            (
-                input.key_pressed(egui::Key::ArrowRight)
-                    || input.key_pressed(egui::Key::ArrowDown)
-                    || input.key_pressed(egui::Key::Space)
-                    || input.key_pressed(egui::Key::PageDown),
-                input.key_pressed(egui::Key::ArrowLeft)
-                    || input.key_pressed(egui::Key::ArrowUp)
-                    || input.key_pressed(egui::Key::PageUp),
-                input.key_pressed(egui::Key::Escape),
-            )
-        });
-        if exit {
-            self.presentation = false;
-            if let Some(mode) = self.presentation_previous_mode.take() {
-                self.set_view_mode(mode);
-            }
-            self.fit_page();
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        let page_count = self.state.active_tab().map_or(0, |tab| tab.page_count());
+        if page_count == 0 {
+            self.exit_presentation(ctx);
             return;
         }
-        if next {
-            self.step_page(1);
+        if self.presentation_model.as_ref().map(PresentationModel::len) != Some(page_count) {
+            let start = self.state.active_tab().map_or(0, |tab| tab.current_page());
+            match Self::presentation_model_at(page_count, start) {
+                Some(model) => self.presentation_model = Some(model),
+                None => {
+                    self.exit_presentation(ctx);
+                    return;
+                }
+            }
         }
-        if previous {
-            self.step_page(-1);
+
+        for command in self.presentation_commands(ctx) {
+            if self.apply_presentation_command(command, ctx) {
+                return;
+            }
         }
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(egui::Color32::BLACK))
-            .show(ctx, |ui| self.canvas_ui(ui));
-        // Fit after drawing so the custom zoom wins over any fit-on-resize
-        // reapplication; the next frame renders with it. A 6% margin keeps a
-        // black border around the slide instead of letting it touch the edges.
-        if let Some(page) = self.page_sizes.first().copied()
-            && self
-                .state
-                .active_tab()
-                .is_some_and(|tab| tab.page_count() > 0)
-        {
-            // Layout units are points; the window reports physical pixels, so
-            // divide by the pixel ratio before fitting.
-            let pixels = ctx.content_rect();
-            let ratio = ctx.pixels_per_point().max(0.1);
-            let width_pt = pixels.width() / ratio;
-            let height_pt = pixels.height() / ratio;
-            let scale = ((width_pt * 0.94) / page.width_pt.max(1.0))
-                .min((height_pt * 0.94) / page.height_pt.max(1.0));
-            let percent = (scale * 100.0).clamp(10.0, 800.0).round() as u32;
-            self.set_zoom_percent(percent);
-            // Centre the slide: a new zoom keeps the old continuous-scroll
-            // offset, which would push a single page off to the right.
-            self.scroll_x = (width_pt - page.width_pt * scale) / 2.0;
-            self.scroll_y = 0.0;
+
+        let playing = self
+            .presentation_model
+            .as_ref()
+            .is_some_and(|model| model.state() == AdvanceState::Playing);
+        if playing {
+            let elapsed = ctx.input(|input| input.stable_dt);
+            let outcome = self
+                .presentation_model
+                .as_mut()
+                .map(|model| model.tick(elapsed));
+            match outcome {
+                Some(PresentationOutcome::PageChanged(page)) => self.show_presentation_page(page),
+                Some(PresentationOutcome::Finished | PresentationOutcome::Exited) => {
+                    self.exit_presentation(ctx);
+                    return;
+                }
+                _ => {}
+            }
         }
+
+        self.draw_presentation_slide(ctx);
         ctx.request_repaint();
+    }
+
+    /// A presentation over `page_count` slides with `page` selected.
+    ///
+    /// Returns `None` only for an empty document; callers treat that as "leave
+    /// presentation mode".
+    fn presentation_model_at(page_count: usize, page: usize) -> Option<PresentationModel> {
+        let mut model = PresentationModel::new(page_count).ok()?;
+        for _ in 0..page.min(page_count.saturating_sub(1)) {
+            let _ = model.command(PresentationCommand::Next);
+        }
+        Some(model)
+    }
+
+    /// Presentation commands triggered by this frame's key presses.
+    fn presentation_commands(&self, ctx: &egui::Context) -> Vec<PresentationCommand> {
+        // Navigation keys are listed once each; a key that is not pressed is
+        // skipped, so several keys in one frame queue several commands.
+        const KEYS: [egui::Key; 12] = [
+            egui::Key::Space,
+            egui::Key::Enter,
+            egui::Key::PageDown,
+            egui::Key::ArrowRight,
+            egui::Key::ArrowDown,
+            egui::Key::PageUp,
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowUp,
+            egui::Key::Home,
+            egui::Key::End,
+            egui::Key::Escape,
+            egui::Key::A,
+        ];
+        ctx.input(|input| {
+            KEYS.iter()
+                .filter(|key| input.key_pressed(**key))
+                .filter_map(|key| presentation_command_for(*key, input.modifiers))
+                .collect()
+        })
+    }
+
+    /// Apply one presentation command; returns `true` when the mode exited.
+    fn apply_presentation_command(
+        &mut self,
+        command: PresentationCommand,
+        ctx: &egui::Context,
+    ) -> bool {
+        let Some(model) = self.presentation_model.as_mut() else {
+            if command == PresentationCommand::Exit {
+                self.exit_presentation(ctx);
+                return true;
+            }
+            return false;
+        };
+        match model.command(command) {
+            PresentationOutcome::Exited => {
+                self.exit_presentation(ctx);
+                true
+            }
+            PresentationOutcome::PageChanged(page) => {
+                self.show_presentation_page(page);
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Mark `page` as the current page so the shell agrees with the slide being
+    /// shown when presentation mode ends.
+    fn show_presentation_page(&mut self, page: usize) {
+        self.select_thumbnail_page(page);
+    }
+
+    /// Leave presentation mode and restore the window decoration.
+    fn exit_presentation(&mut self, ctx: &egui::Context) {
+        if let Some(page) = self
+            .presentation_model
+            .as_ref()
+            .map(PresentationModel::current_page)
+        {
+            self.select_thumbnail_page(page);
+        }
+        self.presentation_model = None;
+        self.presentation = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        self.fit_page();
+    }
+
+    /// Paint the current slide on black, scaled and centred by the presentation
+    /// layout, from the page raster cache.
+    fn draw_presentation_slide(&mut self, ctx: &egui::Context) {
+        let screen = ctx.content_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Background,
+            egui::Id::new("pdfxi-presentation"),
+        ));
+        painter.rect_filled(screen, 0.0, egui::Color32::BLACK);
+
+        let placed = self.presentation_model.as_ref().and_then(|model| {
+            let page = model.current_page();
+            let size = self.page_sizes.get(page).copied()?;
+            let viewport = CanvasSize::new(screen.width(), screen.height());
+            model
+                .layout(viewport, size, FitMode::Fit)
+                .map(|layout| (page, layout))
+        });
+        let Some((page, layout)) = placed else {
+            return;
+        };
+
+        let dest = egui::Rect::from_min_size(
+            egui::pos2(screen.min.x + layout.x, screen.min.y + layout.y),
+            egui::vec2(layout.width, layout.height),
+        );
+        // The render key is device pixels per PDF point; the cached raster is
+        // capped so a huge window cannot allocate an unbounded bitmap.
+        let scale = layout.scale.clamp(0.1, 4.0);
+        self.ensure_presentation_raster(page, scale);
+        #[cfg(feature = "pdfium")]
+        {
+            if let Some(texture) = self.raster_texture(ctx, page, scale, Rotation::Deg0) {
+                painter.image(
+                    texture.id(),
+                    dest,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+        #[cfg(not(feature = "pdfium"))]
+        {
+            let _ = (painter, dest);
+        }
     }
 }
 
@@ -2928,5 +3075,93 @@ mod tests {
         // Without the flag startup leaves the window closed.
         let plain = PdfxiApp::new();
         assert!(!plain.help_open());
+    }
+
+    #[test]
+    fn presentation_keys_map_to_navigation_with_escape_winning() {
+        let none = egui::Modifiers::NONE;
+        assert_eq!(
+            presentation_command_for(egui::Key::ArrowRight, none),
+            Some(PresentationCommand::Next)
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::Space, none),
+            Some(PresentationCommand::Next),
+            "space advances"
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::PageDown, none),
+            Some(PresentationCommand::Next)
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::ArrowUp, none),
+            Some(PresentationCommand::Previous),
+            "the up arrow behaves like left"
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::Home, none),
+            Some(PresentationCommand::First)
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::End, none),
+            Some(PresentationCommand::Last)
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::Escape, none),
+            Some(PresentationCommand::Exit)
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::A, none),
+            Some(PresentationCommand::ToggleAutoAdvance)
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::A, egui::Modifiers::CTRL),
+            None,
+            "Ctrl+A stays with focused widgets"
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::ArrowRight, egui::Modifiers::ALT),
+            None,
+            "Alt+Right is not a presentation command"
+        );
+        assert_eq!(
+            presentation_command_for(egui::Key::B, none),
+            None,
+            "an unrelated key is left alone"
+        );
+    }
+
+    #[test]
+    fn presentation_mode_starts_on_the_active_page_and_exits_from_the_model() {
+        let mut app = app_with_pages(4);
+        app.apply_launch_presentation(true);
+        assert!(app.is_presenting());
+        // The model is built on the first frame; the helper is the same one.
+        let model = PdfxiApp::presentation_model_at(4, 2).expect("four pages is not empty");
+        assert_eq!(model.current_page(), 2);
+        assert_eq!(model.len(), 4);
+
+        app.presentation_model = Some(model);
+        assert!(
+            !app.apply_presentation_command(PresentationCommand::Next, &egui::Context::default())
+        );
+        assert_eq!(
+            app.presentation_model
+                .as_ref()
+                .map(PresentationModel::current_page),
+            Some(3)
+        );
+        assert_eq!(
+            app.state()
+                .active_tab()
+                .map(crate::DocumentTab::current_page),
+            Some(3),
+            "the shell follows the presented slide"
+        );
+        assert!(
+            app.apply_presentation_command(PresentationCommand::Exit, &egui::Context::default())
+        );
+        assert!(!app.is_presenting());
+        assert!(app.presentation_model.is_none());
     }
 }

@@ -1,103 +1,75 @@
-# T-0281 — presentation mode: page fit is still wrong (VIEW-012 not claimed)
+# T-0281 — presentation mode: implementation complete, visual evidence blocked by the host
 
-Status: open. `VIEW-012` stays `model`. The launch shell works; the page view does
-not, so nothing is claimed.
+Status: open. `VIEW-012` stays `model`. The host code is now the planned design;
+only the full-screen capture is missing, and this machine can no longer create a
+window (see `ENV-gui-session-wedged.md`).
 
-## What works (verified by capture)
+## What changed from the earlier attempts
 
-`pdfxi-ui.exe --present <file>` now:
+The earlier versions reused `canvas_ui`, which lays out a continuous column and
+applies its own scroll offset. That is why the slide was clipped and then
+right-aligned: `fit_page`, a custom zoom, and `scroll_x` were fighting a layout
+that was never meant to show one centred page.
 
-- switches the window to full screen (2560x1440 on this host) via
-  `ViewportCommand::Fullscreen(true)` on the first frame;
-- hides the title bar, command bar, rail, pages panel, tools panel and status
-  bar, leaving a black canvas;
-- maps `Right/Down/Space/PageDown` to next page, `Left/Up/PageUp` to previous,
-  and `Escape` to leave presentation mode and restore decorations;
-- is parser-tested: `settings::tests::presentation_flags_are_bare_switches_and_ignore_lookalikes`.
+The window now paints the slide directly:
 
-## What is wrong
+- `PdfxiApp::presentation_model` holds the tested
+  `presentation::PresentationModel` for the open document, built at the tab's
+  current page.
+- `draw_presentation_slide` asks
+  `PresentationModel::layout(content_rect_size, page_size, FitMode::Fit)` for the
+  placed rect, fills the whole window black, and draws the page raster into
+  exactly that rect. The model's layout is already unit-tested as uniform and
+  centred (`layout_fit_and_actual_math_is_deterministic_and_centered`,
+  `layout_fit_uses_width_limit_for_wide_pages`).
+- `ensure_presentation_raster` renders the presented page at the layout scale
+  (clamped 0.1..4.0) into the existing `RasterCache`, keyed exactly as
+  `raster_texture` reads it, so the bitmap is reused across frames.
+- Keys go through `presentation_command_for(egui::Key, egui::Modifiers)` ->
+  `presentation::map_presentation_key`, then `PresentationModel::command`:
+  `Space`/`Enter`/`PageDown`/`Right`/`Down` next, `Left`/`Up`/`PageUp` previous,
+  `Home`/`End` first/last, `A` auto-advance, `Escape` exit.
+- Exit restores the window decoration, syncs the shell to the presented page and
+  calls `fit_page()`.
 
-The page is drawn at a scale larger than the window, so it is clipped on the
-right. Two captures:
+Units were measured, not guessed: a debug overlay printed
+`cr=2560x1440 vr=2560x1440 ppp=1.50 avail=2560x1440`. Painter coordinates, the
+content rect, and `available_size` are all the same 2560x1440 space, so the
+layout and the painter agree and no pixel-ratio correction is needed. The
+earlier 2.23 fit was the bug (it divided by `pixels_per_point`).
 
-- `target\tmp\present-5.png` — computed custom zoom: one page, clipped.
-- `target\tmp\present-50.png` — forced 50%: the *continuous* column of all three
-  pages is visible, offset to the right side of the canvas.
+## Proven
 
-So the custom zoom is applied, but the canvas layout is not a centred single
-page: it keeps the continuous column and the horizontal padding is computed
-against a wider content box than the visible viewport.
+```text
+cargo test -p pdfxi-app --lib --features ui,pdfium presentation
+  test result: ok. 22 passed; 0 failed
+    ui::tests::presentation_keys_map_to_navigation_with_escape_winning
+    ui::tests::presentation_mode_starts_on_the_active_page_and_exits_from_the_model
+    presentation::tests::layout_fit_and_actual_math_is_deterministic_and_centered
+    presentation::tests::navigation_commands_walk_slides_and_clamp_at_boundaries
+    ... (18 more model/state-machine tests)
+cargo clippy -p pdfxi-app --features ui,pdfium --all-targets -- -D warnings -> 0
+```
 
-## Attempts recorded
+`presentation_mode_starts_on_the_active_page_and_exits_from_the_model` proves
+that a `Next` command advances to the model's next page, that the shell's tab
+follows it, and that `Exit` clears the model and leaves the mode.
 
-1. `fit_page()` on entry — no effect (fit scale is caller-supplied and the
-   first frames still used the pre-fullscreen viewport).
-2. `ViewportCommand::Fullscreen(true)` then fit on the next frame — fullscreen
-   now applies, page still clipped.
-3. Custom zoom from `ctx.content_rect()` and `page_sizes[0]` — zoom applies
-   (50% test changed the scale) but the column layout and offset remain wrong.
-4. Sent an extra repaint after the fullscreen command — no change.
+## Blocked only on the capture
 
-## Next approach (not yet done)
+`ENV-gui-session-wedged.md`: no GUI process on this machine creates a top-level
+window any more, so `PrintWindow` reports `window not found` and
+`CopyFromScreen` never returns. The last capture from the previous design
+(`docs/evidence/ui/final/presentation-mode.png`) shows the slide fully visible
+but right-aligned; it predates the direct-paint rewrite.
 
-Drive the active tab to the single-page layout (`view.rs` has
-`SinglePage`/`Continuous`/`TwoPageContinuous`) before fitting, and centre the
-active page in the visible canvas instead of the continuous column; or paint the
-current slide directly from the raster cache with an explicit destination rect
-instead of reusing `canvas_ui`.
+When the session is healthy the remaining work is: launch
+`target\lanes\core\debug\pdfxi-ui.exe --present --light
+fixtures\realworld\powerpoint-slides.pdf`, capture page 1, send two Right
+presses, capture pages 2 and 3, send Left, capture page 2 again, then `Escape`;
+paste the four captures and add the VIEW-012 fragment.
 
 ## Effect on the goal
 
-No feature row changes. `cargo xtask goal-verify --all` still reports
-`FEATURES OK: 145 rows, 63 verified`. The campaign continues on other rows while
-this one is reworked.
-
-## Attempt 5-6 (single-page layout and per-frame fit)
-
-- Forced `ViewMode::SinglePage` on entry (restored on exit) and applied a custom
-  zoom from `ctx.content_rect()` and `page_sizes[0]` on every presentation frame.
-- Result: `target\tmp\present-7.png` (real screen capture, not PrintWindow) is
-  pixel-identical to the earlier captures: one page, scale ≈ 2560/792 ≈ 3.23,
-  clipped at the right edge.
-- `fmt`/`clippy -D warnings` pass. The zoom call compiles and runs (the guard is
-  satisfied because a page is painted, so `layout_for_state` has page sizes).
-- The scale matches fit-**width**, not fit-page, so the suspicion is now inside
-  `CanvasLayout::with_rotation`/`Zoom` resolution: either the viewport passed to
-  the layout is wider than the window, or `Zoom::FitPage` resolves the width
-  constraint first.
-
-## Next diagnostic
-
-Add a temporary debug overlay (or a unit test) that prints
-`canvas.viewport`, `zoom`, the resolved scale and `layout.pages()[0].rect` for
-`ViewMode::SinglePage` at the presentation viewport, then fix the resolution at
-the `CanvasLayout` level rather than in `ui.rs`. Do not call VIEW-012 verified
-until a full-screen capture shows the whole page with black margins and arrow
-navigation changes the slide.
-
-## Attempts 7-9 (instrumented; fit fixed, centring and key proof remain)
-
-Debug overlay printed `vp=2560x1440 ppp=1.50 page=720x405 zoom=...`. The fixture
-pages are 720x405, so a pixel-ratio-corrected fit is
-`min((2560/1.5)*0.94/720, (1440/1.5)*0.94/405) = 2.23`.
-
-- Applying the ratio-corrected custom zoom **fixes the clipping**: the whole
-  slide is visible (`target\tmp\present-final2.png`).
-- The slide is **right-aligned** (page starts at x≈730, flush to the right
-  edge). Setting `scroll_x` positive is clamped and does not centre it, and
-  `pad_x` in `canvas_ui` still centres against a wider content box.
-- Arrow-key navigation could not be proven end to end: `SetForegroundWindow`
-  from this process does not take focus (same host restriction as the Help
-  window), so injected Right/Left keystrokes never reach the egui input. The
-  capture after two Right presses is still slide 1.
-
-## Remaining work for VIEW-012
-
-1. Centre the slide horizontally (fix `pad_x`/content width for `SinglePage`,
-   or set the scroll offset in the same units the canvas expects).
-2. Prove key navigation without OS focus: extract the key decision into a pure
-   helper and unit-test it (Right/Space/PageDown -> next, Left/PageUp ->
-   previous, Escape -> exit), and/or post `WM_KEYDOWN` to the window.
-3. Only then add captures for slide 1 -> 2 -> 1 and the VIEW-012 fragment.
-
-The row stays `model`; nothing is claimed.
+No feature row changes: `cargo xtask features verify` still reports
+`FEATURES OK: 145 rows, 63 verified`.

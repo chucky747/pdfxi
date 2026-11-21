@@ -72,6 +72,29 @@ impl PdfxiApp {
         }
     }
 
+    /// Render `page` into the raster cache at `scale` device pixels per PDF
+    /// point when it is not cached yet.
+    ///
+    /// Presentation mode paints one page at a time and cannot reuse the canvas
+    /// visibility pass, so it renders the presented page synchronously. The
+    /// cache key matches what [`Self::raster_texture`] asks for, so the bitmap
+    /// is reused across frames and only re-rendered after a scale change.
+    #[cfg(feature = "pdfium")]
+    pub(crate) fn ensure_presentation_raster(&mut self, page: usize, scale: f32) {
+        let Some(renderer) = self.pdfium_renderer.as_ref() else {
+            return;
+        };
+        let key = RasterKey::new(page, scale, Rotation::Deg0);
+        if self.raster_cache.contains(key) {
+            return;
+        }
+        let token = self.raster_cancel.clone();
+        match renderer.render_page(PageIndex::new(page), scale, &token, &mut |_| {}) {
+            Ok(rendered) => self.raster_cache.put(key, rendered),
+            Err(error) => self.status = format!("Render error: {error}"),
+        }
+    }
+
     /// Upload the cached raster for `page` into a reusable `egui` texture.
     ///
     /// Returns `None` when the page is not cached or its pixel buffer is not a
