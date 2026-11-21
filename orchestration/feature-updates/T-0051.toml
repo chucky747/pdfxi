@@ -1,0 +1,69 @@
+# T-0051 - fetch and smoke-test external corpora with checksums
+#
+# No feature-row status changes: this is corpus infrastructure. The fragment
+# records the pinned descriptors, the new tooling, and the verification
+# evidence for the integrator. Evidence is inline because docs/evidence/** is
+# outside this task's ownership.
+
+task = "T-0051"
+lane = "qa"
+status = "verified"
+evidence = ""
+docs = [
+    "corpus/manifest.toml",
+    "corpus/README.md",
+    "crates/pdfxi-testkit/Cargo.toml",
+    "crates/pdfxi-testkit/src/lib.rs",
+    "crates/pdfxi-testkit/src/external_corpus.rs",
+    "crates/pdfxi-testkit/examples/fetch_corpus.rs",
+    "crates/pdfxi-testkit/tests/external_corpus.rs",
+    "crates/pdfxi-testkit/tests/realworld_corpus.rs",
+    "crates/pdfxi-testkit/tests/committed_fixtures.rs",
+]
+notes = """
+External corpus set is now reproducible and smoke-tested. corpus/manifest.toml
+pins two Apache-2.0 PDFBox test PDFs from the immutable 3.0.8 commit
+9286e47d89d6877005c9d2d0f2fd38793a62519a (941 and 1042 bytes, full lowercase
+SHA-256 recorded), plus one unapproved example.invalid descriptor that stays
+unfetchable. No binary is committed: files are cached under the platform cache
+location (override with PDFXI_CORPUS_CACHE), outside the repository, so no
+.gitignore rule is needed.
+
+New pdfxi-testkit::external_corpus parses the manifest, resolves a safe cache
+path, verifies exact size + SHA-256, and provides the only network path:
+fetch_entry, which refuses unpinned entries, enforces an 8 MiB bound, uses curl
+with --max-filesize and a 30s timeout, and verifies a .part file before rename.
+A failed download is deleted and reports "check connectivity or use --offline".
+fetch_corpus example drives fetch/verify; --offline never uses the network.
+Fast tests only read local cache files: absent entries are SKIP, a cached file
+with a wrong digest or size is a hard failure.
+
+cargo xtask corpus smoke needed no xtask edit: the external smoke test was
+added to the realworld_corpus test target that the existing command already
+runs. It opens each cached pinned file with pdfxi_core::Document, checks page
+count and extracted marker text, and skips uncached files.
+
+VERIFICATION (CARGO_TARGET_DIR=target/lanes/qa5):
+- cargo xtask claim T-0051 --lane qa
+  -> CLAIMED T-0051 for qa: orchestration/claims/T-0051.json
+- cargo fmt -p pdfxi-testkit -- --check -> exit 0
+- cargo clippy -p pdfxi-testkit --all-targets --all-features -- -D warnings
+  -> exit 0 (only the pre-existing workspace warning about unused pdfxi-assistant)
+- cargo test -p pdfxi-testkit -> exit 0; 155 tests pass, 0 fail.
+  external_corpus.rs: 8 passed; realworld_corpus.rs: 6 passed (includes
+  external_corpus_smoke_checks_cached_files); committed_fixtures.rs: 10 passed
+  (corpus_manifest_is_fail_closed replaces the M1 no-downloads test).
+- cargo run -p pdfxi-testkit --example fetch_corpus
+  -> DOWNLOADED pdfbox-5002 sha256=401586241a33...; DOWNLOADED
+     pdfbox-table-document sha256=a31f3b5fc79e...; SKIP verapdf-test-suite;
+     SUMMARY checked=2 skipped=1 failures=0
+- cargo xtask corpus smoke -> exit 0, CORPUS SMOKE OK.
+- Empty-cache smoke (nocapture) -> two SKIP lines, test passes, exit 0.
+- Unreachable proxy -> exit 1 with clear "download ... failed ... (check
+  connectivity or use --offline)" messages; no corrupt file left in cache.
+- Negative test a_cached_file_with_the_wrong_hash_fails_clearly proves a cached
+  file with a wrong SHA-256 produces a named HashMismatch error.
+
+Claim is held for parent review per dispatch instructions. No git writes were
+performed by this lane.
+"""
