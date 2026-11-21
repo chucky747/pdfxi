@@ -10,7 +10,7 @@
 //! `pdfxi-security`, `pdfxi-edit` and `pdfxi-document` entry points and shows
 //! their typed results.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pdfxi_edit::{Point, add_text_note};
 use pdfxi_forms::{FormFieldKind, read_acroform};
@@ -19,6 +19,7 @@ use pdfxi_security::{
 };
 
 use super::capabilities::Capability;
+use super::sign_request::{SignRequestStatus, SignRequestTracker, open_mailto, request_mailto_url};
 use crate::ui::{AppCommand, PdfxiApp};
 
 /// State of the Sign card and the last verification readout.
@@ -63,6 +64,18 @@ pub(crate) struct SigningUiState {
     pub(crate) verification_tab: Option<crate::TabId>,
     /// Typed verification error.
     pub(crate) verification_error: Option<String>,
+    /// Recipient address for a signature request.
+    pub(crate) request_recipient: String,
+    /// Optional subject for a signature request.
+    pub(crate) request_subject: String,
+    /// Optional message for a signature request.
+    pub(crate) request_message: String,
+    /// Durable signature-request list, loaded once.
+    pub(crate) tracker: Option<super::sign_request::SignRequestTracker>,
+    /// Tracker file injected by tests or resolved from the platform.
+    pub(crate) tracker_path: Option<PathBuf>,
+    /// Typed tracker or mail-client error.
+    pub(crate) tracker_error: Option<String>,
 }
 
 /// One signature request assembled from the card's fields.
@@ -119,6 +132,25 @@ impl PdfxiApp {
         }
     }
 
+    /// Handle [`AppCommand::RequestSignature`] from the tools panel or a
+    /// `--tool=request-signature` deep link.
+    ///
+    /// The request form lives in the Sign card, so the command opens that card
+    /// and points at the recipient field. When the card is already open the
+    /// status line repeats the next step instead of sending: sending is the
+    /// card's explicit "Send request" button and never a side effect of a
+    /// navigation command.
+    pub(crate) fn handle_request_signature_command(&mut self) {
+        if self.signing.open {
+            self.status = "Signature request: type the recipient, then Send request".to_owned();
+        } else {
+            self.open_sign_dialog();
+            if self.signing.open {
+                self.status = "Signature request: type the recipient".to_owned();
+            }
+        }
+    }
+
     /// Open the Sign card for the active document.
     ///
     /// The card is capability-gated and needs an open document, exactly like
@@ -139,6 +171,7 @@ impl PdfxiApp {
         }
         self.signing.open = true;
         self.signing.tab = Some(id);
+        self.load_sign_request_tracker();
         self.signing.error = None;
         self.signing.page = self.state.active_tab().map_or(0, |tab| tab.current_page());
         if self.signing.appearance.trim().is_empty() {
@@ -190,6 +223,117 @@ impl PdfxiApp {
         self.signing.pfx_path.is_some()
             && !self.signing.password.is_empty()
             && self.signing.progress.is_none()
+    }
+
+    /// Load the durable signature-request tracker once.
+    pub(crate) fn load_sign_request_tracker(&mut self) {
+        if self.signing.tracker.is_some() {
+            return;
+        }
+        let path = self
+            .signing
+            .tracker_path
+            .clone()
+            .unwrap_or_else(SignRequestTracker::tracker_path);
+        self.signing.tracker_path = Some(path.clone());
+        self.signing.tracker = Some(SignRequestTracker::load(path));
+        self.signing.tracker_error = None;
+    }
+
+    /// Send the assembled signature request through the platform mail client.
+    pub(crate) fn send_signature_request(&mut self) {
+        let _ = self.send_signature_request_with(open_mailto);
+    }
+
+    /// Mark a pending request signed when its document comes back signed.
+    pub(crate) fn mark_returned_signature(&mut self, document: &Path, signer: Option<&str>) {
+        let path = self
+            .signing
+            .tracker_path
+            .clone()
+            .unwrap_or_else(SignRequestTracker::tracker_path);
+        let mut tracker = self
+            .signing
+            .tracker
+            .take()
+            .unwrap_or_else(|| SignRequestTracker::load(path));
+        if tracker.mark_signed_for(document, signer) {
+            let _ = tracker.save();
+            self.signing.tracker_error = None;
+            self.status = "A returned signature was matched to a request".to_owned();
+        }
+        self.signing.tracker = Some(tracker);
+    }
+
+    /// Testable request flow: `launch` stands in for the mail client.
+    ///
+    /// A request is recorded only after the launcher accepts the `mailto:` URL,
+    /// so every listed request means "handed to the mail client".
+    fn send_signature_request_with<F>(&mut self, launch: F) -> Result<(), String>
+    where
+        F: FnOnce(&str) -> std::io::Result<()>,
+    {
+        let Some(id) = self.state.active_tab_id() else {
+            return Err(self.request_error("Open a document before requesting a signature"));
+        };
+        let Some(document) = self
+            .sessions
+            .get(&id)
+            .and_then(|session| session.path().map(std::path::Path::to_path_buf))
+        else {
+            return Err(self.request_error("Save the document before requesting a signature"));
+        };
+        let recipient = self.signing.request_recipient.trim().to_owned();
+        if recipient.is_empty() || !recipient.contains('@') {
+            return Err(self.request_error("Type the recipient's email address"));
+        }
+        let document_name = document.file_name().map_or_else(
+            || document.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let subject = if self.signing.request_subject.trim().is_empty() {
+            format!("Signature requested: {document_name}")
+        } else {
+            self.signing.request_subject.trim().to_owned()
+        };
+        let message = if self.signing.request_message.trim().is_empty() {
+            format!("Please sign {document_name} and return the signed copy as a reply.")
+        } else {
+            self.signing.request_message.trim().to_owned()
+        };
+        let body = format!(
+            "{message}\n\nDocument: {document_name}\nReturn the signed copy by replying with the signed PDF attached."
+        );
+        let url = request_mailto_url(&document_name, &recipient, &subject, &body);
+        if let Err(error) = launch(&url) {
+            return Err(self.request_error(&format!("Could not open the mail client: {error}")));
+        }
+        self.load_sign_request_tracker();
+        let save_result = self.signing.tracker.as_mut().map(|tracker| {
+            tracker.record(document, &recipient, &subject, now_unix());
+            tracker.save()
+        });
+        match save_result {
+            Some(Ok(())) => {}
+            Some(Err(error)) => {
+                return Err(
+                    self.request_error(&format!("Could not save the signature requests: {error}"))
+                );
+            }
+            None => {
+                return Err(self.request_error("The signature-request tracker is unavailable"));
+            }
+        }
+        self.signing.request_message.clear();
+        self.signing.tracker_error = None;
+        self.status = format!("Signature request recorded for {recipient}");
+        Ok(())
+    }
+
+    /// Store and return a typed request error.
+    fn request_error(&mut self, message: &str) -> String {
+        self.signing.tracker_error = Some(message.to_owned());
+        message.to_owned()
     }
 
     /// Whether a valid, whole-file signature covers the active document.
@@ -638,6 +782,7 @@ impl PdfxiApp {
         let mut choose = false;
         let mut load = false;
         let mut sign = false;
+        let mut request = false;
         let page_count = self
             .state
             .active_tab()
@@ -752,6 +897,62 @@ impl PdfxiApp {
                     }
                 });
 
+                ui.separator();
+                ui.heading("Request signature");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.signing.request_recipient)
+                        .hint_text("Recipient email")
+                        .desired_width(300.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.signing.request_subject)
+                        .hint_text("Subject (optional)")
+                        .desired_width(300.0),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.signing.request_message)
+                        .hint_text("Message (optional)")
+                        .desired_rows(2)
+                        .desired_width(300.0),
+                );
+                if ui
+                    .add_enabled(
+                        self.signing.request_recipient.contains('@'),
+                        egui::Button::new("Send request"),
+                    )
+                    .clicked()
+                {
+                    request = true;
+                }
+                if let Some(error) = &self.signing.tracker_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+
+                ui.separator();
+                ui.heading("Tracked requests");
+                if let Some(tracker) = &self.signing.tracker {
+                    if tracker.all().is_empty() {
+                        ui.label("No requests yet.");
+                    }
+                    let awaiting = tracker.pending().count();
+                    if awaiting > 0 {
+                        ui.label(format!("{awaiting} awaiting a signed copy"));
+                    }
+                    for request in tracker.all() {
+                        let document = request.document().file_name().map_or_else(
+                            || request.document().display().to_string(),
+                            |name| name.to_string_lossy().into_owned(),
+                        );
+                        let status = match request.status() {
+                            SignRequestStatus::Pending => "pending",
+                            SignRequestStatus::Signed => "signed",
+                        };
+                        ui.label(format!("{} - {} - {status}", request.recipient(), document));
+                    }
+                } else {
+                    ui.label("No requests yet.");
+                }
+
                 self.signature_verification_ui(ui);
             });
         if choose {
@@ -762,6 +963,9 @@ impl PdfxiApp {
         }
         if sign {
             self.dispatch(AppCommand::Sign, Some(ctx));
+        }
+        if request {
+            self.send_signature_request();
         }
         if close {
             self.close_sign_dialog();
@@ -950,6 +1154,13 @@ fn signing_time_label(unix_seconds: Option<u64>) -> String {
         .ok()
         .and_then(|time| time.format(FORMAT).ok())
         .unwrap_or_else(|| format!("{seconds} (Unix seconds)"))
+}
+
+/// Current Unix time in seconds, or 0 when the clock predates the epoch.
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 #[cfg(test)]
@@ -1380,5 +1591,110 @@ mod tests {
             signing_time_label(Some(u64::MAX)),
             format!("{} (Unix seconds)", u64::MAX)
         );
+    }
+
+    /// A unique tracker file under `target/tmp/sign-requests/`.
+    fn request_temp_path(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/sign-requests");
+        std::fs::create_dir_all(&dir).expect("create the request temp directory");
+        dir.join(format!("signing-{}-{tag}-{unique}.tsv", std::process::id()))
+    }
+
+    /// Open the Excel fixture and point the card at a temp tracker file.
+    fn app_with_request_tracker(tag: &str) -> (PdfxiApp, PathBuf, PathBuf) {
+        let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/realworld/microsoft-excel-2019-sample.pdf");
+        let mut app = PdfxiApp::new();
+        app.open_document(&pdf);
+        let id = app.state.active_tab_id().expect("the fixture opens");
+        let document = app
+            .sessions
+            .get(&id)
+            .and_then(|session| session.path().map(std::path::Path::to_path_buf))
+            .expect("the fixture session has a path");
+        let path = request_temp_path(tag);
+        app.signing.tracker_path = Some(path.clone());
+        app.load_sign_request_tracker();
+        (app, document, path)
+    }
+
+    #[test]
+    fn sending_a_signature_request_records_it_and_passes_a_mailto_url() {
+        let (mut app, document, path) = app_with_request_tracker("send");
+        app.signing.request_recipient = "ada@example.com".to_owned();
+        let mut seen = None;
+        let result = app.send_signature_request_with(|url| {
+            seen = Some(url.to_owned());
+            Ok(())
+        });
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+        let url = seen.expect("the launcher receives the mailto URL");
+        assert!(url.starts_with("mailto:ada@example.com?subject="));
+        assert!(url.contains("Signature%20requested"));
+
+        let loaded = SignRequestTracker::load(path.clone());
+        assert_eq!(loaded.all().len(), 1);
+        assert_eq!(loaded.pending().count(), 1);
+        assert_eq!(loaded.all()[0].recipient(), "ada@example.com");
+        assert_eq!(loaded.all()[0].document(), document.as_path());
+        assert!(app.signing.request_message.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_failed_mail_launch_records_nothing_and_reports_an_error() {
+        let (mut app, _document, path) = app_with_request_tracker("launch-fail");
+        app.signing.request_recipient = "ada@example.com".to_owned();
+        let result =
+            app.send_signature_request_with(|_| Err(std::io::Error::other("no mail client")));
+        assert!(result.is_err());
+        assert!(app.signing.tracker_error.is_some());
+        assert_eq!(
+            app.signing.tracker.as_ref().expect("tracker").all().len(),
+            0
+        );
+        assert!(!path.exists(), "a failed launch writes no tracker file");
+    }
+
+    #[test]
+    fn a_returned_signed_copy_marks_the_pending_request_signed() {
+        let (mut app, document, path) = app_with_request_tracker("returned");
+        app.signing.request_recipient = "ada@example.com".to_owned();
+        app.send_signature_request_with(|_| Ok(()))
+            .expect("the request is recorded");
+        assert_eq!(
+            app.signing
+                .tracker
+                .as_ref()
+                .expect("tracker")
+                .pending()
+                .count(),
+            1,
+            "the sent request starts pending"
+        );
+
+        app.mark_returned_signature(&document, Some("CN=Ada Lovelace, E=ada@example.com"));
+
+        let in_memory = app.signing.tracker.as_ref().expect("tracker");
+        assert_eq!(
+            in_memory.all()[0].status(),
+            SignRequestStatus::Signed,
+            "the matching request is marked signed"
+        );
+        assert_eq!(in_memory.pending().count(), 0);
+        assert_eq!(
+            app.status(),
+            "A returned signature was matched to a request"
+        );
+        let reloaded = SignRequestTracker::load(path.clone());
+        assert_eq!(
+            reloaded.all()[0].status(),
+            SignRequestStatus::Signed,
+            "the signed state is saved to disk"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

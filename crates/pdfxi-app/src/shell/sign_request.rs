@@ -6,10 +6,6 @@
 //! pure `mailto:` builder. There is no UI and no network here; launching the
 //! mail client is an explicit host boundary in [`open_mailto`].
 
-// Slice 1 ships the model before its request dialog exists. Slice 2 consumes
-// every item below, so the dead-code lint is silenced for this module only.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -57,6 +53,23 @@ pub(crate) struct SignRequest {
     sent_at_unix: u64,
     /// Current state of the request.
     status: SignRequestStatus,
+}
+
+impl SignRequest {
+    /// Document that was sent out.
+    pub(crate) fn document(&self) -> &Path {
+        &self.document
+    }
+
+    /// Recipient address or display text as typed by the user.
+    pub(crate) fn recipient(&self) -> &str {
+        &self.recipient
+    }
+
+    /// Current state of the request.
+    pub(crate) fn status(&self) -> SignRequestStatus {
+        self.status
+    }
 }
 
 /// The on-disk request list plus its file path.

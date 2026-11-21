@@ -22,6 +22,7 @@ impl PdfxiApp {
             .into_iter()
             .filter(|row| forms_available || row.command.label() != "fill-and-sign")
             .filter(|row| document_open || row.command.label() != "place-signature")
+            .filter(|row| document_open || row.command.label() != "request-signature")
             .collect()
     }
 

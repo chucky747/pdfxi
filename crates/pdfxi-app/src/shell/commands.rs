@@ -143,6 +143,8 @@ pub enum AppCommand {
     Sign,
     /// Open the typed/drawn/image Fill & Sign placement card.
     PlaceSignature,
+    /// Request a signature by email and track it.
+    RequestSignature,
     /// Open Organize Pages (capability-gated).
     Organize,
     /// Open Export (capability-gated).
@@ -400,6 +402,7 @@ impl AppCommand {
             Self::FillAndSign => "fill-and-sign",
             Self::Sign => "sign",
             Self::PlaceSignature => "place-signature",
+            Self::RequestSignature => "request-signature",
             Self::Organize => "organize",
             Self::Export => "export",
             Self::ConvertToPdf => "convert-to-pdf",
@@ -578,6 +581,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::FillAndSign => self.open_fill_and_sign(),
             AppCommand::Sign => self.handle_sign_command(),
             AppCommand::PlaceSignature => self.handle_place_signature_command(),
+            AppCommand::RequestSignature => self.handle_request_signature_command(),
             AppCommand::Organize => self.not_available("Organize Pages"),
             AppCommand::Export => self.not_available("Export"),
             AppCommand::ConvertToPdf => self.not_available("Convert to PDF"),

@@ -320,6 +320,12 @@ pub fn tool_rows() -> Vec<ToolRow> {
             command: AppCommand::PlaceSignature,
         },
         ToolRow {
+            label: "Request signature",
+            capability: Capability::Signing,
+            icon: Icon::Sign,
+            command: AppCommand::RequestSignature,
+        },
+        ToolRow {
             label: "Organize Pages",
             capability: Capability::Export,
             icon: Icon::Organize,

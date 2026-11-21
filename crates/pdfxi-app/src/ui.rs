@@ -773,6 +773,7 @@ impl PdfxiApp {
             settings::LaunchTool::Highlight => AppCommand::Highlight,
             settings::LaunchTool::Fill => AppCommand::FillAndSign,
             settings::LaunchTool::Sign => AppCommand::Sign,
+            settings::LaunchTool::RequestSignature => AppCommand::RequestSignature,
             settings::LaunchTool::Organize => AppCommand::Organize,
             settings::LaunchTool::Export => AppCommand::Export,
             settings::LaunchTool::Convert => AppCommand::ConvertToPdf,

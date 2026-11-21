@@ -139,6 +139,14 @@ impl PdfxiApp {
                 // immediately, once per opened document; an unsigned one
                 // clears the previous readout without an error.
                 self.verify_signature_on_open(id);
+                if let Some(signer) = self
+                    .signing
+                    .verification
+                    .as_ref()
+                    .map(|verification| verification.signer_subject().to_owned())
+                {
+                    self.mark_returned_signature(path, Some(&signer));
+                }
                 self.sync_tab_dirty(id);
                 self.refresh_annotations();
                 self.refresh_forms();

@@ -356,6 +356,8 @@ pub enum LaunchTool {
     Fill,
     /// Sign.
     Sign,
+    /// Request signature by email.
+    RequestSignature,
     /// Organize Pages.
     Organize,
     /// Export PDF.
@@ -381,6 +383,7 @@ impl LaunchTool {
             "highlight" => Some(Self::Highlight),
             "fill" | "fill-sign" | "fill-and-sign" | "forms" => Some(Self::Fill),
             "sign" => Some(Self::Sign),
+            "request-signature" | "request-sign" => Some(Self::RequestSignature),
             "organize" | "organise" => Some(Self::Organize),
             "export" => Some(Self::Export),
             "convert" | "convert-to-pdf" => Some(Self::Convert),
@@ -399,6 +402,7 @@ impl LaunchTool {
             Self::Highlight => "highlight",
             Self::Fill => "fill",
             Self::Sign => "sign",
+            Self::RequestSignature => "request-signature",
             Self::Organize => "organize",
             Self::Export => "export",
             Self::Convert => "convert",
@@ -790,6 +794,8 @@ mod tests {
             ("--tool=comment", LaunchTool::Comment),
             ("--tool=highlight", LaunchTool::Highlight),
             ("--tool=sign", LaunchTool::Sign),
+            ("--tool=request-signature", LaunchTool::RequestSignature),
+            ("--tool=request-sign", LaunchTool::RequestSignature),
             ("--tool=organize", LaunchTool::Organize),
             ("--tool=export", LaunchTool::Export),
             ("--tool=convert", LaunchTool::Convert),
@@ -826,6 +832,7 @@ mod tests {
         assert_eq!(mixed.theme, Some(ThemePreference::Light));
 
         assert_eq!(LaunchTool::Fill.as_str(), "fill");
+        assert_eq!(LaunchTool::RequestSignature.as_str(), "request-signature");
         assert_eq!(LaunchTool::AiAssistant.as_str(), "ai-assistant");
     }
 
