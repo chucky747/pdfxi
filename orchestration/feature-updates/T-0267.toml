@@ -1,0 +1,67 @@
+# T-0267 - Signature trust anchors and certificate-store seam (Round A)
+#
+# Library slice only. No matrix promotion: trust is available through an
+# explicit TrustAnchorBundle, the signature report still shows trust as
+# unevaluated, real Windows store enumeration is not implemented, and RFC 3161
+# timestamps plus CRL/OCSP revocation remain Round B.
+
+task = "T-0267"
+lane = "security"
+status = "in_progress"
+evidence = "docs/evidence/hardening/T-0267.md"
+docs = [
+    "docs/evidence/hardening/T-0267.md",
+    "crates/pdfxi-security/src/trust_anchors.rs",
+    "crates/pdfxi-security/src/certificate_store.rs",
+    "crates/pdfxi-security/src/x509/verify.rs",
+    "crates/pdfxi-security/src/x509/certificate.rs",
+    "crates/pdfxi-security/src/x509/extension.rs",
+    "crates/pdfxi-security/src/x509/mod.rs",
+    "crates/pdfxi-security/src/der.rs",
+    "crates/pdfxi-security/src/error.rs",
+    "crates/pdfxi-security/src/lib.rs",
+]
+feature_rows = ["SEC-005", "SEC-007"]
+promoted_rows = []
+acceptance_items = []
+tests = [
+    "trust_anchors::tests::real_fixture_chain_reaches_configured_anchor",
+    "trust_anchors::tests::chain_without_path_to_anchor_is_some_false",
+    "trust_anchors::tests::empty_bundle_yields_none_not_untrusted",
+    "trust_anchors::tests::expired_and_not_yet_valid_chains_are_typed_failures",
+    "trust_anchors::tests::bad_signature_is_a_typed_failure",
+    "trust_anchors::tests::bundles_load_multiple_blocks_and_ignore_other_pem_blocks",
+    "trust_anchors::tests::malformed_bundle_inputs_are_typed_errors",
+    "certificate_store::tests::fake_store_enumerates_and_filters_private_keys",
+    "certificate_store::tests::unavailable_store_is_typed_not_empty",
+    "certificate_store::tests::store_failure_is_typed",
+    "certificate_store::tests::store_identity_debug_carries_no_key_material",
+]
+notes = """
+Round A: `TrustAnchorBundle` loads an explicit PEM or DER bundle and exposes
+`certificate_chain_trusted`, which returns `Some(true)` only when the signer
+path terminates byte-for-byte at a configured anchor, `Some(false)` when anchors
+are configured but no path reaches one, and `None` when no anchors are
+configured. `evaluate` carries the typed `TrustFailureReason` (expired,
+not-yet-valid, unknown issuer, bad signature, CA/key-usage/path-length, unknown
+critical extension). `RsaPkcs1Verifier` is a real PKCS#1 v1.5 verifier for
+SHA-256/384/512 RSA issuer keys. No network and no host clock.
+
+Real T-0249 PEM fixtures exposed two strict-parser bugs, fixed here and
+regression-tested: 16-octet Windows serial numbers are now preserved
+(`serial_number_bytes`, with the legacy `u64` accessor documented as a view),
+and SAN/EKU extnValue was double-unwrapped and rejected every conforming
+extension.
+
+`CertificateStore` is an injectable abstraction over non-secret identity
+metadata; `UnavailableCertificateStore` returns the typed
+`WindowsStoreUnavailable`. Real Windows enumeration (CertOpenStore/CNG key
+handles) is NOT implemented in this round: the crate has no `windows`
+dependency and the shared lock file is integrator-owned. No test depends on the
+host's installed certificates; store tests use injected fakes.
+
+Not claimed: `SignatureVerification::certificate_chain_trusted` still reports
+`None` until a later wiring task; RFC 3161 timestamp tokens, CRL/OCSP
+revocation, and Windows store enumeration/key handles remain Round B. A-20 and
+the security rows are not promoted.
+"""

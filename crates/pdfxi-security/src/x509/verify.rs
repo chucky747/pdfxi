@@ -5,10 +5,16 @@
 //! a certificate explicitly present in the caller's [`TrustStore`]. Every trust
 //! decision is returned as [`ChainReport`] or a typed error.
 
+use rsa::Pkcs1v15Sign;
+use rsa::pkcs1::DecodeRsaPublicKey;
+use sha2::{Digest as _, Sha256, Sha384, Sha512};
+
 use crate::error::{Result, SecurityError};
 use crate::x509::certificate::Certificate;
 use crate::x509::extension::{EkuPurpose, KeyUsageBit};
-use crate::x509::{Clock, SignatureAlgorithm, oid_string, reject_unknown_critical};
+use crate::x509::{
+    Clock, OID_RSA_ENCRYPTION, SignatureAlgorithm, oid_string, reject_unknown_critical,
+};
 
 use super::PublicKeyInfo;
 
@@ -48,6 +54,65 @@ impl CertificateVerifier for RejectingVerifier {
         _issuer_key: &PublicKeyInfo,
     ) -> Result<bool> {
         Ok(false)
+    }
+}
+
+/// A real PKCS#1 v1.5 RSA certificate-signature verifier.
+///
+/// This is the production [`CertificateVerifier`] for RSA issuer keys: it parses
+/// the issuer's `RSAPublicKey` from [`PublicKeyInfo`] and verifies the
+/// `sha256WithRSAEncryption`, `sha384WithRSAEncryption`, or
+/// `sha512WithRSAEncryption` signature over the exact `tbsCertificate` bytes.
+///
+/// A hash mismatch, a malformed issuer key, a non-RSA issuer key, and the
+/// legacy `sha1WithRSAEncryption` algorithm all return `Ok(false)`: they are
+/// signature *decisions*, not structural errors, so path building can try
+/// another same-subject issuer. ECDSA and unknown algorithms likewise return
+/// `Ok(false)`; this crate does not implement EC verification in this round.
+///
+/// No key is stored in the value and no key material is ever logged.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RsaPkcs1Verifier;
+
+impl CertificateVerifier for RsaPkcs1Verifier {
+    fn verify_signature(
+        &self,
+        algorithm: &SignatureAlgorithm,
+        tbs_der: &[u8],
+        signature: &[u8],
+        issuer_key: &PublicKeyInfo,
+    ) -> Result<bool> {
+        if issuer_key.algorithm_oid() != OID_RSA_ENCRYPTION {
+            return Ok(false);
+        }
+        let Ok(key) = rsa::RsaPublicKey::from_pkcs1_der(issuer_key.key_bits()) else {
+            return Ok(false);
+        };
+        let valid = match algorithm {
+            SignatureAlgorithm::Sha256WithRsa => key
+                .verify(
+                    Pkcs1v15Sign::new::<Sha256>(),
+                    Sha256::digest(tbs_der).as_slice(),
+                    signature,
+                )
+                .is_ok(),
+            SignatureAlgorithm::Sha384WithRsa => key
+                .verify(
+                    Pkcs1v15Sign::new::<Sha384>(),
+                    Sha384::digest(tbs_der).as_slice(),
+                    signature,
+                )
+                .is_ok(),
+            SignatureAlgorithm::Sha512WithRsa => key
+                .verify(
+                    Pkcs1v15Sign::new::<Sha512>(),
+                    Sha512::digest(tbs_der).as_slice(),
+                    signature,
+                )
+                .is_ok(),
+            _ => false,
+        };
+        Ok(valid)
     }
 }
 

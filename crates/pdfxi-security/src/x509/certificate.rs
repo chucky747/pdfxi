@@ -17,6 +17,24 @@ use crate::x509::extension::{
 use crate::x509::name::Name;
 use crate::x509::{Clock, SignatureAlgorithm, parse_algorithm_identifier};
 
+/// Low-order 64-bit view of a canonical positive `INTEGER` magnitude.
+///
+/// Serial numbers that fit in 64 bits round-trip exactly; wider values keep
+/// their full bytes through [`Certificate::serial_number_bytes`] and only use
+/// this view for the legacy [`Certificate::serial_number`] accessor.
+fn low_u64(bytes: &[u8]) -> u64 {
+    let significant = if bytes.first() == Some(&0) {
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    let mut value = 0_u64;
+    for byte in significant.iter().skip(significant.len().saturating_sub(8)) {
+        value = (value << 8) | u64::from(*byte);
+    }
+    value
+}
+
 /// Where a certificate's validity window stands at a given instant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidityStatus {
@@ -153,6 +171,7 @@ pub struct Certificate {
     tbs_der: Vec<u8>,
     version: u8,
     serial_number: u64,
+    serial_number_bytes: Vec<u8>,
     issuer: Name,
     subject: Name,
     validity: Validity,
@@ -181,7 +200,13 @@ impl Certificate {
         let mut tbs = tbs_tlv.as_sequence()?;
 
         let version = Self::parse_version(&mut tbs)?;
-        let serial_number = tbs.read_tlv()?.as_integer_u64()?;
+        let serial_bytes = tbs.read_tlv()?.as_positive_integer_bytes()?.to_vec();
+        // RFC 5280 section 4.1.2.2 caps the serial at 20 octets. Reject wider
+        // values instead of allocating an unbounded magnitude for hostile input.
+        if serial_bytes.len() > 20 {
+            return Err(SecurityError::DerInvalid);
+        }
+        let serial_number = low_u64(&serial_bytes);
         let (tbs_signature_oid, _) = parse_algorithm_identifier(&tbs.read_tlv()?)?;
         let signature_algorithm = SignatureAlgorithm::from_oid(&tbs_signature_oid);
         let issuer = Name::parse(&tbs.read_tlv()?)?;
@@ -251,6 +276,7 @@ impl Certificate {
             tbs_der,
             version,
             serial_number,
+            serial_number_bytes: serial_bytes,
             issuer,
             subject,
             validity,
@@ -292,9 +318,24 @@ impl Certificate {
         self.version
     }
 
-    /// Return the certificate serial number.
+    /// Return the certificate serial number as a `u64`.
+    ///
+    /// RFC 5280 permits serial numbers wider than 64 bits and Windows-issued
+    /// certificates commonly use them. This accessor is a lossless view for any
+    /// serial that fits; for a wider serial it returns the low-order 64 bits.
+    /// Use [`Self::serial_number_bytes`] for identity, display, or any decision
+    /// that must distinguish the full value.
     pub const fn serial_number(&self) -> u64 {
         self.serial_number
+    }
+
+    /// Return the full canonical `INTEGER` content of the serial number.
+    ///
+    /// The bytes are the DER content octets: non-empty, positive, minimally
+    /// encoded, and at most the 20 octets RFC 5280 allows. A leading `0x00` is
+    /// present only when DER requires it for a high-bit magnitude.
+    pub fn serial_number_bytes(&self) -> &[u8] {
+        &self.serial_number_bytes
     }
 
     /// Return the issuer name.

@@ -52,13 +52,16 @@ pub use extension::{
 };
 pub use name::{AttributeTypeAndValue, Name, RelativeDistinguishedName};
 pub use verify::{
-    CertificateVerifier, ChainReport, RejectingVerifier, TrustStore, ValidationPolicy, verify_chain,
+    CertificateVerifier, ChainReport, RejectingVerifier, RsaPkcs1Verifier, TrustStore,
+    ValidationPolicy, verify_chain,
 };
 
 use crate::der::Tlv;
 use crate::error::{Result, SecurityError};
 use crate::signature::DigestAlgorithm;
 
+/// OID `1.2.840.113549.1.1.1` — `rsaEncryption` (an RSA subject public key).
+pub const OID_RSA_ENCRYPTION: [u32; 7] = [1, 2, 840, 113_549, 1, 1, 1];
 /// OID `1.2.840.113549.1.1.5` — `sha1WithRSAEncryption`.
 pub const OID_SHA1_WITH_RSA: [u32; 7] = [1, 2, 840, 113_549, 1, 1, 5];
 /// OID `1.2.840.113549.1.1.11` — `sha256WithRSAEncryption`.

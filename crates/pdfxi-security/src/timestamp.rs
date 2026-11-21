@@ -1143,10 +1143,12 @@ mod tests {
     }
 
     fn eku(oid: &[u32]) -> Vec<u8> {
+        // `extension` wraps this in the extnValue OCTET STRING; the payload is
+        // the `ExtKeyUsageSyntax` SEQUENCE itself.
         extension(
             &[2, 5, 29, 37],
             false,
-            &encode_octet_string(&encode_sequence(&encode_oid(oid).expect("eku"))),
+            &encode_sequence(&encode_oid(oid).expect("eku")),
         )
     }
 

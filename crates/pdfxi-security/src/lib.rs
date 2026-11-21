@@ -105,6 +105,9 @@
 pub mod authorization;
 /// Certificate-based enveloped encryption (SEC-003).
 pub mod certificate_encryption;
+/// Injectable platform certificate-store abstraction for signing identities
+/// (T-0267).
+pub mod certificate_store;
 pub mod cms;
 pub mod crypto;
 pub mod der;
@@ -138,6 +141,9 @@ pub mod standard_handler;
 pub mod timestamp;
 /// Timestamp-authority token model and detached-signature validation wiring (SEC-006).
 pub mod timestamp_authority;
+/// Explicit PEM/DER signature trust anchors and three-valued chain trust
+/// decisions (T-0267).
+pub mod trust_anchors;
 /// Local trust manager, CRLs, and deterministic trust/revocation reports (SEC-007).
 pub mod trust_manager;
 pub mod x509;
@@ -149,6 +155,9 @@ pub use certificate_encryption::{
     AesKwKeyWrapProvider, ContentCipher, EnvelopedData, InMemoryKeyWrapProvider, KeyWrapProvider,
     OpenedEnvelope, Recipient, RecipientEnvelopeKey, RecipientList, RecipientSelector,
     build_envelope, open_envelope,
+};
+pub use certificate_store::{
+    CertificateStore, StoreIdentity, UnavailableCertificateStore, platform_identity_store,
 };
 pub use cms::{
     InMemorySignatureProvider, SignatureProvider, SignedDataParams, SignerIdentifier,
@@ -229,6 +238,7 @@ pub use timestamp_authority::{
     DetachedSignatureReport, TsaStatus, TsaTokenModel, TsaValidationReport,
     validate_detached_signature_against_certificate, validate_tsa_token,
 };
+pub use trust_anchors::{ChainTrustReport, TrustAnchorBundle};
 pub use trust_manager::{
     Crl, RevocationEvidence, RevocationPolicy, RevocationReason, RevocationStatus,
     RevokedCertificate, TrustDecision, TrustFailureReason, TrustManager, TrustReport,
@@ -237,8 +247,8 @@ pub use x509::{
     BasicConstraints, Certificate, CertificateVerifier, ChainReport, Clock, DigitalId,
     DigitalIdMetadata, DigitalIdStore, EkuPurpose, ExtendedKeyUsage, Extension, ExtensionValue,
     FixedClock, KeyHandle, KeyUsage, KeyUsageBit, Name, OpaqueKeyHandle, PublicKeyInfo,
-    RejectingVerifier, RelativeDistinguishedName, SignatureAlgorithm, SubjectAltName, TrustStore,
-    ValidationPolicy, Validity, ValidityStatus, verify_chain,
+    RejectingVerifier, RelativeDistinguishedName, RsaPkcs1Verifier, SignatureAlgorithm,
+    SubjectAltName, TrustStore, ValidationPolicy, Validity, ValidityStatus, verify_chain,
 };
 pub use xmp_scrub::{
     XmpRemovalKind, XmpRemovalRecord, XmpRemovalSpec, XmpResidual, XmpScrubOutput, XmpScrubReport,

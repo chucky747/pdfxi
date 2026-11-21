@@ -551,7 +551,7 @@ pub enum TrustFailureReason {
 }
 
 impl TrustFailureReason {
-    fn from_security_error(error: &SecurityError) -> Self {
+    pub(crate) fn from_security_error(error: &SecurityError) -> Self {
         match error {
             SecurityError::CertificateUntrusted => Self::NoAnchor,
             SecurityError::CertificateIssuerUnknown => Self::IssuerUnknown,

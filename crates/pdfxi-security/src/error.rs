@@ -137,6 +137,11 @@ pub enum SecurityError {
     CertificateEkuMissing,
     /// A critical X.509 extension that this subset does not understand was present.
     CertificateUnknownCriticalExtension,
+    /// A PEM or DER trust-anchor bundle could not be loaded.
+    ///
+    /// The static label names the failing step (`"PEM"`, `"DER"`, or
+    /// `"empty"`); no certificate bytes or file paths are carried in the value.
+    TrustAnchorInvalid(&'static str),
     /// A known extension carried a malformed payload.
     CertificateExtensionInvalid(&'static str),
     /// An optional `TBSCertificate` field appeared more than once.
@@ -492,6 +497,9 @@ impl fmt::Display for SecurityError {
             }
             Self::CertificateUnknownCriticalExtension => {
                 write!(f, "certificate contains an unknown critical extension")
+            }
+            Self::TrustAnchorInvalid(reason) => {
+                write!(f, "trust-anchor bundle could not be loaded: {reason}")
             }
             Self::CertificateExtensionInvalid(name) => {
                 write!(f, "malformed X.509 extension: {name}")

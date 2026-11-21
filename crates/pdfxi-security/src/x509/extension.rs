@@ -284,10 +284,9 @@ impl SubjectAltName {
 }
 
 fn parse_subject_alt_name(value: &[u8]) -> Result<SubjectAltName> {
-    let mut outer = DerReader::new(value);
-    let octets = outer.read_tlv()?.as_octets()?.to_vec();
-    outer.expect_end()?;
-    let mut wrapper = DerReader::new(&octets);
+    // `parse_extension` already unwrapped the extension's `extnValue` OCTET
+    // STRING, so `value` is the `GeneralNames` SEQUENCE itself.
+    let mut wrapper = DerReader::new(value);
     let names_tlv = wrapper.read_tlv()?;
     wrapper.expect_end()?;
     if names_tlv.tag() != Tag::SEQUENCE {
@@ -435,10 +434,9 @@ impl ExtendedKeyUsage {
 }
 
 fn parse_extended_key_usage(value: &[u8]) -> Result<ExtendedKeyUsage> {
-    let mut outer = DerReader::new(value);
-    let octets = outer.read_tlv()?.as_octets()?.to_vec();
-    outer.expect_end()?;
-    let mut wrapper = DerReader::new(&octets);
+    // `parse_extension` already unwrapped the extension's `extnValue` OCTET
+    // STRING, so `value` is the `ExtKeyUsageSyntax` SEQUENCE itself.
+    let mut wrapper = DerReader::new(value);
     let seq_tlv = wrapper.read_tlv()?;
     wrapper.expect_end()?;
     if seq_tlv.tag() != Tag::SEQUENCE {

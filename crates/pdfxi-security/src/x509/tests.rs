@@ -153,11 +153,7 @@ fn san_ext() -> Vec<u8> {
         Tag::context(8, false).expect("registeredID tag"),
         &encode_oid(&[1, 2, 3, 4]).expect("oid")[2..],
     ));
-    extension(
-        &OID_SUBJECT_ALT_NAME,
-        false,
-        &encode_octet_string(&encode_sequence(&names)),
-    )
+    extension(&OID_SUBJECT_ALT_NAME, false, &encode_sequence(&names))
 }
 
 fn eku_ext(purposes: &[&[u32]]) -> Vec<u8> {
@@ -165,11 +161,7 @@ fn eku_ext(purposes: &[&[u32]]) -> Vec<u8> {
     for purpose in purposes {
         children.extend_from_slice(&encode_oid(purpose).expect("oid"));
     }
-    extension(
-        &OID_EXT_KEY_USAGE,
-        false,
-        &encode_octet_string(&encode_sequence(&children)),
-    )
+    extension(&OID_EXT_KEY_USAGE, false, &encode_sequence(&children))
 }
 
 struct CertSpec {

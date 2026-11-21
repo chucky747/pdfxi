@@ -539,6 +539,24 @@ impl<'a> Tlv<'a> {
         Ok(value)
     }
 
+    /// Validate a canonical, non-negative `INTEGER` and return its content bytes.
+    ///
+    /// The full magnitude is preserved, including the leading `0x00` that DER
+    /// requires when the most significant bit of the next octet is set. This is
+    /// the lossless counterpart to [`Self::as_integer_u64`] and is used for
+    /// X.509 serial numbers, which RFC 5280 permits to be up to 20 octets wide.
+    pub fn as_positive_integer_bytes(&self) -> Result<&'a [u8]> {
+        expect_tag(Tag::INTEGER, self.tag)?;
+        let content = self.content;
+        if content.is_empty() || content[0] & 0x80 != 0 {
+            return Err(SecurityError::DerInvalid);
+        }
+        if content.len() > 1 && content[0] == 0 && content[1] & 0x80 == 0 {
+            return Err(SecurityError::DerInvalid);
+        }
+        Ok(content)
+    }
+
     /// Decode an object identifier into its integer arcs.
     pub fn as_oid(&self) -> Result<Vec<u32>> {
         expect_tag(Tag::OBJECT_IDENTIFIER, self.tag)?;
