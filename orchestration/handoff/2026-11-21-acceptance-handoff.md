@@ -27,8 +27,8 @@ and every tool, two AcroForm captures, the Print dialog) against
 - `cargo xtask verify`: green, including the no-dead-controls test
   (`ui_controls` 35 passed). Full output in `docs/evidence/release/T-0262.md`.
 - `cargo deny check`: `advisories ok, bans ok, licenses ok, sources ok`, exit 0.
-- `cargo xtask goal-verify --all`: `FEATURES OK: 145 rows, 33 verified` then
-  `Error: 109 feature rows are not verified or replaced` (exit 1). Those 109
+- `cargo xtask goal-verify --all`: `FEATURES OK: 145 rows, 54 verified` then
+  `Error: 89 feature rows are not verified or replaced` (exit 1). Those 89
   rows are outside this campaign's acceptance surface; nothing is claimed as
   verified beyond the matrix.
 - `cargo xtask installer-test`: 28/28 assertions, install and uninstall.
@@ -53,3 +53,4 @@ and every tool, two AcroForm captures, the Print dialog) against
 - Corpus is 1-3 pages per fixture; encrypted save unsupported by design.
 - mdbook not installed; `cargo xtask docs` and the link pass are green.
 - VIEW-009, VIEW-011 and PLAT-002 remain outside this campaign's surface.
+

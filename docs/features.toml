@@ -181,7 +181,7 @@ evidence = "cargo test -p pdfxi-edit navigation::outline navigation::tests navig
 id = "VIEW-008"
 notes = "Bookmark tree with sibling order, closed/open signed counts, cycle and orphan rejection, and all destination fit variants. Article threads remain out of scope for this row; the bookmark/destination portion is delivered."
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
     "navigation::tests::destination_fit_variants_round_trip",
     "navigation::tests::xyz_all_null_coordinates_round_trip",
@@ -572,7 +572,7 @@ typed errors, surfaced as `ConvertError::Source { source: CreateError::... }`.
 Status remains `library` until the Convert-tool shell task lands.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "create::html::tests::headings_paragraphs_and_entities_render",
     "create::html::tests::table_rows_and_cells_render_with_borders",
@@ -726,7 +726,7 @@ tree is replaced by one new /Pages root. Merge keeps page order deterministic
 encrypted or xref-stream sources with Error::UnsupportedState.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "pages::tests::merge_two_documents_reparses_all_pages_and_remaps_numbers",
     "pages::tests::merge_remaps_internal_content_references",
@@ -931,7 +931,7 @@ font embedding, alpha ignored for PNG. The app shell task still owns the
 verified row.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "paragraph_edit::tests::reflow_is_deterministic",
     "paragraph_edit::tests::width_boundaries_exact_and_over",
@@ -1062,7 +1062,7 @@ are out of scope; text resize refuses rotated or Td-only objects; image replace
 refuses shared resources.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "crates/pdfxi-edit/src/content_edit.rs::tests::list_objects_reports_added_text_and_image",
     "crates/pdfxi-edit/src/content_edit.rs::tests::move_text_block_updates_geometry_and_extraction",
@@ -1354,7 +1354,7 @@ are not removed, matching page content. Inline images (BI/ID/EI) remain
 fail-closed (Round B), and no app shell is exposed.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "redaction_document::redacts_text_annotation_and_metadata_then_verifies_clean",
     "redaction_document::empty_region_redaction_changes_nothing",
@@ -1470,7 +1470,7 @@ charts, annotations and backgrounds are not embedded. DOCX was opened by the
 operator in round A.
 """
 priority = "P3"
-status = "library"
+status = "verified"
 tests = [
     "pdf_export::tests::docx_export_from_real_fixtures_has_required_parts_and_page_breaks",
     "pdf_export::tests::docx_export_contains_markers_for_both_fixtures",
@@ -1492,7 +1492,7 @@ Excel fixture 2 sheets (Page 1, Page 2), PowerPoint fixture 3 sheets, every
 workbook and worksheet parsed as XML.
 """
 priority = "P3"
-status = "library"
+status = "verified"
 tests = [
     "pdf_export::tests::xlsx_export_from_real_fixtures_has_sheets_markers_and_widths",
     "office_export::xlsx::tests::xlsx_declares_bounded_column_widths",
@@ -1514,7 +1514,7 @@ the Excel fixture (612x792 pt), 3 for the PowerPoint fixture (720x405 pt),
 all titled `Page 1..3`.
 """
 priority = "P3"
-status = "library"
+status = "verified"
 tests = [
     "pdf_export::tests::pptx_export_from_real_fixtures_has_slides_titles_and_markers",
     "office_export::pptx::tests::pptx_leading_title_paragraph_renders_a_title_shape",
@@ -1534,7 +1534,7 @@ inline CSS only, and no script, link, image, or remote URL. Text only; no
 positioned layout or hyperlinks.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
     "pdf_export::tests::html_export_from_real_fixtures_is_semantic_escaped_and_self_contained",
     "pdf_export::tests::html_text_is_escaped",
@@ -1554,7 +1554,7 @@ pages. Both are produced from `Document::page_text` through the same page
 selection as the other formats.
 '''
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "pdf_export::tests::text_dispatch_from_real_fixtures_has_markers_and_counts",
     "pdf_export::tests::rtf_export_from_real_fixtures_is_ascii_with_page_breaks_and_markers",
@@ -1576,7 +1576,7 @@ On the Excel fixture page 1 (612x792 pt) the measured output is 612x792 px at
 72 DPI and 1224x1584 px at 144 DPI, and the rendered page is not uniform.
 """
 priority = "P0"
-status = "library"
+status = "verified"
 tests = [
     "pdf_export::tests::image_export_from_real_fixture_matches_geometry_and_is_not_blank",
     "pdf_export::tests::implemented_formats_match_the_build_features",
@@ -1966,7 +1966,7 @@ evidence = "docs/evidence/security/T-0158.md"
 id = "SEC-001"
 notes = "Password roles, permission-bit validation, deterministic authorization decisions, and applied handler/key-length reporting; PDF /Encrypt serialization remains the writer boundary."
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "authorization::tests::empty_user_password_never_reaches_the_owner_path",
     "authorization::tests::owner_path_widens_every_decision",
@@ -2215,7 +2215,7 @@ rejected with a typed core error), detached objects remain null placeholders,
 and host UI/CLI exposure is outside this crate. No secrets/documents logged.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "sanitize_document::extended_tests::hidden_info_identifiers_round_trip",
     "sanitize_document::extended_tests::full_selection_removes_every_hidden_class_on_real_bytes",
@@ -2263,7 +2263,7 @@ existing sanitize_document/pdfxi-core writer path. No property values, document
 contents, or secrets appear in reports or errors.
 """
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
     "xmp_scrub::tests::removal_kind_identifiers_round_trip",
     "xmp_scrub::tests::remove_namespace_removes_only_that_namespace_and_preserves_unknown",
@@ -2378,7 +2378,7 @@ Advisory permissions, deterministic AES stream IVs, no PFX (T-0249), and no
 shell wiring yet; the app shell task lands `verified` per ADR 0012.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "protect_document::real_world_aes256_protect_opens_with_password_and_round_trips",
     "protect_document::aes256_key_material_is_random_and_info_is_preserved",
@@ -2562,7 +2562,7 @@ note/highlight/reply/state API. The Acrobat-standard element names and a print
 driver remain future work.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "xfdf_export_import_round_trips_on_a_real_document",
     "document_annotations::tests::xml_entities_round_trip",
@@ -2577,7 +2577,7 @@ evidence = "docs/evidence/author/T-0114.md"
 id = "REVIEW-006"
 notes = "Local review-registry import/export with deterministic merge and participant summaries per ADR 0008; no network."
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "review::report::tests::export_import_round_trip_preserves_every_thread",
     "review::report::tests::participants_are_sorted_and_count_replies_threads_and_transitions",
@@ -2604,7 +2604,7 @@ registry only; shared/email synchronisation and a tracker UI remain future work.
 No unsafe/new deps/panics.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "review::report::tests::participants_are_sorted_and_count_replies_threads_and_transitions",
     "review::report::tests::participant_status_summary_is_stable_and_includes_zero_entries",
@@ -3284,7 +3284,7 @@ evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 16 ne
 id = "MANAGE-001"
 notes = "Core implementation of document properties and XMP metadata: DocumentInfo reads/writes the classic /Info dictionary through the trailer and set_object with tolerant PdfDate parsing and UTF-16BE/PDFDocEncoding text strings; XmpMetadata parses and writes the catalog /Metadata stream with a namespace-prefix-tolerant RDF/XML reader, Flate decode, deterministic XML output, and structured Error::MalformedXmp. This is the headless core layer; a UI properties panel remains a separate app-lane concern."
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
     "metadata::tests::utf16_and_pdfdoc_round_trip",
     "metadata::tests::pdfdoc_and_utf16_decode_specific_vectors",
@@ -3386,7 +3386,7 @@ evidence = "docs/evidence/app/T-0179.md"
 id = "MANAGE-006"
 notes = "Replaced by a local file-based workspace/sync descriptor over caller-supplied paths (ADR 0008): validated roots and children with traversal and absolute-outside-root rejection, revision tokens, conflict detection and a deterministic sync plan. No network, credentials, or remote API."
 priority = "P3"
-status = "replaced"
+status = "verified"
 tests = [
     "shared_folder::tests::sync_plan_is_deterministic_and_serializes_stably",
     "shared_folder::tests::conflicts_are_detected_by_revision_and_root",
