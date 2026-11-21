@@ -3,7 +3,7 @@
     "lane":  "app",
     "title":  "Bookmarks panel and document properties dialog",
     "priority":  "P1",
-    "status":  "queued",
+    "status":  "in_progress",
     "depends_on":  [
                        "T-0222"
                    ],

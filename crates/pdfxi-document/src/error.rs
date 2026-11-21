@@ -24,6 +24,14 @@ pub enum SessionError {
     /// here (see ADR 0010, point 5).
     #[error("saving an encrypted document is not supported yet")]
     EncryptedSaveUnsupported,
+    /// The document was opened with a password, and signing it is refused.
+    ///
+    /// A signature would cover the decrypted plaintext held in memory, not the
+    /// encrypted bytes stored on disk, so it could not be verified after the
+    /// file is reopened. The operation is refused instead of writing a
+    /// signature that is invalid by construction (ADR 0010, point 3).
+    #[error("signing an encrypted document is not supported yet")]
+    EncryptedSignUnsupported,
     /// The session was opened from memory and has no destination path.
     #[error("the session has no file path; use save_as")]
     NoPath,

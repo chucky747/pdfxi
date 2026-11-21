@@ -2,7 +2,7 @@
 
 > The `Current state` section below is the Phase 1 snapshot and is kept for
 > history. The live state is the last checkpoint section (currently
-> `T-0253B checkpoint`): 145 feature rows with 33 `verified`, HEAD moving with
+> `T-0245A checkpoint`): 145 feature rows with 33 `verified`, HEAD moving with
 > each checkpoint.
 
 ## Current state
@@ -364,3 +364,53 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
   grounded and the prompt says which pages were included; there is no on-demand
   page fetch. If a later OpenCode build exposes client-MCP tools to the model,
   revisit ADR 0013.
+
+### T-0245A checkpoint (2026-11-20, document session signing, T-0245 round A)
+
+- **HEAD before:** `3b7c595` (`feat(app): ground the assistant with a fenced
+  document excerpt [T-0253]`). **HEAD after:** this checkpoint commit
+  (`feat(document): add session signing with incremental revisions [T-0245A]`;
+  `git log -1 --oneline`). Linear history, not pushed, no amend/rebase.
+- **Task state:** T-0245A is `verified`; its claim is released. T-0255 (app
+  lane, bookmarks panel and document-properties dialog) is `in_progress` and
+  holds its claim. T-0245 (signature UI, E-signed badge, request-signature
+  tracker) stays `queued` as round B.
+- **What landed:** `DocumentSession::sign(&SigningIdentity, &SignOptions) ->
+  Result<SignatureReport, SessionError>` in `crates/pdfxi-document/src/session.rs`.
+  It calls `pdfxi_security::sign_pdf` on the session document and keeps the
+  original session bytes as the exact prefix plus one incremental revision;
+  it never calls `edit_full`/`Document::save`. On success it reparses the signed
+  bytes, sets `current_digest` (so `is_dirty()` is true), pushes one
+  `Revision { start_len, delta, before, after }` and clears redo. On any error
+  the unchanged bytes are reparsed, so document, history and redo are intact.
+  Encrypted sessions are refused before any byte is produced with the new typed
+  `SessionError::EncryptedSignUnsupported` (a signature over decrypted plaintext
+  would not cover the bytes on disk). Prefix mismatch reloads and returns
+  `RevisionMismatch`. ADR 0010 point 3 remains the design basis.
+- **Test:** `crates/pdfxi-document/tests/signing.rs` ->
+  `session_signs_saves_reopens_and_detects_tampering` (`#[ignore]`, because
+  `crates/pdfxi-security/tests/fixtures/pfx/leaf-aes256.pfx` holds a private key
+  and `.pfx` is gitignored; public password `pdfxi-test-pfx`). It signs
+  `fixtures/realworld/microsoft-excel-2019-sample.pdf`, asserts the exact
+  prefix, one revision, redo cleared and dirty, saves and reopens with unchanged
+  page count and page-1 text, gets `Valid`/`bytes_match`/`covers_entire_file`,
+  then flips one byte inside the signed range and asserts `Tampered`. Run it
+  explicitly with:
+  `cargo test -p pdfxi-document --test signing -- --ignored --nocapture`.
+- **Integrator gates** (`target/integration`, `PDFIUM_PATH` set, TEMP/TMP under
+  `target/tmp`): `cargo fmt -p pdfxi-document -- --check` EXIT=0;
+  `cargo clippy -p pdfxi-document --all-targets --all-features -- -D warnings`
+  EXIT=0; `cargo test -p pdfxi-document` EXIT=0 with **2 lib + 6 session,
+  1 ignored signing, 0 failed**; the ignored signing test EXIT=0
+  (**1 passed**); `RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-document
+  --no-deps` EXIT=0. `cargo xtask features verify` reports `FEATURES OK: 145
+  rows, 33 verified` - unchanged, because T-0245A is a library slice of T-0245
+  and the signing row stays `library` until the app shell verifies it. No
+  `orchestration/feature-updates/T-0245A.toml` fragment was written by the lane;
+  nothing was merged into `docs/features.toml`.
+- **Evidence:** `docs/evidence/core/T-0245A.md`.
+- **Scope discipline:** the app workspace (`crates/pdfxi-app/**`) was neither
+  staged nor tested here; the T-0255 in-flight work stays out of this commit.
+- **Next:** finish T-0255 (bookmarks panel and document-properties dialog), then
+  T-0245 round B (Sign panel, E-signed badge, request-signature tracker) on top
+  of `DocumentSession::sign`.

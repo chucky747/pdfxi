@@ -1,0 +1,19 @@
+{
+  "id": "T-0245A",
+  "lane": "core",
+  "title": "Document session signing (T-0245 round A)",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": [
+    "T-0241",
+    "T-0249"
+  ],
+  "owns": [
+    "crates/pdfxi-document/src/**",
+    "crates/pdfxi-document/tests/**",
+    "docs/evidence/core/T-0245A.md"
+  ],
+  "acceptance": "cargo test -p pdfxi-document; a real PDF signs with the PFX fixture, saves, reopens in PDFium with unchanged pages/text, verify_signature is Valid and bytes_match, and a one-byte tamper after signing reports Tampered",
+  "notes": "Library half of T-0245 split out because the app lane cannot edit pdfxi-document. Adds the ADR 0010 session sign path: call pdfxi_security::pdf_signature::sign_pdf on the session document, keep the original bytes as the exact prefix plus one incremental revision, update the before/after digests and revision list, clear redo. Tests use the real fixture and crates/pdfxi-security/tests/fixtures/pfx/leaf-aes256.pfx (password pdfxi-test-pfx): open, sign, save, reopen with PDFium (page count and text unchanged), verify_signature (Valid, bytes_match, covers_entire_file), then flip one byte after signing and assert Tampered. The app Sign panel and E-signed badge remain T-0245 round B.",
+  "evidence": "docs/evidence/core/T-0245A.md"
+}

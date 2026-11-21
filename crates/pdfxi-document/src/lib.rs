@@ -9,6 +9,10 @@
 //! back to the stored revision boundary, and saves are written through a
 //! temporary file in the destination directory and renamed into place.
 //!
+//! Signing goes through [`DocumentSession::sign`], which calls
+//! [`pdfxi_security::sign_pdf`] and records the signature as one more
+//! incremental revision, so bytes signed earlier stay verifiable.
+//!
 //! # Round A limits
 //!
 //! - An encrypted source is decrypted on open with

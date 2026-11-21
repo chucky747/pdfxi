@@ -6,8 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use pdfxi_core::Document;
-use pdfxi_security::DecryptionReport;
 use pdfxi_security::crypto::sha::sha256;
+use pdfxi_security::{DecryptionReport, SignOptions, SignatureReport, SigningIdentity};
 
 use crate::atomic;
 use crate::error::SessionError;
@@ -44,7 +44,8 @@ struct Revision {
 ///
 /// A session is the single owner described by ADR 0010. Open it with
 /// [`DocumentSession::open`] or [`DocumentSession::open_with_password`]; mutate
-/// it only through [`DocumentSession::edit`] (incremental append) or
+/// it only through [`DocumentSession::edit`] (incremental append),
+/// [`DocumentSession::sign`] (incremental signature revision) or
 /// [`DocumentSession::edit_full`] (whole-file rewrite); undo and redo walk the
 /// incremental revisions; and save with [`DocumentSession::save`],
 /// [`DocumentSession::save_forced`] or [`DocumentSession::save_as`].
@@ -302,6 +303,86 @@ impl DocumentSession {
         });
         self.redo.clear();
         Ok(value)
+    }
+
+    /// Sign the document with one incremental signature revision.
+    ///
+    /// Calls [`pdfxi_security::sign_pdf`] on the current parsed document and
+    /// records the result exactly like [`DocumentSession::edit`]: the bytes
+    /// before the signature stay a byte-for-byte prefix, the appended revision
+    /// becomes the new session bytes, the parsed document is reloaded from the
+    /// signed bytes, the revision is pushed with its before/after digests, and
+    /// the redo stack is cleared. The whole-file rewrite path
+    /// ([`DocumentSession::edit_full`]) is deliberately not used, because it
+    /// would invalidate a signature applied earlier in the history (ADR 0010,
+    /// point 3).
+    ///
+    /// The returned [`SignatureReport`] describes the signature that was
+    /// written, including the `/ByteRange` and the signer subject.
+    /// [`DocumentSession::bytes`] is the authoritative signed file; persist it
+    /// with [`DocumentSession::save`] or [`DocumentSession::save_as`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::EncryptedSignUnsupported`] for an encrypted
+    /// source, because the signature would cover the decrypted plaintext rather
+    /// than the bytes on disk; [`SessionError::Security`] when
+    /// [`pdfxi_security::sign_pdf`] rejects the page, the `/AcroForm`, the
+    /// identity, or the `/Contents` reservation; [`SessionError::Core`] when
+    /// the signed bytes cannot be reparsed; and [`SessionError::RevisionMismatch`]
+    /// when the security layer's output does not begin with the unchanged
+    /// session bytes. On any error the previous bytes, parsed document and
+    /// history are restored.
+    pub fn sign(
+        &mut self,
+        identity: &SigningIdentity,
+        options: &SignOptions,
+    ) -> Result<SignatureReport, SessionError> {
+        if self.is_encrypted() {
+            return Err(SessionError::EncryptedSignUnsupported);
+        }
+        let start_len = self.bytes.len();
+        let before = self.current_digest;
+        let signed = match pdfxi_security::sign_pdf(&mut self.document, identity, options) {
+            Ok(signed) => signed,
+            Err(error) => {
+                self.reload_unchanged()?;
+                return Err(SessionError::Security(error));
+            }
+        };
+        let report = signed.report().clone();
+        let appended = signed.into_bytes();
+        let delta = match appended.get(start_len..) {
+            Some(delta)
+                if !delta.is_empty()
+                    && appended.get(..start_len) == Some(self.bytes.as_slice()) =>
+            {
+                delta.to_vec()
+            }
+            _ => {
+                self.reload_unchanged()?;
+                return Err(SessionError::RevisionMismatch);
+            }
+        };
+        let after = sha256(&appended);
+        let document = match Document::from_bytes(appended.clone()) {
+            Ok(document) => document,
+            Err(error) => {
+                self.reload_unchanged()?;
+                return Err(SessionError::Core(error));
+            }
+        };
+        self.bytes = appended;
+        self.document = document;
+        self.current_digest = after;
+        self.push_revision(Revision {
+            start_len,
+            delta,
+            before,
+            after,
+        });
+        self.redo.clear();
+        Ok(report)
     }
 
     /// Apply `mutation` and rewrite the whole file, discarding history.
