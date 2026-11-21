@@ -600,3 +600,54 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
   claim held.
 - **Next:** T-0245 round C (A-25 placement, A-31 request/tracker) on the app
   lane, then T-0261 close-out and T-0262 final package/install/captures/handoff.
+
+### T-0260B checkpoint (2026-11-21, open/edit/save performance budgets)
+
+- **HEAD before:** `85a8d3c` (`checkpoint(docs): shipped-tool guides and security
+  pages [T-0261A]`). **HEAD after:** this checkpoint commit
+  (`checkpoint(acceptance): open, edit and save performance budgets [T-0260B]`;
+  `git log -1 --oneline`). Linear history on `main`, not pushed, no amend/rebase.
+- **Task state:** T-0260B is `verified`; its claim is released after this
+  checkpoint with `cargo xtask release T-0260B`. T-0245 stays `in_progress` with
+  its app claim held and uncommitted (A-25 placement and A-31 request/tracker are
+  mid-edit). T-0267 stays `in_progress`; T-0260, T-0261 and T-0262 stay `queued`.
+  The regenerated board shows T-0260B `verified` and T-0245 `in_progress`.
+- **What landed:** a measurement-only slice - no shipping code and no feature
+  row. `docs/evidence/acceptance/T-0260B.md` records the method, toolchain and
+  every number; `T-0260B-measure.rs` + `T-0260B-measure.ps1` are a docs-only
+  harness that drives the shipping crates (`pdfxi-core`, `pdfxi-document`,
+  `pdfxi-edit`) over `fixtures/realworld/**` (2 warm-up + 7 measured iterations
+  per case, five independent rounds, page count / annotation count / single
+  revision / save-reopen checked each run); `orchestration/blockers/T-0260B-budget.md`
+  records the two derived-budget save breaches; the fragment is empty; the task
+  JSON carries status `verified`.
+- **Verification (cited from the QA lane's recorded run, not rerun here):**
+  `cargo xtask bench --report` -> 18 metrics, 0 breaches, 0 regressions, baseline
+  present, in-memory harness (it has no edit case and never reads the real
+  corpus, so it cannot answer this task alone). Real-corpus measurement: open and
+  one incremental annotation edit pass every derived and absolute budget on all
+  five fixtures (worst tracked medians 0.6685 ms open, 0.5661 ms edit). Save has
+  two breaches of the derived 5 ms-floor rule only - `browser-print.pdf` 15.1668
+  ms vs 6.25 ms and `microsoft-excel-2019-sample.pdf` 10.4397 ms vs 10.0 ms - both
+  under 1% of the 2000 ms absolute budget, recorded in the blocker; no budget was
+  weakened. `pdfxi-testkit` -> 155 passed, 0 failed. The 500-page reference row
+  re-measured through `bench_open_500`: `open_median_ms=1.2816`, `first_page_ms=0.0044`.
+- **Integrator gates (run here):** `cargo xtask board` regenerated
+  `orchestration/BOARD.md` and confirms T-0260B `verified`;
+  `cargo xtask features verify` reports `FEATURES OK: 145 rows, 33 verified`
+  (three non-test `tests` citations skipped). No app/core/workspace rerun while
+  T-0245 is mid-edit.
+- **Matrix:** the T-0260B fragment carries empty `feature_rows` and
+  `promoted_rows`; no feature-row status changed and `docs/features.toml` is not
+  in the commit.
+- **Evidence:** `docs/evidence/acceptance/T-0260B.md`,
+  `docs/evidence/acceptance/T-0260B-measure.rs`,
+  `docs/evidence/acceptance/T-0260B-measure.ps1`,
+  `orchestration/feature-updates/T-0260B.toml`,
+  `orchestration/blockers/T-0260B-budget.md`, `orchestration/tasks/T-0260B.json`.
+- **Scope discipline:** `git status` before staging showed nothing staged at all.
+  Only the approved paths were staged: no `crates/**`, no `docs/evidence/ui/**`,
+  and `orchestration/feature-updates/T-0245.toml` was explicitly excluded. The
+  in-flight T-0245 A-25/A-31 app work stays uncommitted with its claim held.
+- **Next:** T-0245 round C (A-25 placement, A-31 request/tracker) on the app
+  lane, then T-0261 close-out and T-0262 final package/install/captures/handoff.

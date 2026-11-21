@@ -1,0 +1,52 @@
+# T-0260B - open, edit and save budgets on the real corpus
+#
+# Measurement-only task. It adds no shipping code and no feature row, so both
+# row lists are intentionally empty.
+#
+# Acceptance met: open, edit and save are measured on the committed real corpus
+# and compared to explicit budgets. Result: open and one incremental annotation
+# edit pass every derived and absolute budget on all five fixtures. Two save
+# cases exceed only the derived 5 ms-floor rule (browser-print 15.1668 ms vs
+# 6.25 ms, excel-sample 10.4397 ms vs 10.0 ms); both use under 1% of the
+# documented 2000 ms absolute budget. Those two breaches stay OPEN in
+# orchestration/blockers/T-0260B-budget.md - "verified" here means the
+# measurement and the record exist, not that every case passes. No budget was
+# weakened.
+
+task = "T-0260B"
+lane = "qa"
+status = "verified"
+evidence = "docs/evidence/acceptance/T-0260B.md"
+feature_rows = []
+promoted_rows = []
+docs = [
+    "docs/evidence/acceptance/T-0260B.md",
+    "docs/evidence/acceptance/T-0260B-measure.rs",
+    "docs/evidence/acceptance/T-0260B-measure.ps1",
+    "orchestration/blockers/T-0260B-budget.md",
+]
+notes = """
+The deterministic harness (`cargo xtask bench --report`) passes 18/18 metrics
+(0 breaches, 0 regressions, baseline present) but has no edit case and never
+reads the real corpus, so it cannot satisfy T-0260B alone. A docs-only
+measurement (`T-0260B-measure.rs` + `.ps1`) drives the shipping crates
+(pdfxi-core, pdfxi-document, pdfxi-edit) over fixtures/realworld/** with 2
+warm-up + 7 measured iterations per case in five independent rounds, verifying
+the page count, the one-annotation-per-edit count, a single revision, and a
+reopen of the saved file each time.
+
+Tracked (lowest of five round medians) results, ms:
+  open  0.1269 (forms) to 0.6685 (slides)  budgets 6.25-11.25  pass
+  edit  0.0360 (encrypted) to 0.5661 (slides)  budgets 6.25-15.0  pass
+  save  3.4603 (forms) / 9.1885 (slides)  pass
+        15.1668 (browser-print, budget 6.25) and 10.4397 (excel, budget 10.0)
+        BREACH of the derived rule only; 0.76% and 0.52% of the 2000 ms
+        absolute row.
+
+The 500-page reference row was re-measured separately through the existing
+crates/pdfxi-core/examples/bench_open_500.rs: open_median_ms=1.2816 (budget
+1500), first_page_ms=0.0044 (budget 300), all_pages_ms=1.6684, 500 pages,
+145,516 bytes.
+
+No app/core/xtask/matrix change, no git write. Claim left held.
+"""

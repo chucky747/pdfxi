@@ -1,0 +1,17 @@
+{
+    "acceptance":  "open, edit and save timings are measured on the real corpus and recorded against explicit budgets, or the exact missing harness is recorded without weakening the budget",
+    "id":  "T-0260B",
+    "evidence":  "docs/evidence/acceptance/T-0260B.md",
+    "owns":  [
+                 "docs/evidence/acceptance/T-0260B.md",
+                 "orchestration/feature-updates/T-0260B.toml"
+             ],
+    "notes":  "Split out of T-0260 so performance can be measured while the remaining app tasks finish. Uses the existing `cargo xtask bench` deterministic harness and/or the CLI on fixtures/realworld/**; records wall-clock numbers for open, one incremental annotation edit, and save on the committed corpus, compares them to the documented budgets, and records the machine/toolchain. Does not edit app/core code or the matrix. If the harness has no open/edit/save case, record that gap and add a measurement script under docs/evidence only.",
+    "status":  "verified",
+    "depends_on":  [
+
+                   ],
+    "title":  "Open, edit and save performance budgets on the real corpus",
+    "priority":  "P0",
+    "lane":  "qa"
+}
