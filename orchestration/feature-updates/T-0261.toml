@@ -1,0 +1,11 @@
+# T-0261 - documentation close-out for the acceptance campaign
+#
+# Documentation-only final pass. It proposes no feature-status changes: every
+# row was already promoted by the app/security tasks this page documents.
+
+task = "T-0261"
+lane = "docs"
+status = "verified"
+evidence = "docs/evidence/acceptance/T-0261.md"
+feature_rows = []
+promoted_rows = []

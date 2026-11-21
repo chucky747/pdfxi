@@ -23,6 +23,17 @@
 - [Automation](automation.md)
 - [Standards and preflight](standards.md)
 
+# Tool guides
+
+- [Edit PDF](tools/edit-pdf.md)
+- [Certificates and signature requests](tools/certificates-and-signature-requests.md)
+- [Bookmarks and document properties](tools/bookmarks-and-properties.md)
+- [Organize pages and combine files](tools/organize-and-combine.md)
+- [Export](tools/export.md)
+- [Convert to PDF](tools/convert-to-pdf.md)
+- [Protect PDF, redact and sanitize](tools/protect-redact-sanitize.md)
+- [Shared folder, review sync and notifications](tools/shared-and-notifications.md)
+
 # Security and privacy
 
 - [Security](security.md)

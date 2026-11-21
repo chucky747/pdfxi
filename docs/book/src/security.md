@@ -9,6 +9,46 @@ below names its feature row, so the status is checkable in the
 [feature matrix](../../FEATURES.md). Do not read "no viewer control" as "not
 implemented": the tests cited here run on real PDF bytes, not on mocks.
 
+## What the assistant sends and when
+
+The assistant sends **nothing before you ask**. Opening a document or the panel,
+and connecting, make no document request. At **Ask** it sends your question plus
+a bounded excerpt of the open document's text to the local OpenCode service only.
+That excerpt is wrapped in an `<untrusted-document-text>` fence with the closing
+tag neutralised, capped at 24,000 characters, and taken from a 64-page / 256 KiB
+snapshot ([ADR 0013](../../decisions/0013-assistant-document-grounding-fallback.md)).
+The session uses a wildcard **deny** ruleset with five specific `pdfxi_*` allow
+rules, read back and verified before use; no tool server is attached to the app
+turn, so there is no shell, file, edit, or network tool path. PDFXI itself makes
+**no network calls**: the only destination is the OpenCode service running on
+this machine, over loopback ([ADR 0011](../../decisions/0011-ai-assistant-through-opencode.md)).
+See [What the assistant sends](security/assistant-data.md).
+
+## Signature trust
+
+Verification proves **digest validity over the declared byte range** and reports
+whether the range has **whole-file coverage** and whether bytes were appended
+after the signature. The green `E-signed` chip requires all of
+`Valid && bytes_match && covers_entire_file && !appended`. It proves the bytes
+under the embedded certificate are unchanged, not who signed them: certificate
+**chain trust is `None`**, so identity is **not verified** without a trust anchor;
+no CRL/OCSP revocation and no RFC 3161 timestamp are checked
+([T-0241](../../evidence/hardening/T-0241.md), T-0267 in progress).
+See [Signatures: integrity and identity](security/signatures.md).
+
+## Redaction limits
+
+Redaction **removes content rather than covering it**, as a full rewrite to a new
+file, and the result is verified by independently reparsing the saved bytes:
+page-text re-extraction, a whole-file and stream byte scan, and surviving
+rectangle checks. `clean` is true only when no secret survives. Two limits
+matter: **vector paths and drawing graphics under a mark are not removed**, and
+the viewer is **selection-only** (no area-drawing or search-and-redact tool).
+Form XObjects are recursed and inline images decoded, but fonts, image streams,
+and vector content remain outside the text/image scan
+([T-0237](../../evidence/hardening/T-0237.md),
+[T-0268](../../evidence/hardening/T-0268.md)). See [Redaction](security/redaction.md).
+
 ## What this build exposes
 
 | Capability | Installed viewer | Implemented and tested | Row and source |

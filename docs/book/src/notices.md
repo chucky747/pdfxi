@@ -75,6 +75,17 @@ If you pass a build on to someone else, include:
 The packaging script already stages the PDFium licence set; see
 [docs/THIRD_PARTY.md](../../THIRD_PARTY.md) for the exact payload.
 
+## Close-out confirmation
+
+The assistant's local HTTP/TLS stack is built on **`ureq`** and **`rustls`**
+(with `rustls-native-certs` for the OS trust store); the read-only client-MCP
+bridge lives at `crates/pdfxi-assistant/src/mcp.rs` and is a library capability,
+not an app-turn tool path. The bundled **Courier Prime Regular** font is licensed
+under the **SIL Open Font License, Version 1.1**, with its licence text at
+`crates/pdfxi-edit/assets/CourierPrime-OFL.txt`. These are recorded above and in
+`deny.toml`; the authoritative component table is
+[docs/THIRD_PARTY.md](../../THIRD_PARTY.md).
+
 ## Limits
 
 - This page is a summary and is not legal advice.

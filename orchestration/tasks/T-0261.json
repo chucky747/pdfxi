@@ -3,7 +3,7 @@
     "lane":  "docs",
     "title":  "User guide per tool, security notes, notices and matrix evidence",
     "priority":  "P0",
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0260"
                    ],
@@ -14,6 +14,6 @@
                  "orchestration/blockers/**"
              ],
     "acceptance":  "cargo xtask docs passes; every shipped tool has a guide page, the security page states what the assistant sends and what signatures and redaction do and do not guarantee, and the notices cover the new crates and the bundled font",
-    "notes":  "Documentation close-out for the acceptance campaign. One mdBook page per tool that actually shipped, written against the installed build\u0027s behaviour rather than the plan. Security notes: exactly what the assistant sends and when, signature trust (digest validity versus chain/identity, which is not verified without a trust anchor), and redaction guarantees and limits (what is removed, what an independent reader can still recover). Third-party notices for the new crates (ureq/rustls and the MCP path) and the bundled Courier Prime font (SIL OFL 1.1). Final feature-matrix evidence links. The mdBook tree is docs/book/** (confirmed: docs/book exists with src/); docs/security/** does not exist, so security pages go under docs/book/src/security/**. `cargo xtask docs` must be green. This task owns docs/book/**, its fragment and blockers; it must not edit integrator-owned files. Final docs pass must re-check `privacy.md`, `security.md`, `gui.md` and `getting-started.md` against the installed build after T-0249/T-0252/T-0253/T-0257/T-0263/T-0264; the T-0269 pages are a snapshot of the current build.",
+    "notes":  "Documentation close-out for the acceptance campaign. One mdBook page per tool that actually shipped, written against the installed build\u0027s behaviour rather than the plan. Security notes: exactly what the assistant sends and when, signature trust (digest validity versus chain/identity, which is not verified without a trust anchor), and redaction guarantees and limits (what is removed, what an independent reader can still recover). Third-party notices for the new crates (ureq/rustls and the MCP path) and the bundled Courier Prime font (SIL OFL 1.1). Final feature-matrix evidence links. The mdBook tree is docs/book/** (confirmed: docs/book exists with src/); docs/security/** does not exist, so security pages go under docs/book/src/security/**. `cargo xtask docs` must be green. This task owns docs/book/**, its fragment and blockers; it must not edit integrator-owned files. Final docs pass must re-check `privacy.md`, `security.md`, `gui.md` and `getting-started.md` against the installed build after T-0249/T-0252/T-0253/T-0257/T-0263/T-0264; the T-0269 pages are a snapshot of the current build. Integrator close-out: the formal claim was refused by the T-0260 dependency gate (orchestration/blockers/T-0261-claim-gate.md); the docs work was done on task-named paths only and is verified at this checkpoint; no formal claim was ever registered.",
     "evidence":  "docs/evidence/acceptance/T-0261.md"
 }
