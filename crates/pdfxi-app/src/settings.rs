@@ -436,6 +436,12 @@ pub struct LaunchOptions {
     /// service and asks this question once the connection is usable. Normal
     /// panel opening never sets it.
     pub assistant_question: Option<String>,
+    /// Help window requested with `--open-help` or `--help-window`.
+    ///
+    /// A capture/deep-link action for the automation lane: the help window
+    /// cannot be reached through synthesised window messages, so a launch flag
+    /// is the only headless way to open it in the real viewer (A-03).
+    pub open_help: bool,
 }
 
 impl LaunchOptions {
@@ -448,14 +454,15 @@ impl LaunchOptions {
             && self.tool.is_none()
             && self.title.is_none()
             && self.assistant_question.is_none()
+            && !self.open_help
     }
 }
 
 /// Parse viewer launch flags, ignoring everything else.
 ///
 /// Recognised forms are `--dark`, `--light`, `--controls=windows` or
-/// `--controls=macos`, `--rail=`/`--panel=`, `--tool=`, `--set-title=`, and
-/// `--assistant-question=`.
+/// `--controls=macos`, `--rail=`/`--panel=`, `--tool=`, `--set-title=`,
+/// `--assistant-question=`, `--open-help`, and `--help-window`.
 /// Unknown flags, bare `--controls`, and invalid values are ignored without
 /// panicking. When a flag repeats, the last one wins. Arguments that look like
 /// file paths are skipped so callers can pass the same list to the document
@@ -467,6 +474,7 @@ pub fn parse_launch_arguments(arguments: &[String]) -> LaunchOptions {
         match argument.as_str() {
             "--dark" => options.theme = Some(ThemePreference::Dark),
             "--light" => options.theme = Some(ThemePreference::Light),
+            "--open-help" | "--help-window" => options.open_help = true,
             other => {
                 if let Some(value) = other.strip_prefix("--controls=")
                     && let Some(style) = WindowControlStyle::parse(value)
@@ -849,5 +857,77 @@ mod tests {
         let empty = parse_launch_arguments(&["--assistant-question=".to_owned()]);
         assert_eq!(empty.assistant_question, None);
         assert!(empty.is_empty(), "an empty question is not an action");
+    }
+
+    #[test]
+    fn help_flags_are_bare_switches_and_ignore_lookalikes() {
+        for flag in ["--open-help", "--help-window"] {
+            let parsed = parse_launch_arguments(&[flag.to_owned()]);
+            assert!(parsed.open_help, "{flag} opens the help window");
+            assert!(!parsed.is_empty(), "{flag} must be a real override");
+            assert_eq!(
+                parsed,
+                LaunchOptions {
+                    open_help: true,
+                    ..LaunchOptions::default()
+                }
+            );
+        }
+
+        // `--help` is the conventional usage switch and `--open-help=1` is not
+        // a recognised form; neither may steal a document open or set the flag.
+        let bad = parse_launch_arguments(&[
+            "--help".to_owned(),
+            "--open-help=1".to_owned(),
+            "--help-window=yes".to_owned(),
+            "--open_help".to_owned(),
+        ]);
+        assert!(!bad.open_help, "only the bare switches are recognised");
+        assert_eq!(bad, LaunchOptions::default());
+        assert!(bad.is_empty());
+
+        // The other launch flags keep parsing alongside the help switch.
+        for (flag, check) in [
+            (
+                "--light",
+                (|options: &LaunchOptions| options.theme == Some(ThemePreference::Light))
+                    as fn(&LaunchOptions) -> bool,
+            ),
+            (
+                "--dark",
+                (|options: &LaunchOptions| options.theme == Some(ThemePreference::Dark))
+                    as fn(&LaunchOptions) -> bool,
+            ),
+            (
+                "--controls=macos",
+                (|options: &LaunchOptions| {
+                    options.window_controls == Some(WindowControlStyle::MacOs)
+                }) as fn(&LaunchOptions) -> bool,
+            ),
+            (
+                "--panel=files",
+                (|options: &LaunchOptions| options.panel == Some(LaunchPanel::Files))
+                    as fn(&LaunchOptions) -> bool,
+            ),
+            (
+                "--tool=sign",
+                (|options: &LaunchOptions| options.tool == Some(LaunchTool::Sign))
+                    as fn(&LaunchOptions) -> bool,
+            ),
+            (
+                "--set-title=Plan",
+                (|options: &LaunchOptions| options.title.as_deref() == Some("Plan"))
+                    as fn(&LaunchOptions) -> bool,
+            ),
+            (
+                "--assistant-question=Why?",
+                (|options: &LaunchOptions| options.assistant_question.as_deref() == Some("Why?"))
+                    as fn(&LaunchOptions) -> bool,
+            ),
+        ] {
+            let parsed = parse_launch_arguments(&[flag.to_owned(), "--open-help".to_owned()]);
+            assert!(check(&parsed), "{flag} still parses next to --open-help");
+            assert!(parsed.open_help, "{flag} must not clear the help switch");
+        }
     }
 }

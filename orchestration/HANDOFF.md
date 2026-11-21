@@ -798,3 +798,16 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
 - **Evidence:** `docs/evidence/ui/T-0272.md`; fragment `orchestration/feature-updates/T-0272.toml`. Task JSON `orchestration/tasks/T-0272.json` carries status `verified`.
 - **Scope discipline:** the T-0262 paths `docs/evidence/release/T-0262.md`, `docs/evidence/ui/final/**` and `target/**` were left unstaged and untouched. Only the eight approved paths were staged.
 - **Next:** T-0262 final package/install/captures/handoff.
+
+### T-0273 checkpoint (2026-11-21, `--open-help` launch deep link)
+
+- **HEAD before:** `c1a6ee3` (`docs(release): state the exact Help verification for A-03 [T-0262]`). **HEAD after:** this checkpoint commit (`feat(app): open the help window from the --open-help launch flag [T-0273]`; `git log -1 --oneline`). Linear history on `main`, not pushed, no amend/rebase.
+- **Task state:** T-0273 is `verified` (task JSON status set `queued` -> `verified` before regenerating the board); its claim is released after this checkpoint with `cargo xtask release T-0273`. T-0272 stays `verified`; T-0262 stays `verified`. The regenerated board shows T-0273 `verified`.
+- **Reviewer verdict:** ACCEPT. No capture is taken by this slice; the installed-build captures are the T-0262 close-out.
+- **What landed:** `LaunchOptions` gains `pub open_help: bool`, set only by the bare switches `--open-help` and `--help-window` and included in `is_empty()`/`Default`; exact-form parsing leaves `--help`, `--open-help=1`, `--help-window=yes` and `--open_help` untouched while every pre-existing flag still parses next to the new one. `PdfxiApp::apply_launch_help(bool)` sets `help_open` at startup immediately after `apply_launch_tool`, opening the same Help window as `AppCommand::OpenHelp` without touching persisted shell preferences. Parser and startup tests cover both switches and the plain-start case.
+- **Verification (cited from the lane and the orchestrator's final run, not rerun here):** `cargo fmt --all --check` exit 0; `cargo clippy -p pdfxi-app --all-targets --features ui,pdfium -- -D warnings` exit 0; `cargo test -p pdfxi-app --features ui,pdfium` = **615 lib passed / 4 ignored / 0 failed** and **35 ui_controls passed / 0 failed**; `cargo xtask verify` reports `VERIFY OK` with the no-dead-controls harness green; `cargo xtask features verify` reports `FEATURES OK: 145 rows, 54 verified`.
+- **Integrator gates (run here):** `cargo xtask board` regenerated `orchestration/BOARD.md` and confirms T-0273 `verified`.
+- **Matrix:** the fragment carries empty `feature_rows` and `promoted_rows` (`acceptance_items = ["A-03"]`); no feature-row status changed and `docs/features.toml` is not in the commit.
+- **Evidence:** `docs/evidence/ui/T-0273.md`; fragment `orchestration/feature-updates/T-0273.toml`; task JSON `orchestration/tasks/T-0273.json` carries status `verified`.
+- **Scope discipline:** `git status` before staging showed exactly the T-0273 code, evidence, fragment, task JSON, board and handoff paths alongside the separate T-0262 docs paths. Only the seven approved paths were staged; `docs/design/FEATURE_ACCEPTANCE.md`, `docs/evidence/release/T-0262.md`, `docs/evidence/ui/final/**` and `orchestration/blockers/**` were left unstaged and untouched.
+- **Next:** T-0262 installer, Office-open and print close-out with the final captures.

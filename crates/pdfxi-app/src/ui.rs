@@ -486,6 +486,7 @@ pub fn run() -> Result<(), String> {
             app.apply_launch_title(launch.title.as_deref());
             app.apply_launch_panel(launch.panel);
             app.apply_launch_tool(launch.tool);
+            app.apply_launch_help(launch.open_help);
             if let Some(question) = launch.assistant_question {
                 app.request_launch_question(question);
             }
@@ -805,6 +806,17 @@ impl PdfxiApp {
             settings::LaunchTool::AiAssistant => AppCommand::AiAssistant,
         };
         self.dispatch(command, None);
+    }
+
+    /// Apply an `--open-help`/`--help-window` deep link.
+    ///
+    /// Opens the same Help window the Help menu opens, so the flag cannot do
+    /// more than the real control. It is a startup action only: no launch flag
+    /// changes the saved shell preferences.
+    fn apply_launch_help(&mut self, open_help: bool) {
+        if open_help {
+            self.help_open = true;
+        }
     }
 
     /// The theme preference currently in effect.
@@ -2778,5 +2790,20 @@ mod tests {
         assert!(app.help_open());
         app.dispatch(AppCommand::CloseHelp, None);
         assert!(!app.help_open());
+    }
+
+    #[test]
+    fn help_window_opens_through_the_launch_flag() {
+        for flag in ["--open-help", "--help-window"] {
+            let launch = settings::parse_launch_arguments(&[flag.to_owned()]);
+            let mut app = PdfxiApp::new();
+            assert!(!app.help_open(), "a fresh shell starts closed");
+            app.apply_launch_help(launch.open_help);
+            assert!(app.help_open(), "{flag} opens the help window at startup");
+        }
+
+        // Without the flag startup leaves the window closed.
+        let plain = PdfxiApp::new();
+        assert!(!plain.help_open());
     }
 }

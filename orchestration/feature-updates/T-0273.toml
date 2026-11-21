@@ -1,0 +1,33 @@
+# T-0273 - launch flag that opens the Help window
+#
+# Headless automation cannot reach the Help window through synthesised window
+# messages, so this deep link exists for A-03 captures. No feature row changes
+# status here.
+
+task = "T-0273"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0273.md"
+docs = [
+    "crates/pdfxi-app/src/settings.rs",
+    "crates/pdfxi-app/src/ui.rs",
+]
+acceptance_items = ["A-03"]
+feature_rows = []
+promoted_rows = []
+notes = """
+LaunchOptions gains pub open_help: bool, set by the bare switches --open-help
+and --help-window. It participates in is_empty() and Default; exact-form parsing
+keeps --help, --open-help=1, --help-window=yes and --open_help ignored. All
+previous flags (--light, --dark, --controls=, --panel=/--rail=, --tool=,
+--set-title=, --assistant-question=) still parse alongside it and the existing
+tool table test is unchanged.
+
+PdfxiApp::apply_launch_help(bool) sets help_open at startup right after
+apply_launch_tool, mirroring the OpenHelp command without touching persisted
+shell preferences.
+
+Gates on CARGO_TARGET_DIR=target/lanes/app12 with ui,pdfium: fmt exit 0; clippy
+--all-targets -D warnings exit 0; tests lib 619 (615 passed, 4 ignored, 0
+failed) + ui_controls 35 passed + doc-tests 0. No git writes by this lane.
+"""

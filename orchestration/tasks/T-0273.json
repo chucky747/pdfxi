@@ -1,0 +1,12 @@
+{
+  "id": "T-0273",
+  "lane": "app",
+  "title": "Add an --open-help launch deep link for the Help window",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0272"],
+  "owns": ["crates/pdfxi-app/src/**", "crates/pdfxi-app/tests/**", "docs/evidence/ui/T-0273.md", "orchestration/feature-updates/T-0273.toml"],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium passes; launching the installed viewer with --open-help shows the Help window with the guide sections; the flag is documented in the launch-argument parser and covered by tests.",
+  "notes": "Needed to finish A-03 on the installed build: the Help window could not be opened by automation because the title-bar icon is not exposed to UI Automation and Windows blocks foreground changes from the orchestrator process. Add `--open-help` (and alias `--help-window`) to LaunchOptions in crates/pdfxi-app/src/settings.rs, apply it in ui.rs so the Help window opens at startup (set help_open), and test parser + startup application. Keep the existing --dark/--light/--controls/--tool/--panel behaviour unchanged. This is a support/deep-link parity feature consistent with --panel and --tool.",
+  "evidence": "docs/evidence/ui/T-0273.md"
+}
