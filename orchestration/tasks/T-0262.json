@@ -3,7 +3,7 @@
     "lane":  "integrator",
     "title":  "Package, install, desktop shortcut, final captures, handoff and archive",
     "priority":  "P0",
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0260",
                        "T-0261"
