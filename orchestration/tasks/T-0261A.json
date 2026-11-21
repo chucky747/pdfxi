@@ -1,0 +1,18 @@
+{
+    "acceptance":  "cargo xtask docs passes; every tool that is actually reachable in the current build has a guide page; the security page states what the assistant sends and what signatures and redaction do and do not guarantee",
+    "id":  "T-0261A",
+    "evidence":  "docs/evidence/acceptance/T-0261A.md",
+    "owns":  [
+                 "docs/book/**",
+                 "docs/evidence/acceptance/T-0261A.md",
+                 "orchestration/feature-updates/T-0261A.toml"
+             ],
+    "notes":  "Split out of T-0261 so documentation can start while the remaining app tasks finish. Writes against the current code, not the plan. Covers the shipped surfaces: open/save/print, Home/Files/Recent/Starred, Pages and comments/highlight, Fill \u0026 Sign form filling, the certificate Sign card as shipped (typed appearance, verification, E-signed badge, chain trust not verified), search, AI Assistant grounding and privacy (ADR 0013), and the current limits. Security page: exactly what the assistant sends and when; digest validity versus chain/identity; redaction guarantees and limits. Notices for new crates and the bundled Courier Prime font. T-0261 remains the final close-out after T-0260 and will revise these pages against the installed build.",
+    "status":  "queued",
+    "depends_on":  [
+
+                   ],
+    "title":  "User guide and security pages for shipped tools",
+    "priority":  "P0",
+    "lane":  "docs"
+}

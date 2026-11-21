@@ -1,0 +1,19 @@
+{
+    "acceptance":  "cargo fuzz targets for the redaction and edit parsers build and a short clean run completes, or the exact toolchain blocker is recorded without weakening the target",
+    "id":  "T-0260A",
+    "evidence":  "docs/evidence/acceptance/T-0260A.md",
+    "owns":  [
+                 "fuzz/**",
+                 "docs/evidence/acceptance/T-0260A.md",
+                 "orchestration/feature-updates/T-0260A.toml",
+                 "orchestration/blockers/**"
+             ],
+    "notes":  "Split out of T-0260 so the independent fuzz work can land while the app tasks finish. Adds targets and seed corpora for the pdfxi-edit redaction path (redaction::apply_redactions on real bytes) and the content/annotation edit path (document_annotations add_highlight/add_text_note and content_edit), reusing the existing fuzz harness conventions. Runs a short clean campaign (or records the exact missing nightly/cargo-fuzz toolchain and the next viable route). Does not claim or edit app, core, integrator or matrix files.",
+    "status":  "verified",
+    "depends_on":  [
+
+                   ],
+    "title":  "Fuzz targets for the redaction and edit parsers",
+    "priority":  "P0",
+    "lane":  "qa"
+}

@@ -3,17 +3,23 @@
 # This is intentionally a standalone workspace (it declares `[workspace]`).
 # The canonical workspace root `Cargo.toml` is integrator-owned and does NOT
 # list `fuzz` as a member, so adding it there would violate the claim boundary.
-# On this host `cargo fuzz`, nightly, and `libfuzzer-sys` are all unavailable,
-# so this manifest is not built by the fast checks. The equivalent plain
-# functions and their deterministic runner live in
-# `crates/pdfxi-testkit/src/fuzz.rs` and `examples/fuzz_smoke.rs`.
+# On this host `cargo fuzz` is not installed and `libfuzzer-sys` does not
+# compile with the installed MinGW g++ or clang (see
+# `orchestration/blockers/T-0260A-fuzz-toolchain.md`), so the fast checks do
+# not build the libFuzzer runtime.
+#
+# Plain entry points for the original five targets live in
+# `crates/pdfxi-testkit/src/fuzz.rs` with `examples/fuzz_smoke.rs`. The
+# `redaction` and `edit` entry points live in the `entry/` member so their
+# deterministic seed runner builds and runs without `libfuzzer-sys`; every
+# target file is still a thin `fuzz_target!` wrapper around a plain function.
 
 [package]
 name = "pdfxi-fuzz"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "libFuzzer targets for the PDFXI parsers, filters, content streams, forms, and crypto."
+description = "libFuzzer targets for the PDFXI parsers, filters, content streams, forms, crypto, redaction, and edit paths."
 license = "MIT OR Apache-2.0"
 
 # This marker is what `cargo fuzz` looks for when locating the fuzz crate.
@@ -21,11 +27,15 @@ license = "MIT OR Apache-2.0"
 cargo-fuzz = true
 
 [workspace]
-members = ["."]
+members = [".", "entry"]
 
 [dependencies]
 libfuzzer-sys = "0.4"
 pdfxi-testkit = { path = "../crates/pdfxi-testkit" }
+# Plain functions shared with the deterministic seed runner. This path carries
+# no `libfuzzer-sys` dependency, so `cargo test` in that member never builds
+# the C++ runtime.
+pdfxi-fuzz-entry = { path = "entry" }
 
 [[bin]]
 name = "parser"
@@ -58,6 +68,20 @@ bench = false
 [[bin]]
 name = "crypto"
 path = "fuzz_targets/crypto.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "redaction"
+path = "fuzz_targets/redaction.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "edit"
+path = "fuzz_targets/edit.rs"
 test = false
 doc = false
 bench = false

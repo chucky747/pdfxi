@@ -1,0 +1,24 @@
+﻿# Plain, panic-free entry points for the `redaction` and `edit` fuzz targets.
+#
+# This crate exists because the existing entry points live in
+# `crates/pdfxi-testkit/src/fuzz.rs`, which task T-0260A does not own. Keeping
+# the same shape here (bounded input, `FuzzOutcome`, thin libFuzzer wrapper)
+# lets the deterministic seed runner build and execute even on a host where
+# `libfuzzer-sys` itself cannot compile.
+#
+# It carries no `libfuzzer-sys` dependency, so `cargo test` for this crate never
+# touches the C++ libFuzzer runtime.
+
+[package]
+name = "pdfxi-fuzz-entry"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Bounded entry points shared by the PDFXI redaction and edit fuzz targets."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+pdfxi-core = { path = "../../crates/pdfxi-core" }
+pdfxi-edit = { path = "../../crates/pdfxi-edit" }
+pdfxi-security = { path = "../../crates/pdfxi-security" }
+pdfxi-testkit = { path = "../../crates/pdfxi-testkit" }

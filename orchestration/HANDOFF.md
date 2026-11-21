@@ -468,3 +468,40 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
 - **Next:** T-0245 round B (Sign panel, E-signed badge, request-signature
   tracker), then T-0255 app (bookmarks panel wired to the new bridge, plus the
   document-properties dialog).
+
+### T-0260A checkpoint (2026-11-21, fuzz targets for redaction and edit paths)
+
+- **HEAD before:** `b26a24d` (`checkpoint(acceptance): real-PDF outline reader and
+  writer [T-0255A]`). **HEAD after:** this checkpoint commit
+  (`checkpoint(acceptance): fuzz targets for redaction and edit paths [T-0260A]`;
+  `git log -1 --oneline`). Linear history, not pushed, no amend/rebase.
+- **Task state:** T-0260A is `verified` and its claim is released. T-0245
+  (signature UI, E-signed badge, request-signature tracker) is `in_progress`
+  and its app claim stays held and uncommitted. T-0261A (docs) and T-0255
+  (bookmarks/properties) are `queued`. The board was regenerated with
+  `cargo xtask board` and shows T-0260A `verified`, T-0245 `in_progress`,
+  T-0255 `queued`.
+- **What landed:** fuzz targets for `content`, `crypto`, `filters`, `forms`,
+  `parser` (harness updates) plus new `edit` and `redaction` targets driving
+  `pdfxi-edit` redaction and annotation/content-edit paths on real bytes. New
+  `fuzz/entry` harness with a `seed_corpus` test and committed seed corpora
+  under `fuzz/corpus/edit` and `fuzz/corpus/redaction`.
+- **Verification (cited from the lane, not rerun here):** `cargo test
+  --manifest-path fuzz/entry/Cargo.toml` -> 7 passed, 0 failed;
+  `cargo check --manifest-path fuzz/Cargo.toml --all-targets` exits 101 in the
+  pre-existing `libfuzzer-sys` build with MinGW g++, recorded verbatim in
+  `orchestration/blockers/T-0260A-fuzz-toolchain.md`; fuzz-entry `cargo fmt`
+  and `cargo clippy` are green per the lane and its evidence. The full
+  workspace was intentionally not rerun while the app and docs lanes are
+  mid-edit.
+- **Matrix:** `cargo xtask features verify` reports `FEATURES OK: 145 rows,
+  33 verified` - unchanged; this fuzz slice promotes no matrix row and
+  `docs/features.toml` is not in the commit.
+- **Evidence:** `docs/evidence/acceptance/T-0260A.md`;
+  `orchestration/feature-updates/T-0260A.toml`;
+  `orchestration/blockers/T-0260A-fuzz-toolchain.md`.
+- **Scope discipline:** no `crates/pdfxi-app/**`, `docs/book/**`, or
+  `docs/evidence/ui/**` path was staged. The in-flight T-0245 app work and
+  T-0261A docs work stay uncommitted with their claims held.
+- **Next:** T-0245 round B and T-0261A docs land, then T-0262 final
+  package/install/captures/handoff.
