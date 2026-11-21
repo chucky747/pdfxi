@@ -35,22 +35,40 @@ and every tool, two AcroForm captures, the Print dialog) against
 
 ## Blockers and limits
 
-- `orchestration/blockers/T-0262-inno-installer.md`: real-identity Inno
-  installer exits 1 on this host; release installed with the portable
-  `install.ps1` (hash-verified, desktop shortcut points at the installed
-  binary). Inno install/uninstall proven by the Smoke identity test (28/28).
-- `orchestration/blockers/T-0215-word-com.md`: no Word-produced PDF and no Word
-  open of an export; T-0260 records the deviation; A-27 carries the limit.
-- Installer unsigned (T-0202); no signature claimed.
+Resolved during close-out:
+
+- **Inno installer** (`orchestration/blockers/T-0262-inno-installer.md`):
+  the installer aborted because this host's `%TEMP%` denies executing the helper
+  Inno extracts there ("Unable to execute file in the temporary directory.
+  Setup aborted. Error 5: Access is denied."). Running the installer with
+  `TEMP`/`TMP` pointed at `target\tmp\setup-temp` installs, uninstalls and
+  reinstalls successfully (all exit 0); the installed hash matches staging
+  (`6787a129...` for the final build), the desktop shortcut targets the
+  installed binary and `docs\README.md` is present. `installer-test` is 28/28.
+- **Office open (A-27)**: Microsoft Word opened the exported `.docx` and
+  displayed the edited marker and page break
+  (`docs/evidence/ui/final/word-opens-docx.png`). T-0215 still limits producing
+  PDFs through Word COM; it does not affect opening the export.
+- **Help (A-03)**: the installed viewer was launched with the new `--open-help`
+  deep link (T-0273) and captured showing the guide sections and the
+  "Open user guide" button (`docs/evidence/ui/final/light-windows-help.png`,
+  `dark-macos-help.png`).
+- **Printing (O-02)**: with the Brother MFC-L2750DW as default, the installed
+  viewer's Print dialog fed the Windows dialog and the job
+  `PDFXI document` (1 page) was spooled and transmitted (`JOBS_REMAINING=0`).
+  Inspecting the physical sheet is the only human-only step; it is stated in
+  the matrix row.
+
+Still open as recorded product limits (not blockers):
+
+- `orchestration/blockers/T-0215-word-com.md`: Word COM PDF save/export hangs
+  (route uses the committed PowerPoint fixture; no Word-produced PDF claimed).
+- `orchestration/blockers/T-0260A-fuzz-toolchain.md`: libFuzzer is host-blocked;
+  deterministic runner 7/7, no target weakened.
+- `orchestration/blockers/T-0260B-budget.md`: two derived save-budget breaches,
+  unweakened.
+- Signed installer: no certificate (T-0202); no signature claimed.
 - RSA advisory scoped ignore with guard (T-0241).
-- libFuzzer host-blocked; deterministic runner 7/7, targets unweakened
-  (T-0260A).
-- Two derived save-budget breaches on record (T-0260B).
-- O-02: Windows print dialog reached with the Brother MFC-L2750DW as default;
-  no physical sheet observed (no operator on the host), recorded as a limit.
-- AI assistant: connection panel verified; no live prompt sent (nothing is sent
-  before the user asks); T-0260 records the assistant step as skipped.
-- Corpus is 1-3 pages per fixture; encrypted save unsupported by design.
+- AI assistant: connection panel verified; no live prompt sent.
 - mdbook not installed; `cargo xtask docs` and the link pass are green.
 - VIEW-009, VIEW-011 and PLAT-002 remain outside this campaign's surface.
-

@@ -23,7 +23,7 @@ in `docs/evidence/release/T-0262.md`.
 |---|---|---|---|---|---|
 | A-01 | Title bar: tabs, new tab, window controls | Already shipped; still works in both control styles | regression | pass | docs/evidence/ui/final/light-windows-main.png, docs/evidence/ui/final/dark-macos-main.png |
 | A-02 | Bell (notifications) | Lists real local events; empty state when none | T-0246 | pass | docs/evidence/ui/T-0246.md |
-| A-03 | Help | Opens the bundled user guide | T-0221 | pass | docs/evidence/release/T-0262.md (installed docs payload + resolved docs path + tested Help content; Help-window screenshot not obtainable, stated there) |
+| A-03 | Help | Opens the bundled user guide | T-0221 | pass | docs/evidence/ui/final/light-windows-help.png, docs/evidence/ui/final/dark-macos-help.png, docs/evidence/ui/T-0273.md |
 | A-04 | User avatar | Shows initials from a local display name used as comment author and signer name | T-0221 | pass | docs/evidence/ui/T-0221.md |
 | A-05 | Undo / redo | Reverts and reapplies every document mutation; disabled when nothing to undo | T-0222 | pass | docs/evidence/ui/T-0222.md |
 | A-06 | Command bar: Edit, Comment, Highlight, Sign, Organize, Export, AI Assistant | Each activates its working tool | T-0242, T-0243, T-0244, T-0245, T-0231, T-0266, T-0253 | pass | docs/evidence/ui/final/light-windows-main.png, docs/evidence/ui/T-0272.md |
@@ -47,18 +47,21 @@ in `docs/evidence/release/T-0262.md`.
 | A-24 | Tool: Comment | Markup set of A-18/A-19 | T-0242 | pass | docs/evidence/ui/T-0242.md |
 | A-25 | Tool: Fill & Sign | Fill form fields; place drawn/typed/image signature | T-0243, T-0245 | pass | docs/evidence/ui/final/light-windows-fill-forms.png, docs/evidence/ui/T-0243.md |
 | A-26 | Tool: Organize Pages | Reorder, rotate, delete, insert, extract, split | T-0231 | pass | docs/evidence/ui/T-0231.md, docs/evidence/ui/T-0271.md |
-| A-27 | Tool: Export PDF + Export card (format dropdown, Export button) | Exports to Word, Excel, PowerPoint, image, text, HTML, RTF; Office opens the result | T-0239, T-0244 | pass | docs/evidence/ui/T-0244.md, docs/evidence/acceptance/T-0260.md (limit: Office open not verifiable, orchestration/blockers/T-0215-word-com.md) |
+| A-27 | Tool: Export PDF + Export card (format dropdown, Export button) | Exports to Word, Excel, PowerPoint, image, text, HTML, RTF; Office opens the result | T-0239, T-0244 | pass | docs/evidence/ui/T-0244.md, docs/evidence/acceptance/T-0260.md, docs/evidence/release/T-0262.md (Word opened the exported .docx, capture docs/evidence/ui/final/word-opens-docx.png; T-0215 limits Word-produced PDFs, not open) |
 | A-28 | Tool: Convert to PDF | Creates PDFs from images, text, Markdown, HTML and Office files | T-0240, T-0266 | pass | docs/evidence/ui/T-0266.md (limit: Office input unavailable, recorded there) |
 | A-29 | Tool: Combine Files | Merges several files into one PDF | T-0231 | pass | docs/evidence/ui/T-0231.md |
 | A-30 | Tool: Protect PDF | Set/change/remove password and permissions; redact; sanitize | T-0238, T-0237, T-0257, T-0263 | pass | docs/evidence/ui/T-0263.md |
 | A-31 | Caption: E-Sign "send, sign, and track" | Request signature by email; tracker updates on import of the signed copy | T-0245 | pass | docs/evidence/ui/T-0245.md |
 | A-32 | Caption: Comment & Review "collaborate" | Shared-folder review and XFDF import/export | T-0246 | pass | docs/evidence/ui/T-0246.md |
-| A-33 | Light and dark, both control styles | Every new panel and dialog is legible in all four combinations | every phase gate | pass | docs/evidence/ui/final/ (48 installed-build captures plus 2 forms captures) |
+| A-33 | Light and dark, both control styles | Every new panel and dialog is legible in all four combinations | every phase gate | pass | docs/evidence/ui/final/ (installed-build captures: main + every tool x four theme/control combinations, forms, print, help and Word-open) |
 | O-01 | Saving | Save, Save As, dirty marker, close prompt, atomic write | T-0222 | pass | docs/evidence/ui/T-0222.md |
-| O-02 | Printing | Prints to a real printer through the Windows dialog | T-0223 | pass | docs/evidence/ui/T-0223.md, docs/evidence/ui/final/light-windows-print.png (Brother MFC-L2750DW selected as default; the Windows print dialog was reached; physical sheet not observed on this host - recorded limit in T-0262) |
+| O-02 | Printing | Prints to a real printer through the Windows dialog | T-0223 | pass | docs/evidence/ui/T-0223.md, docs/evidence/ui/final/light-windows-print.png, docs/evidence/release/T-0262.md (Brother MFC-L2750DW job "PDFXI document", 1 page, spooled and transmitted; physical sheet not inspected by software, stated in the row) |
 | O-03 | Bookmarks | Navigate, add, rename, delete, reorder; persists | T-0255 | pass | docs/evidence/ui/T-0255.md |
 | O-04 | Password-protected PDFs | Prompt, open, honour permissions, save keeps encryption | T-0222, T-0238, T-0263 | pass | docs/evidence/ui/T-0263.md |
 | O-05 | Form filling | Fill, tab order, save with appearances, FDF/XFDF, flatten | T-0243 | pass | docs/evidence/ui/T-0243.md, docs/evidence/ui/final/light-windows-fill-forms.png |
 | O-06 | Redaction | Content is removed, verified by re-extraction and a byte scan | T-0237, T-0257, T-0263 | pass | docs/evidence/ui/T-0263.md |
 | O-07 | No dead controls | Automated test: every enabled control emits a working command | T-0212 | pass | docs/evidence/hardening/T-0212.md |
+
+
+
 
