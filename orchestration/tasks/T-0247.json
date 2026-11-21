@@ -3,7 +3,7 @@
   "lane": "author",
   "title": "Underline, strikeout, ink, shapes and stamps annotations",
   "priority": "P0",
-  "status": "in_progress",
+  "status": "verified",
   "depends_on": [
     "T-0230"
   ],
@@ -13,6 +13,6 @@
     "orchestration/feature-updates/T-0247.toml"
   ],
   "acceptance": "cargo test -p pdfxi-edit; the new markup types render in PDFium and extract through the annotation model on a real fixture",
-  "notes": "Follow-up split from T-0230, which delivered note, highlight, reply, resolve and XFDF. This task adds underline, strikeout, ink, geometric shapes (line, arrow, rectangle, ellipse, polygon) and stamp annotations, each with its own quads or appearance and its own serialization round-trip, proven on a real document through the pdfxi-document session of ADR 0010. The shell half (T-0242 already owns the Comments UI) is extended separately when these land; feature-matrix rows stay `library` until a shell task exposes the new types. ROUND A DELIVERED (checkpoint 2026-11-20): underline, strikeout and ink with indirect /AP appearances, fail-closed validation and a PDFium render proof; evidence in docs/evidence/hardening/T-0247.md, no matrix promotion, claim released. ROUND B PENDING: Line, Square, Circle, Polygon, arrow line endings and Stamp, each with appearance, read-back and PDFium proof; AnnotationSubtype stays unextended until a shell task switches to AnnotationView::kind. Task therefore stays in_progress, not verified.",
+  "notes": "Follow-up split from T-0230, which delivered note, highlight, reply, resolve and XFDF. This task adds underline, strikeout, ink, geometric shapes (line, arrow, rectangle, ellipse, polygon) and stamp annotations, each with its own quads or appearance and its own serialization round-trip, proven on a real document through the pdfxi-document session of ADR 0010. The shell half (T-0242 already owns the Comments UI) is extended separately when these land; feature-matrix rows stay `library` until a shell task exposes the new types. ROUND A DELIVERED (checkpoint 2026-11-20): underline, strikeout and ink with indirect /AP appearances, fail-closed validation and a PDFium render proof; evidence in docs/evidence/hardening/T-0247.md, no matrix promotion, claim released. ROUND B DELIVERED (checkpoint 2026-11-20): Line with an open arrowhead, Square, Circle/ellipse, Polygon and Stamp plus a validated ShapeStyle, each with an indirect /AP appearance, typed errors returned before mutation and a PDFium render proof (line 359, square 8060, circle 628, polygon 780, stamp 1377 changed pixels inside their rects, 0 outside); 392 tests, 0 failed; verified. AnnotationSubtype stays unextended so the app's exhaustive match stays green, the Comments shell exposes the new kinds in a later shell task, and no matrix row is promoted (feature_rows/promoted_rows stay empty).",
   "evidence": "docs/evidence/hardening/T-0247.md"
 }

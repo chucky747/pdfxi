@@ -1,12 +1,11 @@
-# T-0247 - Underline, strikeout and ink annotations (Round A)
+# T-0247 - Markup, shape and stamp annotations (Rounds A and B)
 #
 # Library result, no matrix promotion. The new kinds are exposed through
-# AnnotationView::kind; shapes and stamps remain Round B, and the Comments
-# shell exposes them in a later task.
+# AnnotationView::kind; the Comments shell exposes them in a later task.
 
 task = "T-0247"
 lane = "author"
-status = "in_progress"
+status = "verified"
 evidence = "docs/evidence/hardening/T-0247.md"
 docs = [
     "docs/evidence/hardening/T-0247.md",
@@ -24,6 +23,10 @@ tests = [
     "real_document_annotations::invalid_markup_input_is_rejected_without_mutation",
     "real_document_annotations::new_markup_types_render_inside_their_rect",
     "real_document_annotations::old_annotations_keep_their_view_but_have_no_markup_geometry",
+    "real_document_annotations::line_square_circle_polygon_and_stamp_survive_a_full_rewrite",
+    "real_document_annotations::invalid_shape_and_stamp_input_is_rejected_without_mutation",
+    "real_document_annotations::shapes_and_stamp_render_inside_their_rects",
+    "real_document_annotations::hostile_stamp_text_is_pdf_and_xml_safe",
 ]
 notes = """
 Round A adds Underline, StrikeOut and Ink annotations through the
@@ -43,11 +46,36 @@ the app's exhaustive subtype_label match stays green; the new kinds are exposed
 through AnnotationView::kind and render as Other("<Name>") in the current shell,
 so a later shell task should switch subtype_label/subtype_icon to view.kind.
 PDFium proof on page 1 of the real fixture: 228/456/1153 changed pixels inside
-the three rects and 0 outside. Gates: 383 tests (341 lib, 5 object, 9 annotations,
-27 redaction, 1 text) with fmt, clippy -D warnings and rustdoc -D warnings
-clean. Artifact target/lanes/author7/t0247-out/markup.pdf, 96477 bytes, SHA-256
-CA68282144D097C2B2EF8513DB18B220DAD1B31AC764676A86EBEC387CAC6004 (the /M dates
-carry the run time, so a rerun changes the hash but not the size). Round B
-still owns Line, Square, Circle, Polygon, arrow line endings and Stamp; no
-matrix promotion (feature_rows and promoted_rows stay empty).
+the three rects and 0 outside. Round A gates: 383 tests (341 lib, 5 object, 9
+annotations, 27 redaction, 1 text) with fmt, clippy -D warnings and rustdoc -D
+warnings clean. Artifact target/lanes/author7/t0247-out/markup.pdf, 96477 bytes,
+SHA-256 CA68282144D097C2B2EF8513DB18B220DAD1B31AC764676A86EBEC387CAC6004 (the
+/M dates carry the run time, so a rerun changes the hash but not the size).
+
+Round B adds Line (with an open arrowhead), Square, Circle (ellipse), Polygon
+and Stamp annotations plus a validated ShapeStyle. Line writes /L and
+/LE [/None /OpenArrow] and draws the segment and two arrow legs; Square uses
+/Subtype /Square; Circle draws the ellipse with four cubic Bezier segments;
+Polygon writes /Vertices and closes the path with h. /IC is written only when a
+fill colour is supplied (never for a line). Every shape writes /C, /CA, /F 4,
+/BS, /T, /M, /NM, /Contents and an indirect /AP /N form XObject; the derived
+/Rect (geometry bounds expanded by half the stroke width, plus ARROW_HEAD_LENGTH
+for lines) is normalized and must stay inside the page media box. Stamp writes
+/Name (canonical casing from the 14 standard ISO 32000-1 names), exact
+/Contents, and a vector bordered label using the standard Helvetica font with
+no external image; the drawn label is sanitized to printable ASCII and escaped,
+while /Contents keeps the hostile text intact. Caps: MAX_POLYGON_VERTICES 4096,
+MAX_STAMP_TEXT_CHARS 200, shape width 0.1..=32.0, colour components and opacity
+finite and in 0.0..=1.0. New typed errors: DegenerateLine, EmptyShapeRect,
+DegeneratePolygon, TooManyVertices, InvalidColorComponent, InvalidOpacity,
+InvalidStampName, StampTextTooLong, all returned before mutation.
+AnnotationView gained line, vertices and stamp_name. PDFium proof on page 1 of
+the real fixture: line 359, square 8060, circle 628, polygon 780, stamp 1377
+changed pixels inside their rects and 0 outside. Round B gates: 392 tests (346
+lib, 5 object, 13 annotations, 27 redaction, 1 text, 0 doc) with fmt, clippy -D
+warnings and rustdoc -D warnings clean. Artifact
+target/lanes/author9/t0247-out/shapes.pdf, 97823 bytes, SHA-256
+5688339BC26DF51B5E2E67AADB7C5BF8457413E5AE57C41A7B131390C0E7C11B. Evidence in
+docs/evidence/hardening/T-0247.md. AnnotationSubtype stays unextended and no
+matrix row is promoted (feature_rows and promoted_rows stay empty).
 """

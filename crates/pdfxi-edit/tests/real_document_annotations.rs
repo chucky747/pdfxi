@@ -12,9 +12,11 @@ use std::path::{Path, PathBuf};
 use pdfxi_core::{Dictionary, Document, Object, ObjectId};
 use pdfxi_edit::{
     AnnotationEditError, AnnotationKind, AnnotationState, AnnotationSubtype, MAX_INK_PATHS,
-    MAX_INK_POINTS, MAX_MARKUP_QUADS, Point, Rect, add_highlight, add_ink, add_strikeout,
-    add_text_note, add_underline, delete_annotation, export_xfdf, import_xfdf, list_annotations,
-    reply_to, set_state, update_contents,
+    MAX_INK_POINTS, MAX_MARKUP_QUADS, MAX_POLYGON_VERTICES, MAX_STAMP_TEXT_CHARS, Point, Rect,
+    ShapeStyle, add_circle, add_highlight, add_ink, add_line, add_polygon, add_polygon_styled,
+    add_square, add_square_styled, add_stamp, add_strikeout, add_text_note, add_underline,
+    delete_annotation, export_xfdf, import_xfdf, list_annotations, reply_to, set_state,
+    update_contents,
 };
 use pdfxi_render::pdfium_backend::PdfiumRenderer;
 use pdfxi_render::{CancellationToken, PageIndex, RenderedPage, Renderer};
@@ -130,6 +132,15 @@ fn markup_output_path() -> PathBuf {
         .nth(2)
         .expect("workspace root")
         .join("target/lanes/author7/t0247-out/markup.pdf")
+}
+
+/// Where the T-0247 Round B artifact (shapes and stamp) is written.
+fn shapes_output_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("workspace root")
+        .join("target/lanes/author9/t0247-out/shapes.pdf")
 }
 
 #[test]
@@ -916,6 +927,651 @@ fn new_markup_types_render_inside_their_rect() {
         outside, 0,
         "the new markup must not paint outside its annotation rects"
     );
+}
+
+#[test]
+fn line_square_circle_polygon_and_stamp_survive_a_full_rewrite() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let original_text = document.page_text(0).expect("page 1 text before editing");
+
+    add_text_note(
+        &mut document,
+        0,
+        Point::new(40.0, 700.0),
+        "Existing note",
+        "Reader",
+        "existing-note",
+    )
+    .expect("add an annotation that must be preserved");
+
+    let line_from = Point::new(90.0, 520.0);
+    let line_to = Point::new(240.0, 560.0);
+    let line = add_line(&mut document, 0, line_from, line_to, "Leader", "Alice").expect("add line");
+    let square_rect = rect(90.0, 430.0, 210.0, 480.0);
+    let square_style = ShapeStyle {
+        stroke_color: [0.1, 0.2, 0.6],
+        fill_color: Some([1.0, 0.9, 0.2]),
+        stroke_width: 2.0,
+        opacity: 0.8,
+    };
+    let square = add_square_styled(
+        &mut document,
+        0,
+        square_rect,
+        square_style,
+        "Key box",
+        "Bob",
+    )
+    .expect("add square");
+    let circle_rect = rect(240.0, 430.0, 340.0, 480.0);
+    let circle = add_circle(&mut document, 0, circle_rect, "Ellipse", "Carol").expect("add circle");
+    let vertices = [
+        Point::new(90.0, 350.0),
+        Point::new(160.0, 410.0),
+        Point::new(230.0, 350.0),
+        Point::new(160.0, 330.0),
+    ];
+    let polygon_style = ShapeStyle {
+        fill_color: Some([0.9, 0.9, 0.9]),
+        ..ShapeStyle::default()
+    };
+    let polygon = add_polygon_styled(&mut document, 0, &vertices, polygon_style, "Region", "Dan")
+        .expect("add polygon");
+    let stamp_rect = rect(300.0, 330.0, 450.0, 380.0);
+    let stamp =
+        add_stamp(&mut document, 0, stamp_rect, "approved", "APPROVED", "Eve").expect("add stamp");
+
+    assert_eq!(line.subtype.as_pdf_name(), "Line");
+    assert_eq!(square.subtype.as_pdf_name(), "Square");
+    assert_eq!(circle.subtype.as_pdf_name(), "Circle");
+    assert_eq!(polygon.subtype.as_pdf_name(), "Polygon");
+    assert_eq!(stamp.subtype.as_pdf_name(), "Stamp");
+
+    let views = list_annotations(&document, 0).expect("list annotations");
+    assert_eq!(views.len(), 6, "existing note plus five new annotations");
+
+    let line_view = views
+        .iter()
+        .find(|view| view.id == line.id)
+        .expect("line view");
+    assert_eq!(line_view.kind, Some(AnnotationKind::Line));
+    assert_eq!(line_view.line, Some((line_from, line_to)));
+    assert_eq!(line_view.rect, rect(81.5, 511.5, 248.5, 568.5));
+    assert_eq!(line_view.contents, "Leader");
+    assert_eq!(line_view.author, "Alice");
+    assert_eq!(line_view.stroke_width, Some(1.0));
+
+    let square_view = views
+        .iter()
+        .find(|view| view.id == square.id)
+        .expect("square view");
+    assert_eq!(square_view.kind, Some(AnnotationKind::Rectangle));
+    assert_eq!(square_view.rect, rect(89.0, 429.0, 211.0, 481.0));
+    assert_eq!(square_view.color, Some(vec![0.1, 0.2, 0.6]));
+    assert_eq!(square_view.stroke_width, Some(2.0));
+    assert_eq!(square_view.contents, "Key box");
+
+    let circle_view = views
+        .iter()
+        .find(|view| view.id == circle.id)
+        .expect("circle view");
+    assert_eq!(circle_view.kind, Some(AnnotationKind::Oval));
+    assert_eq!(circle_view.rect, rect(239.5, 429.5, 340.5, 480.5));
+
+    let polygon_view = views
+        .iter()
+        .find(|view| view.id == polygon.id)
+        .expect("polygon view");
+    assert_eq!(polygon_view.kind, Some(AnnotationKind::Polygon));
+    assert_eq!(polygon_view.vertices, vertices.to_vec());
+    assert_eq!(polygon_view.rect, rect(89.5, 329.5, 230.5, 410.5));
+
+    let stamp_view = views
+        .iter()
+        .find(|view| view.id == stamp.id)
+        .expect("stamp view");
+    assert_eq!(stamp_view.kind, Some(AnnotationKind::Stamp));
+    assert_eq!(stamp_view.stamp_name.as_deref(), Some("Approved"));
+    assert_eq!(stamp_view.rect, stamp_rect);
+    assert_eq!(stamp_view.contents, "APPROVED");
+    assert_eq!(stamp_view.author, "Eve");
+
+    assert_eq!(
+        views
+            .iter()
+            .find(|view| view.id == "existing-note")
+            .expect("existing note view")
+            .kind,
+        Some(AnnotationKind::Note)
+    );
+
+    let saved = document.save().expect("full rewrite");
+    let reopened = Document::from_bytes(saved.clone()).expect("saved document parses");
+    assert_eq!(
+        reopened.page_text(0).expect("page 1 text after editing"),
+        original_text,
+        "annotations must not change page text"
+    );
+    assert_eq!(annotation_ids(&reopened, 0).len(), 6);
+
+    let (_, note_dictionary) = annotation_by_id(&reopened, 0, "existing-note");
+    assert_eq!(
+        string_field(&note_dictionary, "Contents").as_deref(),
+        Some("Existing note"),
+        "the pre-existing annotation must be preserved"
+    );
+
+    let (_, line_dictionary) = annotation_by_id(&reopened, 0, &line.id);
+    assert_eq!(name_field(&line_dictionary, "Subtype"), Some("Line"));
+    assert_eq!(
+        numbers(line_dictionary.get("L")),
+        vec![90.0, 520.0, 240.0, 560.0]
+    );
+    let line_endings: Vec<&str> = line_dictionary
+        .get("LE")
+        .and_then(Object::as_array)
+        .expect("line endings")
+        .iter()
+        .map(|item| item.as_name().expect("line ending name"))
+        .collect();
+    assert_eq!(line_endings, vec!["None", "OpenArrow"]);
+    assert_eq!(
+        numbers(line_dictionary.get("Rect")),
+        vec![81.5, 511.5, 248.5, 568.5]
+    );
+    assert_eq!(numbers(line_dictionary.get("C")), vec![0.0, 0.0, 0.0]);
+    assert_eq!(
+        line_dictionary
+            .get("BS")
+            .and_then(Object::as_dictionary)
+            .and_then(|border| border.get("W"))
+            .and_then(Object::as_f64),
+        Some(1.0)
+    );
+    let (line_appearance, line_content) = appearance(&reopened, &line_dictionary);
+    assert_eq!(name_field(&line_appearance, "Type"), Some("XObject"));
+    assert_eq!(name_field(&line_appearance, "Subtype"), Some("Form"));
+    assert_eq!(
+        numbers(line_appearance.get("BBox")),
+        vec![0.0, 0.0, 167.0, 57.0]
+    );
+    let line_drawing = String::from_utf8_lossy(&line_content);
+    assert_eq!(
+        line_drawing.matches(" l S").count(),
+        3,
+        "the line plus two open-arrow legs: {line_drawing:?}"
+    );
+    assert!(line_drawing.contains("1 J 1 j"));
+
+    let (_, square_dictionary) = annotation_by_id(&reopened, 0, &square.id);
+    assert_eq!(name_field(&square_dictionary, "Subtype"), Some("Square"));
+    assert_eq!(
+        numbers(square_dictionary.get("Rect")),
+        vec![89.0, 429.0, 211.0, 481.0]
+    );
+    assert_eq!(numbers(square_dictionary.get("IC")), vec![1.0, 0.9, 0.2]);
+    assert_eq!(numbers(square_dictionary.get("C")), vec![0.1, 0.2, 0.6]);
+    assert_eq!(number_field(&square_dictionary, "CA"), Some(0.8));
+    let (square_appearance, square_content) = appearance(&reopened, &square_dictionary);
+    assert_eq!(
+        numbers(square_appearance.get("BBox")),
+        vec![0.0, 0.0, 122.0, 52.0]
+    );
+    let square_drawing = String::from_utf8_lossy(&square_content);
+    assert!(
+        square_drawing.contains(" re B"),
+        "a filled square strokes and fills: {square_drawing:?}"
+    );
+    assert!(square_drawing.contains("1.000 0.900 0.200 rg"));
+    assert!(square_drawing.contains("0.100 0.200 0.600 RG"));
+    assert!(square_drawing.contains("2.000 w"));
+
+    let (_, circle_dictionary) = annotation_by_id(&reopened, 0, &circle.id);
+    assert_eq!(name_field(&circle_dictionary, "Subtype"), Some("Circle"));
+    assert_eq!(
+        numbers(circle_dictionary.get("Rect")),
+        vec![239.5, 429.5, 340.5, 480.5]
+    );
+    assert!(
+        !circle_dictionary.contains_key("IC"),
+        "an unfilled ellipse must not write /IC"
+    );
+    let (circle_appearance, circle_content) = appearance(&reopened, &circle_dictionary);
+    assert_eq!(
+        numbers(circle_appearance.get("BBox")),
+        vec![0.0, 0.0, 101.0, 51.0]
+    );
+    let circle_drawing = String::from_utf8_lossy(&circle_content);
+    assert_eq!(
+        circle_drawing.matches(" c\n").count(),
+        4,
+        "four Bezier segments make the ellipse: {circle_drawing:?}"
+    );
+
+    let (_, polygon_dictionary) = annotation_by_id(&reopened, 0, &polygon.id);
+    assert_eq!(name_field(&polygon_dictionary, "Subtype"), Some("Polygon"));
+    assert_eq!(
+        numbers(polygon_dictionary.get("Vertices")),
+        vec![90.0, 350.0, 160.0, 410.0, 230.0, 350.0, 160.0, 330.0]
+    );
+    assert_eq!(numbers(polygon_dictionary.get("IC")), vec![0.9, 0.9, 0.9]);
+    let (_, polygon_content) = appearance(&reopened, &polygon_dictionary);
+    let polygon_drawing = String::from_utf8_lossy(&polygon_content);
+    assert_eq!(polygon_drawing.matches(" l\n").count(), 3);
+    assert!(polygon_drawing.contains("h B"));
+
+    let (_, stamp_dictionary) = annotation_by_id(&reopened, 0, &stamp.id);
+    assert_eq!(name_field(&stamp_dictionary, "Type"), Some("Annot"));
+    assert_eq!(name_field(&stamp_dictionary, "Subtype"), Some("Stamp"));
+    assert_eq!(name_field(&stamp_dictionary, "Name"), Some("Approved"));
+    assert_eq!(
+        numbers(stamp_dictionary.get("Rect")),
+        vec![300.0, 330.0, 450.0, 380.0]
+    );
+    assert_eq!(
+        string_field(&stamp_dictionary, "Contents").as_deref(),
+        Some("APPROVED")
+    );
+    assert_eq!(string_field(&stamp_dictionary, "T").as_deref(), Some("Eve"));
+    let (stamp_appearance, stamp_content) = appearance(&reopened, &stamp_dictionary);
+    assert_eq!(
+        numbers(stamp_appearance.get("BBox")),
+        vec![0.0, 0.0, 150.0, 50.0]
+    );
+    let font = stamp_appearance
+        .get("Resources")
+        .and_then(Object::as_dictionary)
+        .and_then(|resources| resources.get("Font"))
+        .and_then(Object::as_dictionary)
+        .and_then(|fonts| fonts.get("F1"))
+        .and_then(Object::as_dictionary)
+        .expect("stamp font resource");
+    assert_eq!(name_field(font, "BaseFont"), Some("Helvetica"));
+    let stamp_drawing = String::from_utf8_lossy(&stamp_content);
+    assert!(stamp_drawing.contains(" re S"), "bordered label");
+    assert!(stamp_drawing.contains("BT"));
+    assert!(stamp_drawing.contains("/F1"));
+    assert!(stamp_drawing.contains("(APPROVED) Tj"));
+
+    let output = shapes_output_path();
+    std::fs::create_dir_all(output.parent().expect("output directory")).expect("create output dir");
+    std::fs::write(&output, &saved).expect("write shapes PDF");
+    assert!(output.is_file());
+}
+
+#[test]
+fn invalid_shape_and_stamp_input_is_rejected_without_mutation() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let annotations_before = annotation_ids(&document, 0);
+    let next_object_before = document.allocate_object_number().expect("object number");
+
+    assert!(matches!(
+        add_square(
+            &mut document,
+            0,
+            Rect::saturating(10.0, 10.0, 10.0, 20.0),
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::EmptyShapeRect)
+    ));
+    assert!(matches!(
+        add_circle(
+            &mut document,
+            0,
+            rect(700.0, 700.0, 760.0, 760.0),
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::CoordinateOutsidePage { page: 0, .. })
+    ));
+    assert!(matches!(
+        add_line(
+            &mut document,
+            0,
+            Point::new(10.0, 10.0),
+            Point::new(10.0, 10.0),
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::DegenerateLine)
+    ));
+    assert!(matches!(
+        add_line(
+            &mut document,
+            0,
+            Point::new(f32::NAN, 10.0),
+            Point::new(20.0, 20.0),
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::Geometry(_))
+    ));
+    assert!(matches!(
+        add_line(
+            &mut document,
+            0,
+            Point::new(-10.0, 10.0),
+            Point::new(20.0, 20.0),
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::CoordinateOutsidePage { page: 0, .. })
+    ));
+
+    assert!(matches!(
+        add_polygon(
+            &mut document,
+            0,
+            &[Point::new(10.0, 10.0), Point::new(20.0, 20.0)],
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::DegeneratePolygon)
+    ));
+    assert!(matches!(
+        add_polygon(
+            &mut document,
+            0,
+            &[
+                Point::new(100.0, 100.0),
+                Point::new(120.0, 120.0),
+                Point::new(140.0, 140.0)
+            ],
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::DegeneratePolygon)
+    ));
+    let too_many_vertices = vec![Point::new(10.0, 10.0); MAX_POLYGON_VERTICES + 1];
+    assert!(matches!(
+        add_polygon(
+            &mut document,
+            0,
+            &too_many_vertices,
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::TooManyVertices {
+            count,
+            limit: MAX_POLYGON_VERTICES
+        }) if count == MAX_POLYGON_VERTICES + 1
+    ));
+    assert!(matches!(
+        add_polygon(
+            &mut document,
+            0,
+            &[
+                Point::new(5000.0, 10.0),
+                Point::new(20.0, 20.0),
+                Point::new(30.0, 10.0)
+            ],
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::CoordinateOutsidePage { page: 0, .. })
+    ));
+
+    let shape_rect = rect(100.0, 100.0, 200.0, 160.0);
+    for style in [
+        ShapeStyle {
+            stroke_color: [0.0, f64::NAN, 0.0],
+            ..ShapeStyle::default()
+        },
+        ShapeStyle {
+            fill_color: Some([0.0, 0.0, 2.0]),
+            ..ShapeStyle::default()
+        },
+    ] {
+        assert!(matches!(
+            add_square_styled(&mut document, 0, shape_rect, style, "x", "Alice"),
+            Err(AnnotationEditError::InvalidColorComponent { .. })
+        ));
+    }
+    assert!(matches!(
+        add_square_styled(
+            &mut document,
+            0,
+            shape_rect,
+            ShapeStyle {
+                opacity: 1.5,
+                ..ShapeStyle::default()
+            },
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::InvalidOpacity { .. })
+    ));
+    for width in [0.0, f32::NAN, 100.0] {
+        assert!(matches!(
+            add_square_styled(
+                &mut document,
+                0,
+                shape_rect,
+                ShapeStyle {
+                    stroke_width: width,
+                    ..ShapeStyle::default()
+                },
+                "x",
+                "Alice"
+            ),
+            Err(AnnotationEditError::InvalidStrokeWidth { .. })
+        ));
+    }
+
+    let stamp_rect = rect(300.0, 300.0, 450.0, 350.0);
+    assert!(matches!(
+        add_stamp(&mut document, 0, stamp_rect, "NotAStamp", "x", "Alice"),
+        Err(AnnotationEditError::InvalidStampName(name)) if name == "NotAStamp"
+    ));
+    let too_long = "x".repeat(MAX_STAMP_TEXT_CHARS + 1);
+    assert!(matches!(
+        add_stamp(&mut document, 0, stamp_rect, "Approved", &too_long, "Alice"),
+        Err(AnnotationEditError::StampTextTooLong {
+            chars,
+            limit: MAX_STAMP_TEXT_CHARS
+        }) if chars == MAX_STAMP_TEXT_CHARS + 1
+    ));
+    assert!(matches!(
+        add_stamp(
+            &mut document,
+            0,
+            rect(700.0, 700.0, 800.0, 800.0),
+            "Approved",
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::CoordinateOutsidePage { page: 0, .. })
+    ));
+    assert!(matches!(
+        add_stamp(
+            &mut document,
+            0,
+            Rect::saturating(10.0, 10.0, 10.0, 20.0),
+            "Approved",
+            "x",
+            "Alice"
+        ),
+        Err(AnnotationEditError::EmptyShapeRect)
+    ));
+
+    assert_eq!(
+        annotation_ids(&document, 0),
+        annotations_before,
+        "a rejected shape or stamp must not change the /Annots array"
+    );
+    assert_eq!(
+        document.allocate_object_number().expect("object number"),
+        next_object_before,
+        "a rejected shape or stamp must not consume an object number"
+    );
+    assert!(
+        list_annotations(&document, 0)
+            .expect("list annotations")
+            .is_empty()
+    );
+}
+
+#[test]
+fn shapes_and_stamp_render_inside_their_rects() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let page = document.page(1).expect("page 1");
+    assert_eq!(
+        (page.media_box.width(), page.media_box.height()),
+        (f64::from(PAGE_WIDTH), f64::from(PAGE_HEIGHT)),
+        "the render helpers assume page 1 is US Letter"
+    );
+
+    let line = add_line(
+        &mut document,
+        1,
+        Point::new(72.0, 700.0),
+        Point::new(220.0, 740.0),
+        "Rendered line",
+        "Alice",
+    )
+    .expect("add line");
+    let square = add_square_styled(
+        &mut document,
+        1,
+        rect(72.0, 600.0, 200.0, 660.0),
+        ShapeStyle {
+            fill_color: Some([0.95, 0.85, 0.2]),
+            stroke_width: 2.0,
+            ..ShapeStyle::default()
+        },
+        "Rendered square",
+        "Bob",
+    )
+    .expect("add square");
+    let circle = add_circle(
+        &mut document,
+        1,
+        rect(240.0, 600.0, 360.0, 660.0),
+        "Rendered circle",
+        "Carol",
+    )
+    .expect("add circle");
+    let polygon = add_polygon(
+        &mut document,
+        1,
+        &[
+            Point::new(72.0, 500.0),
+            Point::new(150.0, 560.0),
+            Point::new(230.0, 500.0),
+        ],
+        "Rendered polygon",
+        "Dan",
+    )
+    .expect("add polygon");
+    let stamp = add_stamp(
+        &mut document,
+        1,
+        rect(300.0, 500.0, 460.0, 560.0),
+        "Final",
+        "FINAL",
+        "Eve",
+    )
+    .expect("add stamp");
+
+    let views = list_annotations(&document, 1).expect("list annotations");
+    let rect_of = |id: &str| {
+        views
+            .iter()
+            .find(|view| view.id == id)
+            .expect("annotation view")
+            .rect
+    };
+    let rects = [
+        rect_of(&line.id),
+        rect_of(&square.id),
+        rect_of(&circle.id),
+        rect_of(&polygon.id),
+        rect_of(&stamp.id),
+    ];
+
+    let saved = document.save().expect("save edited page");
+    let before = render_page(&renderer_for(&fixture()), 1);
+    let after = render_page(&renderer_for(&saved), 1);
+    assert_eq!(
+        (before.width(), before.height()),
+        (after.width(), after.height()),
+        "the render must keep the page size"
+    );
+
+    for (name, rect, minimum) in [
+        ("line", rects[0], 40usize),
+        ("square", rects[1], 200),
+        ("circle", rects[2], 200),
+        ("polygon", rects[3], 200),
+        ("stamp", rects[4], 200),
+    ] {
+        let changed = changed_pixels_inside(&before, &after, rect, 2);
+        assert!(
+            changed > minimum,
+            "{name} must paint inside its annotation rect, changed {changed} pixels"
+        );
+        println!("{name} rect {rect:?} changed {changed} pixels");
+    }
+    let outside = changed_pixels_outside(&before, &after, &rects, 2);
+    assert_eq!(
+        outside, 0,
+        "shapes and stamps must not paint outside their annotation rects"
+    );
+}
+
+#[test]
+fn hostile_stamp_text_is_pdf_and_xml_safe() {
+    let hostile = "Evil ) Tj ET /Name /Approved ( & < > \" ' \\ end";
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    add_stamp(
+        &mut document,
+        0,
+        rect(300.0, 600.0, 480.0, 660.0),
+        "Confidential",
+        hostile,
+        "Mallory",
+    )
+    .expect("add stamp with hostile text");
+
+    let views = list_annotations(&document, 0).expect("list annotations");
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].kind, Some(AnnotationKind::Stamp));
+    assert_eq!(views[0].stamp_name.as_deref(), Some("Confidential"));
+    assert_eq!(views[0].contents, hostile);
+
+    let saved = document.save().expect("full rewrite");
+    let reopened = Document::from_bytes(saved).expect("saved document parses");
+    let (_, stamp_dictionary) = annotation_by_id(&reopened, 0, &views[0].id);
+    assert_eq!(
+        string_field(&stamp_dictionary, "Contents").as_deref(),
+        Some(hostile),
+        "the exact label survives the PDF text string"
+    );
+    let (_, content) = appearance(&reopened, &stamp_dictionary);
+    let drawing = String::from_utf8(content).expect("the appearance stream is ASCII");
+    assert!(
+        drawing.contains("Evil \\) Tj ET"),
+        "the injected close parenthesis is escaped: {drawing:?}"
+    );
+    assert!(
+        drawing.contains("\\( & < >"),
+        "the injected open parenthesis is escaped: {drawing:?}"
+    );
+    assert_eq!(
+        drawing.matches("Tj\nET").count(),
+        1,
+        "only the real text operator ends the literal: {drawing:?}"
+    );
+
+    let exported = export_xfdf(&reopened).expect("export XFDF");
+    assert!(exported.contains("subtype=\"Stamp\""));
+    for entity in ["&amp;", "&lt;", "&gt;", "&quot;", "&apos;"] {
+        assert!(
+            exported.contains(entity),
+            "XFDF must escape hostile text as {entity}: {exported:?}"
+        );
+    }
 }
 
 #[test]

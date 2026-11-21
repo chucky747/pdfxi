@@ -23,15 +23,18 @@
 //!
 //! # What a written annotation contains
 //!
-//! Both kinds are written with `/Type /Annot`, their `/Subtype`, a normalized
+//! Every kind is written with `/Type /Annot`, its `/Subtype`, a normalized
 //! `/Rect`, `/Contents`, `/T` (author), `/NM` (a unique identifier), `/M` (the
 //! PDF date), a `/C` colour array, `/CA` opacity, `/F 4` (print) and
 //! `/AP << /N <form XObject> >>`. The form carries `/BBox`, `/Resources` and a
 //! content stream: a vector note icon for `/Text`, a translucent fill for
 //! `/Highlight`, a stroked line under or through each quad for `/Underline` and
-//! `/StrikeOut`, and stroked point paths for `/Ink`. Text markup annotations
-//! also carry `/QuadPoints`, and an ink annotation carries `/InkList`, as
-//! required by ISO 32000-1.
+//! `/StrikeOut`, stroked point paths for `/Ink`, a stroked line with an open
+//! arrowhead for `/Line`, a stroked or filled rectangle for `/Square`, a Bezier
+//! ellipse for `/Circle`, a closed path for `/Polygon`, and a bordered,
+//! lettered label for `/Stamp`. Text markup annotations also carry
+//! `/QuadPoints`, an ink annotation carries `/InkList`, a line carries `/L` and
+//! `/LE`, and a polygon carries `/Vertices`, as required by ISO 32000-1.
 //!
 //! [`DocumentSession`]: https://docs.rs/pdfxi-document
 
@@ -44,6 +47,7 @@ use thiserror::Error;
 
 use crate::annotation::AnnotationKind;
 use crate::geometry::{GeometryError, Point, Rect};
+use crate::header_footer::escape_literal;
 
 /// Side length of the sticky-note icon, in default user space units.
 pub const NOTE_ICON_SIZE: f32 = 24.0;
@@ -71,6 +75,78 @@ pub const MARKUP_STROKE_COLOR: [f64; 3] = [0.0, 0.0, 0.0];
 
 /// Stroke width of underline and strikeout markup, in default user space units.
 pub const MARKUP_STROKE_WIDTH: f32 = 1.0;
+
+/// Maximum number of vertices accepted by one polygon annotation.
+pub const MAX_POLYGON_VERTICES: usize = 4096;
+
+/// Maximum number of characters accepted by one stamp label.
+///
+/// The cap bounds the appearance content stream and the `/Contents` string so a
+/// hostile caller cannot make one annotation allocate without limit.
+pub const MAX_STAMP_TEXT_CHARS: usize = 200;
+
+/// Length of one open-arrow leg drawn for a `/Line` annotation, in default user
+/// space units.
+pub const ARROW_HEAD_LENGTH: f32 = 8.0;
+
+/// Colour of the stamp border and label as an RGB triple in `0.0..=1.0`.
+pub const STAMP_COLOR: [f64; 3] = [0.75, 0.1, 0.1];
+
+/// Padding between a stamp's border and its label, in default user space units.
+const STAMP_PADDING: f64 = 6.0;
+
+/// The standard `/Name` values accepted for a stamp annotation, in the casing
+/// written to the document.
+///
+/// The list is the standard stamp set from ISO 32000-1 Table 181. A caller may
+/// pass any casing; the canonical spelling is written to `/Name`.
+pub const STAMP_NAMES: [&str; 14] = [
+    "Approved",
+    "Experimental",
+    "NotApproved",
+    "AsIs",
+    "Expired",
+    "NotForPublicRelease",
+    "Confidential",
+    "Final",
+    "Sold",
+    "Departmental",
+    "ForComment",
+    "TopSecret",
+    "Draft",
+    "ForPublicRelease",
+];
+
+/// Stroke, fill and opacity of a geometric shape annotation.
+///
+/// The style is plain data. [`add_line_styled`], [`add_square_styled`],
+/// [`add_circle_styled`] and [`add_polygon_styled`] validate every component
+/// before allocating an object or staging a change, so a non-finite or
+/// out-of-range value returns [`AnnotationEditError::InvalidColorComponent`] or
+/// [`AnnotationEditError::InvalidOpacity`] and leaves the document unchanged.
+/// [`ShapeStyle::default`] is an opaque black outline with no interior fill.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeStyle {
+    /// Stroke colour written to `/C`, as three components in `0.0..=1.0`.
+    pub stroke_color: [f64; 3],
+    /// Interior colour written to `/IC` when [`Some`], or no interior fill.
+    pub fill_color: Option<[f64; 3]>,
+    /// Border width written to `/BS /W`, in default user space points.
+    pub stroke_width: f32,
+    /// Opacity written to `/CA`, in `0.0..=1.0`.
+    pub opacity: f64,
+}
+
+impl Default for ShapeStyle {
+    fn default() -> Self {
+        Self {
+            stroke_color: MARKUP_STROKE_COLOR,
+            fill_color: None,
+            stroke_width: MARKUP_STROKE_WIDTH,
+            opacity: 1.0,
+        }
+    }
+}
 
 /// Fill colour of the note icon as an RGB triple in `0.0..=1.0`.
 const NOTE_COLOR: [f64; 3] = [1.0, 0.82, 0.1];
@@ -213,6 +289,12 @@ pub struct AnnotationView {
     pub color: Option<Vec<f64>>,
     /// The `/BS /W` stroke width in default user space units, when present.
     pub stroke_width: Option<f32>,
+    /// The `/L` endpoints of a `/Line` annotation, as `(from, to)`.
+    pub line: Option<(Point, Point)>,
+    /// The `/Vertices` of a `/Polygon` annotation, in storage order.
+    pub vertices: Vec<Point>,
+    /// The `/Name` of a `/Stamp` annotation, when present.
+    pub stamp_name: Option<String>,
 }
 
 /// Typed errors returned by the annotation library.
@@ -293,6 +375,46 @@ pub enum AnnotationEditError {
     InvalidStrokeWidth {
         /// The rejected width.
         value: f32,
+    },
+    /// A line annotation was given identical endpoints.
+    #[error("a line annotation requires two distinct endpoints")]
+    DegenerateLine,
+    /// A rectangle or ellipse annotation had no area.
+    #[error("a shape annotation requires a rectangle with positive width and height")]
+    EmptyShapeRect,
+    /// A polygon annotation was too small or enclosed no area.
+    #[error("a polygon annotation requires at least three vertices and positive-area bounds")]
+    DegeneratePolygon,
+    /// A polygon annotation exceeded the documented vertex cap.
+    #[error("polygon annotation has {count} vertices; the maximum is {limit}")]
+    TooManyVertices {
+        /// Number of vertices supplied.
+        count: usize,
+        /// The documented cap, [`MAX_POLYGON_VERTICES`].
+        limit: usize,
+    },
+    /// A shape colour component was non-finite or outside `0.0..=1.0`.
+    #[error("shape colour components must be finite and in 0.0..=1.0, got {value}")]
+    InvalidColorComponent {
+        /// The rejected component.
+        value: f64,
+    },
+    /// A shape opacity was non-finite or outside `0.0..=1.0`.
+    #[error("shape opacity must be finite and in 0.0..=1.0, got {value}")]
+    InvalidOpacity {
+        /// The rejected opacity.
+        value: f64,
+    },
+    /// A stamp name was not one of the standard `/Name` values.
+    #[error("'{0}' is not a standard stamp name")]
+    InvalidStampName(String),
+    /// A stamp label exceeded the documented character cap.
+    #[error("stamp text has {chars} characters; the maximum is {limit}")]
+    StampTextTooLong {
+        /// Character count supplied.
+        chars: usize,
+        /// The documented cap, [`MAX_STAMP_TEXT_CHARS`].
+        limit: usize,
     },
     /// An input coordinate lay outside the page media box.
     #[error("coordinate ({x}, {y}) lies outside the media box of page {page}")]
@@ -482,6 +604,288 @@ pub fn add_ink(
         None,
         None,
     )
+}
+
+/// Add a straight-line annotation from `from` to `to`.
+///
+/// The annotation uses `/Subtype /Line`, `/L [x1 y1 x2 y2]` and
+/// `/LE [/None /OpenArrow]`; its appearance strokes the segment and an open
+/// arrowhead at `to`. The annotation `/Rect` is the endpoint bounds expanded by
+/// half the stroke width plus [`ARROW_HEAD_LENGTH`], so the arrowhead is inside
+/// the appearance bounding box. The `/NM` identifier is derived from the
+/// allocated annotation object number.
+///
+/// Equivalent to [`add_line_styled`] with [`ShapeStyle::default`].
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::DegenerateLine`] for identical endpoints,
+/// [`AnnotationEditError::Geometry`] for a non-finite endpoint,
+/// [`AnnotationEditError::CoordinateOutsidePage`] when the endpoint or the
+/// derived `/Rect` leaves the page media box, a missing-page error, or a core
+/// error. A rejected input leaves the document unchanged.
+pub fn add_line(
+    document: &mut Document,
+    page_index: usize,
+    from: Point,
+    to: Point,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_line_styled(
+        document,
+        page_index,
+        from,
+        to,
+        ShapeStyle::default(),
+        contents,
+        author,
+    )
+}
+
+/// Add a straight-line annotation with an explicit [`ShapeStyle`].
+///
+/// The fill component is ignored: a line has no interior. See [`add_line`] for
+/// the written dictionary and appearance.
+///
+/// # Errors
+///
+/// Returns every error from [`add_line`], plus
+/// [`AnnotationEditError::InvalidColorComponent`],
+/// [`AnnotationEditError::InvalidOpacity`] or
+/// [`AnnotationEditError::InvalidStrokeWidth`] for a style component outside its
+/// accepted range.
+pub fn add_line_styled(
+    document: &mut Document,
+    page_index: usize,
+    from: Point,
+    to: Point,
+    style: ShapeStyle,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_shape(
+        document,
+        page_index,
+        ShapeGeometry::Line { from, to },
+        style,
+        contents,
+        author,
+        None,
+        None,
+    )
+}
+
+/// Add a rectangle annotation covering `rect`.
+///
+/// The annotation uses `/Subtype /Square`; its appearance strokes the rectangle
+/// (and fills it with `/IC` when the style has a fill colour). The annotation
+/// `/Rect` is `rect` expanded by half the stroke width so the stroked outline is
+/// inside the appearance bounding box. Equivalent to [`add_square_styled`] with
+/// [`ShapeStyle::default`].
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::EmptyShapeRect`] for a zero-width or
+/// zero-height rectangle, [`AnnotationEditError::CoordinateOutsidePage`] when
+/// the rectangle or the derived `/Rect` leaves the page media box, a
+/// missing-page error, or a core error. A rejected input leaves the document
+/// unchanged.
+pub fn add_square(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_square_styled(
+        document,
+        page_index,
+        rect,
+        ShapeStyle::default(),
+        contents,
+        author,
+    )
+}
+
+/// Add a rectangle annotation with an explicit [`ShapeStyle`].
+///
+/// See [`add_square`] for the written dictionary and appearance.
+///
+/// # Errors
+///
+/// Returns every error from [`add_square`], plus the style errors documented on
+/// [`add_line_styled`].
+pub fn add_square_styled(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    style: ShapeStyle,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_shape(
+        document,
+        page_index,
+        ShapeGeometry::Rect {
+            rect,
+            outline: Outline::Square,
+        },
+        style,
+        contents,
+        author,
+        None,
+        None,
+    )
+}
+
+/// Add an ellipse annotation inscribed in `rect`.
+///
+/// The annotation uses `/Subtype /Circle`; its appearance draws the ellipse with
+/// four Bezier curves (and fills it with `/IC` when the style has a fill colour).
+/// The annotation `/Rect` is `rect` expanded by half the stroke width.
+/// Equivalent to [`add_circle_styled`] with [`ShapeStyle::default`].
+///
+/// # Errors
+///
+/// Returns the same typed errors as [`add_square`].
+pub fn add_circle(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_circle_styled(
+        document,
+        page_index,
+        rect,
+        ShapeStyle::default(),
+        contents,
+        author,
+    )
+}
+
+/// Add an ellipse annotation with an explicit [`ShapeStyle`].
+///
+/// See [`add_circle`] for the written dictionary and appearance.
+///
+/// # Errors
+///
+/// Returns every error from [`add_circle`], plus the style errors documented on
+/// [`add_line_styled`].
+pub fn add_circle_styled(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    style: ShapeStyle,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_shape(
+        document,
+        page_index,
+        ShapeGeometry::Rect {
+            rect,
+            outline: Outline::Circle,
+        },
+        style,
+        contents,
+        author,
+        None,
+        None,
+    )
+}
+
+/// Add a closed polygon annotation through `vertices`.
+///
+/// The annotation uses `/Subtype /Polygon` and `/Vertices [x1 y1 ...]`; its
+/// appearance closes and strokes the path (and fills it with `/IC` when the
+/// style has a fill colour). The annotation `/Rect` is the vertex bounds
+/// expanded by half the stroke width. At least three vertices are required, and
+/// the polygon must enclose a non-zero area.
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::TooManyVertices`] above
+/// [`MAX_POLYGON_VERTICES`], [`AnnotationEditError::DegeneratePolygon`] for
+/// fewer than three vertices or zero-area geometry,
+/// [`AnnotationEditError::Geometry`] for a non-finite vertex,
+/// [`AnnotationEditError::CoordinateOutsidePage`] when a vertex or the derived
+/// `/Rect` leaves the page media box, a missing-page error, or a core error. A
+/// rejected input leaves the document unchanged.
+pub fn add_polygon(
+    document: &mut Document,
+    page_index: usize,
+    vertices: &[Point],
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_polygon_styled(
+        document,
+        page_index,
+        vertices,
+        ShapeStyle::default(),
+        contents,
+        author,
+    )
+}
+
+/// Add a closed polygon annotation with an explicit [`ShapeStyle`].
+///
+/// See [`add_polygon`] for the written dictionary and appearance.
+///
+/// # Errors
+///
+/// Returns every error from [`add_polygon`], plus the style errors documented on
+/// [`add_line_styled`].
+pub fn add_polygon_styled(
+    document: &mut Document,
+    page_index: usize,
+    vertices: &[Point],
+    style: ShapeStyle,
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_shape(
+        document,
+        page_index,
+        ShapeGeometry::Polygon(vertices.to_vec()),
+        style,
+        contents,
+        author,
+        None,
+        None,
+    )
+}
+
+/// Add a stamp annotation covering `rect`.
+///
+/// `name` must be one of [`STAMP_NAMES`] in any casing; the canonical spelling
+/// is written to `/Name` (for example `/Approved`). `text` becomes the label
+/// drawn inside a bordered vector appearance and is also stored in `/Contents`.
+/// No external image is used and non-ASCII characters are replaced with `?` in
+/// the appearance, while `/Contents` keeps the exact text. The annotation
+/// `/Rect` is `rect` unchanged.
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::InvalidStampName`] for an unknown name,
+/// [`AnnotationEditError::StampTextTooLong`] above
+/// [`MAX_STAMP_TEXT_CHARS`] characters,
+/// [`AnnotationEditError::EmptyShapeRect`] for a zero-area rectangle,
+/// [`AnnotationEditError::CoordinateOutsidePage`] when the rectangle leaves the
+/// page media box, a missing-page error, or a core error. A rejected input
+/// leaves the document unchanged.
+pub fn add_stamp(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    name: &str,
+    text: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_stamp_with(document, page_index, rect, name, text, author, None, None)
 }
 
 /// List the annotations on `page_index`, resolving each referenced dictionary.
@@ -1218,6 +1622,631 @@ fn add_ink_with(
     })
 }
 
+/// Geometry of one geometric shape annotation.
+enum ShapeGeometry {
+    /// A straight line with an open arrowhead at `to`.
+    Line {
+        /// Start point in default user space.
+        from: Point,
+        /// End point in default user space; the arrowhead is drawn here.
+        to: Point,
+    },
+    /// A rectangle or its inscribed ellipse.
+    Rect {
+        /// Bounds of the path in default user space.
+        rect: Rect,
+        /// Which path the appearance draws.
+        outline: Outline,
+    },
+    /// A closed polygon in storage order.
+    Polygon(Vec<Point>),
+}
+
+/// The two `/Rect`-shaped geometric outlines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outline {
+    /// `/Subtype /Square`.
+    Square,
+    /// `/Subtype /Circle`.
+    Circle,
+}
+
+impl ShapeGeometry {
+    fn subtype_name(&self) -> &'static str {
+        match self {
+            Self::Line { .. } => "Line",
+            Self::Rect {
+                outline: Outline::Square,
+                ..
+            } => "Square",
+            Self::Rect {
+                outline: Outline::Circle,
+                ..
+            } => "Circle",
+            Self::Polygon(_) => "Polygon",
+        }
+    }
+
+    fn id_prefix(&self) -> &'static str {
+        match self {
+            Self::Line { .. } => "pdfxi-line-",
+            Self::Rect {
+                outline: Outline::Square,
+                ..
+            } => "pdfxi-square-",
+            Self::Rect {
+                outline: Outline::Circle,
+                ..
+            } => "pdfxi-circle-",
+            Self::Polygon(_) => "pdfxi-polygon-",
+        }
+    }
+}
+
+/// Stage one geometric shape annotation after validating its geometry and style.
+#[allow(clippy::too_many_arguments)]
+fn add_shape(
+    document: &mut Document,
+    page_index: usize,
+    geometry: ShapeGeometry,
+    style: ShapeStyle,
+    contents: &str,
+    author: &str,
+    date: Option<&str>,
+    id: Option<&str>,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    validate_shape_style(&style)?;
+    let (rect, points) = shape_bounds(&geometry, style.stroke_width)?;
+
+    let current = effective_document(document)?;
+    let page_info = current.page(page_index)?;
+    ensure_points_on_page(page_index, page_info.media_box, points)?;
+    ensure_rect_on_page(page_index, page_info.media_box, rect)?;
+    let mut page = read_page_state(&current, page_index)?;
+    let ids = allocate_ids(document, 2)?;
+    let appearance_id = ids[0];
+    let annotation_id = ids[1];
+    let generated = format!("{}{}", geometry.id_prefix(), annotation_id.number);
+    let id = match id {
+        Some(id) if !id.is_empty() => id,
+        _ => generated.as_str(),
+    };
+    if annotation_id_exists(&current, &page.annots, id)? {
+        return Err(AnnotationEditError::DuplicateId {
+            id: id.to_owned(),
+            page: page_index,
+        });
+    }
+    let now;
+    let date = match date {
+        Some(date) => date,
+        None => {
+            now = now_pdf_date();
+            now.as_str()
+        }
+    };
+
+    let annotation = build_shape_annotation(
+        &geometry,
+        rect,
+        &style,
+        contents,
+        author,
+        id,
+        date,
+        appearance_id,
+    );
+    let appearance = shape_appearance(&geometry, rect, style);
+
+    document.set_object(appearance_id, appearance)?;
+    document.set_object(annotation_id, Object::Dictionary(annotation))?;
+    page.annots
+        .items_mut()
+        .push(Object::Reference(annotation_id));
+    stage_page_state(document, page)?;
+
+    Ok(AnnotationRef {
+        id: id.to_owned(),
+        object: annotation_id,
+        page_index,
+        subtype: AnnotationSubtype::Other(geometry.subtype_name().to_owned()),
+    })
+}
+
+/// Stage one stamp annotation after validating its name, text and rectangle.
+#[allow(clippy::too_many_arguments)]
+fn add_stamp_with(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    name: &str,
+    text: &str,
+    author: &str,
+    date: Option<&str>,
+    id: Option<&str>,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    let Some(name) = known_stamp_name(name) else {
+        return Err(AnnotationEditError::InvalidStampName(name.to_owned()));
+    };
+    let chars = text.chars().count();
+    if chars > MAX_STAMP_TEXT_CHARS {
+        return Err(AnnotationEditError::StampTextTooLong {
+            chars,
+            limit: MAX_STAMP_TEXT_CHARS,
+        });
+    }
+    if rect.is_empty() {
+        return Err(AnnotationEditError::EmptyShapeRect);
+    }
+
+    let current = effective_document(document)?;
+    let page_info = current.page(page_index)?;
+    ensure_rect_on_page(page_index, page_info.media_box, rect)?;
+    let mut page = read_page_state(&current, page_index)?;
+    let ids = allocate_ids(document, 2)?;
+    let appearance_id = ids[0];
+    let annotation_id = ids[1];
+    let generated = format!("pdfxi-stamp-{}", annotation_id.number);
+    let id = match id {
+        Some(id) if !id.is_empty() => id,
+        _ => generated.as_str(),
+    };
+    if annotation_id_exists(&current, &page.annots, id)? {
+        return Err(AnnotationEditError::DuplicateId {
+            id: id.to_owned(),
+            page: page_index,
+        });
+    }
+    let now;
+    let date = match date {
+        Some(date) => date,
+        None => {
+            now = now_pdf_date();
+            now.as_str()
+        }
+    };
+
+    let annotation = build_stamp_annotation(rect, name, text, author, id, date, appearance_id);
+    let appearance = stamp_appearance(rect, text);
+
+    document.set_object(appearance_id, appearance)?;
+    document.set_object(annotation_id, Object::Dictionary(annotation))?;
+    page.annots
+        .items_mut()
+        .push(Object::Reference(annotation_id));
+    stage_page_state(document, page)?;
+
+    Ok(AnnotationRef {
+        id: id.to_owned(),
+        object: annotation_id,
+        page_index,
+        subtype: AnnotationSubtype::Other("Stamp".to_owned()),
+    })
+}
+
+/// Validate every component of a shape style before any object is allocated.
+fn validate_shape_style(style: &ShapeStyle) -> Result<(), AnnotationEditError> {
+    for component in style.stroke_color {
+        ensure_color_component(component)?;
+    }
+    if let Some(fill) = style.fill_color {
+        for component in fill {
+            ensure_color_component(component)?;
+        }
+    }
+    if !style.opacity.is_finite() || !(0.0..=1.0).contains(&style.opacity) {
+        return Err(AnnotationEditError::InvalidOpacity {
+            value: style.opacity,
+        });
+    }
+    if !style.stroke_width.is_finite()
+        || !(MIN_INK_STROKE_WIDTH..=MAX_INK_STROKE_WIDTH).contains(&style.stroke_width)
+    {
+        return Err(AnnotationEditError::InvalidStrokeWidth {
+            value: style.stroke_width,
+        });
+    }
+    Ok(())
+}
+
+fn ensure_color_component(value: f64) -> Result<(), AnnotationEditError> {
+    if value.is_finite() && (0.0..=1.0).contains(&value) {
+        Ok(())
+    } else {
+        Err(AnnotationEditError::InvalidColorComponent { value })
+    }
+}
+
+/// Compute the annotation rectangle and the input points to page-check.
+///
+/// The rectangle is the shape's own bounds expanded by half the stroke width (and
+/// by [`ARROW_HEAD_LENGTH`] for a line), so the whole appearance fits inside the
+/// form `/BBox`. The returned points are the caller-supplied coordinates, so an
+/// out-of-page input reports its own point rather than a derived corner.
+fn shape_bounds(
+    geometry: &ShapeGeometry,
+    stroke_width: f32,
+) -> Result<(Rect, Vec<Point>), AnnotationEditError> {
+    let padding = stroke_width / 2.0;
+    match geometry {
+        ShapeGeometry::Line { from, to } => {
+            ensure_finite_point(*from)?;
+            ensure_finite_point(*to)?;
+            if from.x == to.x && from.y == to.y {
+                return Err(AnnotationEditError::DegenerateLine);
+            }
+            let line_padding = padding + ARROW_HEAD_LENGTH;
+            let rect = Rect::new(
+                from.x.min(to.x) - line_padding,
+                from.y.min(to.y) - line_padding,
+                from.x.max(to.x) + line_padding,
+                from.y.max(to.y) + line_padding,
+            )?;
+            Ok((rect, vec![*from, *to]))
+        }
+        ShapeGeometry::Rect { rect, .. } => {
+            if rect.is_empty() {
+                return Err(AnnotationEditError::EmptyShapeRect);
+            }
+            let expanded = Rect::new(
+                rect.x0() - padding,
+                rect.y0() - padding,
+                rect.x1() + padding,
+                rect.y1() + padding,
+            )?;
+            Ok((expanded, rect_corners(*rect)))
+        }
+        ShapeGeometry::Polygon(vertices) => {
+            if vertices.len() > MAX_POLYGON_VERTICES {
+                return Err(AnnotationEditError::TooManyVertices {
+                    count: vertices.len(),
+                    limit: MAX_POLYGON_VERTICES,
+                });
+            }
+            if vertices.len() < 3 {
+                return Err(AnnotationEditError::DegeneratePolygon);
+            }
+            let mut min_x = f32::INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for vertex in vertices {
+                ensure_finite_point(*vertex)?;
+                min_x = min_x.min(vertex.x);
+                min_y = min_y.min(vertex.y);
+                max_x = max_x.max(vertex.x);
+                max_y = max_y.max(vertex.y);
+            }
+            let bounds = Rect::new(min_x, min_y, max_x, max_y)?;
+            if bounds.is_empty() || polygon_area(vertices).abs() < 1e-6 {
+                return Err(AnnotationEditError::DegeneratePolygon);
+            }
+            let rect = Rect::new(
+                bounds.x0() - padding,
+                bounds.y0() - padding,
+                bounds.x1() + padding,
+                bounds.y1() + padding,
+            )?;
+            Ok((rect, vertices.clone()))
+        }
+    }
+}
+
+fn ensure_finite_point(point: Point) -> Result<(), AnnotationEditError> {
+    if point.is_finite() {
+        Ok(())
+    } else {
+        Err(AnnotationEditError::Geometry(
+            GeometryError::NonFiniteCoordinate {
+                field: "point",
+                value: point.x,
+            },
+        ))
+    }
+}
+
+fn rect_corners(rect: Rect) -> Vec<Point> {
+    vec![
+        Point::new(rect.x0(), rect.y0()),
+        Point::new(rect.x1(), rect.y0()),
+        Point::new(rect.x1(), rect.y1()),
+        Point::new(rect.x0(), rect.y1()),
+    ]
+}
+
+/// Twice the signed area of a polygon, as used for the degeneracy check.
+fn polygon_area(vertices: &[Point]) -> f64 {
+    let mut sum = 0.0;
+    for (index, current) in vertices.iter().enumerate() {
+        let next = vertices[(index + 1) % vertices.len()];
+        sum += f64::from(current.x) * f64::from(next.y) - f64::from(next.x) * f64::from(current.y);
+    }
+    sum / 2.0
+}
+
+fn ensure_rect_on_page(
+    page: usize,
+    media_box: Rectangle,
+    rect: Rect,
+) -> Result<(), AnnotationEditError> {
+    ensure_points_on_page(page, media_box, rect_corners(rect))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_shape_annotation(
+    geometry: &ShapeGeometry,
+    rect: Rect,
+    style: &ShapeStyle,
+    contents: &str,
+    author: &str,
+    id: &str,
+    date: &str,
+    appearance_id: ObjectId,
+) -> Dictionary {
+    let mut dictionary = Dictionary::new();
+    dictionary.insert("Type".to_owned(), pdf_name("Annot"));
+    dictionary.insert("Subtype".to_owned(), pdf_name(geometry.subtype_name()));
+    dictionary.insert("Rect".to_owned(), rect_array(rect));
+    match geometry {
+        ShapeGeometry::Line { from, to } => {
+            dictionary.insert("L".to_owned(), line_array(*from, *to));
+            dictionary.insert(
+                "LE".to_owned(),
+                Object::Array(vec![pdf_name("None"), pdf_name("OpenArrow")]),
+            );
+        }
+        ShapeGeometry::Rect { .. } => {}
+        ShapeGeometry::Polygon(vertices) => {
+            dictionary.insert("Vertices".to_owned(), point_array(vertices));
+        }
+    }
+    if !matches!(geometry, ShapeGeometry::Line { .. })
+        && let Some(fill) = style.fill_color
+    {
+        dictionary.insert("IC".to_owned(), color_array(fill));
+    }
+    dictionary.insert("Contents".to_owned(), pdf_text(contents));
+    dictionary.insert("T".to_owned(), pdf_text(author));
+    dictionary.insert("NM".to_owned(), pdf_text(id));
+    dictionary.insert("M".to_owned(), pdf_text(date));
+    dictionary.insert("C".to_owned(), color_array(style.stroke_color));
+    dictionary.insert("CA".to_owned(), Object::Real(style.opacity));
+    dictionary.insert("F".to_owned(), Object::Integer(4));
+    dictionary.insert("BS".to_owned(), border_style(f64::from(style.stroke_width)));
+    dictionary.insert("AP".to_owned(), appearance_dictionary(appearance_id));
+    dictionary
+}
+
+fn build_stamp_annotation(
+    rect: Rect,
+    name: &str,
+    text: &str,
+    author: &str,
+    id: &str,
+    date: &str,
+    appearance_id: ObjectId,
+) -> Dictionary {
+    let mut dictionary = Dictionary::new();
+    dictionary.insert("Type".to_owned(), pdf_name("Annot"));
+    dictionary.insert("Subtype".to_owned(), pdf_name("Stamp"));
+    dictionary.insert("Rect".to_owned(), rect_array(rect));
+    dictionary.insert("Name".to_owned(), pdf_name(name));
+    dictionary.insert("Contents".to_owned(), pdf_text(text));
+    dictionary.insert("T".to_owned(), pdf_text(author));
+    dictionary.insert("NM".to_owned(), pdf_text(id));
+    dictionary.insert("M".to_owned(), pdf_text(date));
+    dictionary.insert("C".to_owned(), color_array(STAMP_COLOR));
+    dictionary.insert("CA".to_owned(), Object::Real(1.0));
+    dictionary.insert("F".to_owned(), Object::Integer(4));
+    dictionary.insert("AP".to_owned(), appearance_dictionary(appearance_id));
+    dictionary
+}
+
+/// Build the `/AP /N` form for a shape, in coordinates relative to `rect`.
+fn shape_appearance(geometry: &ShapeGeometry, rect: Rect, style: ShapeStyle) -> Object {
+    let width = f64::from(rect.width());
+    let height = f64::from(rect.height());
+    let [red, green, blue] = style.stroke_color;
+    let stroke_width = f64::from(style.stroke_width);
+    let mut data = String::from("q\n");
+    if let Some([fill_red, fill_green, fill_blue]) = style.fill_color {
+        data.push_str(&format!(
+            "{fill_red:.3} {fill_green:.3} {fill_blue:.3} rg\n"
+        ));
+    }
+    data.push_str(&format!(
+        "{red:.3} {green:.3} {blue:.3} RG\n{stroke_width:.3} w\n"
+    ));
+
+    match geometry {
+        ShapeGeometry::Line { from, to } => {
+            data.push_str("1 J 1 j\n");
+            let x0 = f64::from(from.x - rect.x0());
+            let y0 = f64::from(from.y - rect.y0());
+            let x1 = f64::from(to.x - rect.x0());
+            let y1 = f64::from(to.y - rect.y0());
+            data.push_str(&format!("{x0:.3} {y0:.3} m {x1:.3} {y1:.3} l S\n"));
+            for leg in arrow_head_legs(*from, *to).into_iter().flatten() {
+                let lx = f64::from(leg.x - rect.x0());
+                let ly = f64::from(leg.y - rect.y0());
+                data.push_str(&format!("{lx:.3} {ly:.3} m {x1:.3} {y1:.3} l S\n"));
+            }
+        }
+        ShapeGeometry::Rect {
+            rect: path,
+            outline,
+        } => {
+            let x = f64::from(path.x0() - rect.x0());
+            let y = f64::from(path.y0() - rect.y0());
+            let path_width = f64::from(path.width());
+            let path_height = f64::from(path.height());
+            match outline {
+                Outline::Square => {
+                    data.push_str(&format!(
+                        "{x:.3} {y:.3} {path_width:.3} {path_height:.3} re {}\n",
+                        if style.fill_color.is_some() { "B" } else { "S" }
+                    ));
+                }
+                Outline::Circle => {
+                    let cx = x + path_width / 2.0;
+                    let cy = y + path_height / 2.0;
+                    let rx = path_width / 2.0;
+                    let ry = path_height / 2.0;
+                    let kx = rx * ELLIPSE_KAPPA;
+                    let ky = ry * ELLIPSE_KAPPA;
+                    let right = cx + rx;
+                    let left = cx - rx;
+                    let up = cy + ry;
+                    let down = cy - ry;
+                    data.push_str(&format!(
+                        "{right:.3} {cy:.3} m\n\
+                         {right:.3} {c1y:.3} {c1x:.3} {up:.3} {cx:.3} {up:.3} c\n\
+                         {c2x:.3} {up:.3} {left:.3} {c2y:.3} {left:.3} {cy:.3} c\n\
+                         {left:.3} {c3y:.3} {c3x:.3} {down:.3} {cx:.3} {down:.3} c\n\
+                         {c4x:.3} {down:.3} {right:.3} {c4y:.3} {right:.3} {cy:.3} c\n",
+                        c1y = cy + ky,
+                        c1x = cx + kx,
+                        c2x = cx - kx,
+                        c2y = cy + ky,
+                        c3y = cy - ky,
+                        c3x = cx - kx,
+                        c4x = cx + kx,
+                        c4y = cy - ky,
+                    ));
+                    data.push_str(if style.fill_color.is_some() {
+                        "B\n"
+                    } else {
+                        "S\n"
+                    });
+                }
+            }
+        }
+        ShapeGeometry::Polygon(vertices) => {
+            let mut points = vertices.iter().map(|vertex| {
+                (
+                    f64::from(vertex.x - rect.x0()),
+                    f64::from(vertex.y - rect.y0()),
+                )
+            });
+            if let Some((x, y)) = points.next() {
+                data.push_str(&format!("{x:.3} {y:.3} m\n"));
+                for (x, y) in points {
+                    data.push_str(&format!("{x:.3} {y:.3} l\n"));
+                }
+                data.push_str(if style.fill_color.is_some() {
+                    "h B\n"
+                } else {
+                    "h S\n"
+                });
+            }
+        }
+    }
+    data.push_str("Q\n");
+
+    let mut dictionary = form_dictionary(width, height);
+    dictionary.insert(
+        "Resources".to_owned(),
+        Object::Dictionary(Dictionary::new()),
+    );
+    Object::Stream {
+        dictionary,
+        data: data.into_bytes(),
+    }
+}
+
+/// Build the bordered label form for a stamp, in coordinates relative to `rect`.
+fn stamp_appearance(rect: Rect, text: &str) -> Object {
+    let width = f64::from(rect.width());
+    let height = f64::from(rect.height());
+    let [red, green, blue] = STAMP_COLOR;
+    let display = sanitize_stamp_text(text);
+    let chars = display.chars().count().max(1) as f64;
+    let available = (width - 2.0 * STAMP_PADDING).max(1.0);
+    let font_size = (height * 0.35)
+        .min(available / (chars * 0.55))
+        .clamp(4.0, 24.0);
+    let text_width = chars * font_size * 0.55;
+    let text_x = ((width - text_width) / 2.0).max(STAMP_PADDING / 2.0);
+    let text_y = ((height - font_size * 0.7) / 2.0).max(1.0);
+    let inset = 2.0_f64.min(width / 4.0).min(height / 4.0);
+    let border_width = (inset / 2.0).max(0.25);
+    let escaped = escape_literal(&display);
+
+    let data = format!(
+        "q\n{red:.3} {green:.3} {blue:.3} RG\n{border_width:.3} w\n\
+         {inset:.3} {inset:.3} {inner_width:.3} {inner_height:.3} re S\nQ\n\
+         q\n{red:.3} {green:.3} {blue:.3} rg\nBT\n/F1 {font_size:.3} Tf\n\
+         1 0 0 1 {text_x:.3} {text_y:.3} Tm\n({escaped}) Tj\nET\nQ\n",
+        inner_width = (width - 2.0 * inset).max(0.0),
+        inner_height = (height - 2.0 * inset).max(0.0),
+    );
+
+    let mut font = Dictionary::new();
+    font.insert("Type".to_owned(), pdf_name("Font"));
+    font.insert("Subtype".to_owned(), pdf_name("Type1"));
+    font.insert("BaseFont".to_owned(), pdf_name("Helvetica"));
+    font.insert("Encoding".to_owned(), pdf_name("WinAnsiEncoding"));
+    let mut fonts = Dictionary::new();
+    fonts.insert("F1".to_owned(), Object::Dictionary(font));
+    let mut resources = Dictionary::new();
+    resources.insert("Font".to_owned(), Object::Dictionary(fonts));
+
+    let mut dictionary = form_dictionary(width, height);
+    dictionary.insert("Resources".to_owned(), Object::Dictionary(resources));
+    Object::Stream {
+        dictionary,
+        data: data.into_bytes(),
+    }
+}
+
+/// Bezier circle constant: four cubic segments at this control distance
+/// approximate a circle to within a fraction of a point.
+const ELLIPSE_KAPPA: f64 = 0.552_284_749_830_793_6;
+
+/// The two legs of an open arrowhead at `to`, or `None` for a zero-length line.
+fn arrow_head_legs(from: Point, to: Point) -> Option<[Point; 2]> {
+    let dx = f64::from(to.x - from.x);
+    let dy = f64::from(to.y - from.y);
+    let length = dx.hypot(dy);
+    if !length.is_finite() || length <= f64::EPSILON {
+        return None;
+    }
+    let ux = dx / length;
+    let uy = dy / length;
+    let (sin, cos) = 25.0_f64.to_radians().sin_cos();
+    let head = f64::from(ARROW_HEAD_LENGTH);
+    let leg = |vx: f64, vy: f64| Point::new(to.x - (vx * head) as f32, to.y - (vy * head) as f32);
+    Some([
+        leg(ux * cos - uy * sin, ux * sin + uy * cos),
+        leg(ux * cos + uy * sin, -ux * sin + uy * cos),
+    ])
+}
+
+/// Return the canonical `/Name` for a standard stamp name, in any casing.
+fn known_stamp_name(name: &str) -> Option<&'static str> {
+    STAMP_NAMES
+        .iter()
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(name))
+}
+
+/// Map a stamp label to printable ASCII for the standard Helvetica appearance.
+///
+/// `/Contents` keeps the exact text; only the drawn label is restricted, so a
+/// control character or a non-WinAnsi character can never split the content
+/// stream.
+fn sanitize_stamp_text(text: &str) -> String {
+    let mut display = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_ascii_graphic() || character == ' ' {
+            display.push(character);
+        } else {
+            display.push('?');
+        }
+    }
+    display
+}
+
 fn build_note_annotation(spec: &NoteSpec<'_>, appearance_id: ObjectId) -> Dictionary {
     let mut dictionary = Dictionary::new();
     dictionary.insert("Type".to_owned(), pdf_name("Annot"));
@@ -1537,6 +2566,26 @@ fn color_array(color: [f64; 3]) -> Object {
     Object::Array(color.into_iter().map(Object::Real).collect())
 }
 
+/// `/L`: the two endpoints of a line annotation.
+fn line_array(from: Point, to: Point) -> Object {
+    Object::Array(vec![
+        Object::Real(f64::from(from.x)),
+        Object::Real(f64::from(from.y)),
+        Object::Real(f64::from(to.x)),
+        Object::Real(f64::from(to.y)),
+    ])
+}
+
+/// `/Vertices`: alternating x/y coordinates of a polygon.
+fn point_array(points: &[Point]) -> Object {
+    let mut coordinates = Vec::with_capacity(points.len() * 2);
+    for point in points {
+        coordinates.push(Object::Real(f64::from(point.x)));
+        coordinates.push(Object::Real(f64::from(point.y)));
+    }
+    Object::Array(coordinates)
+}
+
 fn pdf_name(name: &str) -> Object {
     Object::Name(name.to_owned())
 }
@@ -1696,6 +2745,12 @@ fn view_from_dictionary(
         ink_paths: ink_paths_from_dictionary(dictionary),
         color: color_from_dictionary(dictionary),
         stroke_width: stroke_width_from_dictionary(dictionary),
+        line: line_endpoints_from_dictionary(dictionary),
+        vertices: vertices_from_dictionary(dictionary),
+        stamp_name: dictionary
+            .get("Name")
+            .and_then(Object::as_name)
+            .map(str::to_owned),
     }
 }
 
@@ -1758,6 +2813,47 @@ fn ink_paths_from_dictionary(dictionary: &Dictionary) -> Vec<Vec<Point>> {
 fn color_from_dictionary(dictionary: &Dictionary) -> Option<Vec<f64>> {
     let items = dictionary.get("C").and_then(Object::as_array)?;
     items.iter().map(Object::as_f64).collect()
+}
+
+/// Decode `/L` into the `(from, to)` endpoints of a line annotation.
+fn line_endpoints_from_dictionary(dictionary: &Dictionary) -> Option<(Point, Point)> {
+    let items = dictionary.get("L").and_then(Object::as_array)?;
+    if items.len() != 4 {
+        return None;
+    }
+    let values: Option<Vec<f64>> = items.iter().map(Object::as_f64).collect();
+    let values = values?;
+    let from = Point::new(values[0] as f32, values[1] as f32);
+    let to = Point::new(values[2] as f32, values[3] as f32);
+    if from.is_finite() && to.is_finite() {
+        Some((from, to))
+    } else {
+        None
+    }
+}
+
+/// Decode `/Vertices` into polygon points, skipping malformed arrays.
+fn vertices_from_dictionary(dictionary: &Dictionary) -> Vec<Point> {
+    let Some(items) = dictionary.get("Vertices").and_then(Object::as_array) else {
+        return Vec::new();
+    };
+    if items.len() < 6 || !items.len().is_multiple_of(2) {
+        return Vec::new();
+    }
+    let Some(values) = items
+        .iter()
+        .map(Object::as_f64)
+        .collect::<Option<Vec<f64>>>()
+    else {
+        return Vec::new();
+    };
+    values
+        .as_slice()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| Point::new(pair[0] as f32, pair[1] as f32))
+        .collect()
 }
 
 /// Decode the `/BS /W` border width.
@@ -2347,5 +3443,125 @@ mod tests {
             TextMarkup::Underline.subtype(),
             AnnotationSubtype::Other("Underline".to_owned())
         );
+    }
+
+    #[test]
+    fn shape_style_validation_is_fail_closed() {
+        assert!(validate_shape_style(&ShapeStyle::default()).is_ok());
+
+        assert!(matches!(
+            validate_shape_style(&ShapeStyle {
+                opacity: 1.5,
+                ..ShapeStyle::default()
+            }),
+            Err(AnnotationEditError::InvalidOpacity { .. })
+        ));
+        assert!(matches!(
+            validate_shape_style(&ShapeStyle {
+                stroke_color: [0.0, f64::NAN, 0.0],
+                ..ShapeStyle::default()
+            }),
+            Err(AnnotationEditError::InvalidColorComponent { .. })
+        ));
+        assert!(matches!(
+            validate_shape_style(&ShapeStyle {
+                fill_color: Some([0.0, 0.0, 2.0]),
+                ..ShapeStyle::default()
+            }),
+            Err(AnnotationEditError::InvalidColorComponent { .. })
+        ));
+        assert!(matches!(
+            validate_shape_style(&ShapeStyle {
+                stroke_width: 0.0,
+                ..ShapeStyle::default()
+            }),
+            Err(AnnotationEditError::InvalidStrokeWidth { .. })
+        ));
+    }
+
+    #[test]
+    fn line_vertices_and_stamp_name_decode_from_the_dictionary() {
+        let from = Point::new(10.0, 20.0);
+        let to = Point::new(30.0, 40.0);
+        let vertices = [
+            Point::new(1.0, 2.0),
+            Point::new(3.0, 4.0),
+            Point::new(5.0, 6.0),
+        ];
+        let mut dictionary = Dictionary::new();
+        dictionary.insert("L".to_owned(), line_array(from, to));
+        dictionary.insert("Vertices".to_owned(), point_array(&vertices));
+        dictionary.insert("Name".to_owned(), pdf_name("Approved"));
+
+        assert_eq!(
+            line_endpoints_from_dictionary(&dictionary),
+            Some((from, to))
+        );
+        assert_eq!(vertices_from_dictionary(&dictionary), vertices.to_vec());
+        assert_eq!(
+            dictionary.get("Name").and_then(Object::as_name),
+            Some("Approved")
+        );
+
+        dictionary.insert(
+            "L".to_owned(),
+            Object::Array(vec![Object::Real(1.0), Object::Real(2.0)]),
+        );
+        assert_eq!(line_endpoints_from_dictionary(&dictionary), None);
+        dictionary.insert("Vertices".to_owned(), Object::Array(Vec::new()));
+        assert!(vertices_from_dictionary(&dictionary).is_empty());
+    }
+
+    #[test]
+    fn open_arrow_legs_sit_behind_the_endpoint() {
+        let from = Point::new(10.0, 10.0);
+        let to = Point::new(110.0, 10.0);
+        let legs = arrow_head_legs(from, to).expect("a non-degenerate line has an arrowhead");
+        for leg in legs {
+            assert!(leg.x < to.x, "arrow legs point back along the line");
+            assert!(
+                (leg.y - to.y).abs() > 1.0,
+                "the legs open away from the axis"
+            );
+        }
+        assert!(arrow_head_legs(from, from).is_none());
+    }
+
+    #[test]
+    fn stamp_text_is_sanitized_and_escaped_for_the_content_stream() {
+        assert_eq!(sanitize_stamp_text("a(b)\\c\n\u{e9}"), "a(b)\\c??");
+
+        let appearance = stamp_appearance(rect(10.0, 10.0, 210.0, 60.0), "x) Tj ET 0 0 m (y");
+        let Object::Stream { data, .. } = appearance else {
+            panic!("stamp appearance must be a stream");
+        };
+        let drawing = String::from_utf8(data).expect("appearance content is ASCII");
+        assert!(
+            drawing.contains("x\\) Tj ET 0 0 m \\(y"),
+            "the label must be escaped: {drawing:?}"
+        );
+        assert_eq!(
+            drawing.matches("Tj\nET").count(),
+            1,
+            "only the real text operator ends the literal: {drawing:?}"
+        );
+        assert!(drawing.contains("/F1"));
+        assert!(drawing.contains(" re S"));
+    }
+
+    #[test]
+    fn polygon_area_detects_degenerate_outlines() {
+        let triangle = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(0.0, 10.0),
+        ];
+        assert!((polygon_area(&triangle) - 50.0).abs() < 1e-6);
+        let collinear = [
+            Point::new(0.0, 0.0),
+            Point::new(5.0, 5.0),
+            Point::new(10.0, 10.0),
+        ];
+        assert!(polygon_area(&collinear).abs() < 1e-6);
     }
 }
