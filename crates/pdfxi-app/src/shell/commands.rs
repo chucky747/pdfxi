@@ -535,7 +535,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::ConvertToPdf => self.not_available("Convert to PDF"),
             AppCommand::CombineFiles => self.not_available("Combine Files"),
             AppCommand::Protect => self.not_available("Protect PDF"),
-            AppCommand::AiAssistant => self.not_available("AI Assistant"),
+            AppCommand::AiAssistant => self.open_assistant_connect(),
             AppCommand::ToggleTools => self.toggle_tools(),
             AppCommand::ToggleGrid => self.grid_view = !self.grid_view,
             AppCommand::ToggleFullscreen => {

@@ -29,12 +29,7 @@ impl PdfxiApp {
             RailItem::Starred => self.starred_panel_ui(ui, palette),
             RailItem::Shared => self.shared_panel_ui(ui, palette),
             RailItem::Comments => self.comments_panel_ui(ui, palette),
-            RailItem::AiAssistant => self.future_panel(
-                ui,
-                palette,
-                "AI Assistant",
-                "The assistant appears when it is connected",
-            ),
+            RailItem::AiAssistant => self.assistant_connect_panel_ui(ui, palette),
         }
     }
 
@@ -276,13 +271,6 @@ impl PdfxiApp {
             1 => "1 recent document".to_owned(),
             _ => format!("{count} recent documents"),
         };
-        ui.label(egui::RichText::new(message).color(palette.text_muted));
-    }
-
-    /// Placeholder for a rail entry whose feature has not landed yet.
-    fn future_panel(&mut self, ui: &mut egui::Ui, palette: Palette, title: &str, message: &str) {
-        ui.label(egui::RichText::new(title).strong().size(13.0));
-        ui.add_space(6.0);
         ui.label(egui::RichText::new(message).color(palette.text_muted));
     }
 

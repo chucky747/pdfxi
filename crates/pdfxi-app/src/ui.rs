@@ -546,6 +546,8 @@ pub struct PdfxiApp {
     settings_path: Option<PathBuf>,
     /// Feature families enabled in this build.
     capabilities: Capabilities,
+    /// OpenCode connection screen state and its worker-thread probe.
+    assistant: shell::assistant_connect::AssistantConnection,
     /// Active left rail and side-panel content.
     active_rail: RailItem,
     /// Whether the right tools panel is open.
@@ -687,6 +689,10 @@ impl PdfxiApp {
             self.tools_open = self.shell_prefs.tools_open;
         }
         self.identity_name = self.settings.display_name.clone();
+        self.assistant
+            .set_saved_model(self.settings.assistant_model.clone());
+        self.assistant
+            .set_last_endpoint(self.settings.assistant_endpoint.clone());
         self.capabilities = if self.settings.shared_folder.is_some() {
             Capabilities::available().with(Capability::Shared)
         } else {
@@ -1766,6 +1772,7 @@ impl eframe::App for PdfxiApp {
         self.window_resize_handles(ctx);
         self.handle_keyboard(ctx);
         self.pump_text_extraction();
+        self.poll_assistant_connection(ctx);
 
         let dropped: Vec<PathBuf> = ctx.input(|input| {
             input

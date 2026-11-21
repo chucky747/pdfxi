@@ -131,6 +131,19 @@ pub struct Settings {
     pub library_root: Option<PathBuf>,
     /// Optional shared folder; when set, the Shared rail entry appears.
     pub shared_folder: Option<PathBuf>,
+    /// Last model chosen in the AI Assistant picker, as `provider/model`.
+    ///
+    /// The default is the ADR 0011 acceptance model. This is the only assistant
+    /// value that selects a model; no credential is stored here.
+    #[serde(default = "default_assistant_model")]
+    pub assistant_model: String,
+    /// Last OpenCode endpoint that answered the connection check, without
+    /// credentials.
+    ///
+    /// Shown in the Connect screen. The service password/pairing code is never
+    /// written to settings; an explicit endpoint needs the code again.
+    #[serde(default)]
+    pub assistant_endpoint: Option<String>,
 }
 
 impl Default for Settings {
@@ -141,6 +154,8 @@ impl Default for Settings {
             display_name: default_display_name(),
             library_root: None,
             shared_folder: None,
+            assistant_model: default_assistant_model(),
+            assistant_endpoint: None,
         }
     }
 }
@@ -174,6 +189,12 @@ impl Settings {
 #[must_use]
 pub fn default_display_name() -> String {
     "Reader".to_owned()
+}
+
+/// The default AI Assistant model from ADR 0011 and the acceptance test.
+#[must_use]
+pub fn default_assistant_model() -> String {
+    "opencode-go/hy4-flash-free".to_owned()
 }
 
 /// The per-user home directory, or `None` when the environment exposes none.
@@ -600,6 +621,39 @@ mod tests {
         assert_eq!(load(&path).display_name, "Ada");
         fs::write(&path, "theme = \"light\"\n").expect("write settings without a name");
         assert_eq!(load(&path).display_name, "Reader");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn assistant_model_and_endpoint_round_trip_without_credentials() {
+        let dir = temp_dir("assistant");
+        let path = dir.join("settings.toml");
+
+        let settings = Settings {
+            assistant_model: "opencode-go/deepseek-v4.1-flash".to_owned(),
+            assistant_endpoint: Some("http://127.0.0.1:28894/".to_owned()),
+            ..Settings::default()
+        };
+        save(&path, &settings).expect("save assistant settings");
+        let loaded = load(&path);
+        assert_eq!(loaded.assistant_model, "opencode-go/deepseek-v4.1-flash");
+        assert_eq!(
+            loaded.assistant_endpoint.as_deref(),
+            Some("http://127.0.0.1:28894/")
+        );
+
+        let text = fs::read_to_string(&path).expect("read settings");
+        let lower = text.to_ascii_lowercase();
+        assert!(!lower.contains("password"));
+        assert!(!lower.contains("token"));
+        assert!(!lower.contains("credential"));
+
+        // An older file without the new keys keeps the documented defaults.
+        fs::write(&path, "theme = \"dark\"\n").expect("write old settings");
+        let old = load(&path);
+        assert_eq!(old.assistant_model, default_assistant_model());
+        assert_eq!(old.assistant_endpoint, None);
+
         let _ = fs::remove_dir_all(&dir);
     }
 

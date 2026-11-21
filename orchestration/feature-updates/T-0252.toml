@@ -1,0 +1,57 @@
+# T-0252 - OpenCode Connect screen and model picker (Round A)
+#
+# Connection half only; the assistant chat panel and SEC-013 promotion are
+# T-0253. No feature row is promoted.
+
+task = "T-0252"
+lane = "app"
+status = "in_progress"
+evidence = "docs/evidence/ui/T-0252.md"
+docs = [
+    "docs/evidence/ui/T-0252.md",
+    "crates/pdfxi-app/src/shell/assistant_connect.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/settings.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/ui/t0252-connect-light-windows.png",
+    "docs/evidence/ui/t0252-connect-dark-windows.png",
+    "docs/evidence/ui/t0252-connect-light-macos.png",
+    "docs/evidence/ui/t0252-connect-dark-macos.png",
+]
+feature_rows = []
+promoted_rows = []
+acceptance_items = ["A-16"]
+tests = [
+    "shell::assistant_connect::tests::connect_lists_models_and_selects_the_acceptance_default",
+    "shell::assistant_connect::tests::unreachable_service_is_reported_and_not_usable",
+    "shell::assistant_connect::tests::incompatible_service_is_refused_before_models_are_requested",
+    "shell::assistant_connect::tests::dispatch_opens_the_connect_panel_without_network_io",
+    "shell::assistant_connect::tests::model_choice_prefers_the_saved_model_then_the_acceptance_model",
+    "shell::assistant_connect::tests::pair_with_code_uses_the_explicit_endpoint_and_clears_the_code",
+    "shell::assistant_connect::tests::disconnect_returns_to_disconnected_and_keeps_the_remembered_model",
+    "shell::assistant_connect::tests::app_persists_the_model_and_endpoint_but_never_the_password",
+    "settings::tests::assistant_model_and_endpoint_round_trip_without_credentials",
+]
+notes = """
+Round A of the assistant shell per ADR 0011. Capability::AssistantConnect is
+always available, while Capability::AiAssistant is added only for a usable
+connected service. The command bar, Tools panel and rail dispatch the same
+AppCommand::AiAssistant and open a real Connect screen with Disconnected,
+Checking, Connected, Incompatible and Unreachable states. The connected state
+shows the service URL (no credentials), OpenCode version, provider labels and
+clickable model rows; the default and acceptance model is
+opencode-go/hy4-flash-free. Model and last endpoint persist in settings; the
+password/token/pairing code never does. Pairing uses the T-0251 explicit
+endpoint with the code as the credential because the client has no
+POST /api/pair handshake; the panel states that limit.
+
+Only /api/info, /api/provider and /api/model are called during a probe. No
+session, prompt, document text or tool call is sent. Four captures show the
+connected real service in light/dark x Windows/macOS. Tests: 503 lib + 24
+harness, clippy/fmt/release green. Limits: no chat panel, streaming, summary,
+insights, citations or stop control (T-0253); no native pair handshake; the
+model picker changes the remembered model only, because no conversation exists
+yet. No matrix promotion; SEC-013 stays as the library leaves it.
+"""

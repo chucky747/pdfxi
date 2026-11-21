@@ -32,6 +32,10 @@ pdfxi-edit = { path = "../pdfxi-edit", version = "0.1.0" }
 # AcroForm reading, filling and appearance regeneration (T-0234). The shell
 # calls these entry points and never parses a field dictionary itself.
 pdfxi-forms = { path = "../pdfxi-forms", version = "0.1.0" }
+# OpenCode assistant client (T-0251). The shell calls its T-0251 API only; it
+# never builds a request or route of its own. T-0252 uses discovery, info,
+# provider and model listing; sessions arrive with T-0253.
+pdfxi-assistant = { workspace = true }
 # Calendar formatting and local offsets for annotation dates. MIT OR Apache-2.0.
 # `chrono` was removed after RUSTSEC-2026-0543 (unmaintained).
 time = { version = "0.3", default-features = false, features = [
@@ -56,3 +60,7 @@ egui = { version = "0.33", optional = true }
 name = "pdfxi-ui"
 path = "src/bin/pdfxi-ui.rs"
 required-features = ["ui"]
+
+[dev-dependencies]
+# Unit tests parse pinned service JSON into the T-0251 model types. Test-only.
+serde_json.workspace = true

@@ -33,8 +33,19 @@ pub enum Capability {
     Print,
     /// Password, permissions and redaction.
     Protect,
-    /// The OpenCode-backed assistant.
+    /// The OpenCode-backed assistant conversation.
+    ///
+    /// This is enabled at runtime only while the connection screen reports a
+    /// usable service, so no assistant control appears before there is a
+    /// service to talk to. The connection screen itself is reached through
+    /// [`Capability::AssistantConnect`].
     AiAssistant,
+    /// The OpenCode connection screen.
+    ///
+    /// Always available in this build: the screen is how a user connects, so
+    /// hiding it behind a successful connection would make the feature
+    /// unreachable. It renders a real connect panel, never a status-only stub.
+    AssistantConnect,
     /// The recent-file list.
     Recent,
     /// The local Files library.
@@ -64,9 +75,11 @@ impl Capabilities {
     /// Capabilities that are enabled today.
     ///
     /// The document workspace, recent files, bookmarks navigation, the local
-    /// Files library, starring, comments and AcroForm filling exist. Shared is
-    /// added by the shell when a shared folder is configured; edit, export,
-    /// print, protect and AI remain off until their task lands.
+    /// Files library, starring, comments, AcroForm filling and the OpenCode
+    /// connection screen exist. Shared is added by the shell when a shared
+    /// folder is configured; [`Capability::AiAssistant`] is added by the shell
+    /// only after the connection screen reports a usable service. Edit, export,
+    /// print and protect remain off until their task lands.
     #[must_use]
     pub fn available() -> Self {
         Self::none()
@@ -77,6 +90,7 @@ impl Capabilities {
             .with(Capability::Starred)
             .with(Capability::Comments)
             .with(Capability::Forms)
+            .with(Capability::AssistantConnect)
     }
 
     /// No capabilities at all, for tests and for a deliberately bare shell.
@@ -89,6 +103,13 @@ impl Capabilities {
     #[must_use]
     pub fn with(mut self, capability: Capability) -> Self {
         self.bits |= 1u16 << (capability as u16);
+        self
+    }
+
+    /// Disable one capability.
+    #[must_use]
+    pub fn without(mut self, capability: Capability) -> Self {
+        self.bits &= !(1u16 << (capability as u16));
         self
     }
 
@@ -132,7 +153,9 @@ impl RailItem {
             Self::Starred => Capability::Starred,
             Self::Shared => Capability::Shared,
             Self::Comments => Capability::Comments,
-            Self::AiAssistant => Capability::AiAssistant,
+            // The rail entry is the way to the connection screen; the
+            // conversation controls use `Capability::AiAssistant`.
+            Self::AiAssistant => Capability::AssistantConnect,
         }
     }
 
@@ -314,6 +337,12 @@ pub fn tool_rows() -> Vec<ToolRow> {
             capability: Capability::Protect,
             icon: Icon::Protect,
             command: AppCommand::Protect,
+        },
+        ToolRow {
+            label: "AI Assistant",
+            capability: Capability::AssistantConnect,
+            icon: Icon::Sparkle,
+            command: AppCommand::AiAssistant,
         },
     ]
 }
