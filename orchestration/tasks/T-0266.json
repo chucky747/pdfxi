@@ -3,7 +3,7 @@
     "lane":  "app",
     "title":  "Convert to PDF tool UI",
     "priority":  "P0",
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0240"
                    ],

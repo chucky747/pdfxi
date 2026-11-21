@@ -1461,6 +1461,14 @@ fn toggle_notifications_opens_the_window_and_an_empty_store_says_so() {
 }
 
 #[test]
+fn convert_to_pdf_opens_the_card_without_a_document() {
+    let mut app = PdfxiApp::new();
+    app.dispatch(AppCommand::ConvertToPdf, None);
+    assert!(app.convert_card_open());
+    assert_eq!(app.status(), "Convert to PDF: choose files, then Convert");
+}
+
+#[test]
 fn set_display_name_and_document_title_act() {
     let mut app = with_excel_document();
 
@@ -2044,6 +2052,10 @@ struct Function {
 /// Allowing them by name (rather than by return type) keeps the exemption
 /// narrow: a new factory needs an explicit entry and a reason.
 const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "convert_card_ui",
+        "convert to PDF window: Add files/Choose output call the rfd-backed methods and Convert calls convert_to_path; source loading and conversion are unit-tested without a window",
+    ),
     (
         "shared_panel_ui",
         "shared folder panel: rows open documents and the review buttons call the sync/import methods; the folder and review state are unit-tested without a window",

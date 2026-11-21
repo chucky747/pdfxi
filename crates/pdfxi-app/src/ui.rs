@@ -611,6 +611,8 @@ pub struct PdfxiApp {
     properties_state: shell::bookmarks_panel::DocumentPropertiesState,
     /// Notifications window and its on-disk store.
     notifications: shell::notifications::NotificationsUiState,
+    /// Convert to PDF card state.
+    convert: shell::convert_card::ConvertUiState,
     /// Export card state.
     export_ui: shell::export_card::ExportUiState,
     /// Pre-print panel, progress and worker state.
@@ -1840,6 +1842,7 @@ impl eframe::App for PdfxiApp {
         self.place_signature_dialog_ui(ctx);
         self.document_properties_ui(ctx);
         self.notifications_ui(ctx);
+        self.convert_card_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);

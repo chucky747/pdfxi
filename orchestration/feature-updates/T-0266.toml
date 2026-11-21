@@ -1,0 +1,73 @@
+# T-0266 - Convert to PDF tool UI
+#
+# App surface for A-28. Native text, Markdown, HTML and PNG/JPEG sources are
+# served end to end. Office input remains unavailable: there is no extractor in
+# the app, so `.docx/.xlsx/.pptx` are absent from the picker rather than a
+# disabled control. No feature row is promoted.
+
+task = "T-0266"
+lane = "app"
+status = "partial"
+evidence = "docs/evidence/ui/T-0266.md"
+docs = [
+    "crates/pdfxi-app/src/shell/convert_card.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/ui/T-0266.md",
+]
+feature_rows = ["CREATE-003", "CREATE-004", "CREATE-005"]
+promoted_rows = []
+acceptance_items = ["A-28"]
+tests = [
+    "ui::shell::convert_card::tests::loads_every_native_source_and_classifies_by_extension",
+    "ui::shell::convert_card::tests::converts_all_sources_to_a_pdf_with_the_text_marker",
+    "ui::shell::convert_card::tests::empty_input_and_bad_extensions_are_typed_errors",
+    "ui::shell::convert_card::tests::removing_a_source_keeps_names_in_step",
+    "ui_controls::convert_to_pdf_opens_the_card_without_a_document",
+]
+notes = """
+Convert card: ConvertUiState (sources, source_names, output, page_size_letter,
+title, error, progress) and handle_convert_command in shell/convert_card.rs.
+AppCommand::ConvertToPdf ("convert-to-pdf") now opens the window and sets
+"Convert to PDF: choose files, then Convert"; no document is required because
+conversion creates one. The window has Add files (rfd multi-select filtered to
+png, jpg, jpeg, txt, md, html, htm), a per-row Remove, Choose output (save_file,
+defaults to the first source stem .pdf), an optional title, a fixed
+"Page size: Letter" line, and Convert enabled only with at least one source and
+an output.
+
+load_sources(paths) reads and classifies each file once, at add time: .txt and
+.md become UTF-8 text/Markdown sources, .html/.htm keep their parent as the base
+directory, .png and .jpg/.jpeg become image sources; an empty extension or any
+other extension is a typed unsupported-format error naming the supported set and
+the missing Office extractor. convert_to_path sends the loaded sources to
+convert_to_pdf in order with ConvertOptions::new() plus an optional title, writes
+with ConvertedPdf::write_to, returns the page count, sets "Converted N file(s)
+to a PDF with M page(s) at <path>", and records the "PDF converted" notification.
+Errors go to the card error and "Convert failed: ..." status; the source list is
+kept.
+
+Tests: a temp folder with .txt, .md, .html and a 2x2 RGB PNG loads as
+text/markdown/html/image and converts to a PDF whose page count matches the
+converter and whose page 0 text contains "PDFXI convert marker"; empty input and
+a .docx are typed errors; removal keeps sources and names in step. Harness:
+convert_to_pdf_opens_the_card_without_a_document.
+
+API mismatch recorded: pdfxi_convert::encode_png always emits RGBA (PNG color
+type 6), while the converter's image path rejects PNGs with alpha ("only
+grayscale and RGB images without alpha are supported"), so the test embeds a
+known 124-byte RGB PNG instead of using encode_png. No JPEG encoder exists in
+the crate for tests.
+
+Gates (CARGO_TARGET_DIR=target/lanes/app9): fmt exit 0; clippy
+-p pdfxi-app --all-targets --features ui,pdfium -- -D warnings exit 0;
+cargo test -p pdfxi-app --features ui,pdfium: 578 passed (lib), 4 ignored,
+0 failed; ui_controls 30 passed.
+
+Limits: Office input unavailable (no extractor), page size fixed to Letter, no
+progress/cancel (synchronous), no automatic open of the result, and the Tools row
+is still gated by Capability::Export (reachable from the command and --tool
+convert). No capture and no git.
+"""

@@ -591,7 +591,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::DocumentProperties => self.handle_document_properties_command(),
             AppCommand::Organize => self.not_available("Organize Pages"),
             AppCommand::Export => self.handle_export_command(),
-            AppCommand::ConvertToPdf => self.not_available("Convert to PDF"),
+            AppCommand::ConvertToPdf => self.handle_convert_command(),
             AppCommand::CombineFiles => self.not_available("Combine Files"),
             AppCommand::Protect => self.not_available("Protect PDF"),
             AppCommand::AiAssistant => self.open_assistant_connect(),

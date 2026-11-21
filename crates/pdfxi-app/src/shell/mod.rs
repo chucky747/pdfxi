@@ -19,6 +19,7 @@ pub mod capabilities;
 pub mod command_bar;
 pub mod commands;
 pub mod comments;
+pub(crate) mod convert_card;
 pub mod dialogs;
 pub mod document_view;
 pub mod empty_state;
