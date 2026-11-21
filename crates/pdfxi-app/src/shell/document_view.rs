@@ -167,15 +167,27 @@ impl PdfxiApp {
                     .map(|page| page.rect.x + page.rect.width)
                     .fold(0.0_f32, f32::max);
                 let pad_x = ((viewport.width - content_right) * 0.5).max(0.0);
-                let text_tool = self.state.active_tool() == Toolset::TextSelection;
-                let (scroll_delta, hover, pressed, dragging) = ui.input(|input| {
+                let text_tool =
+                    !self.edit.active && self.state.active_tool() == Toolset::TextSelection;
+                let (
+                    scroll_delta,
+                    hover,
+                    pressed,
+                    released,
+                    dragging,
+                    delete_pressed,
+                    double_clicked,
+                ) = ui.input(|input| {
                     let pointer = &input.pointer;
                     let pressed = pointer.primary_pressed();
                     (
                         input.smooth_scroll_delta,
                         pointer.hover_pos(),
                         pressed,
+                        pointer.primary_released(),
                         pointer.primary_down() && !pressed,
+                        input.key_pressed(egui::Key::Delete),
+                        pointer.button_double_clicked(egui::PointerButton::Primary),
                     )
                 });
 
@@ -228,8 +240,28 @@ impl PdfxiApp {
                     }
                 }
 
+                // Edit PDF tool: hit-test, move, resize and place text. The
+                // tool owns the pointer only while it is active.
+                if self.edit.active {
+                    self.edit_tool_pointer(
+                        &layout,
+                        origin,
+                        pad_x,
+                        super::edit_tool::CanvasPointer {
+                            hover,
+                            pressed,
+                            released,
+                            double_clicked,
+                        },
+                    );
+                    if delete_pressed && let Err(error) = self.delete_selection() {
+                        self.edit.error = Some(error);
+                    }
+                }
+
                 // Comment tool: one click places a note and opens its draft.
-                if self.note_tool_active()
+                if !self.edit.active
+                    && self.note_tool_active()
                     && pressed
                     && let Some(pos) = hover
                 {
@@ -321,6 +353,10 @@ impl PdfxiApp {
                         );
                     }
                 }
+
+                // Edit PDF selection rectangle and resize handles, above the
+                // page rasters and find highlights.
+                self.edit_tool_overlay(painter, &layout, origin, pad_x);
 
                 // Form field widgets from the real AcroForm, drawn at their
                 // page rectangles with the same mapping as the find and

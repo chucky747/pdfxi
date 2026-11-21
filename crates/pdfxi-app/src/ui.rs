@@ -617,6 +617,8 @@ pub struct PdfxiApp {
     protect: shell::protect_card::ProtectUiState,
     /// Redact and sanitize card state.
     redact: shell::redact_card::RedactUiState,
+    /// Edit PDF tool state and its toolbar window.
+    edit: shell::edit_tool::EditToolState,
     /// Export card state.
     export_ui: shell::export_card::ExportUiState,
     /// Pre-print panel, progress and worker state.
@@ -1849,6 +1851,7 @@ impl eframe::App for PdfxiApp {
         self.convert_card_ui(ctx);
         self.protect_card_ui(ctx);
         self.redact_card_ui(ctx);
+        self.edit_tool_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);

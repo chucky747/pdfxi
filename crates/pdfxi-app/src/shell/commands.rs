@@ -584,7 +584,7 @@ impl crate::ui::PdfxiApp {
                 self.select_thumbnail_page(page);
             }
             AppCommand::SetClosePolicy(policy) => self.set_close_policy(policy),
-            AppCommand::EditDocument => self.not_available("Edit PDF"),
+            AppCommand::EditDocument => self.handle_edit_document_command(),
             AppCommand::Comment => self.start_note_tool(),
             AppCommand::Highlight => self.highlight_selection(),
             AppCommand::FillAndSign => self.open_fill_and_sign(),

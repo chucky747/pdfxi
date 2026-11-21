@@ -1847,7 +1847,6 @@ fn dispatched_shell_and_settings_commands_act() {
 fn dispatched_capability_commands_report_unavailable() {
     let mut app = PdfxiApp::new();
     for command in [
-        AppCommand::EditDocument,
         AppCommand::Comment,
         AppCommand::Highlight,
         AppCommand::FillAndSign,
@@ -1868,6 +1867,25 @@ fn dispatched_capability_commands_report_unavailable() {
     ] {
         assert_dispatch_acts(command.label(), &mut app, command);
     }
+}
+
+#[test]
+fn edit_document_command_activates_the_edit_tool() {
+    let mut app = PdfxiApp::new();
+    assert!(!app.edit_tool_active(), "the edit tool starts inactive");
+    // With no document the command still gives feedback rather than opening a
+    // tool with nothing to edit.
+    app.dispatch(AppCommand::EditDocument, None);
+    assert!(!app.edit_tool_active());
+    assert_eq!(app.status(), "Open a document to edit");
+
+    let mut app = with_excel_document();
+    assert!(!app.edit_tool_active());
+    app.dispatch(AppCommand::EditDocument, None);
+    assert!(app.edit_tool_active(), "EditDocument activates the tool");
+    assert_eq!(app.edit_tool_selected(), None);
+    app.dispatch(AppCommand::EditDocument, None);
+    assert!(!app.edit_tool_active(), "a second dispatch toggles it off");
 }
 
 #[test]
@@ -2109,6 +2127,10 @@ const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
     (
         "place_signature_dialog_ui",
         "placement dialog: the typed/drawn/image buttons call the methods the PlaceSignature command proof covers; the mode selector is state only and the draw pad is a gesture",
+    ),
+    (
+        "edit_tool_ui",
+        "Edit PDF window: Done closes the tool, Delete calls delete_selection, Add text arms placement, Add image opens the rfd picker and arms load_image_file, and Apply text calls apply_edit_text; the EditDocument command proof and the edit_tool unit tests cover activation, hit-testing, move, resize, delete, reflow replacement and add image without a window",
     ),
     (
         "shell_icon_button",

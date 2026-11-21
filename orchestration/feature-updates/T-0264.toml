@@ -1,0 +1,61 @@
+# T-0264 - Edit PDF tool UI (A-23 object editing, A-17 in-place text)
+#
+# App surface for object editing and in-place text replacement. The editing
+# library already ships the operations; this task wires the canvas selection,
+# the toolbar card, double-click reflow replacement and Add image. The feature
+# matrix rows stay where the libraries left them; no row is promoted here.
+
+task = "T-0264"
+lane = "app"
+status = "verified"
+acceptance_items = ["A-17", "A-23"]
+feature_rows = ["EDIT-001", "EDIT-004"]
+promoted_rows = []
+docs = [
+    "crates/pdfxi-app/src/shell/edit_tool.rs",
+    "crates/pdfxi-app/src/shell/document_view.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+]
+tests = [
+    "ui::shell::edit_tool::tests::hit_test_selects_the_topmost_listed_object",
+    "ui::shell::edit_tool::tests::moving_a_text_block_updates_the_reopened_rect",
+    "ui::shell::edit_tool::tests::resizing_a_text_block_scales_the_reopened_rect",
+    "ui::shell::edit_tool::tests::deleting_a_text_block_drops_one_object",
+    "ui::shell::edit_tool::tests::adding_text_places_extractable_text",
+    "ui::shell::edit_tool::tests::corner_handles_map_to_expected_scales",
+    "ui::shell::edit_tool::tests::in_place_text_editing_replaces_the_reopened_text",
+    "ui::shell::edit_tool::tests::adding_an_image_creates_a_listed_image_object_at_the_click",
+    "ui::shell::edit_tool::tests::load_image_file_identifies_png_and_rejects_other_bytes",
+    "ui_controls::edit_document_command_activates_the_edit_tool",
+]
+notes = """
+Edit PDF tool (shell/edit_tool.rs): EditToolState, EditSelection, Handle,
+DragMode and the EditDocument handler. AppCommand::EditDocument ("edit-document")
+toggles the tool: with no document it reports "Open a document to edit"; with a
+document it activates and reports "Edit PDF: click an object", and a second
+dispatch returns to the plain view.
+
+Canvas: while active, a click hit-tests content_edit::list_objects on the page
+(page_point converted from the canvas' top-left y-down frame into PDF y-up) and
+selects the topmost object by list position, so a positional id can never go
+stale between edits. The selection rectangle and four corner handles are drawn
+over the page. Dragging the body calls move_object; dragging a corner calls
+resize_object with scales anchored at the object's lower-left origin; Delete
+calls delete_object. Every mutation clones the session document, runs the
+library call on the clone, commits it as one session.edit, and refreshes with
+after_session_edit.
+
+In-place text (A-17): a double-click selects the object and, for a text block,
+prefills the card's multiline editor from content_edit::text_blocks. Apply text
+calls replace_object(.., ObjectReplacement::Text(..)), which reflows the block
+at its existing width and font rules through the library paragraph path; the
+selection clears and the status reads "Edit PDF: text replaced".
+
+Add image (A-23): the card's Add image opens an rfd picker filtered to
+png/jpg/jpeg. load_image_file reads the file, identifies PNG or JPEG by magic
+bytes, and arms the next canvas click; that click calls add_image with a
+120-point square centred on the click and clamped to the page. Tests build an
+8x8 RGB PNG in memory so the placement path runs without a dialog.
+"""

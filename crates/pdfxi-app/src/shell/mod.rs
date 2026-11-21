@@ -22,6 +22,7 @@ pub mod comments;
 pub(crate) mod convert_card;
 pub mod dialogs;
 pub mod document_view;
+pub(crate) mod edit_tool;
 pub mod empty_state;
 pub(crate) mod export_card;
 pub mod find_bar;
