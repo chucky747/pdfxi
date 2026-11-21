@@ -6,7 +6,7 @@
 //! required.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -50,19 +50,35 @@ impl Drop for TempPdf {
 /// Build a one-page PDF with a caller-supplied content-stream dictionary
 /// suffix, computing all cross-reference offsets from real byte lengths.
 fn one_page_pdf(content_dict_extra: &str, content: &str) -> Vec<u8> {
+    one_page_pdf_versioned("1.7", "", content_dict_extra, content)
+}
+
+/// Build a one-page PDF with a chosen header version and optional catalog
+/// entries, computing all cross-reference offsets from real byte lengths.
+fn one_page_pdf_versioned(
+    version: &str,
+    catalog_extra: &str,
+    content_dict_extra: &str,
+    content: &str,
+) -> Vec<u8> {
     let dictionary = if content_dict_extra.is_empty() {
         format!("<< /Length {} >>", content.len())
     } else {
         format!("<< /Length {} {} >>", content.len(), content_dict_extra)
     };
+    let catalog = if catalog_extra.is_empty() {
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned()
+    } else {
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>")
+    };
     let objects = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        catalog,
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_owned(),
         format!("{dictionary}\nstream\n{content}\nendstream"),
     ];
 
-    let mut out = String::from("%PDF-1.7\n");
+    let mut out = format!("%PDF-{version}\n");
     let mut offsets = Vec::with_capacity(objects.len());
     for (index, object) in objects.iter().enumerate() {
         offsets.push(out.len());
@@ -2208,4 +2224,135 @@ fn repair_missing_input_exits_one() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("failed to read"));
     assert!(!out.path.exists(), "no output when the input is missing");
+}
+
+#[test]
+fn compat_reports_a_14_document_and_every_gate() {
+    let pdf = TempPdf::new(&one_page_pdf_versioned(
+        "1.4",
+        "",
+        "",
+        "BT /F1 12 Tf 72 720 Td (hi) Tj ET",
+    ));
+    let output = run(&["compat", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("effective_version: 1.4"), "{text}");
+    assert!(text.contains("source: header"), "{text}");
+    assert!(text.contains("supported: yes"), "{text}");
+    assert!(text.contains("supported=2/12"), "{text}");
+    assert!(
+        text.contains("cross-reference streams: not supported (needs 1.5)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("object streams: not supported (needs 1.5)"),
+        "{text}"
+    );
+    assert!(text.contains("transparency: supported"), "{text}");
+    assert!(text.contains("detected: none"), "{text}");
+    assert!(text.contains("warnings: none"), "{text}");
+}
+
+#[test]
+fn compat_reports_a_20_document_as_fully_supported() {
+    let pdf = TempPdf::new(&one_page_pdf_versioned("2.0", "", "", "q Q"));
+    let output = run(&["compat", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("effective_version: 2.0"), "{text}");
+    assert!(text.contains("supported=12/12"), "{text}");
+    assert!(
+        text.contains("encrypted metadata: supported"),
+        "every gate must be supported at 2.0: {text}"
+    );
+}
+
+#[test]
+fn compat_reports_a_catalog_version_override() {
+    let pdf = TempPdf::new(&one_page_pdf_versioned("1.4", "/Version /1.7", "", "q Q"));
+    let output = run(&["compat", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("header_version: 1.4"), "{text}");
+    assert!(text.contains("effective_version: 1.7"), "{text}");
+    assert!(text.contains("source: catalog"), "{text}");
+    assert!(
+        text.contains("catalog /Version 1.7 overrides header version 1.4"),
+        "{text}"
+    );
+    assert!(text.contains("supported=9/12"), "{text}");
+}
+
+#[test]
+fn compat_flags_a_version_outside_the_supported_range() {
+    let pdf = TempPdf::new(&one_page_pdf_versioned("2.1", "", "", "q Q"));
+    let output = run(&["compat", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("effective_version: 2.1"), "{text}");
+    assert!(text.contains("supported: no"), "{text}");
+    assert!(
+        text.contains("PDF version 2.1 is outside the supported 1.0-2.0 range"),
+        "{text}"
+    );
+}
+
+#[test]
+fn compat_strict_exits_three_for_a_construct_beyond_the_version() {
+    let pdf = TempPdf::new(&one_page_pdf_versioned(
+        "1.4",
+        "",
+        "",
+        "BT /F1 12 Tf 72 720 Td (/ObjStm token) Tj ET",
+    ));
+    let output = run(&["compat", pdf.arg(), "--strict"]);
+    assert_eq!(output.status.code(), Some(3), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("does not allow: object streams"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn compat_json_has_stable_fields() {
+    let pdf = TempPdf::new(&one_page_pdf_versioned("1.7", "", "", "q Q"));
+    let output = run(&["compat", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["header_version"], "1.7");
+    assert_eq!(value["effective_version"], "1.7");
+    assert_eq!(value["source"], "header");
+    assert_eq!(value["supported"], true);
+    let features = value["features"].as_array().expect("features array");
+    assert_eq!(features.len(), 12);
+    assert!(features.iter().any(|entry| {
+        entry["feature"] == "transparency"
+            && entry["min_version"] == "1.4"
+            && entry["supported"] == true
+    }));
+    assert!(
+        value["detected"]
+            .as_array()
+            .expect("detected array")
+            .is_empty()
+    );
+}
+
+#[test]
+fn compat_handles_a_real_world_document() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/realworld/powerpoint-slides.pdf");
+    assert!(
+        path.exists(),
+        "real-world fixture missing: {}",
+        path.display()
+    );
+    let output = run(&["compat", path.to_str().expect("utf-8 fixture path")]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("effective_version: "), "{text}");
+    assert!(text.contains("gates: effective="), "{text}");
+    assert!(text.contains("features:"), "{text}");
 }

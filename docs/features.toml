@@ -3688,41 +3688,43 @@ title = "Unicode CJK and right-to-left text"
 docs = [
     "crates/pdfxi-core/src/compatibility.rs",
     "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
     "docs/evidence/core/T-0172.md",
+    "docs/evidence/cli/T-0274.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core --lib compatibility:: (CARGO_TARGET_DIR=target/lanes/core): 20 passed, 0 failed (15 pre-existing + 5 new); full core suite 370 unit + 6 integration passed; fmt/clippy/doc EXIT=0. Full output in docs/evidence/core/T-0172.md."
+evidence = "`cargo test -p pdfxi-cli --test cli` 69 passed, 0 failed; the seven compat tests exercise 1.4, 1.7 and 2.0 headers, a catalog /Version override, a 2.1 out-of-range document, a stripped construct under --strict (exit 3) and the real fixture fixtures/realworld/powerpoint-slides.pdf; `pdfxi compat` on that real file reports header 1.7, effective 1.7, 9/12 gates, and detected transparency, tagged PDF, cross-reference streams and object streams. A sweep of the first 80 fixtures loads every readable file (78 x 1.7) and exits non-zero only for the two intentionally unreadable fixtures. fmt/clippy/doc exit 0. Pasted output in docs/evidence/cli/T-0274.md."
 id = "STD-001"
 notes = """
-Closes the library-level version-compatibility model. The existing layer already
-detected the header version tolerantly (leading garbage, padding, catalog
-/Version override, typed warnings) and gated twelve version-dependent constructs
-(PdfFeature::ALL) with exact ISO 32000 minimum versions. T-0172 adds the missing
-aggregate deterministic report and raw-byte detection: FeatureGateEntry and
-FeatureGateReport record a support result for every PdfFeature in stable order;
-CompatibilityReport::feature_gate_report is the convenience entry point; the
-report exposes entries(), unsupported(), all_supported() and a byte-stable
-summary()/Display of the form effective=<M.m> supported=<n>/12
-unsupported=<label>(need <version>),... . detect_features(data) is a documented
-token-presence scan that reports version-dependent constructs in PdfFeature::ALL
-order even for structurally damaged files, and is deterministic. Five new tests
-cover gate ordering/determinism, version-sensitive summaries, catalog override,
-multi-token detection and the negative plain-1.4 case.
+STD-001 is now reachable through the CLI, not only through the library. The
+existing core model (tolerant header parse, catalog /Version override, twelve
+PdfFeature gates with exact ISO 32000 minimum versions, deterministic
+FeatureGateReport, token scan) is exposed by `pdfxi compat <FILE> [--json]
+[--strict]`, which runs on real document bytes and prints the effective version,
+per-gate support, detected constructs and warnings. `--strict` exits 3 when a
+present construct exceeds the effective version, which gives scripts the same
+gate the reader uses.
 
-Honest scope: verified at library level. detect_features is deliberately a
-heuristic token scan (stream contents are not excluded, so a token inside a
-stream can be a false positive); confirming a construct structurally remains the
-caller's job. Emitting/reading each construct with full conformance belongs to
-the owning writer/reader modules, and no PDF/A, PDF/X or PDF/UA claim is made.
+Honest scope is unchanged: the detection scan is a token heuristic (a token in
+a stream can be a false positive) and structural confirmation stays with the
+owning reader modules; no PDF/A, PDF/X or PDF/UA conformance is claimed.
 """
 priority = "P0"
-status = "library"
+status = "verified"
 tests = [
     "compatibility::tests::feature_gate_report_is_ordered_and_deterministic",
     "compatibility::tests::feature_gate_report_summary_is_stable_and_reflects_version",
     "compatibility::tests::feature_gate_report_reflects_catalog_override",
     "compatibility::tests::detect_features_finds_version_dependent_tokens",
     "compatibility::tests::detect_features_is_empty_for_plain_14_pdf",
+    "compat_reports_a_14_document_and_every_gate",
+    "compat_reports_a_20_document_as_fully_supported",
+    "compat_reports_a_catalog_version_override",
+    "compat_flags_a_version_outside_the_supported_range",
+    "compat_strict_exits_three_for_a_construct_beyond_the_version",
+    "compat_json_has_stable_fields",
+    "compat_handles_a_real_world_document",
 ]
 title = "PDF 1.0 through 2.0 compatibility"
 

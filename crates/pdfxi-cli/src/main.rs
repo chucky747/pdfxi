@@ -45,6 +45,12 @@
 //! stable report whose `warnings` array carries one code/message pair per typed
 //! core warning.
 
+//! The `compat` command prints the PDF version compatibility report for a file:
+//! the header and effective version, a catalog `/Version` override, warnings,
+//! every version-dependent feature gate (1.0-2.0), and the constructs a byte
+//! scan can see. `--strict` exits 3 when the file uses a construct its version
+//! does not allow, so scripts can gate on it.
+
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -104,6 +110,23 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Report the PDF version (1.0-2.0) and which version-dependent features
+    /// the file may use.
+    ///
+    /// Reads the `%PDF-` header, honours a catalog `/Version` override, evaluates
+    /// the twelve version-dependent feature gates, and scans the bytes for the
+    /// constructs those gates describe. `--strict` exits 3 when a construct is
+    /// present but the effective version does not allow it.
+    Compat {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+        /// Exit 3 when a detected construct exceeds the effective version.
+        #[arg(long)]
+        strict: bool,
     },
     /// Extract plain text from a PDF file.
     ///
@@ -490,6 +513,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Info { file, json } => print_info(&file, json),
+        Command::Compat { file, json, strict } => print_compatibility(&file, json, strict),
         Command::Text { file } => extract_text(&file),
         Command::Search {
             file,
@@ -616,6 +640,134 @@ fn print_info(file: &PathBuf, json: bool) -> anyhow::Result<()> {
         println!("pdf_version: {}", info.pdf_version);
         println!("bytes: {}", info.bytes);
         println!("pages: {}", info.pages);
+    }
+    Ok(())
+}
+
+/// One version-dependent feature gate in a [`CompatOutput`].
+#[derive(Debug, Serialize)]
+struct CompatFeature {
+    /// Human-readable feature label, stable across releases.
+    feature: &'static str,
+    /// First PDF version that provides the feature.
+    min_version: String,
+    /// Whether the document's effective version provides it.
+    supported: bool,
+}
+
+/// Machine-readable result of `pdfxi compat --json`.
+#[derive(Debug, Serialize)]
+struct CompatOutput {
+    /// File that was inspected.
+    file: String,
+    /// Version declared by the `%PDF-` header.
+    header_version: String,
+    /// Version that applies after a catalog `/Version` override.
+    effective_version: String,
+    /// Where the effective version came from: `header` or `catalog`.
+    source: &'static str,
+    /// Byte offset of the `%PDF-` marker, when one was found.
+    header_offset: Option<usize>,
+    /// Whether the effective version is inside the supported 1.0-2.0 range.
+    supported: bool,
+    /// Non-fatal header or version irregularities, in a fixed order.
+    warnings: Vec<String>,
+    /// One entry per [`pdfxi_core::compatibility::PdfFeature::ALL`] gate.
+    features: Vec<CompatFeature>,
+    /// Constructs whose tokens are present in the file, in gate order.
+    detected: Vec<&'static str>,
+}
+
+/// Load a document and print its version-compatibility report.
+fn print_compatibility(file: &PathBuf, json: bool, strict: bool) -> anyhow::Result<()> {
+    use pdfxi_core::compatibility::{VersionSource, detect_features};
+
+    let doc = load(file)?;
+    let report = doc.compatibility_report();
+    let gates = report.feature_gate_report();
+    let detected = detect_features(doc.bytes());
+    let source = match report.source() {
+        VersionSource::Header => "header",
+        VersionSource::Catalog => "catalog",
+    };
+    let features = gates
+        .entries()
+        .iter()
+        .map(|entry| CompatFeature {
+            feature: entry.feature().label(),
+            min_version: entry.feature().min_version().to_string(),
+            supported: entry.support().is_supported(),
+        })
+        .collect::<Vec<_>>();
+    let detected_labels = detected
+        .iter()
+        .map(|feature| feature.label())
+        .collect::<Vec<_>>();
+    let output = CompatOutput {
+        file: file.display().to_string(),
+        header_version: report.header_version().to_string(),
+        effective_version: report.effective_version().to_string(),
+        source,
+        header_offset: report.header_offset(),
+        supported: report.is_supported(),
+        warnings: report.warnings().iter().map(ToString::to_string).collect(),
+        features,
+        detected: detected_labels,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("file: {}", output.file);
+        println!("header_version: {}", output.header_version);
+        println!("effective_version: {}", output.effective_version);
+        println!("source: {}", output.source);
+        match output.header_offset {
+            Some(offset) => println!("header_offset: {offset}"),
+            None => println!("header_offset: missing"),
+        }
+        println!("supported: {}", if output.supported { "yes" } else { "no" });
+        println!("gates: {}", gates.summary());
+        println!("features:");
+        for feature in &output.features {
+            if feature.supported {
+                println!("  {}: supported", feature.feature);
+            } else {
+                println!(
+                    "  {}: not supported (needs {})",
+                    feature.feature, feature.min_version
+                );
+            }
+        }
+        if output.detected.is_empty() {
+            println!("detected: none");
+        } else {
+            println!("detected: {}", output.detected.join(", "));
+        }
+        if output.warnings.is_empty() {
+            println!("warnings: none");
+        } else {
+            println!("warnings:");
+            for warning in &output.warnings {
+                println!("  - {warning}");
+            }
+        }
+    }
+
+    if strict {
+        let blocked = detected
+            .iter()
+            .filter(|feature| !report.effective_version().supports(**feature))
+            .map(|feature| feature.label())
+            .collect::<Vec<_>>();
+        if !blocked.is_empty() {
+            eprintln!(
+                "strict: effective version {} does not allow: {}",
+                report.effective_version(),
+                blocked.join(", ")
+            );
+            std::process::exit(3);
+        }
     }
     Ok(())
 }

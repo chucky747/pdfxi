@@ -1,0 +1,17 @@
+{
+  "id": "T-0274",
+  "lane": "core",
+  "title": "Expose PDF version compatibility (1.0-2.0) as a pdfxi CLI command",
+  "priority": "P0",
+  "status": "queued",
+  "depends_on": ["T-0172"],
+  "owns": [
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/evidence/cli/T-0274.md",
+    "orchestration/feature-updates/T-0274.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli passes; pdfxi compat reports the header/effective version, warnings, and every version-dependent feature gate on real files across 1.0-2.0; a 1.4 file lists the 1.5+ constructs as unsupported, a 2.0 file supports all of them, a catalog /Version override is reported, and --json emits stable names. STD-001 moves to verified with that command as its reachable path.",
+  "notes": "STD-001 was library-only: pdfxi-core::compatibility already parses the header, honours a catalog /Version override, gates the twelve PdfFeature constructs and scans for their tokens, but no user could reach it. Add `pdfxi compat <FILE> [--json] [--strict]` so the capability runs on real document bytes from the CLI. --strict exits 3 when the effective version cannot use a construct that is present in the file, for scripts.",
+  "evidence": "docs/evidence/cli/T-0274.md"
+}
