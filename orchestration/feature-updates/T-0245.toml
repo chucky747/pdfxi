@@ -8,7 +8,7 @@
 
 task = "T-0245"
 lane = "app"
-status = "partial"
+status = "verified"
 evidence = "docs/evidence/ui/T-0245.md"
 docs = [
     "crates/pdfxi-app/src/shell/signing.rs",
@@ -54,6 +54,7 @@ tests = [
     "ui::shell::sign_request::tests::corrupt_tracker_file_loads_as_empty",
     "settings::tests::tool_flag_parses_stable_names_and_ignores_unknown_values",
     "ui_controls::request_signature_tool_row_appears_with_a_document_and_opens_the_window",
+    "ui_controls::place_signature_tool_row_appears_with_a_document_and_opens_the_card",
 ]
 
 notes = """
@@ -93,17 +94,18 @@ target/tmp/signing/capture-signed.pdf (111330 bytes, SHA-256
 B2D99AD720BAC8D4CC9E9ED1061C078285351556B25BAA1D7831C4C687BFCACD) for the
 reviewer's four captures. No screenshots are committed yet.
 
-Not promoted: the matrix promotion is reviewed at the end, and SEC-006
-(timestamps/revocation) is T-0267. Other limits: verification not re-run after
-save, no multi-signature list, PFX read and signing synchronous on the UI
-thread (~0.1 s for the fixture), encrypted documents refuse signing.
+Not promoted: feature_rows and promoted_rows stay empty because matrix
+promotion is reviewed at T-0262 (which also captures the installed build), and
+SEC-006 (timestamps/revocation) is T-0267. Other limits: verification not
+re-run after save, no multi-signature list, PFX read and signing synchronous on
+the UI thread (~0.1 s for the fixture), encrypted documents refuse signing.
 
 A-31 (request a signature by email, served from the Sign card): the card's
 "Request signature" section takes recipient, optional subject and optional
 message and sends through the platform mail client with a mailto: URL built by
 request_mailto_url; PDFXI makes no network call. A request is recorded only
 after the launcher accepts the URL, in a tab-separated tracker at
-%APPDATA%\PDFXI\sign-requests.tsv (Windows) or
+%APPDATA%\\PDFXI\\sign-requests.tsv (Windows) or
 $XDG_CONFIG_HOME/PDFXI/sign-requests.tsv (other systems), with escaped fields
 and a corrupt file loading as empty. "Tracked requests" lists recipient,
 document file name and pending/signed. open_document_session marks a pending
@@ -116,9 +118,10 @@ sending_a_signature_request_records_it_and_passes_a_mailto_url,
 a_failed_mail_launch_records_nothing_and_reports_an_error,
 a_returned_signed_copy_marks_the_pending_request_signed, the four
 sign_request tracker tests, the --tool parser test, and the ui_controls row
-test. Limits: no delivery confirmation, no network or attachment, no recipient
-identity verification, and matching is local exact-path or recipient-substring
-only. No capture is claimed; T-0262 captures the installed build.
+tests. Limits: no delivery confirmation, no network or attachment, no recipient
+identity verification, no certificate trust anchor until T-0267, and matching
+is local exact-path or recipient-substring only. No capture is claimed; T-0262
+captures the installed build.
 
 A-25 (Fill & Sign placement, not a certificate signature): a separate Place
 signature card and AppCommand::PlaceSignature ("place-signature"), with its own
@@ -136,7 +139,8 @@ typed_signature_stamp_persists_through_save_and_reopen,
 drawn_signature_adds_ink_and_persists,
 image_signature_adds_page_content_and_persists (3 passed, 0 failed with
 cargo test -p pdfxi-app --features ui,pdfium signature_place). Entry is the
-command only: no Fill & Sign panel button or --tool alias dispatches
-place-signature yet. A-31 is served by the paragraph above; no capture is
-claimed for this card and no feature row is promoted.
+Tools panel "Place signature" row (Capability::Signing plus an open document),
+proved by place_signature_tool_row_appears_with_a_document_and_opens_the_card;
+there is no --tool=place-signature deep link. A-31 is served by the paragraph
+above; no capture is claimed for this card and no feature row is promoted.
 """

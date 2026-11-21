@@ -1,0 +1,83 @@
+# T-0255 - Bookmarks panel and document properties dialog
+#
+# App slice after T-0255A's committed outline bridge. O-03 bookmark
+# navigate/add/rename/delete/reorder is served, as is the read-only properties
+# half of MANAGE-001. The matrix rows are listed for review but not promoted
+# here: VIEW-008 stays `model` and MANAGE-001 stays `library` until the
+# integrator reviews the UI evidence.
+
+task = "T-0255"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0255.md"
+docs = [
+    "crates/pdfxi-app/src/shell/bookmarks_panel.rs",
+    "crates/pdfxi-app/src/shell/side_panel.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/tools_panel.rs",
+    "crates/pdfxi-app/src/shell/session.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/ui/T-0255.md",
+]
+feature_rows = ["VIEW-008", "MANAGE-001"]
+promoted_rows = []
+acceptance_items = ["O-03"]
+tests = [
+    "ui::shell::bookmarks_panel::tests::powerpoint_outline_loads_add_rename_move_persist_then_delete",
+    "ui::shell::bookmarks_panel::tests::excel_document_gains_an_outline_that_persists",
+    "ui::shell::bookmarks_panel::tests::a_rejected_edit_keeps_the_previous_outline_and_reports_it",
+    "ui::shell::bookmarks_panel::tests::properties_show_real_info_and_not_set_for_absent_values",
+    "ui_controls::document_properties_tool_row_appears_with_a_document_and_opens_the_window",
+]
+notes = """
+Bookmarks: `BookmarksPanelState` in shell/bookmarks_panel.rs is a collapsible
+section at the bottom of pages_panel_ui. `refresh_bookmarks` calls
+pdfxi_edit::navigation::read_outline on document open, tab activation and every
+after_session_edit; OutlineRead::issues explain destination-less rows by title.
+Rows are flattened to depth order. A row with a destination dispatches the same
+AppCommand::SelectThumbnailPage(page) the thumbnail list uses, which calls
+PdfxiApp::select_thumbnail_page (DocumentTab::set_current_page + scroll); the
+library Destination::page is already zero-based, so it is passed unchanged. A
+row without a destination is weak-styled, non-navigating, and still selectable
+so Rename/Delete can reach it.
+
+Actions on the active writable tab: Add bookmark inserts a root bookmark at the
+current page with Destination::new(PageIndex::new(current_page), FitType::Fit)
+and title "Bookmark N"; Rename commits an inline field on Enter/Save; Delete
+removes the node; Move up/down uses move_bookmark (index - 1 / index + 2) and is
+disabled at the ends. Every mutation clones the session Document, edits a cloned
+Outline, calls write_outline, commits with
+session.edit(|document| { *document = candidate; Ok(()) }) and then
+after_session_edit(id), matching comments.rs::commit_annotation. Failures map to
+self.status ("Bookmarks: ...") and the panel error; the old outline stays.
+
+Properties: AppCommand::DocumentProperties ("document-properties") opens the
+Document properties window via handle_document_properties_command. The Tools row
+uses Capability::Documents (the crate has no Core capability) and is hidden
+without an open document. Rows show real session/document values only: file
+name, page count, byte size, PDF version, /Info Title/Author/Subject/Keywords/
+Creator/Producer/CreationDate/ModDate, encrypted yes/no and XMP present yes/no.
+Absent values read "not set"; a failed /Info read reads "unavailable".
+
+Tests: the four bookmarks_panel tests cover the PowerPoint outline loading,
+add/rename/move persistence through save_as + Document::from_bytes/read_outline,
+delete persistence, the Excel no-outline add-then-reopen, the rejected-rename
+no-mutation path, and real Title/Creator plus "not set" for an absent Author in
+the properties view. Harness adds DocumentProperties to all_commands, the label
+set, the label snapshot and the capability dispatch loop, plus the tool-row test
+(hidden without a document, opens the window for the Excel fixture). Gates
+(CARGO_TARGET_DIR=target/lanes/app9): fmt exit 0; clippy
+-p pdfxi-app --all-targets --features ui,pdfium -- -D warnings exit 0;
+cargo test -p pdfxi-app --features ui,pdfium: 560 passed (lib), 4 ignored,
+0 failed; ui_controls 27 passed.
+
+Limits: no drag-reorder or nesting change, no multi-select, no destination
+editing beyond "current page + Fit" on add, issue matching by title because the
+row model has no object id, read-only properties dialog, and the section state
+is not persisted. API mismatches recorded for review: Destination::page is a
+zero-based PageIndex (not 1-based NonZeroUsize), and Bookmark::new returns
+Result. No capture, no git, no matrix promotion.
+"""

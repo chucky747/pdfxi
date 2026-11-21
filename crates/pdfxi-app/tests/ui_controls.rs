@@ -337,6 +337,7 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
         ("Sign", AppCommand::Sign),
         ("PlaceSignature", AppCommand::PlaceSignature),
         ("RequestSignature", AppCommand::RequestSignature),
+        ("DocumentProperties", AppCommand::DocumentProperties),
         ("Organize", AppCommand::Organize),
         ("Export", AppCommand::Export),
         ("ConvertToPdf", AppCommand::ConvertToPdf),
@@ -515,6 +516,7 @@ const PROVEN_LABELS: &[&str] = &[
     "sign",
     "place-signature",
     "request-signature",
+    "document-properties",
     "organize",
     "export",
     "convert-to-pdf",
@@ -741,6 +743,7 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("sign", "sign"),
         ("place-signature", "place-signature"),
         ("request-signature", "request-signature"),
+        ("document-properties", "document-properties"),
         ("organize", "organize"),
         ("export", "export"),
         ("convert-to-pdf", "convert-to-pdf"),
@@ -1791,6 +1794,7 @@ fn dispatched_capability_commands_report_unavailable() {
         AppCommand::Sign,
         AppCommand::PlaceSignature,
         AppCommand::RequestSignature,
+        AppCommand::DocumentProperties,
         AppCommand::Organize,
         AppCommand::Export,
         AppCommand::ConvertToPdf,
@@ -1846,6 +1850,27 @@ fn request_signature_tool_row_appears_with_a_document_and_opens_the_window() {
         "the Request signature command opens the Sign card that holds the request form"
     );
     assert_eq!(app.status(), "Signature request: type the recipient");
+}
+
+#[test]
+fn document_properties_tool_row_appears_with_a_document_and_opens_the_window() {
+    let app = PdfxiApp::new();
+    assert!(
+        !app.tools_panel_rows()
+            .iter()
+            .any(|row| row.command.label() == "document-properties"),
+        "Document properties must not be offered without an open document"
+    );
+
+    let mut app = with_excel_document();
+    let row = app
+        .tools_panel_rows()
+        .into_iter()
+        .find(|row| row.command.label() == "document-properties")
+        .expect("the Document properties row is offered for an open document");
+    app.dispatch(row.command, None);
+    assert!(app.document_properties_open());
+    assert_eq!(app.status(), "Document properties");
 }
 
 #[test]

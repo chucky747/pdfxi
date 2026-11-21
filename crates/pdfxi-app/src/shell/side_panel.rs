@@ -259,6 +259,7 @@ impl PdfxiApp {
             return;
         }
         self.thumbnails_ui(ui);
+        self.bookmarks_section_ui(ui, palette);
     }
 
     /// Home panel: a short recent hint, no second open action.

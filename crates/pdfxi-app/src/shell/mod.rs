@@ -13,6 +13,7 @@ pub(crate) mod assistant_connect;
 pub(crate) mod assistant_stub;
 pub(crate) mod assistant_tools;
 
+pub(crate) mod bookmarks_panel;
 pub mod bottom_bar;
 pub mod capabilities;
 pub mod command_bar;

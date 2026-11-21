@@ -605,6 +605,10 @@ pub struct PdfxiApp {
     signing: shell::signing::SigningUiState,
     /// Fill & Sign typed/drawn/image signature placement card.
     signature_place: shell::signature_place::SignaturePlaceState,
+    /// Bookmarks panel state for the active document.
+    bookmarks: shell::bookmarks_panel::BookmarksPanelState,
+    /// Document properties window state.
+    properties_state: shell::bookmarks_panel::DocumentPropertiesState,
     /// Pre-print panel, progress and worker state.
     print_ui: shell::print_dialog::PrintUiState,
     /// Revision of the active session bound to the renderer.
@@ -1286,6 +1290,7 @@ impl PdfxiApp {
         self.refresh_renderer_for_active_tab();
         self.refresh_annotations();
         self.refresh_forms();
+        self.refresh_bookmarks();
     }
 
     /// Bind the PDFium renderer to the active tab's document.
@@ -1823,6 +1828,7 @@ impl eframe::App for PdfxiApp {
         self.forms_panel_ui(ctx);
         self.signing_dialog_ui(ctx);
         self.place_signature_dialog_ui(ctx);
+        self.document_properties_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
         self.save_conflict_ui(ctx);

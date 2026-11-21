@@ -361,6 +361,12 @@ pub fn tool_rows() -> Vec<ToolRow> {
             icon: Icon::Sparkle,
             command: AppCommand::AiAssistant,
         },
+        ToolRow {
+            label: "Document properties",
+            capability: Capability::Documents,
+            icon: Icon::File,
+            command: AppCommand::DocumentProperties,
+        },
     ]
 }
 

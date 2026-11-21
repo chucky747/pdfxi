@@ -145,6 +145,8 @@ pub enum AppCommand {
     PlaceSignature,
     /// Request a signature by email and track it.
     RequestSignature,
+    /// Show the document properties dialog.
+    DocumentProperties,
     /// Open Organize Pages (capability-gated).
     Organize,
     /// Open Export (capability-gated).
@@ -403,6 +405,7 @@ impl AppCommand {
             Self::Sign => "sign",
             Self::PlaceSignature => "place-signature",
             Self::RequestSignature => "request-signature",
+            Self::DocumentProperties => "document-properties",
             Self::Organize => "organize",
             Self::Export => "export",
             Self::ConvertToPdf => "convert-to-pdf",
@@ -582,6 +585,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::Sign => self.handle_sign_command(),
             AppCommand::PlaceSignature => self.handle_place_signature_command(),
             AppCommand::RequestSignature => self.handle_request_signature_command(),
+            AppCommand::DocumentProperties => self.handle_document_properties_command(),
             AppCommand::Organize => self.not_available("Organize Pages"),
             AppCommand::Export => self.not_available("Export"),
             AppCommand::ConvertToPdf => self.not_available("Convert to PDF"),
