@@ -22,6 +22,7 @@ pub mod comments;
 pub mod dialogs;
 pub mod document_view;
 pub mod empty_state;
+pub(crate) mod export_card;
 pub mod find_bar;
 pub mod forms;
 pub mod help;

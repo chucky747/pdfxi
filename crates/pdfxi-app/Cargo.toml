@@ -17,7 +17,7 @@ ui = ["dep:eframe", "dep:egui", "dep:rfd"]
 # Enables the native PDFium backend inside `pdfxi-render`. This is independent
 # of `ui` so the raster cache can be exercised headlessly, and `ui` keeps working
 # without it by drawing the placeholder canvas.
-pdfium = ["pdfxi-render/pdfium"]
+pdfium = ["pdfxi-render/pdfium", "pdfxi-convert/pdfium"]
 
 [dependencies]
 # Rendering is a normal (non-optional) dependency: the dependency-light raster
@@ -28,6 +28,9 @@ pdfxi-text = { workspace = true }
 pdfxi-document = { workspace = true }
 pdfxi-core = { workspace = true }
 pdfxi-security = { workspace = true }
+# Export encoders used by the Export card (A-27). The app's `pdfium` feature
+# forwards `pdfxi-convert/pdfium` for PNG/JPEG export.
+pdfxi-convert = { workspace = true }
 pdfxi-edit = { path = "../pdfxi-edit", version = "0.1.0" }
 # AcroForm reading, filling and appearance regeneration (T-0234). The shell
 # calls these entry points and never parses a field dictionary itself.

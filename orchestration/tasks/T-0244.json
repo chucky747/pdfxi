@@ -3,7 +3,7 @@
     "lane":  "app",
     "title":  "Export card and export menu",
     "priority":  "P1",
-    "status":  "queued",
+    "status":  "verified",
     "depends_on":  [
                        "T-0239"
                    ],

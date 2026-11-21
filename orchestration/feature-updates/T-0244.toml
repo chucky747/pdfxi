@@ -1,0 +1,88 @@
+# T-0244 - Export card and Export command
+#
+# Shell half of the A-27 export pair. The card and command are wired to
+# `pdfxi_convert::pdf_export::export_pdf`; the exercised rows are listed below
+# without promotion. All eight targets, including PNG/JPEG, are exercised now
+# that the app's `pdfium` feature forwards `pdfxi-convert/pdfium`.
+
+task = "T-0244"
+lane = "app"
+status = "partial"
+evidence = "docs/evidence/ui/T-0244.md"
+docs = [
+    "crates/pdfxi-app/src/shell/export_card.rs",
+    "crates/pdfxi-app/src/shell/mod.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/tests/ui_controls.rs",
+    "docs/evidence/ui/T-0244.md",
+]
+feature_rows = [
+    "EXPORT-001",
+    "EXPORT-002",
+    "EXPORT-003",
+    "EXPORT-004",
+    "EXPORT-005",
+    "EXPORT-006",
+]
+promoted_rows = []
+acceptance_items = ["A-27"]
+tests = [
+    "ui::shell::export_card::tests::every_export_choice_writes_real_bytes",
+    "ui::shell::export_card::tests::export_without_a_document_reports_it_and_does_not_open_the_card",
+    "ui::shell::export_card::tests::a_missing_parent_directory_is_created",
+    "ui::shell::export_card::tests::page_images_are_written_beside_the_chosen_path",
+    "ui_controls::export_command_opens_the_card_with_a_document_and_explains_without_one",
+]
+notes = """
+Export card: `ExportUiState` + `ExportChoice` in shell/export_card.rs.
+AppCommand::Export calls handle_export_command: no document sets "Open a document
+to export" and changes nothing; an open document shows the card under the Tools
+panel with a format ComboBox, a JPEG quality slider (only when JPEG is offered),
+the Export button and last-export/error lines. The picker lists only formats
+ExportFormat::is_implemented() advertises, per the task note that an
+unimplemented format is absent rather than a disabled ghost.
+
+Export path: choose_export_path opens rfd with the chosen extension and the tab
+stem; tests never touch rfd. export_document_to builds ExportOptions with the tab
+title, TextPageSelection::All, the card DPI and JPEG quality, then calls
+export_pdf once. export_to_path writes one part at the chosen path, or every
+page part as <stem>-<part name>.<ext>; it creates missing parent directories,
+sets last_path, and reports "Exported N page(s) to <path>". Typed converter and
+I/O errors go to the card error and "Export failed: ..." status. Unsupported
+findings (Office text flattening) are appended to the success status as
+"<n> unsupported item(s), e.g. page N kind: detail".
+
+Feature wiring: the app's `pdfium` feature now forwards
+`pdfxi-convert/pdfium`, so `ExportFormat::Png/Jpeg::is_implemented()` is true
+under `--features ui,pdfium` and all eight targets are offered. The picker still
+filters on is_implemented(), so a build without pdfium shows six targets and
+never a disabled ghost.
+
+Tests: `every_export_choice_writes_real_bytes` opens
+fixtures/realworld/microsoft-excel-2019-sample.pdf and, per choice, exports into
+target/tmp/export-card/ and checks the real bytes: Text contains the fixture
+marker "PDFXI"; Docx/Xlsx/Pptx start with "PK"; Html contains "<html" and the
+document title; Rtf starts with "{\\rtf"; PNG starts with 89 50 4E 47 and JPEG
+with FF D8; every choice asserts is_implemented() first.
+`export_without_a_document_reports_it_and_does_not_open_the_card`
+covers the no-document command and converter error. `a_missing_parent_directory_is_created`
+covers nested output creation. `page_images_are_written_beside_the_chosen_path`
+covers multi-part naming for PNG (doc-page-1.png and doc-page-2.png beside the
+chosen path). Harness:
+`export_command_opens_the_card_with_a_document_and_explains_without_one`
+plus the existing Export entries in all_commands, the label set, the label
+snapshot and the capability dispatch loop. The Export branch in commands.rs no
+longer calls not_available.
+
+Gates (CARGO_TARGET_DIR=target/lanes/app9): fmt exit 0; clippy
+-p pdfxi-app --all-targets --features ui,pdfium -- -D warnings exit 0;
+cargo test -p pdfxi-app --features ui,pdfium: 564 passed (lib), 4 ignored,
+0 failed; ui_controls 28 passed; cargo check -p pdfxi-app --features ui (no
+pdfium) still compiles.
+
+Limits: synchronous export on the UI thread with no cancel (incremental
+follow-up); Office "opens the result" is not re-checked because of the recorded
+T-0215 COM problem; PDFium is not involved in the written-output check because
+the output is not a PDF. All eight formats are exercised. No capture and no git.
+"""

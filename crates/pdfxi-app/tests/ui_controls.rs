@@ -1874,6 +1874,19 @@ fn document_properties_tool_row_appears_with_a_document_and_opens_the_window() {
 }
 
 #[test]
+fn export_command_opens_the_card_with_a_document_and_explains_without_one() {
+    let mut app = PdfxiApp::new();
+    app.dispatch(AppCommand::Export, None);
+    assert_eq!(app.status(), "Open a document to export");
+    assert!(!app.export_card_open());
+
+    let mut app = with_excel_document();
+    app.dispatch(AppCommand::Export, None);
+    assert!(app.export_card_open());
+    assert!(app.status().starts_with("Export:"));
+}
+
+#[test]
 fn viewport_commands_reach_the_egui_context() {
     let mut app = PdfxiApp::new();
 
@@ -2007,6 +2020,10 @@ struct Function {
 /// Allowing them by name (rather than by return type) keeps the exemption
 /// narrow: a new factory needs an explicit entry and a reason.
 const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "export_card_ui",
+        "export card: the format picker is state only and the Export button calls choose_export_path, whose result the Export command proof covers; the native picker is never opened in tests",
+    ),
     (
         "place_signature_dialog_ui",
         "placement dialog: the typed/drawn/image buttons call the methods the PlaceSignature command proof covers; the mode selector is state only and the draw pad is a gesture",

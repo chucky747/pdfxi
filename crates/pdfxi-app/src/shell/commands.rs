@@ -587,7 +587,7 @@ impl crate::ui::PdfxiApp {
             AppCommand::RequestSignature => self.handle_request_signature_command(),
             AppCommand::DocumentProperties => self.handle_document_properties_command(),
             AppCommand::Organize => self.not_available("Organize Pages"),
-            AppCommand::Export => self.not_available("Export"),
+            AppCommand::Export => self.handle_export_command(),
             AppCommand::ConvertToPdf => self.not_available("Convert to PDF"),
             AppCommand::CombineFiles => self.not_available("Combine Files"),
             AppCommand::Protect => self.not_available("Protect PDF"),

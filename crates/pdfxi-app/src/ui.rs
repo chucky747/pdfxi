@@ -609,6 +609,8 @@ pub struct PdfxiApp {
     bookmarks: shell::bookmarks_panel::BookmarksPanelState,
     /// Document properties window state.
     properties_state: shell::bookmarks_panel::DocumentPropertiesState,
+    /// Export card state.
+    export_ui: shell::export_card::ExportUiState,
     /// Pre-print panel, progress and worker state.
     print_ui: shell::print_dialog::PrintUiState,
     /// Revision of the active session bound to the renderer.
@@ -2017,7 +2019,10 @@ impl PdfxiApp {
                             bottom: 10,
                         }),
                 )
-                .show(ctx, |ui| self.tools_panel_ui(ui, palette));
+                .show(ctx, |ui| {
+                    self.tools_panel_ui(ui, palette);
+                    self.export_card_ui(ui, palette);
+                });
         }
 
         if self.state.active_tab().is_some() {
