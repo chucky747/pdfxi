@@ -76,10 +76,14 @@ impl Capabilities {
     ///
     /// The document workspace, recent files, bookmarks navigation, the local
     /// Files library, starring, comments, AcroForm filling, the certificate
-    /// signing card and the OpenCode connection screen exist. Shared is added by
-    /// the shell when a shared folder is configured; [`Capability::AiAssistant`]
-    /// is added by the shell only after the connection screen reports a usable
-    /// service. Edit, export, print and protect remain off until their task lands.
+    /// signing card, edit/export/organise pages and redaction all exist. Shared
+    /// is added by the shell when a shared folder is configured;
+    /// [`Capability::AiAssistant`] is added by the shell only after the
+    /// connection screen reports a usable service.
+    ///
+    /// Print is deliberately absent: the command bar prints through an
+    /// unconditional button (`command_bar.rs`), so no control checks
+    /// [`Capability::Print`] and enabling it would have no effect.
     #[must_use]
     pub fn available() -> Self {
         Self::none()
@@ -91,6 +95,9 @@ impl Capabilities {
             .with(Capability::Comments)
             .with(Capability::Forms)
             .with(Capability::Signing)
+            .with(Capability::Edit)
+            .with(Capability::Export)
+            .with(Capability::Protect)
             .with(Capability::AssistantConnect)
     }
 

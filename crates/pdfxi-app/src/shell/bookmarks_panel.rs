@@ -188,97 +188,114 @@ impl PdfxiApp {
                 if let Some(error) = &self.bookmarks.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(writable, egui::Button::new("Add bookmark"))
-                        .on_hover_text("Add a bookmark at the current page")
-                        .clicked()
-                    {
-                        add = true;
-                    }
-                    if ui
-                        .add_enabled(writable && selected.is_some(), egui::Button::new("Rename"))
-                        .clicked()
-                    {
-                        begin_rename = true;
-                    }
-                    if ui
-                        .add_enabled(writable && selected.is_some(), egui::Button::new("Delete"))
-                        .clicked()
-                    {
-                        delete = true;
-                    }
-                    let can_move_up =
-                        writable && selected_row.as_ref().is_some_and(|row| row.index > 0);
-                    if ui
-                        .add_enabled(can_move_up, egui::Button::new("Move up"))
-                        .clicked()
-                    {
-                        move_up = true;
-                    }
-                    let can_move_down = writable
-                        && selected_row
-                            .as_ref()
-                            .is_some_and(|row| row.index + 1 < row.siblings);
-                    if ui
-                        .add_enabled(can_move_down, egui::Button::new("Move down"))
-                        .clicked()
-                    {
-                        move_down = true;
-                    }
-                });
-
-                if self.bookmarks.renaming.is_some() {
-                    ui.horizontal(|ui| {
-                        let response = ui.add(
-                            egui::TextEdit::singleline(&mut self.bookmarks.draft_title)
-                                .desired_width(180.0),
-                        );
-                        if ui.button("Save").clicked()
-                            || (response.lost_focus()
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                        {
-                            commit_rename = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.bookmarks.renaming = None;
-                        }
-                    });
-                }
-
-                if rows.is_empty() {
-                    ui.label(egui::RichText::new("No bookmarks").color(palette.text_muted));
-                }
-                for row in &rows {
-                    let is_selected = selected.as_deref() == Some(row.path.as_slice());
-                    let indent = row.depth as f32 * 12.0;
-                    ui.horizontal(|ui| {
-                        ui.add_space(indent);
-                        if let Some(page) = row.page {
-                            let response = ui
-                                .selectable_label(is_selected, row.title.clone())
-                                .on_hover_text(format!("Page {}", page + 1));
-                            if response.clicked() {
-                                navigate = Some((page, row.path.clone()));
-                            }
+                egui::ScrollArea::vertical()
+                    .id_salt("pages_bookmarks_body")
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        let count = rows.len();
+                        let count_label = if count == 1 {
+                            "1 bookmark".to_owned()
                         } else {
-                            let reason = row
-                                .reason
-                                .clone()
-                                .unwrap_or_else(|| "no destination".to_owned());
-                            let response = ui
-                                .selectable_label(
-                                    is_selected,
-                                    egui::RichText::new(row.title.clone()).weak(),
-                                )
-                                .on_hover_text(reason);
-                            if response.clicked() {
-                                // Select only: a destination-less item cannot navigate.
-                                self.select_bookmark(row.path.clone());
+                            format!("{count} bookmarks")
+                        };
+                        ui.label(egui::RichText::new(count_label).color(palette.text_muted));
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add_enabled(writable, egui::Button::new("Add bookmark"))
+                                .on_hover_text("Add a bookmark at the current page")
+                                .clicked()
+                            {
+                                add = true;
                             }
+                            if ui
+                                .add_enabled(
+                                    writable && selected.is_some(),
+                                    egui::Button::new("Rename"),
+                                )
+                                .clicked()
+                            {
+                                begin_rename = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    writable && selected.is_some(),
+                                    egui::Button::new("Delete"),
+                                )
+                                .clicked()
+                            {
+                                delete = true;
+                            }
+                            let can_move_up =
+                                writable && selected_row.as_ref().is_some_and(|row| row.index > 0);
+                            if ui
+                                .add_enabled(can_move_up, egui::Button::new("Move up"))
+                                .clicked()
+                            {
+                                move_up = true;
+                            }
+                            let can_move_down = writable
+                                && selected_row
+                                    .as_ref()
+                                    .is_some_and(|row| row.index + 1 < row.siblings);
+                            if ui
+                                .add_enabled(can_move_down, egui::Button::new("Move down"))
+                                .clicked()
+                            {
+                                move_down = true;
+                            }
+                        });
+                        ui.add_space(4.0);
+
+                        if self.bookmarks.renaming.is_some() {
+                            ui.horizontal(|ui| {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut self.bookmarks.draft_title)
+                                        .desired_width(180.0),
+                                );
+                                if ui.button("Save").clicked()
+                                    || (response.lost_focus()
+                                        && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                                {
+                                    commit_rename = true;
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    self.bookmarks.renaming = None;
+                                }
+                            });
+                        }
+
+                        for row in &rows {
+                            let is_selected = selected.as_deref() == Some(row.path.as_slice());
+                            let indent = row.depth as f32 * 12.0;
+                            ui.horizontal(|ui| {
+                                ui.add_space(indent);
+                                if let Some(page) = row.page {
+                                    let response = ui
+                                        .selectable_label(is_selected, row.title.clone())
+                                        .on_hover_text(format!("Page {}", page + 1));
+                                    if response.clicked() {
+                                        navigate = Some((page, row.path.clone()));
+                                    }
+                                } else {
+                                    let reason = row
+                                        .reason
+                                        .clone()
+                                        .unwrap_or_else(|| "no destination".to_owned());
+                                    let response = ui
+                                        .selectable_label(
+                                            is_selected,
+                                            egui::RichText::new(row.title.clone()).weak(),
+                                        )
+                                        .on_hover_text(reason);
+                                    if response.clicked() {
+                                        // Select only: a destination-less item cannot navigate.
+                                        self.select_bookmark(row.path.clone());
+                                    }
+                                }
+                            });
                         }
                     });
-                }
             });
 
         if let Some((page, path)) = navigate {

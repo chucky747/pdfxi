@@ -1,0 +1,12 @@
+{
+  "id": "T-0272",
+  "lane": "app",
+  "title": "Enable shipped tool capabilities and fix Pages-panel bookmark layout",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0271"],
+  "owns": ["crates/pdfxi-app/src/**", "crates/pdfxi-app/tests/**", "docs/evidence/ui/T-0272.md", "orchestration/feature-updates/T-0272.toml"],
+  "acceptance": "cargo test -p pdfxi-app --features ui,pdfium passes; the installed build's Tools panel lists Edit PDF, Comment, Fill & Sign, Place signature, Request signature, Organize Pages, Export PDF, Convert to PDF, Combine Files and Protect PDF for an open document; the Pages rail's bookmark controls do not overlap each other or the page list.",
+  "notes": "Found by the orchestrator reviewing installed-build captures. Capabilities::available() in crates/pdfxi-app/src/shell/capabilities.rs enables Documents, Recent, Bookmarks, Files, Starred, Comments, Forms, Signing, AssistantConnect but NOT Edit, Export, Protect or Print, so tool_rows_for filters out the Edit PDF, Organize Pages, Export PDF, Convert to PDF, Combine Files and Protect PDF rows: the shipped tools are unreachable from the Tools panel even though their commands and cards work. Add the missing capabilities and update every test that asserts the old enabled set; add a test that asserts the ten ToolRow labels for an open document. Separately, the Pages rail shows the bookmark section overlapping the page list and its own buttons in the installed build (docs/evidence/ui/final/light-windows-main.png): '0 bookmarks' is drawn behind Rename/Delete and 'Move up' is clipped. Give the bookmark controls their own vertical row/space so nothing overlaps at 1920x1200. No capture; T-0262 re-captures.",
+  "evidence": "docs/evidence/ui/T-0272.md"
+}

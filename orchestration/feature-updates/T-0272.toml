@@ -1,0 +1,38 @@
+# T-0272 - enable shipped tool capabilities and fix the Pages bookmark layout
+#
+# Reachability only: Edit, Export and Protect commands already shipped, but the
+# capability registry kept their tool rows and command-bar buttons hidden. No
+# feature row changes status here.
+
+task = "T-0272"
+lane = "app"
+status = "verified"
+evidence = "docs/evidence/ui/T-0272.md"
+docs = [
+    "crates/pdfxi-app/src/shell/capabilities.rs",
+    "crates/pdfxi-app/src/shell/bookmarks_panel.rs",
+    "crates/pdfxi-app/src/ui.rs",
+]
+acceptance_items = ["A-06", "A-33"]
+feature_rows = []
+promoted_rows = []
+notes = """
+Capabilities::available() now enables Edit, Export and Protect in addition to
+Documents, Recent, Bookmarks, Files, Starred, Comments, Forms, Signing and
+AssistantConnect. Print is intentionally left out: no control gates on
+Capability::Print; the command bar prints unconditionally.
+
+The tools panel now reaches Edit PDF, Comment, Fill & Sign, Place signature,
+Request signature, Organize Pages, Export PDF, Convert to PDF, Combine Files,
+Protect PDF, Redact, AI Assistant and Document properties. The new test
+available_capabilities_list_every_shipped_tool asserts that exact order.
+
+The Pages-rail Bookmarks section now puts the count line, the wrapped button
+row, the rename editor and the rows in separate vertical rows with 4 px spacing
+inside a bounded vertical ScrollArea, removing the 1920x1200 overlap; commands
+and button labels are unchanged.
+
+Gates on target/lanes/app11 with ui,pdfium: fmt exit 0; clippy -D warnings exit
+0; tests 648 passed, 4 ignored, 0 failed (lib 613/617 + ui_controls 35/35).
+Capture verification is T-0262. No git writes by this lane.
+"""

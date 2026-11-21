@@ -785,3 +785,16 @@ the first markup batch. `orchestration/BOARD.md` remains the live state.
 - **Evidence:** `docs/evidence/ui/T-0271.md`; fragment `orchestration/feature-updates/T-0271.toml`. Task JSON `orchestration/tasks/T-0271.json` carries status `verified`.
 - **Scope discipline:** `git status` before staging showed exactly the ten approved T-0271 paths. Only those paths were staged; no `docs/features.toml`, `docs/book/**`, `docs/evidence/acceptance/**` or `fuzz/**` path was staged.
 - **Next:** T-0262 final package/install/captures/handoff.
+
+### T-0272 checkpoint (2026-11-21, shipped tool capabilities and Pages bookmark layout)
+
+- **HEAD before:** `015459b` (`checkpoint(acceptance): pages add-page, page menu and shipped-copy audit [T-0271]`). **HEAD after:** this checkpoint commit (`fix(acceptance): enable shipped tool capabilities and fix pages bookmark layout [T-0272]`; `git log -1 --oneline`). Linear history on `main`, not pushed, no amend/rebase.
+- **Task state:** T-0272 is `verified` (task JSON status set `queued` -> `verified` before regenerating the board). T-0271 stays `verified`; T-0262 stays `queued`. The regenerated board shows T-0272 `verified`.
+- **Reviewer verdict:** ACCEPT. No capture is claimed; T-0262 re-captures the installed build.
+- **What landed:** `Capabilities::available()` in `shell/capabilities.rs` now enables Edit, Export and Protect (Print stays out: no control gates on `Capability::Print`, the command bar prints unconditionally), so the Tools panel reaches Edit PDF, Organize Pages, Export PDF, Convert to PDF, Combine Files and Protect PDF alongside the already-visible Comment, Fill & Sign, Place signature, Request signature and AI Assistant rows. The new `available_capabilities_list_every_shipped_tool` test pins the exact ToolRow set. `shell/bookmarks_panel.rs` gives the Pages-rail Bookmarks section separate vertical rows (count line, wrapped button row, rename editor, outline rows) with 4 px spacing inside a bounded `ScrollArea`, removing the 1920x1200 overlap of the count, Rename/Delete and Move up controls; commands and labels are unchanged. Wiring in `ui.rs`.
+- **Verification (cited from the lane and the orchestrator's final run, not rerun here):** `cargo fmt --all --check` exit 0; `cargo clippy -p pdfxi-app --all-targets --features ui,pdfium -- -D warnings` exit 0; `cargo test -p pdfxi-app --features ui,pdfium` = lib **613 passed / 0 failed / 4 ignored** and **35 ui_controls passed / 0 failed**. Reviewer verdict: ACCEPT.
+- **Integrator gates (run here):** `cargo xtask board` regenerated `orchestration/BOARD.md` and confirms T-0272 `verified`; `cargo xtask features verify` reports `FEATURES OK: 145 rows, 33 verified`. This slice promotes no matrix row; `docs/features.toml` is not in the commit.
+- **Matrix:** the T-0272 fragment carries empty `feature_rows` and `promoted_rows` (`acceptance_items = ["A-06", "A-33"]`); no feature-row status changed.
+- **Evidence:** `docs/evidence/ui/T-0272.md`; fragment `orchestration/feature-updates/T-0272.toml`. Task JSON `orchestration/tasks/T-0272.json` carries status `verified`.
+- **Scope discipline:** the T-0262 paths `docs/evidence/release/T-0262.md`, `docs/evidence/ui/final/**` and `target/**` were left unstaged and untouched. Only the eight approved paths were staged.
+- **Next:** T-0262 final package/install/captures/handoff.

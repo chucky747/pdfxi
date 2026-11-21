@@ -2664,8 +2664,35 @@ mod tests {
         let available = shell::capabilities::tool_rows_for(Capabilities::available(), "");
         assert!(available.iter().any(|row| row.label == "Comment"));
         assert!(
-            !available.iter().any(|row| row.label == "Edit PDF"),
-            "Edit PDF stays gated behind its own capability"
+            available.iter().any(|row| row.label == "Edit PDF"),
+            "Edit PDF ships, so its row must be reachable from the installed tools panel"
+        );
+    }
+
+    #[test]
+    fn available_capabilities_list_every_shipped_tool() {
+        let labels: Vec<&str> = shell::capabilities::tool_rows_for(Capabilities::available(), "")
+            .into_iter()
+            .map(|row| row.label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Edit PDF",
+                "Comment",
+                "Fill & Sign",
+                "Place signature",
+                "Request signature",
+                "Organize Pages",
+                "Export PDF",
+                "Convert to PDF",
+                "Combine Files",
+                "Protect PDF",
+                "Redact",
+                "AI Assistant",
+                "Document properties",
+            ],
+            "an open document must reach every shipped tool through the enabled set"
         );
     }
 
