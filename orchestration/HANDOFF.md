@@ -192,3 +192,60 @@ installed-build check) before checkpointing; do not trust a summary alone.
   113 unfinished rows outside the campaign acceptance surface.
 - **Next:** finish T-0243 Round B, then T-0252/T-0253 assistant work, then the
   remaining app tasks. T-0263 needs T-0257; T-0264 needs T-0265.
+
+### Checkpoint update (2026-11-20, forms, sanitize and markup round)
+
+Durable summary of the round that added forms closure, sanitize/verification and
+the first markup batch. `orchestration/BOARD.md` remains the live state.
+
+- **HEAD:** `cafc009` (`fix(orchestration): close the T-0204 fragment notes`).
+  Linear history this round: `7fb867c` rules, `0975c34` T-0247 Round A,
+  `cafc009` T-0204 fragment repair. Nothing was pushed, rebased or amended.
+- **Verified commits this round:**
+  - T-0243 forms UI A+B: `2f4da28` (fill text and checkboxes with appearances)
+    and `e3a42de` (choice/radio, tab order, reset, flatten, FDF/XFDF import and
+    export).
+  - T-0257 sanitize and independent verification: `9f5167f` (sanitize hidden
+    data, fail-closed residual check, second reader) and `bcf48ab` (scrub XMP on
+    every reachable object).
+  - T-0268 redaction depth: `baceb98` (form XObject recursion) and `96cf730`
+    (inline image pixel redaction, hardened form geometry).
+  - T-0247 Round A: `0975c34` (underline, strikeout and ink with indirect `/AP`
+    appearances, fail-closed validation, PDFium proof). The task stays
+    `in_progress`: Round B owns Line, Square, Circle, Polygon, arrow line
+    endings and Stamp.
+  - T-0051 external corpora: `d757a52` (pinned and smoke-tested downloads).
+  - Earlier in the same campaign: T-0249 `c8448d6` (PFX identity) and T-0265
+    `da7834f` (page object transforms).
+  - `7fb867c` moved the subagent-model rule from §12 to §2 of `RULES.md`.
+- **Feature counts:** 145 rows - 32 `verified`, 30 `library`, 80 `model`,
+  3 `replaced`. `cargo xtask verify` reports VERIFY OK and
+  `cargo xtask features verify` reports `FEATURES OK: 145 rows, 32 verified`.
+- **In flight (claims held, nothing of theirs committed here):**
+  - T-0252 assistant Connect screen and model picker (app lane).
+  - T-0267 trust anchors, Windows certificate store and revocation (security
+    lane).
+  - T-0247 Round B shapes and stamps (author lane).
+- **Remaining app queue after T-0252:** T-0253 assistant panel, T-0245
+  signatures and E-signed badge, T-0231 organize/combine, T-0244 export card,
+  T-0255 bookmarks and properties, T-0246 shared review, T-0266 convert,
+  T-0263 protect/redact, T-0264 edit UI. Then the final tasks: T-0260
+  acceptance scenario/fuzz/perf, T-0261 docs, T-0262 package, install,
+  captures and archive.
+- **Blockers and documented limits:**
+  - T-0202: installer and binaries are unsigned; never claim signed output.
+  - T-0215: Word COM save/export is unavailable on this host, so A-27 Word
+    coverage is open/read only.
+  - T-0241: scoped `deny.toml` RSA advisory ignore with the `rsa_usage_scope`
+    guard; revisit if RSA decryption is added.
+  - T-0243: flatten removes active fields, but incremental save may retain
+    unreferenced bytes; documented in the T-0243 evidence.
+  - T-0268: vector paths under a redaction mark are not removed; documented
+    limit.
+  - T-0257: the independent verifier scans UTF-8 and UTF-16LE text only.
+- **Subagent rule:** dispatch subagents only with `opencode-go/hy4-flash-free`
+  or `opencode-go/deepseek-v4.1-flash`, never a Claude model
+  (`RULES.md` §2).
+- **Fragment repair:** `orchestration/feature-updates/T-0204.toml` had an
+  unterminated `notes` block that aborted every full `features apply`; it is
+  repaired and committed in `cafc009`, and a full apply parses again.
