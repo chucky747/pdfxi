@@ -1,0 +1,19 @@
+{
+  "id": "T-0283",
+  "lane": "core",
+  "title": "Compare two PDFs page by page through pdfxi compare",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0282"],
+  "owns": [
+    "crates/pdfxi-cli/src/compare.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0283.md",
+    "orchestration/feature-updates/T-0283.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli passes; pdfxi compare aligns real revision pages by content, reports aligned/changed/inserted/deleted rows with line detail, exits 1 on --fail-on-difference, and VIEW-015 moves to verified.",
+  "notes": "LCS page alignment over normalised page text with a replacement-block pass, line-level change counts, two-column --lines output capped at 20 rows, stable JSON and an optional non-zero exit for scripts.",
+  "evidence": "docs/evidence/cli/T-0283.md"
+}

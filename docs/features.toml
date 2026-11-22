@@ -420,14 +420,55 @@ tests = [
 title = "PDF Portfolio browsing"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/compare_view.rs, docs/evidence/app/T-0179.md"
+docs = [
+    "crates/pdfxi-cli/src/compare.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0283.md",
+]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0179.md"
+evidence = "docs/evidence/cli/T-0283.md"
 id = "VIEW-015"
-notes = "Deterministic page pairing with aligned/inserted/deleted classification, stable summary and typed errors for duplicate, zero or non-monotonic pages. Host boundary: no pixel-level visual diff and no compare UI widget."
+notes = """
+Verified through the CLI host. `pdfxi compare <LEFT> <RIGHT>` extracts each
+page's text, normalises lines (trim, drop empties), aligns pages with a
+deterministic LCS, and zips deletion/insertion blocks in place into changed
+pairs, so a replaced page is one `changed` pair and leftover pages stay
+inserted/deleted. Aligned pairs report removed/added line counts from a
+line-level LCS; `--lines` prints differing lines as `- left | + right`, capped
+at 20 rows per page. `--json` has stable fields (`left`, `right`, `left_pages`,
+`right_pages`, `identical`, `summary`, `pages[]`). `--fail-on-difference` prints
+the report and exits 1.
+
+Evidence on real bytes: identical fixture -> aligned 3, identical true; deleting
+page 2 with the shipped `pages delete` -> `aligned left 3 right 2 same` and
+`deleted left 2` (content alignment, not page numbers); the reverse comparison
+reports `inserted right 2`; a page whose text changed -> `changed -1 +1` with
+`- All five page boxes | + Hello, PDFXI!`; `--fail-on-difference` exits 1 with
+`Error: the documents differ`.
+
+Gates: cargo test -p pdfxi-cli (7 unit + 6 integration compare tests, whole
+crate green), cargo clippy -p pdfxi-cli --all-targets -D warnings = 0, cargo fmt
+--all --check = 0.
+
+Scope kept honest: no pixel-level visual diff and no compare UI widget; the app
+side-by-side model is untouched and the CLI is the reachable host.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "compare::tests::normalised_lines_drop_blank_and_padded_lines",
+    "compare::tests::alignment_reports_inserted_and_deleted_pages_in_order",
+    "compare::tests::alignment_pairs_a_replaced_page_at_the_same_position",
+    "compare::tests::alignment_keeps_unpaired_leftovers_when_block_sizes_differ",
+    "compare::tests::alignment_is_stable_for_identical_and_empty_inputs",
+    "compare::tests::line_changes_count_only_new_lines",
+    "compare::tests::differing_lines_print_two_columns_with_a_cap",
+    "cli::compare_reports_identical_documents",
+    "cli::compare_aligns_pages_by_content_around_a_deleted_page",
+    "cli::compare_reports_an_inserted_page_from_the_other_side",
+    "cli::compare_shows_changed_lines_side_by_side",
+    "cli::compare_json_has_stable_fields_and_page_rows",
+    "cli::compare_fail_on_difference_exits_non_zero",
     "compare_view::tests::page_pairing_aligns_inserts_and_deletes_pages",
     "compare_view::tests::page_pairing_is_stable_for_identical_and_empty_inputs",
     "compare_view::tests::page_pairing_rejects_zero_duplicate_and_non_monotonic_pages",

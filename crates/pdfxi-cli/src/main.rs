@@ -81,6 +81,8 @@ mod printer;
 // merge and split (`pages`).
 mod pages;
 // Link annotations and embedded-file attachments (`links`, `attachments`).
+/// `pdfxi compare`: side-by-side revision compare of two PDFs.
+mod compare;
 mod links;
 /// `pdfxi portfolio`: list and extract a PDF portfolio collection.
 mod portfolio;
@@ -254,6 +256,28 @@ enum Command {
         /// Write every portfolio file into this directory.
         #[arg(long, value_name = "DIR")]
         extract: Option<PathBuf>,
+    },
+    /// Compare two PDFs page by page, side by side.
+    ///
+    /// Pages are aligned by their extracted text, so an inserted or deleted page
+    /// is reported as such instead of shifting every later page. Aligned pairs
+    /// whose text differs are reported as `changed`; `--lines` prints the
+    /// differing lines as two columns and `--fail-on-difference` makes a
+    /// difference fail the command for scripts.
+    Compare {
+        /// Left document (the "before" revision).
+        left: PathBuf,
+        /// Right document (the "after" revision).
+        right: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+        /// Print the differing lines of each changed page as two columns.
+        #[arg(long)]
+        lines: bool,
+        /// Exit non-zero when the documents are not identical.
+        #[arg(long)]
+        fail_on_difference: bool,
     },
     /// Manage the virtual PDF printer and capture one printed job.
     ///
@@ -819,6 +843,13 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => portfolio::run_portfolio(&file, json, extract.as_deref()),
+        Command::Compare {
+            left,
+            right,
+            json,
+            lines,
+            fail_on_difference,
+        } => compare::run_compare(&left, &right, json, lines, fail_on_difference),
         Command::Pages { command } => match command {
             PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
             PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),

@@ -22,6 +22,8 @@ pdfxi <COMMAND> --help
 | `action show <FILE> <NAME>` | Show an action's steps and parameters | implemented |
 | `action run <FILE> <NAME> --input <PATH>... [--output-dir DIR] [--json]` | Run an action over inputs | implemented, staging-only |
 | `droplet <ACTION_FILE> <NAME> <INPUT>... [--json]` | Explorer-friendly `action run` | implemented, staging-only |
+| `portfolio <FILE> [--json] [--extract DIR]` | List or extract a portfolio collection | verified (`VIEW-014`) |
+| `compare <LEFT> <RIGHT> [--json] [--lines] [--fail-on-difference]` | Text compare of two revisions | verified (`VIEW-015`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -39,6 +41,16 @@ Commands are integration-tested by invoking the real binary; see
   Output is pretty-printed JSON with stable field names; new fields are additive.
 - `text` decodes FlateDecode streams transparently. Another filter is reported
   as an error that names the filter and page.
+- `compare` aligns pages by their extracted text, not by page number, so a page
+  inserted or deleted anywhere is reported as such. Pages whose text differs are
+  `changed` pairs; `--lines` prints their differing lines as `left | right`
+  columns, capped at 20 rows per page. A completely different single page is one
+  changed pair rather than a deletion plus an insertion.
+- `portfolio` prints `/UF` folder depth with two spaces per level. `--extract`
+  recreates the folders and refuses `..`, absolute, drive, `:` stream, control
+  character and over-long path components per file instead of aborting.
+- `compare --fail-on-difference` exits `1` after printing the report when the
+  documents differ; without it a difference still exits `0`.
 
 Exit codes:
 
@@ -64,6 +76,8 @@ pdfxi action list .\staging.act
 pdfxi action show .\staging.act nightly
 pdfxi action run .\staging.act nightly --input .\fixtures\minimal.pdf --json
 pdfxi droplet .\staging.act nightly .\fixtures\minimal.pdf
+pdfxi portfolio .\fixtures\authoring\authoring-portfolio.pdf --extract .\portfolio
+pdfxi compare .\fixtures\realworld\powerpoint-slides.pdf .\revised.pdf --lines
 ```
 
 See [Automation](automation.md) for the action-file format and the staging-only

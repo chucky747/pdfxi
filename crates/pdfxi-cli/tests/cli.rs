@@ -2423,6 +2423,24 @@ fn real_fixture(name: &str) -> PathBuf {
     path
 }
 
+/// Path to a hand-authored fixture under `fixtures/authoring`.
+fn authoring_fixture(name: &str) -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/authoring")
+        .join(name);
+    assert!(path.exists(), "fixture missing: {}", path.display());
+    path
+}
+
+/// Path to a fixture directly under `fixtures/`.
+fn root_fixture(name: &str) -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures")
+        .join(name);
+    assert!(path.exists(), "fixture missing: {}", path.display());
+    path
+}
+
 /// Extract the page texts from a PDF through the CLI and return them in order.
 fn page_texts(path: &Path) -> Vec<String> {
     let output = run(&["text", path.to_str().expect("utf-8 path")]);
@@ -2732,6 +2750,163 @@ fn attachments_report_an_embedded_file() {
     assert!(text.contains("name: notes.txt"), "{text}");
     assert!(text.contains("size: 5"), "{text}");
     assert!(text.contains("description: Sample notes"), "{text}");
+}
+
+#[test]
+fn compare_reports_identical_documents() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let file = source.to_str().expect("utf-8 fixture");
+    let output = run(&["compare", file, file]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("summary: aligned 3, changed 0, inserted 0, deleted 0"),
+        "{text}"
+    );
+    assert!(text.contains("identical: true"), "{text}");
+}
+
+#[test]
+fn compare_aligns_pages_by_content_around_a_deleted_page() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let delete = run(&[
+        "pages",
+        "delete",
+        source.to_str().expect("utf-8 source"),
+        "--pages",
+        "2",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(delete.status.success(), "stderr: {}", stderr(&delete));
+    let output = run(&["compare", source.to_str().expect("utf-8 source"), out.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    // Content alignment keeps pages 1 and 3 paired across the shifted numbers
+    // instead of calling page 2 changed and page 3 deleted.
+    assert!(text.contains("aligned  left 1  right 1  same"), "{text}");
+    assert!(text.contains("deleted  left 2"), "{text}");
+    assert!(text.contains("aligned  left 3  right 2  same"), "{text}");
+    assert!(
+        text.contains("summary: aligned 2, changed 0, inserted 0, deleted 1"),
+        "{text}"
+    );
+    assert!(text.contains("identical: false"), "{text}");
+}
+
+#[test]
+fn compare_reports_an_inserted_page_from_the_other_side() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let delete = run(&[
+        "pages",
+        "delete",
+        source.to_str().expect("utf-8 source"),
+        "--pages",
+        "2",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(delete.status.success(), "stderr: {}", stderr(&delete));
+    let output = run(&["compare", out.arg(), source.to_str().expect("utf-8 source")]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("inserted right 2"), "{text}");
+    assert!(
+        text.contains("summary: aligned 2, changed 0, inserted 1, deleted 0"),
+        "{text}"
+    );
+}
+
+#[test]
+fn compare_shows_changed_lines_side_by_side() {
+    let left = authoring_fixture("authoring-page-boxes.pdf");
+    let right = root_fixture("minimal.pdf");
+    let output = run(&[
+        "compare",
+        left.to_str().expect("utf-8 left"),
+        right.to_str().expect("utf-8 right"),
+        "--lines",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("aligned  left 1  right 1  changed  -1 +1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("- All five page boxes | + Hello, PDFXI!"),
+        "{text}"
+    );
+    assert!(
+        text.contains("summary: aligned 1, changed 1, inserted 0, deleted 0"),
+        "{text}"
+    );
+}
+
+#[test]
+fn compare_json_has_stable_fields_and_page_rows() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let delete = run(&[
+        "pages",
+        "delete",
+        source.to_str().expect("utf-8 source"),
+        "--pages",
+        "2",
+        "--out",
+        out.arg(),
+    ]);
+    assert!(delete.status.success(), "stderr: {}", stderr(&delete));
+    let output = run(&[
+        "compare",
+        source.to_str().expect("utf-8 source"),
+        out.arg(),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["left_pages"], 3);
+    assert_eq!(value["right_pages"], 2);
+    assert_eq!(value["identical"], false);
+    assert_eq!(value["summary"]["aligned"], 2);
+    assert_eq!(value["summary"]["deleted"], 1);
+    let pages = value["pages"].as_array().expect("pages array");
+    assert_eq!(pages.len(), 3);
+    assert_eq!(pages[0]["kind"], "aligned");
+    assert_eq!(pages[0]["changed"], false);
+    assert_eq!(pages[1]["kind"], "deleted");
+    assert_eq!(pages[1]["left"], 2);
+    assert_eq!(pages[2]["kind"], "aligned");
+    assert_eq!(pages[2]["left"], 3);
+    assert_eq!(pages[2]["right"], 2);
+}
+
+#[test]
+fn compare_fail_on_difference_exits_non_zero() {
+    let left = authoring_fixture("authoring-page-boxes.pdf");
+    let right = root_fixture("minimal.pdf");
+    let output = run(&[
+        "compare",
+        left.to_str().expect("utf-8 left"),
+        right.to_str().expect("utf-8 right"),
+        "--fail-on-difference",
+    ]);
+    assert!(
+        !output.status.success(),
+        "a difference must fail the command"
+    );
+    assert!(
+        stderr(&output).contains("the documents differ"),
+        "{}",
+        stderr(&output)
+    );
+
+    let source = real_fixture("powerpoint-slides.pdf");
+    let file = source.to_str().expect("utf-8 fixture");
+    let same = run(&["compare", file, file, "--fail-on-difference"]);
+    assert!(same.status.success(), "stderr: {}", stderr(&same));
 }
 
 #[test]
