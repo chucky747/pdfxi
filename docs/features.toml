@@ -4307,14 +4307,45 @@ tests = [
 title = "Home recents favorites and collections"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/cross_file.rs, crates/pdfxi-app/src/page_text.rs, docs/evidence/app/T-0111.md"
+docs = [
+    "crates/pdfxi-cli/src/find_files.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0326.md",
+]
 domain = "Document Management"
-evidence = "docs/evidence/app/T-0111.md"
+evidence = "docs/evidence/cli/T-0326.md"
 id = "MANAGE-003"
-notes = "CrossFileSearch indexes caller-supplied per-file PageText, applies CrossFileQuery options (case, whole word, character offsets), ranks by match count with file-id tie-break, groups results by file then page, enforces bounded global/per-file result caps with a truncated flag, and reports typed CrossFileError. Implemented in pdfxi-app due to lane permission scope; pdfxi-text remains untouched."
+notes = """
+Verified through `pdfxi find-files <PATH...> --query TEXT [--case-sensitive]
+[--whole-word] [--max-results N] [--max-per-file N] [--json]`.
+
+Directories are scanned recursively for .pdf files (10000-file and 32-level
+caps); explicit files are searched as given. Each page text is extracted through
+pdfxi-core, wrapped in a TextPage and matched with pdfxi_text::search, so case
+and whole-word rules are the shared engine's. Results group by file then page
+with a snippet around the first match; files rank by reported match count then
+path. Caps trim the reported matches and set truncated.
+
+Evidence: a folder with one PDF containing two needles and another containing
+one reports files_scanned 2, files_matched 2, total_matches 3, reported_matches
+3, truncated false, with one.pdf (2 matches, snippet 'needle here and needle
+again.') ranked before two.pdf (1 match). --max-results 2 reports 2 matches,
+files_matched 1 and truncated true; --max-per-file 1 reports 2 matches and
+truncated true; a case-sensitive NEEDLE search reports 0; an explicit file scans
+1 file with 2 matches. A missing directory reports does not exist and an empty
+query is rejected by the parser.
+
+Gates: cargo test -p pdfxi-cli --test cli find_files = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: live search, not a persisted index; each run re-reads the folder. Only
+.pdf files are considered and unparseable/encrypted inputs fail the command.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::find_files_ranks_and_groups_matches",
+    "cli::find_files_applies_caps_and_rejects_bad_inputs",
     "cross_file::tests::ranks_files_by_match_count_and_groups_by_page",
     "cross_file::tests::equal_counts_break_ties_by_file_id",
     "cross_file::tests::case_and_whole_word_options_are_honored",

@@ -8462,6 +8462,124 @@ fn transparency_inspect_rejects_unknown_modes_and_missing_files() {
 }
 
 #[test]
+fn find_files_ranks_and_groups_matches() {
+    let dir = TempDir::new();
+    let one = dir.child("one.pdf");
+    let two = dir.child("two.pdf");
+    let one_source = create_text_pdf("needle here and needle again.");
+    fs::write(&one, fs::read(&one_source.path).expect("one")).expect("write one");
+    let two_source = create_text_pdf("one needle only.");
+    fs::write(&two, fs::read(&two_source.path).expect("two")).expect("write two");
+
+    let found = run(&["find-files", dir.arg(), "--query", "needle", "--json"]);
+    assert!(found.status.success(), "stderr: {}", stderr(&found));
+    let value: Value = serde_json::from_str(&stdout(&found)).expect("valid JSON");
+    assert_eq!(value["files_scanned"], 2);
+    assert_eq!(value["files_matched"], 2);
+    assert_eq!(value["total_matches"], 3);
+    assert_eq!(value["reported_matches"], 3);
+    assert_eq!(value["truncated"], false);
+    let files = value["files"].as_array().expect("files");
+    assert!(files[0]["file"].as_str().unwrap_or("").ends_with("one.pdf"));
+    assert_eq!(files[0]["matches"], 2);
+    assert_eq!(files[0]["pages"][0]["page"], 1);
+    assert_eq!(files[0]["pages"][0]["matches"], 2);
+    assert!(
+        files[0]["pages"][0]["snippet"]
+            .as_str()
+            .unwrap_or("")
+            .contains("needle here")
+    );
+    assert_eq!(files[1]["matches"], 1);
+
+    let text = run(&["find-files", dir.arg(), "--query", "needle"]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    let lines = stdout(&text);
+    assert!(lines.contains("files_matched: 2"), "{lines}");
+    assert!(lines.contains("page 1"), "{lines}");
+}
+
+#[test]
+fn find_files_applies_caps_and_rejects_bad_inputs() {
+    let dir = TempDir::new();
+    let one = dir.child("one.pdf");
+    let one_source = create_text_pdf("needle here and needle again.");
+    fs::write(&one, fs::read(&one_source.path).expect("one")).expect("write one");
+    let two = dir.child("two.pdf");
+    let two_source = create_text_pdf("one needle only.");
+    fs::write(&two, fs::read(&two_source.path).expect("two")).expect("write two");
+
+    let capped = run(&[
+        "find-files",
+        dir.arg(),
+        "--query",
+        "needle",
+        "--max-results",
+        "2",
+        "--json",
+    ]);
+    assert!(capped.status.success(), "stderr: {}", stderr(&capped));
+    let value: Value = serde_json::from_str(&stdout(&capped)).expect("valid JSON");
+    assert_eq!(value["reported_matches"], 2);
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["files_matched"], 1);
+
+    let per_file = run(&[
+        "find-files",
+        dir.arg(),
+        "--query",
+        "needle",
+        "--max-per-file",
+        "1",
+        "--json",
+    ]);
+    assert!(per_file.status.success(), "stderr: {}", stderr(&per_file));
+    let value: Value = serde_json::from_str(&stdout(&per_file)).expect("valid JSON");
+    assert_eq!(value["reported_matches"], 2);
+    assert_eq!(value["truncated"], true);
+
+    let case = run(&[
+        "find-files",
+        dir.arg(),
+        "--query",
+        "NEEDLE",
+        "--case-sensitive",
+        "--json",
+    ]);
+    assert!(case.status.success(), "stderr: {}", stderr(&case));
+    let value: Value = serde_json::from_str(&stdout(&case)).expect("valid JSON");
+    assert_eq!(value["total_matches"], 0);
+
+    let explicit = run(&[
+        "find-files",
+        one.to_str().expect("one"),
+        "--query",
+        "needle",
+        "--json",
+    ]);
+    assert!(explicit.status.success(), "stderr: {}", stderr(&explicit));
+    let value: Value = serde_json::from_str(&stdout(&explicit)).expect("valid JSON");
+    assert_eq!(value["files_scanned"], 1);
+    assert_eq!(value["total_matches"], 2);
+
+    let missing = run(&[
+        "find-files",
+        dir.child("absent").to_str().expect("path"),
+        "--query",
+        "needle",
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("does not exist"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let empty = run(&["find-files", dir.arg(), "--query", ""]);
+    assert!(!empty.status.success());
+}
+
+#[test]
 fn export_conformance_plan_and_profiles_preserve_text() {
     let source = root_fixture("minimal.pdf");
     let plan = run(&[

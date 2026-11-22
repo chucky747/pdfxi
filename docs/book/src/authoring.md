@@ -25,6 +25,7 @@ command.
 | Tag tree and reading order editor | `ACCESS-001` | verified | tagged structure `/K` order | `accessibility order` / `accessibility move` |
 | PostScript export (positioned text subset) | `EXPORT-009` | verified | `pdfxi-convert::postscript` + `pdfxi-edit::text_blocks` | `export postscript` |
 | Transparency and blend modes | `STD-005` | verified | `pdfxi-core::transparency` | `transparency inspect` |
+| Cross-file search | `MANAGE-003` | verified | `pdfxi-core` page text + `pdfxi-text` search | `find-files` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -47,6 +48,18 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Cross-file search is exposed as:
+
+```text
+pdfxi find-files <PATH...> --query TEXT [--case-sensitive] [--whole-word]
+    [--max-results N] [--max-per-file N] [--json]
+```
+
+Directories are scanned recursively for `.pdf` files (bounded to 10000 files and
+32 levels); explicit files are searched as given. Each page's text is matched
+with the shared `pdfxi-text` engine, grouped by file then page, and files rank
+by match count with a path tie-break. Caps report `truncated`. This is a live
+search, not a persisted index.
 Transparency inspection is exposed as:
 
 ```text

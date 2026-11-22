@@ -1,0 +1,19 @@
+{
+  "id": "T-0326",
+  "lane": "convert",
+  "title": "Cross-file search host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0325"],
+  "owns": [
+    "crates/pdfxi-cli/src/find_files.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0326.md",
+    "orchestration/feature-updates/T-0326.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli find_files passes; pdfxi find-files scans real PDFs, groups matches by file/page, ranks and applies caps; MANAGE-003 moves to verified.",
+  "notes": "Scans directories for PDFs, searches page text with pdfxi-text, ranks by match count and caps results.",
+  "evidence": "docs/evidence/cli/T-0326.md"
+}

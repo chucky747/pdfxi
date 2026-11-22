@@ -70,6 +70,8 @@ mod api;
 mod create_portfolio;
 /// pdfxi export postscript: positioned text subset as DSC PostScript.
 mod export_postscript;
+/// pdfxi find-files: cross-file text search over a folder.
+mod find_files;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
 mod ocr;
 /// pdfxi create office: convert an Office intake bundle into a PDF.
@@ -382,6 +384,34 @@ enum Command {
         /// Integration action.
         #[command(subcommand)]
         command: OfficeCommand,
+    },
+    /// Search the text of PDF files in a folder or explicit list.
+    ///
+    /// Files rank by total match count, with a path tie-break; matches are
+    /// grouped by file then page. `--max-results` and `--max-per-file` cap the
+    /// reported matches and set `truncated`.
+    FindFiles {
+        /// Files or directories to search.
+        #[arg(value_name = "PATH", required = true, num_args = 1..)]
+        inputs: Vec<PathBuf>,
+        /// Text to find.
+        #[arg(long, value_name = "TEXT")]
+        query: String,
+        /// Match case exactly.
+        #[arg(long)]
+        case_sensitive: bool,
+        /// Require non-word boundaries around a match.
+        #[arg(long)]
+        whole_word: bool,
+        /// Maximum matches reported overall.
+        #[arg(long, value_name = "N")]
+        max_results: Option<usize>,
+        /// Maximum matches reported per file.
+        #[arg(long, value_name = "N")]
+        max_per_file: Option<usize>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Inspect page transparency groups and graphics-state blend modes.
     ///
@@ -2405,6 +2435,23 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::FindFiles {
+            inputs,
+            query,
+            case_sensitive,
+            whole_word,
+            max_results,
+            max_per_file,
+            json,
+        } => find_files::find_files(
+            &inputs,
+            &query,
+            case_sensitive,
+            whole_word,
+            max_results,
+            max_per_file,
+            json,
+        ),
         Command::Transparency { command } => match command {
             TransparencyCommand::Inspect { file, json } => transparency::inspect(&file, json),
         },
