@@ -1,0 +1,16 @@
+{
+  "id": "T-0288",
+  "lane": "core",
+  "title": "Evidence and promotion of the local JSON API host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0287"],
+  "owns": [
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0288.md",
+    "orchestration/feature-updates/T-0288.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli api and cargo test -p pdfxi-automation --lib api pass; pdfxi api answers version, commands, dry-run and a staged run-batch over the real fixture with canonical JSON and keeps answering typed errors; AUTO-006 moves to verified.",
+  "notes": "The stdio host and protocol already existed; this task records real-fixture output, documents the protocol in the book and promotes the row.",
+  "evidence": "docs/evidence/cli/T-0288.md"
+}

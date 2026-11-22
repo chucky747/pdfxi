@@ -30,6 +30,7 @@ pdfxi <COMMAND> --help
 | `decorate header-footer <FILE> --out PATH [--header TEXT] [--footer TEXT] [--side left\|center\|right] [--json]` | Stamp headers and footers | verified (`EDIT-008`) |
 | `decorate watermark <FILE> --out PATH --text TEXT [--opacity F] [--rotation D] [--tile] [--json]` | Stamp a text watermark | verified (`EDIT-009`) |
 | `decorate bates <FILE> --out PATH [--prefix TEXT] [--start N] [--digits N] [--increment N] [--corner C] [--json]` | Stamp sequential Bates numbers | verified (`EDIT-010`) |
+| `api [--once]` | Local JSON request/response API over stdio | verified (`AUTO-006`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -79,6 +80,14 @@ Commands are integration-tested by invoking the real binary; see
   is drawn through the same display-to-page transform as headers, so a rotated
   page gets an upright number in the requested corner. Quote or escape a prefix
   or suffix that begins with `-` (`--suffix=-A`).
+- `api` speaks one JSON request per line and one canonical response per line:
+  `{"version":1,"id":"...","command":"...","params":{...}}` in,
+  `{"error":...,"id":...,"ok":...,"result":...,"version":1}` out. `--once`
+  answers exactly one line. Version must be `1`; lines over 1 MiB, duplicate
+  keys, deep nesting and malformed JSON return typed errors without exiting.
+  Commands are `version`, `commands`, `list-actions`, `show-action`, `dry-run`,
+  `run-batch`, `list-toolsets`, `show-toolset`, `validate-toolset` and
+  `run-toolset`; runs are staged, so no file is written by a batch.
 
 Exit codes:
 

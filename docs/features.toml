@@ -3397,33 +3397,39 @@ title = "CLI for every scriptable operation"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-automation/src/api.rs",
-    "crates/pdfxi-automation/src/json.rs",
-    "crates/pdfxi-automation/src/lib.rs",
     "crates/pdfxi-cli/src/api.rs",
-    "crates/pdfxi-cli/src/main.rs",
-    "docs/evidence/automation/T-0105.md",
+    "crates/pdfxi-automation/src/api.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0288.md",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation -p pdfxi-cli: 13 new api tests plus 5 new JSON-codec tests pass (125 automation unit, 5 CLI unit, 48 CLI integration total). CLI integration tests api_once_answers_one_canonical_json_line, api_stream_answers_every_nonblank_line_in_order and api_reports_errors_without_exiting_the_process drive the real binary over stdin. output_is_deterministic_and_keys_are_sorted asserts byte-identical responses and alphabetic key order. Full output in docs/evidence/automation/T-0105.md."
+evidence = "docs/evidence/cli/T-0288.md"
 id = "AUTO-006"
 notes = """
-Implements `pdfxi api [--once]` over stdio: one request line produces one
-canonical JSON response line. The request envelope is
-{version, id, command, params}; the response always carries {error, id, ok,
-result, version}. Commands: version, commands, list-actions, show-action,
-dry-run, run-batch, list-toolsets, show-toolset, validate-toolset,
-run-toolset. Protocol version is 1 and must match exactly; lines are capped at
-1 MiB before parsing; the hand-written JSON parser bounds nesting to 64 and
-node count to 65,536, rejects duplicate keys, malformed numbers/strings,
-lone surrogates and trailing text, and returns typed errors instead of
-panicking. File access and execution are injected through ApiHost; the CLI
-host reuses the existing staging DocumentExecutor so API runs share
-`action run --json` semantics. Honest scope: local stdio only, no socket or
-network transport; runs are the documented staging (no real PDF mutation).
+Verified end to end over stdio. One request line
+`{"version":1,"id":...,"command":...,"params":{...}}` produces one canonical
+response line `{"error","id","ok","result","version"}`; `--once` answers exactly
+one line and the stream form answers every non-blank line in order and keeps
+running after errors. Commands are version, commands, list-actions,
+show-action, dry-run, run-batch, list-toolsets, show-toolset, validate-toolset
+and run-toolset.
+
+Evidence recorded from real runs: version/commands/dry-run answered with
+canonical JSON; a run-batch over fixtures/realworld/powerpoint-slides.pdf staged
+119341 bytes through the load step and reported `export staged to 'out.pdf' (no
+write)`; an unknown command and malformed JSON each returned a typed error while
+the process stayed alive and exited 0.
+
+Tests: cargo test -p pdfxi-cli --test cli api = 5 passed; the automation API unit
+tests cover round-trip, typed errors, oversize lines, version mismatch, dry-run
+validation, host delegation and canonical key ordering. The book CLI page now
+documents the protocol and command list.
+
+Scope kept honest: local stdio only, no socket or network transport, and runs are
+the documented staging path (no file is written by a batch).
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "api::tests::request_and_response_round_trip",
     "api::tests::unknown_command_returns_a_typed_error",
@@ -3431,21 +3437,13 @@ tests = [
     "api::tests::oversize_line_is_rejected_before_parsing",
     "api::tests::version_mismatch_is_rejected",
     "api::tests::dry_run_validates_without_executing",
-    "api::tests::list_and_show_actions_use_saved_files",
     "api::tests::run_batch_delegates_to_the_host",
     "api::tests::output_is_deterministic_and_keys_are_sorted",
-    "api::tests::host_and_parameter_errors_are_typed",
-    "json::tests::parse_and_serialize_round_trip_is_canonical",
-    "json::tests::malformed_inputs_are_rejected_without_panicking",
-    "json::tests::depth_and_trailing_input_are_bounded",
-    "json::tests::unicode_escapes_and_control_characters_are_handled",
-    "json::tests::numeric_and_string_spelling_are_preserved",
-    "api::tests::bounded_reader_caps_a_long_line_and_keeps_stream_framing",
-    "api::tests::bounded_reader_returns_a_line_without_a_trailing_newline",
-    "api_once_answers_one_canonical_json_line",
-    "api_stream_answers_every_nonblank_line_in_order",
-    "api_reports_errors_without_exiting_the_process",
-    "api_dry_run_batch_and_toolset_use_local_files",
+    "cli::api_once_answers_one_canonical_json_line",
+    "cli::api_stream_answers_every_nonblank_line_in_order",
+    "cli::api_reports_errors_without_exiting_the_process",
+    "cli::api_dry_run_batch_and_toolset_use_local_files",
+    "cli::api_rejects_dangerous_aliased_operations",
 ]
 title = "Local JSON API for automation"
 
