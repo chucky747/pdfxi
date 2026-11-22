@@ -78,6 +78,8 @@ mod export_postscript;
 mod find_files;
 /// pdfxi geo: geospatial viewports and coordinate mapping.
 mod geo;
+/// pdfxi handoff: hand a local export to the browser.
+mod handoff;
 /// pdfxi home: recents, favorites and collections over a state file.
 mod home;
 /// pdfxi interactions: audit /AA additional actions.
@@ -436,6 +438,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Hand a local export to the browser, or build its `file:` URL.
+    Handoff {
+        /// Handoff action.
+        #[command(subcommand)]
+        command: HandoffCommand,
     },
     /// Register, inspect or remove per-user file associations and the protocol.
     Shell {
@@ -2013,6 +2021,44 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `handoff` command.
+#[derive(Debug, Subcommand)]
+enum HandoffCommand {
+    /// Resolve a local file (or `file:` URL) and print the handoff plan.
+    Open {
+        /// Local file or `file:` URL.
+        file: String,
+        /// Declared MIME type from the allowlist.
+        #[arg(long, value_name = "TYPE")]
+        mime: Option<String>,
+        /// Launch the platform browser after validation.
+        #[arg(long)]
+        launch: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Parse a path or URL and print the resolved plan.
+    Parse {
+        /// Local path or `file:` URL.
+        input: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build the HTML `file:` URL with an optional fragment.
+    Link {
+        /// Local HTML file.
+        file: PathBuf,
+        /// URL fragment.
+        #[arg(long, value_name = "FRAGMENT")]
+        fragment: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `shell` command.
 #[derive(Debug, Subcommand)]
 enum ShellCommand {
@@ -3010,6 +3056,20 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Handoff { command } => match command {
+            HandoffCommand::Open {
+                file,
+                mime,
+                launch,
+                json,
+            } => handoff::open(&file, mime.as_deref(), launch, json),
+            HandoffCommand::Parse { input, json } => handoff::parse(&input, json),
+            HandoffCommand::Link {
+                file,
+                fragment,
+                json,
+            } => handoff::link(&file, fragment.as_deref(), json),
+        },
         Command::Shell { command } => match command {
             ShellCommand::Plan { exe, json } => shell::plan(exe.as_deref(), json),
             ShellCommand::Register { root, exe, json } => {

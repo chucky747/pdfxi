@@ -1,0 +1,19 @@
+{
+  "id": "T-0341",
+  "lane": "convert",
+  "title": "Browser handoff host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0340"],
+  "owns": [
+    "crates/pdfxi-cli/src/handoff.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0341.md",
+    "orchestration/feature-updates/T-0341.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli handoff_ passes; pdfxi handoff resolves open/download plans for real HTML exports, builds file URLs with fragments and rejects missing files, traversal, remote schemes and unsupported MIME; PLAT-004 moves to verified.",
+  "notes": "Hosts pdfxi_core::browser_handoff with host-level existence checks, optional platform-browser launch and a link builder.",
+  "evidence": "docs/evidence/cli/T-0341.md"
+}

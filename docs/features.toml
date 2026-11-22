@@ -4985,14 +4985,51 @@ tests = [
 title = "Microsoft Office integration"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/browser_handoff.rs, docs/evidence/core/T-0181.md"
+docs = [
+    "crates/pdfxi-cli/src/handoff.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0341.md",
+    "crates/pdfxi-core/src/browser_handoff.rs",
+]
 domain = "Platform"
-evidence = "docs/evidence/core/T-0181.md"
+evidence = "docs/evidence/cli/T-0341.md"
 id = "PLAT-004"
-notes = "Local-only browser handoff: validated request parsing for paths and file URLs, traversal and control-character rejection, MIME allowlist, deterministic open/download plan. Host boundary: no network, no browser extension, no protocol registration."
+notes = """
+Verified through `pdfxi handoff open <FILE> [--mime TYPE] [--launch] [--json]`,
+`pdfxi handoff parse <PATH|file://URL> [--json]` and
+`pdfxi handoff link <FILE.html> [--fragment TEXT] [--json]`.
+
+Relative inputs are made absolute; rooted paths pass through unchanged so a ..
+component is still rejected by the model; the file must exist (host-level check
+the model does not perform). open resolves HandoffRequest -> resolve_request and
+prints path, file: URL, decision (open/download), MIME and summary; the MIME
+allowlist is text/html, text/plain, application/pdf and
+application/octet-stream, and a declared non-HTML type decides download.
+--launch spawns cmd /C start, open or xdg-open only after validation. parse
+accepts a rooted path or file: URL, rejects other schemes and traversal and
+requires the local file. link builds the HTML file: URL with a validated
+fragment.
+
+Evidence: a real exported HTML file resolves to decision open with
+file:///.../player.html; declaring application/octet-stream decides download;
+file: URL parsing yields the same plan; link with fragment section-2 yields
+file:///.../player.html#section-2. An unsupported MIME, a missing file, an
+https scheme, a .. traversal and a non-HTML link fail with typed errors.
+--launch was not exercised to avoid opening a browser window.
+
+Gates: cargo test -p pdfxi-cli handoff_ = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: plan resolution, URL building and optional platform-browser launch; no
+network fetch, browser extension, protocol registration or in-command
+HTML/PDF rendering.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::handoff_open_resolves_local_html_and_mime_decisions",
+    "cli::handoff_link_builds_file_url_with_fragment",
+    "cli::handoff_parse_accepts_file_urls_and_rejects_remote_schemes",
     "browser_handoff::tests::request_from_path_builds_a_deterministic_open_plan",
     "browser_handoff::tests::percent_encoded_traversal_is_rejected",
     "browser_handoff::tests::mime_allowlist_controls_the_decision_deterministically",

@@ -41,6 +41,7 @@ command.
 | Ink manager and overprint preview | `PRINT-005` | verified | `pdfxi-app::print` + `/ExtGState` scan | `ink` |
 | Deployment preferences and customization | `PLAT-006` | verified | `pdfxi-core::preferences` | `policy show/write/merge/check` |
 | Shell integration and file associations | `PLAT-005` | verified | `pdfxi-core::association` | `shell plan/register/status/unregister` |
+| Browser integration | `PLAT-004` | verified | `pdfxi-core::browser_handoff` | `handoff open/parse/link` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -592,6 +593,27 @@ protocol key, its `URL Protocol` marker and command, under the chosen root
 still points at `PDFXI.pdf`. The root must be under `HKCU\Software\`; HKLM is
 never written, and the executable must exist. No process is spawned for the
 handler.
+
+### Browser handoff
+
+`PLAT-004` (verified) hosts the local-only handoff model in
+`pdfxi_core::browser_handoff`:
+
+```text
+pdfxi handoff open <FILE> [--mime TYPE] [--launch] [--json]
+pdfxi handoff parse <PATH|file://URL> [--json]
+pdfxi handoff link <FILE.html> [--fragment TEXT] [--json]
+```
+
+`open` makes a relative path absolute, requires the file to exist, resolves the
+deterministic open/download plan (MIME allowlist: `text/html`, `text/plain`,
+`application/pdf`, `application/octet-stream`) and prints the validated path,
+`file:` URL and decision; `--launch` opens the platform browser after
+validation. `parse` accepts a rooted path or `file:` URL, rejects any other
+scheme and traversal, and resolves the same plan. `link` builds the HTML
+`file:` URL with an optional fragment. Missing files, traversal, remote schemes
+and unsupported MIME types are typed errors. Nothing is fetched over the network
+by the command.
 
 ## Page boxes and page operations
 

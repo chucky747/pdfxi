@@ -12032,6 +12032,142 @@ fn shell_rejects_machine_wide_roots_and_missing_executables() {
     assert!(outside.status.success(), "stderr: {}", stderr(&outside));
 }
 
+// ---------------------------------------------------------------------------
+// handoff: browser integration (T-0341)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handoff_open_resolves_local_html_and_mime_decisions() {
+    let dir = TempDir::new();
+    let page = dir.child("export.html");
+    fs::write(&page, "<!DOCTYPE html><title>Export</title>").expect("write HTML");
+
+    let output = run(&["handoff", "open", page.to_str().expect("path"), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["decision"], "open");
+    assert_eq!(value["launched"], false);
+    assert!(
+        value["file_url"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("file:///")
+    );
+    assert!(
+        value["file_url"]
+            .as_str()
+            .unwrap_or("")
+            .ends_with("export.html")
+    );
+
+    let download = run(&[
+        "handoff",
+        "open",
+        page.to_str().expect("path"),
+        "--mime",
+        "application/octet-stream",
+        "--json",
+    ]);
+    assert!(download.status.success(), "stderr: {}", stderr(&download));
+    let value: Value = serde_json::from_str(&stdout(&download)).expect("valid JSON");
+    assert_eq!(value["decision"], "download");
+    assert_eq!(value["mime"], "application/octet-stream");
+
+    let missing = run(&[
+        "handoff",
+        "open",
+        dir.child("missing.html").to_str().expect("path"),
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("does not exist"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let bad_mime = run(&[
+        "handoff",
+        "open",
+        page.to_str().expect("path"),
+        "--mime",
+        "application/x-msdownload",
+    ]);
+    assert!(!bad_mime.status.success());
+    assert!(
+        stderr(&bad_mime).contains("unsupported handoff MIME"),
+        "{}",
+        stderr(&bad_mime)
+    );
+}
+
+#[test]
+fn handoff_link_builds_file_url_with_fragment() {
+    let dir = TempDir::new();
+    let page = dir.child("export.html");
+    fs::write(&page, "<!DOCTYPE html>").expect("write HTML");
+    let output = run(&[
+        "handoff",
+        "link",
+        page.to_str().expect("path"),
+        "--fragment",
+        "section-2",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let url = value["file_url"].as_str().expect("file URL");
+    assert!(url.starts_with("file:///"), "{url}");
+    assert!(url.ends_with("export.html#section-2"), "{url}");
+    assert!(
+        value["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("fragment=section-2")
+    );
+
+    let pdf = create_text_pdf("Not HTML.");
+    let non_html = run(&["handoff", "link", pdf.arg()]);
+    assert!(!non_html.status.success());
+    assert!(stderr(&non_html).contains(".html"), "{}", stderr(&non_html));
+}
+
+#[test]
+fn handoff_parse_accepts_file_urls_and_rejects_remote_schemes() {
+    let dir = TempDir::new();
+    let page = dir.child("export.html");
+    fs::write(&page, "<!DOCTYPE html>").expect("write HTML");
+    let url = format!(
+        "file:///{}",
+        page.to_str().expect("path").replace('\\', "/")
+    );
+    let output = run(&["handoff", "parse", &url, "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["decision"], "open");
+    assert!(
+        value["path"]
+            .as_str()
+            .unwrap_or("")
+            .ends_with("export.html")
+    );
+
+    let remote = run(&["handoff", "parse", "https://evil.test/a.html"]);
+    assert!(!remote.status.success());
+    assert!(
+        stderr(&remote).contains("unsupported handoff URL scheme"),
+        "{}",
+        stderr(&remote)
+    );
+
+    let traversal = run(&["handoff", "parse", "D:\\work\\..\\Windows\\system.ini"]);
+    assert!(!traversal.status.success());
+    assert!(
+        stderr(&traversal).contains("traversal"),
+        "{}",
+        stderr(&traversal)
+    );
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");
