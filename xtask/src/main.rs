@@ -1120,10 +1120,25 @@ fn corpus_smoke() -> Result<()> {
 
 /// Build, install, exercise and uninstall the smoke-identity installer.
 ///
-/// Delegates to `scripts/test-installer.ps1`, which prints a loud `SKIPPED:`
-/// line and exits 0 when Inno Setup is not installed, so a host without Inno
-/// Setup does not fail this command. It exits non-zero on a failed assertion.
+/// First runs `scripts/test-portable-install.ps1`, the hermetic regression
+/// test for the portable contract: every manifest file is installed, including
+/// `install.ps1`, the installed tree verifies against its manifest, an upgrade
+/// merges the guide without nesting `docs\docs`, and an in-place run is safe.
+/// Then delegates to `scripts/test-installer.ps1`, which prints a loud
+/// `SKIPPED:` line and exits 0 when Inno Setup is not installed, so a host
+/// without Inno Setup does not fail this command. It exits non-zero on a
+/// failed assertion.
 fn installer_test() -> Result<()> {
+    run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/test-portable-install.ps1",
+        ],
+    )?;
     run(
         "powershell",
         &[

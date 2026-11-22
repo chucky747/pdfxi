@@ -1,0 +1,19 @@
+{
+  "id": "T-0367",
+  "lane": "platform",
+  "title": "Portable install payload completeness and automated regression test",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0366"],
+  "owns": [
+    "scripts/install.ps1",
+    "scripts/test-portable-install.ps1",
+    "scripts/package.ps1",
+    "xtask/src/main.rs",
+    "docs/evidence/platform/T-0367.md",
+    "orchestration/tasks/T-0367.json"
+  ],
+  "acceptance": "The portable install copies every manifest-listed payload file, including install.ps1; the installed tree verifies against its own manifest; fresh, upgrade, legacy docs\\\\docs and in-place runs are covered by an automated script wired into cargo xtask installer-test and package.ps1 -SelfTest.",
+  "notes": "Fresh review blocking B1: install.ps1 was absent from the portable payload allowlist, so every portable install failed its own manifest and the installed copy stayed at the pre-fix v0.1.0 script. Also adds the regression test RULES 5 requires.",
+  "evidence": "docs/evidence/platform/T-0367.md"
+}

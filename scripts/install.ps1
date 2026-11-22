@@ -30,24 +30,37 @@ $uiExe = Join-Path $source 'pdfxi-ui.exe'
 $target = [System.IO.Path]::GetFullPath($TargetDir)
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 
-# Explicit allowlist: install only what the portable archive ships.
+function Test-SamePath {
+    param([string]$Left, [string]$Right)
+    return [string]::Equals(
+        [System.IO.Path]::GetFullPath($Left),
+        [System.IO.Path]::GetFullPath($Right),
+        [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+# Explicit allowlist: install only what the portable archive ships. The guide
+# and manifest are handled below; install.ps1 is part of the archive and must
+# be copied too, or the installed tree fails its own manifest.
 $payload = @(
     'pdfxi.exe', 'pdfxi-ui.exe', 'pdfium.dll', 'LICENSE', 'NOTICE', 'README.md',
-    'THIRD_PARTY.md', 'deny.toml', 'manifest.json'
+    'THIRD_PARTY.md', 'deny.toml', 'install.ps1', 'manifest.json'
 )
 foreach ($name in $payload) {
     $src = Join-Path $source $name
-    if (Test-Path -LiteralPath $src -PathType Leaf) {
-        Copy-Item -LiteralPath $src -Destination (Join-Path $target $name) -Force
+    $dest = Join-Path $target $name
+    if ((Test-Path -LiteralPath $src -PathType Leaf) -and -not (Test-SamePath $src $dest)) {
+        Copy-Item -LiteralPath $src -Destination $dest -Force
     }
 }
 # PDFium's own notices ship in pdfium-licenses\ next to the binaries.
 $licenceSource = Join-Path $source 'pdfium-licenses'
 if (Test-Path -LiteralPath $licenceSource -PathType Container) {
     $licenceTarget = Join-Path $target 'pdfium-licenses'
-    New-Item -ItemType Directory -Force -Path $licenceTarget | Out-Null
-    foreach ($file in @(Get-ChildItem -LiteralPath $licenceSource -File)) {
-        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $licenceTarget $file.Name) -Force
+    if (-not (Test-SamePath $licenceSource $licenceTarget)) {
+        New-Item -ItemType Directory -Force -Path $licenceTarget | Out-Null
+        foreach ($file in @(Get-ChildItem -LiteralPath $licenceSource -File)) {
+            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $licenceTarget $file.Name) -Force
+        }
     }
 }
 # The user guide ships under docs\ so Help can open it from the install directory.
@@ -56,8 +69,10 @@ if (Test-Path -LiteralPath $licenceSource -PathType Container) {
 $docsSource = Join-Path $source 'docs'
 if (Test-Path -LiteralPath $docsSource -PathType Container) {
     $docsTarget = Join-Path $target 'docs'
-    New-Item -ItemType Directory -Force -Path $docsTarget | Out-Null
-    Copy-Item -Path (Join-Path $docsSource '*') -Destination $docsTarget -Recurse -Force
+    if (-not (Test-SamePath $docsSource $docsTarget)) {
+        New-Item -ItemType Directory -Force -Path $docsTarget | Out-Null
+        Copy-Item -Path (Join-Path $docsSource '*') -Destination $docsTarget -Recurse -Force
+    }
     # Older installers created a duplicate under docs\docs; remove it so the
     # viewer (which serves <install>\docs) always sees the current guide.
     $nested = Join-Path $docsTarget 'docs'

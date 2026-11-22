@@ -830,16 +830,32 @@ function Invoke-SelfTest {
             Write-Output 'TEST 6 source_layout_and_notices PASS'; $passed++
         } else { Format-Result $r6 'TEST 6'; Write-Output 'TEST 6 source_layout_and_notices FAIL'; $failed++ }
 
-        # 7. installer copies the payload without touching the Start Menu.
+        # 7. installer copies the payload (including itself) without touching
+        # the Start Menu; the installed tree must verify against its manifest,
+        # and a reinstall over a legacy docs\docs layout must remove the nest.
         $installed = Join-Path $sandbox 'installed'
         & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $art1.Staging 'install.ps1') `
             -TargetDir $installed -NoShortcut | Out-Null
         $installCode = $LASTEXITCODE
-        if ($installCode -eq 0 -and
+        $installedScript = Join-Path $installed 'install.ps1'
+        $scriptCopied = (Test-Path -LiteralPath $installedScript -PathType Leaf) -and
+            ((Get-Sha256 $installedScript) -eq (Get-Sha256 (Join-Path $art1.Staging 'install.ps1')))
+        $installedManifest = Test-Manifest -ManifestPath (Join-Path $installed 'manifest.json') -StagingDir $installed
+        New-Item -ItemType Directory -Force -Path (Join-Path $installed 'docs\docs') | Out-Null
+        Write-Utf8NoBom (Join-Path $installed 'docs\docs\stale.md') 'legacy nested copy'
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $art1.Staging 'install.ps1') `
+            -TargetDir $installed -NoShortcut | Out-Null
+        $upgradeCode = $LASTEXITCODE
+        $nestedGone = -not (Test-Path -LiteralPath (Join-Path $installed 'docs\docs'))
+        if ($installCode -eq 0 -and $upgradeCode -eq 0 -and $scriptCopied -and
+            $installedManifest.Ok -and $nestedGone -and
             (Test-Path -LiteralPath (Join-Path $installed 'pdfxi.exe') -PathType Leaf) -and
             (Test-Path -LiteralPath (Join-Path $installed 'NOTICE') -PathType Leaf)) {
-            Write-Output "TEST 7 installer_copy PASS exit=$installCode"; $passed++
-        } else { Write-Output "TEST 7 installer_copy FAIL exit=$installCode"; $failed++ }
+            Write-Output "TEST 7 installer_copy PASS exit=$installCode upgrade=$upgradeCode verified=$($installedManifest.Verified) installer_copied=1 nested_removed=1"; $passed++
+        } else {
+            Format-Result $installedManifest 'TEST 7'
+            Write-Output "TEST 7 installer_copy FAIL exit=$installCode upgrade=$upgradeCode installer_copied=$scriptCopied manifest_ok=$($installedManifest.Ok) nested_removed=$nestedGone"; $failed++
+        }
 
         # 8. the archive ships the viewer, the pinned PDFium DLL, and its licences.
         Add-Type -AssemblyName System.IO.Compression.FileSystem
