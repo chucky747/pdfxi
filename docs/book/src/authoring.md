@@ -13,6 +13,7 @@ command.
 | Plain text and a documented Markdown subset | `CREATE-004` | verified | `pdfxi-convert::create` | `create text` |
 | PNG and JPEG images | `CREATE-003` | verified | `pdfxi-convert::create` | `create image` |
 | PostScript and EPS (bounded subset) | `CREATE-013` | verified | `pdfxi-convert::postscript_ingest` + `postscript_pdf` | `create postscript` |
+| Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
 | Local HTML and a CSS subset | `CREATE-005` | verified | `pdfxi-convert::create::html` | — |
 | Office, scan, portfolios | `CREATE-006`–`CREATE-010` | planned | — | — |
@@ -33,6 +34,21 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Scan assembly is exposed as:
+
+```text
+pdfxi create scan --out <OUTPUT.pdf> --scan <PAGE.png> [--scan <PAGE.png> ...]
+    [--dpi 300] [--duplex simplex|front-first|back-first] [--json]
+```
+
+Each `--scan` is a real PNG page in scanner order. The command reads the IHDR
+dimensions, describes every page to `ScanSource`, builds the deterministic
+`ScanAssemblyPlan` (which reuses the print-capture plan), embeds each image with
+`create_from_image` at the plan's exact page size, merges the pages in plan
+order, and reopens the output to verify the page count and geometry. Duplex
+modes pair consecutive images as front/back of each sheet and reject incomplete
+pairs. The TWAIN/WIA device adapter is still the caller's responsibility; any
+scanner that can emit PNG can drive this command.
 PostScript import is exposed as:
 
 ```text

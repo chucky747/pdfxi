@@ -3751,6 +3751,226 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn create_scan_assembles_simplex_png_pages() {
+    let first = TempPath::new("png");
+    first.write(&sample_png());
+    let second = TempPath::new("png");
+    second.write(&sample_png());
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "create",
+        "scan",
+        "--out",
+        out.arg(),
+        "--scan",
+        first.arg(),
+        "--scan",
+        second.arg(),
+        "--dpi",
+        "72",
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["pages"], 2);
+    assert_eq!(value["front"], 2);
+    assert_eq!(value["back"], 0);
+    assert_eq!(value["duplex"], "simplex");
+    assert_eq!(value["dpi"], 72.0);
+    assert_eq!(value["verified_pages"], 2);
+    let rows = value["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["sheet"], 1);
+    assert_eq!(rows[0]["side"], "front");
+    assert_eq!(rows[0]["format"], "png");
+    assert_eq!(rows[0]["width_px"], 2);
+    assert_eq!(rows[0]["height_px"], 2);
+    assert_eq!(rows[0]["page_width"], 2.0);
+    assert_eq!(rows[0]["page_height"], 2.0);
+    assert_eq!(rows[1]["sheet"], 2);
+
+    let bytes = fs::read(&out.path).expect("scan PDF");
+    let document = pdfxi_core::Document::from_bytes(bytes.clone()).expect("core parses scan PDF");
+    assert_eq!(document.page_count().expect("page count"), 2);
+    for index in 0..2 {
+        let page = document.page(index).expect("page");
+        assert!((page.media_box.width() - 2.0).abs() < 0.01);
+        assert!((page.media_box.height() - 2.0).abs() < 0.01);
+    }
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&[
+        "create",
+        "scan",
+        "--out",
+        again.arg(),
+        "--scan",
+        first.arg(),
+        "--scan",
+        second.arg(),
+        "--dpi",
+        "72",
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second scan PDF"),
+        "scan assembly is deterministic"
+    );
+}
+
+#[test]
+fn create_scan_orders_duplex_and_rejects_bad_inputs() {
+    let images: Vec<TempPath> = (0..4)
+        .map(|_| {
+            let path = TempPath::new("png");
+            path.write(&sample_png());
+            path
+        })
+        .collect();
+    let mut args: Vec<String> = vec![
+        "create".to_owned(),
+        "scan".to_owned(),
+        "--out".to_owned(),
+        TempOut::new("pdf").arg().to_owned(),
+    ];
+    for image in &images {
+        args.push("--scan".to_owned());
+        args.push(image.arg().to_owned());
+    }
+    args.push("--dpi".to_owned());
+    args.push("72".to_owned());
+    args.push("--duplex".to_owned());
+    args.push("front-first".to_owned());
+    args.push("--json".to_owned());
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let front_first = run(&arg_refs);
+    assert!(
+        front_first.status.success(),
+        "stderr: {}",
+        stderr(&front_first)
+    );
+    let value: Value = serde_json::from_str(&stdout(&front_first)).expect("valid JSON");
+    assert_eq!(value["duplex"], "duplex-front-first");
+    assert_eq!(value["pages"], 4);
+    assert_eq!(value["front"], 2);
+    assert_eq!(value["back"], 2);
+    let rows = value["rows"].as_array().expect("rows");
+    let sides: Vec<(&str, u64)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row["side"].as_str().unwrap_or(""),
+                row["sheet"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sides,
+        [("front", 1), ("back", 1), ("front", 2), ("back", 2)]
+    );
+
+    let back_out = TempOut::new("pdf");
+    let back_first = run(&[
+        "create",
+        "scan",
+        "--out",
+        back_out.arg(),
+        "--scan",
+        images[0].arg(),
+        "--scan",
+        images[1].arg(),
+        "--dpi",
+        "72",
+        "--duplex",
+        "back-first",
+        "--json",
+    ]);
+    assert!(
+        back_first.status.success(),
+        "stderr: {}",
+        stderr(&back_first)
+    );
+    let value: Value = serde_json::from_str(&stdout(&back_first)).expect("valid JSON");
+    let rows = value["rows"].as_array().expect("rows");
+    assert_eq!(rows[0]["side"], "back");
+    assert_eq!(rows[1]["side"], "front");
+
+    let odd = run(&[
+        "create",
+        "scan",
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--scan",
+        images[0].arg(),
+        "--dpi",
+        "72",
+        "--duplex",
+        "front-first",
+    ]);
+    assert!(!odd.status.success(), "a duplex job needs complete pairs");
+
+    let jpeg = TempPath::new("jpg");
+    jpeg.write(&sample_jpeg());
+    let unsupported = run(&[
+        "create",
+        "scan",
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--scan",
+        jpeg.arg(),
+    ]);
+    assert!(!unsupported.status.success());
+    assert!(
+        stderr(&unsupported).contains("expected png"),
+        "{}",
+        stderr(&unsupported)
+    );
+
+    let malformed = TempPath::new("png");
+    malformed.write(b"not a png");
+    let bad_header = run(&[
+        "create",
+        "scan",
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--scan",
+        malformed.arg(),
+    ]);
+    assert!(!bad_header.status.success());
+    assert!(
+        stderr(&bad_header).contains("not a PNG"),
+        "{}",
+        stderr(&bad_header)
+    );
+
+    let low_dpi = run(&[
+        "create",
+        "scan",
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--scan",
+        images[0].arg(),
+        "--dpi",
+        "10",
+    ]);
+    assert!(!low_dpi.status.success());
+
+    let no_scan = run(&["create", "scan", "--out", TempOut::new("pdf").arg()]);
+    assert!(!no_scan.status.success());
+
+    let missing = run(&[
+        "create",
+        "scan",
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--scan",
+        TempPath::new("png").arg(),
+    ]);
+    assert!(!missing.status.success());
+}
+
+#[test]
 fn plugin_plan_reports_capability_and_budget_gates() {
     let manifest = TempPath::new("json");
     manifest.write(

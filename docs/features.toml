@@ -745,34 +745,45 @@ title = "Create PDF from Microsoft Office via adapter"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/scan_capture.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0165.md",
+    "crates/pdfxi-cli/src/scan.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0312.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 322 unit + 31 integration tests passed, 0 failed, TEST_EXIT=0. All 9 scan_capture::tests green, including simplex_plan_orders_sheets_and_rejects_back_images, duplex_front_first_page_order_is_sheet_then_front_back, duplex_back_first_page_order_is_sheet_then_back_front, invalid_dpi_and_page_limits_are_rejected and assembly_is_deterministic_and_reuses_print_capture_plan. Clippy/doc/fmt scoped to pdfxi-convert EXIT=0. Full output in docs/evidence/convert/T-0165.md."
+evidence = "docs/evidence/cli/T-0312.md"
 id = "CREATE-007"
 notes = """
-ADR 0008 local equivalent for TWAIN/WIA: `scan_capture` accepts caller-supplied
-rendered page images from any TWAIN/WIA-equivalent host facility and never opens
-a device. It delivers a `ScanSource` model (sheet/side/label/pixels/DPI/format),
-resolution validation (finite DPI in 50..=1200, pixel bounds via the shared
-image constants, page geometry via create::PageSize), a duplex/page-order plan
-(simplex, duplex front-first, duplex back-first with duplicate/missing-side
-typed errors), a PDF assembly plan that reuses `print_capture::build_print_capture_plan`
-and `image::ImageFormat`, a deterministic `ScanReport` summary, and typed
-`ScanError` variants. Nine tests cover source validation, DPI/page limits,
-duplex ordering, reuse and byte-for-byte determinism.
+Verified through `pdfxi create scan --out PDF --scan PAGE.png [--scan ...]
+[--dpi 300] [--duplex simplex|front-first|back-first] [--json]`.
 
-Verified at library level only. Exact remaining scope (outside this task's
-claim): a host-side TWAIN/WIA device adapter that produces the rendered images,
-UI wiring to emit PDF bytes from caller-held pixels via create::create_from_image,
-an integrator-owned mdBook page, and the integrator merge into docs/features.toml.
-No device, driver, process, network, or GUI code exists in this crate.
+The host reads each PNG, validates the signature/IHDR and extracts width/height
+without decoding pixels, describes each page as a ScanSource (sheet, side, DPI,
+ImageFormat::Png) and calls build_scan_plan. Each planned page is embedded with
+create_from_image at the plan's exact point size (px/dpi*72) with zero margins,
+then pages are merged in plan order via PagePlan::merge and apply_page_plan. The
+written file is reopened and page count and every media box are checked against
+the plan. Duplex pairs consecutive images and rejects incomplete pairs or backs
+in simplex mode. PNG is the supported raster because the scan model's formats
+and the image embedder intersect there.
+
+Evidence: two 2x2 PNG pages at 72 dpi report pages 2, front 2, back 0, simplex,
+verified_pages 2, two 2.00x2.00 pt pages and 2120 bytes; reopening reports 2
+pages. Four images with --duplex front-first report pages 4, front 2, back 2 and
+side/sheet order front1, back1, front2, back2; back-first swaps each pair.
+Incomplete duplex, dpi 10, a JPEG path, a malformed PNG header, no --scan and a
+missing file fail.
+
+Gates: cargo test -p pdfxi-cli --test cli create_scan = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: the TWAIN/WIA device adapter remains host-side; only rendered PNG pages
+are accepted, with no OCR, deskew or orientation inference.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::create_scan_assembles_simplex_png_pages",
+    "cli::create_scan_orders_duplex_and_rejects_bad_inputs",
     "scan_capture::tests::simplex_plan_orders_sheets_and_rejects_back_images",
     "scan_capture::tests::duplex_front_first_page_order_is_sheet_then_front_back",
     "scan_capture::tests::duplex_back_first_page_order_is_sheet_then_back_front",

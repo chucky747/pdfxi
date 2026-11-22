@@ -1,0 +1,19 @@
+{
+  "id": "T-0312",
+  "lane": "convert",
+  "title": "Scan-to-PDF assembly host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0311"],
+  "owns": [
+    "crates/pdfxi-cli/src/scan.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0312.md",
+    "orchestration/feature-updates/T-0312.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli create_scan passes; pdfxi create scan reads real PNG pages, builds the scan assembly plan, writes one PDF with exact page sizes, verifies geometry and orders duplex sheets; CREATE-007 moves to verified.",
+  "notes": "Hosts ScanSource/ScanAssemblyPlan by parsing PNG headers, embedding each planned page and merging in plan order.",
+  "evidence": "docs/evidence/cli/T-0312.md"
+}

@@ -68,6 +68,8 @@ mod api;
 mod ops;
 /// pdfxi plugin: plan plugin invocations and validate typed outputs.
 mod plugin;
+/// pdfxi create scan: assemble scanned PNG pages into a PDF.
+mod scan;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
 mod toolset;
 /// pdfxi watch: one host-driven poll of a watched folder.
@@ -1627,6 +1629,24 @@ enum CreateCommand {
         #[arg(long)]
         markdown: bool,
     },
+    /// Assemble scanned PNG page images into a PDF.
+    Scan {
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Scanned PNG page; repeat in scan order.
+        #[arg(long = "scan", value_name = "PNG", required = true)]
+        scans: Vec<PathBuf>,
+        /// Declared scanner resolution in dots per inch.
+        #[arg(long, default_value_t = 300.0)]
+        dpi: f64,
+        /// Transport: simplex, front-first or back-first.
+        #[arg(long, default_value = "simplex")]
+        duplex: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a PDF from the supported PostScript or EPS subset.
     ///
     /// DSC headers and a bounded text/line/rectangle operator subset are
@@ -2622,6 +2642,13 @@ fn main() -> anyhow::Result<()> {
                 strict,
                 json,
             } => create::create_postscript(&input, &output, strict, json),
+            CreateCommand::Scan {
+                out,
+                scans,
+                dpi,
+                duplex,
+                json,
+            } => scan::create_scan(&scans, &out, dpi, &duplex, json),
         },
         Command::Export { command } => match command {
             ExportCommand::Tagged {
