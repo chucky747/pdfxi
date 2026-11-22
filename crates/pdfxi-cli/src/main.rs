@@ -80,6 +80,8 @@ mod find_files;
 mod geo;
 /// pdfxi home: recents, favorites and collections over a state file.
 mod home;
+/// pdfxi interactions: audit /AA additional actions.
+mod interactions;
 /// pdfxi media3d: read /3D annotations and extract payloads.
 mod media3d;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
@@ -409,6 +411,17 @@ enum Command {
         /// Geospatial action.
         #[command(subcommand)]
         command: GeoCommand,
+    },
+    /// Audit `/AA` additional actions against the safe-action whitelist.
+    Interactions {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Exit non-zero when any action is rejected.
+        #[arg(long)]
+        strict: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Inspect `/3D` annotations and optionally extract the U3D/PRC payload.
     Media3d {
@@ -2687,6 +2700,24 @@ struct MatchOutput {
 }
 
 fn main() -> anyhow::Result<()> {
+    // The clap command tree is one deeply nested builder expression. In a debug
+    // build, constructing it can exhaust the default main-thread stack as more
+    // commands are added, so the CLI runs on a worker thread with a generous
+    // stack. Behaviour and output are unchanged.
+    let worker = std::thread::Builder::new()
+        .name("pdfxi-cli".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run_cli)?;
+    match worker.join() {
+        Ok(result) => result,
+        Err(_) => {
+            eprintln!("pdfxi: internal error: the CLI worker panicked");
+            std::process::exit(101);
+        }
+    }
+}
+
+fn run_cli() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Info { file, json } => print_info(&file, json),
@@ -2745,6 +2776,9 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Interactions { file, strict, json } => {
+            interactions::interactions(&file, strict, json)
+        }
         Command::Media3d {
             file,
             extract,

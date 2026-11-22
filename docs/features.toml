@@ -4782,27 +4782,48 @@ title = "Geospatial PDF support"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/interactions.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0335.md",
     "crates/pdfxi-render/src/actions.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0169.md: 2 new actions::tests pass (byte-stable action-plan descriptor with escaped named targets, stable code for every SafeAction); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0335.md"
 id = "MEDIA-005"
 notes = """
-Additional-action whitelist is complete at library level: the eight /AA trigger
-codes with canonical ordering, bounded inputs, dangerous actions (JavaScript/JS/
-Launch/ImportData/SubmitForm/ResetForm) rejected as DangerousAction and
-network/multimedia/unknown kinds as UnsupportedAction. Actions carry stable codes
-and resolve_plan emits a deterministic ActionPlan with a byte-stable descriptor
-(declared order as tie-breaker). Host boundary: the plan is data for a host to
-consume; no script is executed, no external application launched, no network
-contacted and no PDF object stream parsed (caller supplies intermediate actions),
-so this is verified for the data/plan model only (ADR 0008).
+Verified through `pdfxi interactions <INPUT.pdf> [--strict] [--json]`.
+
+The host reads /AA from the catalog, every page and every annotation, maps each
+entry's /S kind and /D destination (a page reference resolves to its zero-based
+page index, a name or string becomes a named destination), and validates each
+action independently through AaActionSet::parse so one bad action does not hide
+the rest. Accepted actions print their stable code; rejected actions print the
+typed reason. --strict exits non-zero on any rejection and no action executes.
+
+Evidence: a real fixture with catalog /AA << /PV 6 0 R >> (GoTo page 0), page
+/AA << /E 7 0 R /X 8 0 R >> (NextPage, JavaScript) and annotation
+/AA << /D 10 0 R >> (FullScreen) reports sites 3, actions 4, accepted 3,
+rejected 1, with goto:0 -> 0, next-page, toggle-full-screen and the dangerous
+JavaScript rejection. --strict exits 1 on that document and 0 on a clean one.
+
+T-0335 also fixes a CLI startup failure found here: the clap command tree as one
+nested builder expression exhausted the 1 MiB main-thread stack in debug builds
+at this command count, so main now runs the CLI on a 16 MiB worker thread. A
+regression test asserts `pdfxi --version` exits 0.
+
+Gates: cargo test -p pdfxi-cli interactions = 2 passed plus the version test;
+whole workspace fmt/clippy/tests green.
+
+Scope: audit and validation only; no action execution, no /AA editing and no
+remote/URI destination resolution. Field-level /AA stays with `pdfxi form
+actions`.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::interactions_audits_catalog_page_and_annotation_actions",
+    "cli::interactions_strict_mode_fails_on_rejected_actions",
+    "cli::cli_version_starts_with_the_full_command_tree",
     "actions::tests::plan_descriptor_is_byte_stable_and_reflects_actions",
     "actions::tests::every_safe_action_has_a_stable_code",
 ]

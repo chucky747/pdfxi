@@ -11114,6 +11114,98 @@ fn media3d_rejects_documents_without_3d_annotations() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// interactions: /AA additional actions (T-0335)
+// ---------------------------------------------------------------------------
+
+/// A one-page PDF with catalog, page and annotation `/AA` actions.
+fn t0335_interactions_pdf() -> Vec<u8> {
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AA << /PV 6 0 R >> >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /AA << /E 7 0 R /X 8 0 R >> /Annots [4 0 R] >>"
+                .to_owned(),
+            "<< /Type /Annot /Subtype /Link /Rect [72 72 200 100] \
+             /AA << /D 10 0 R >> >>"
+                .to_owned(),
+            "<< /Type /Annot /Subtype /Text /Rect [300 300 320 320] >>".to_owned(),
+            "<< /S /GoTo /D [3 0 R /Fit] >>".to_owned(),
+            "<< /S /NextPage >>".to_owned(),
+            "<< /S /JavaScript /JS (app.alert(1)) >>".to_owned(),
+            "<< /S /URI /URI (https://example.test/) >>".to_owned(),
+            "<< /S /FullScreen >>".to_owned(),
+        ],
+    )
+}
+
+#[test]
+fn interactions_audits_catalog_page_and_annotation_actions() {
+    let pdf = TempPdf::new(&t0335_interactions_pdf());
+    let output = run(&["interactions", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["sites"], 3);
+    assert_eq!(value["actions"], 4);
+    assert_eq!(value["accepted"], 3);
+    assert_eq!(value["rejected"], 1);
+    let rows = value["rows"].as_array().expect("rows");
+    assert!(rows.iter().any(|row| {
+        row["site"] == "catalog"
+            && row["event"] == "PV"
+            && row["kind"] == "GoTo"
+            && row["code"] == "goto:0"
+            && row["target"] == "0"
+    }));
+    assert!(rows.iter().any(|row| {
+        row["site"] == "page 1" && row["event"] == "E" && row["code"] == "next-page"
+    }));
+    let rejected = rows
+        .iter()
+        .find(|row| row["status"] == "rejected")
+        .expect("rejected row");
+    assert_eq!(rejected["kind"], "JavaScript");
+    assert!(
+        rejected["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("dangerous action"),
+        "{rejected}"
+    );
+    assert!(rows.iter().any(|row| {
+        row["site"] == "page 1 annotation 4" && row["code"] == "toggle-full-screen"
+    }));
+}
+
+#[test]
+fn interactions_strict_mode_fails_on_rejected_actions() {
+    let pdf = TempPdf::new(&t0335_interactions_pdf());
+    let strict = run(&["interactions", pdf.arg(), "--strict"]);
+    assert!(!strict.status.success());
+    assert!(
+        stderr(&strict).contains("rejected by the safe-action whitelist"),
+        "{}",
+        stderr(&strict)
+    );
+
+    let clean = create_text_pdf("No additional actions.");
+    let output = run(&["interactions", clean.arg(), "--strict", "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["sites"], 0);
+    assert_eq!(value["actions"], 0);
+    assert_eq!(value["rejected"], 0);
+}
+
+#[test]
+fn cli_version_starts_with_the_full_command_tree() {
+    let output = run(&["--version"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).contains("pdfxi"), "{}", stdout(&output));
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

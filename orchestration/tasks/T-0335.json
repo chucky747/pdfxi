@@ -1,0 +1,19 @@
+{
+  "id": "T-0335",
+  "lane": "convert",
+  "title": "Interactive actions host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0334"],
+  "owns": [
+    "crates/pdfxi-cli/src/interactions.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0335.md",
+    "orchestration/feature-updates/T-0335.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli interactions passes; pdfxi interactions audits real catalog/page/annotation /AA actions, resolves GoTo destinations, reports dangerous actions and fails with --strict; MEDIA-005 moves to verified.",
+  "notes": "Hosts pdfxi_render::actions over real /AA dictionaries and runs the CLI on a 16 MiB worker stack so the growing clap tree cannot exhaust the main-thread stack.",
+  "evidence": "docs/evidence/cli/T-0335.md"
+}

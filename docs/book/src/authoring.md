@@ -34,6 +34,7 @@ command.
 | Screen reader tree and accesskit roles | `ACCESS-006` | verified | `pdfxi-app::a11y` | `accessibility tree` |
 | Geospatial viewports and coordinate mapping | `MEDIA-004` | verified | `pdfxi-render::geospatial` | `geo info` / `geo to-pdf` / `geo to-geo` |
 | U3D/PRC 3D annotations | `MEDIA-003` | verified | `pdfxi-render::three_d` | `media3d` / `--extract` |
+| Interactive actions and triggers | `MEDIA-005` | verified | `pdfxi-render::actions` | `interactions [--strict]` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -455,6 +456,24 @@ flag. It then validates them through `ThreeDAnnotation`, prints the active view,
 the backend requirements (decoder, animation, view activation) and the stable
 plan descriptor, and with `--extract` writes the decoded payload for an external
 3D viewer. The geometry itself is never decoded.
+
+### Interactive actions and triggers
+
+`MEDIA-005` (verified) hosts the `/AA` whitelist in `pdfxi_render::actions`:
+
+```text
+pdfxi interactions <INPUT.pdf> [--strict] [--json]
+```
+
+The command reads the catalog, page and annotation `/AA` dictionaries, resolves
+each action's `/S` kind and `/D` destination (array page reference or named
+destination) and validates it with the safe-action whitelist: page navigation
+(`GoTo`, named `GoTo`, next/previous/first/last page) and full-screen toggling
+are accepted; `JavaScript`, `Launch`, `ImportData`, `SubmitForm` and
+`ResetForm` are reported as dangerous; `URI`, `GoToR`, rendition, movie and
+sound actions are reported as unsupported. `--strict` exits non-zero when any
+action is rejected; otherwise the report lists every action with its status.
+No action is ever executed.
 
 ## Page boxes and page operations
 
