@@ -89,6 +89,8 @@ mod compare;
 mod conformance;
 /// `pdfxi decorate`: stamp headers and footers on pages.
 mod decorate;
+/// `pdfxi form create` and `pdfxi form list`: build and inspect AcroForm fields.
+mod form;
 /// `pdfxi linearize` and `pdfxi pack`: choose the on-disk object layout.
 mod layout;
 mod links;
@@ -367,6 +369,17 @@ enum Command {
         /// The attachment operation to perform.
         #[command(subcommand)]
         command: AttachCommand,
+    },
+    /// Create and inspect AcroForm fields.
+    ///
+    /// `create` builds real `/AcroForm` field and widget dictionaries from a
+    /// compact description, serializes them into a standalone US-Letter page,
+    /// and reloads the bytes before writing. `list` reports the terminal fields
+    /// of any form PDF.
+    Form {
+        /// The form operation to perform.
+        #[command(subcommand)]
+        command: FormCommand,
     },
     /// Append an incremental revision with updated document information.
     ///
@@ -982,6 +995,34 @@ enum AttachCommand {
         json: bool,
     },
 }
+/// Operations on the `pdfxi form` command group.
+#[derive(Debug, Subcommand)]
+enum FormCommand {
+    /// Build a one-page PDF with typed AcroForm fields.
+    Create {
+        /// Where to write the form PDF.
+        out: PathBuf,
+        /// Field description `KIND:NAME:X,Y,W,H[:OPT1|OPT2]`; repeat for each field.
+        #[arg(
+            long = "field",
+            value_name = "KIND:NAME:X,Y,W,H[:OPTIONS]",
+            required = true
+        )]
+        fields: Vec<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the terminal fields of a form PDF.
+    List {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Operations on the `pdfxi create` command group.
 #[derive(Debug, Subcommand)]
 enum CreateCommand {
@@ -1572,6 +1613,10 @@ fn main() -> anyhow::Result<()> {
                 name,
                 json,
             } => navigation::run_attach_remove(&file, &out, &name, json),
+        },
+        Command::Form { command } => match command {
+            FormCommand::Create { out, fields, json } => form::run_create(&out, &fields, json),
+            FormCommand::List { file, json } => form::run_list(&file, json),
         },
         Command::Update {
             file,

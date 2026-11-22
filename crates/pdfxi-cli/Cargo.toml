@@ -29,6 +29,9 @@ pdfxi-convert = { workspace = true }
 # decorate command group. A workspace crate, so no new external dependency.
 pdfxi-edit = { path = "../pdfxi-edit", version = "0.1.0" }
 pdfxi-accessibility = { workspace = true }
+# Typed AcroForm field builders and the standalone form serializer used by the
+# `form` command group. A workspace crate, so no external dependency.
+pdfxi-forms = { workspace = true }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.
 pdfxi-render = { workspace = true, optional = true }

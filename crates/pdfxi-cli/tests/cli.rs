@@ -3175,6 +3175,180 @@ fn linearize_and_pack_handle_a_hybrid_source() {
 }
 
 #[test]
+fn form_create_writes_typed_fields_and_reloads_them() {
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let create = |out: &TempOut| {
+        run(&[
+            "form",
+            "create",
+            out.arg(),
+            "--field",
+            "text:patient:72,700,200,24",
+            "--field",
+            "checkbox:agree:72,660,14,14",
+            "--field",
+            "radio:color:72,620,14,14:red|green",
+            "--field",
+            "combo:state:72,580,200,24:CA|NY|TX",
+            "--field",
+            "list:notes:72,500,200,60:a|b",
+            "--field",
+            "button:submit:72,460,100,24",
+            "--field",
+            "signature:sig:72,400,200,40",
+        ])
+    };
+    let created = create(&first);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let text = stdout(&created);
+    assert!(
+        text.contains("field: patient [text] rect: 72 700 200 24"),
+        "{text}"
+    );
+    assert!(
+        text.contains("field: color [radio] rect: 72 620 14 14 options: red|green"),
+        "{text}"
+    );
+    assert!(text.contains("field: state [combo]"), "{text}");
+    assert!(text.contains("fields: 7"), "{text}");
+
+    let bytes = fs::read(&first.path).expect("form bytes");
+    assert!(bytes.starts_with(b"%PDF-1.7"), "PDF header");
+
+    let repeated = create(&second);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&second.path).expect("second form bytes"),
+        "form creation is deterministic"
+    );
+
+    let listed = run(&["form", "list", first.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    assert_eq!(value["present"], true);
+    let fields = value["fields"].as_array().expect("fields");
+    assert_eq!(fields.len(), 7);
+    let names: Vec<&str> = fields
+        .iter()
+        .map(|field| field["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "patient", "agree", "color", "state", "notes", "submit", "sig"
+        ]
+    );
+    let kinds: Vec<&str> = fields
+        .iter()
+        .map(|field| field["kind"].as_str().expect("kind"))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "text",
+            "checkbox",
+            "radio",
+            "choice",
+            "choice",
+            "button",
+            "signature"
+        ]
+    );
+
+    let info = run(&["info", first.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+}
+
+#[test]
+fn form_create_and_list_reject_bad_input() {
+    let out = TempOut::new("pdf");
+    let no_fields = run(&["form", "create", out.arg()]);
+    assert!(!no_fields.status.success());
+    assert!(
+        stderr(&no_fields).contains("--field"),
+        "{}",
+        stderr(&no_fields)
+    );
+
+    let bad_rect = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:name:72,700,200",
+    ]);
+    assert!(!bad_rect.status.success());
+    assert!(
+        stderr(&bad_rect).contains("rectangle"),
+        "{}",
+        stderr(&bad_rect)
+    );
+
+    let duplicate = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:name:72,700,200,24",
+        "--field",
+        "checkbox:name:72,660,14,14",
+    ]);
+    assert!(!duplicate.status.success());
+    assert!(
+        stderr(&duplicate).contains("duplicate field name"),
+        "{}",
+        stderr(&duplicate)
+    );
+
+    let text_options = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:name:72,700,200,24:unexpected",
+    ]);
+    assert!(!text_options.status.success());
+
+    let radio_without_options = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "radio:color:72,620,14,14",
+    ]);
+    assert!(!radio_without_options.status.success());
+    assert!(
+        stderr(&radio_without_options).contains("option"),
+        "{}",
+        stderr(&radio_without_options)
+    );
+
+    let off_page = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:name:600,700,200,24",
+    ]);
+    assert!(!off_page.status.success());
+    assert!(
+        stderr(&off_page).contains("outside"),
+        "{}",
+        stderr(&off_page)
+    );
+
+    let minimal = root_fixture("minimal.pdf");
+    let no_form = run(&["form", "list", minimal.to_str().expect("utf-8"), "--json"]);
+    assert!(no_form.status.success(), "stderr: {}", stderr(&no_form));
+    let value: Value = serde_json::from_str(&stdout(&no_form)).expect("valid JSON");
+    assert_eq!(value["present"], false);
+    assert_eq!(value["fields"].as_array().expect("fields").len(), 0);
+}
+
+#[test]
 fn export_conformance_plan_and_profiles_preserve_text() {
     let source = root_fixture("minimal.pdf");
     let plan = run(&[

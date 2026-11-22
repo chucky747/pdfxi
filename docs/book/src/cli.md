@@ -46,6 +46,8 @@ pdfxi <COMMAND> --help
 | `linearize <FILE> --out PATH [--version 1.7] [--json]` | Write a fully linearized file | verified (`STD-003`) |
 | `pack <FILE> --out PATH [--no-compress] [--max-objects N] [--json]` | Pack objects into object streams and an xref stream | verified (`STD-003`) |
 | `export conformance <FILE> --profile PROFILE [--out PATH] [--plan] [--policy report\|reject] [--output-intent SUBTYPE] [--json]` | Normalize for PDF/A, PDF/X or PDF/E | verified (`EXPORT-008`) |
+| `form create <OUT> --field KIND:NAME:X,Y,W,H[:OPTIONS] ... [--json]` | Build a one-page form PDF | verified (`FORMS-002`) |
+| `form list <FILE> [--json]` | List AcroForm fields | verified (`FORMS-002`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -114,7 +116,14 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `export conformance` accepts canonical labels (`PDF/A-2b`) and compact
+- `form create` builds typed AcroForm fields from repeatable
+  `KIND:NAME:X,Y,W,H[:OPT1|OPT2]` descriptions (`text`, `checkbox`, `radio`,
+  `combo`, `list`, `button`, `signature`) on a single 612x792 page, serializes
+  them with `pdfxi-forms::serialize_form_pdf`, and reloads the bytes through
+  both the forms model and `pdfxi-core` before writing. Rectangles must be
+  positive and inside the page, names must be unique, and options are required
+  only for radio/combo/list. `form list` reports the terminal fields of any form
+  PDF using the same loader.- `export conformance` accepts canonical labels (`PDF/A-2b`) and compact
   lowercase spellings (`pdfa-2b`, `pdfx-4`, `pdfe-1`). It normalizes the header
   version, adds the XMP and output-intent placeholders the target requires,
   detects forbidden catalog entries, and rewrites the xref deterministically.

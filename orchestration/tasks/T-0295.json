@@ -1,0 +1,20 @@
+{
+  "id": "T-0295",
+  "lane": "forms",
+  "title": "Form creation and inspection host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0294"],
+  "owns": [
+    "crates/pdfxi-cli/src/form.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/Cargo.toml",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0295.md",
+    "orchestration/feature-updates/T-0295.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli form_ and cargo test -p pdfxi-cli --bin pdfxi form pass; pdfxi form create writes a one-page PDF whose fields reload through pdfxi-forms and pdfxi-core, form list reports them, and FORMS-002 moves to verified.",
+  "notes": "Hosts FieldSpec builders and serialize_form_pdf behind a compact KIND:NAME:RECT[:OPTIONS] description, verifies the bytes through load_acroform and pdfxi-core before writing, and adds form list.",
+  "evidence": "docs/evidence/cli/T-0295.md"
+}

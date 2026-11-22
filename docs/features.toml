@@ -2013,32 +2013,48 @@ title = "Fill existing AcroForm fields"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/serialize.rs",
-    "crates/pdfxi-forms/src/build.rs",
-    "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0140.md",
+    "crates/pdfxi-cli/src/form.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0295.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 255 passed, 0 failed; 12 new serialize::tests cover full emit->PDF-bytes->parse round trip, page /Annots, AcroForm /Fields, missing/invalid page reference, duplicate names, malformed dictionaries, empty fields, widget count mismatch, explicit widget override, byte determinism and bad-header rejection. fmt/clippy/doc EXIT=0. Full output in docs/evidence/forms/T-0140.md."
+evidence = "docs/evidence/cli/T-0295.md"
 id = "FORMS-002"
 notes = """
-The previously deferred step -- serializing emitted field/widget dictionaries
-into a concrete, loadable PDF -- is now implemented and end-to-end tested.
-serialize_form_pdf promotes each /Kids widget into an indirect object, rewrites
-field /Kids to reference it, overwrites widget /P with the supplied page object
-reference, wires page /Annots, builds the AcroForm /Fields array, a catalogue,
-page tree, xref table and trailer. parse_pdf parses the bytes back; the
-round-trip test asserts /T names, /FT types, /Rect placement, corrected /P and
-page /Annots. Field names are unique-checked before emission and the caller's
-page number is reserved/bounded so no hostile reference can allocate a huge
-xref. Honest boundary: this creates a standalone document with one page; it
-does not merge into an existing host document, does not attach per-option radio
-appearance streams, and does not provide a UI. The original typed field-creation
-tests from T-0080 remain valid and are retained below.
+Verified through a new pdfxi form host. form create accepts repeatable
+KIND:NAME:X,Y,W,H[:OPT1|OPT2] descriptions for text, checkbox, radio, combo,
+list, button and signature fields, builds FieldSpec values, emits their field and
+widget dictionaries, and calls serialize_form_pdf for a one-page 612x792 PDF.
+Rectangles must be finite, positive and on the page; names must be unique;
+options are required only for radio/combo/list. Before writing, the host
+reloads the bytes with pdfxi-forms::load_acroform (same field count and order)
+and with pdfxi-core (exactly one page); otherwise it fails closed. form list
+reports terminal fields (name, type, value) of any form PDF through the same
+loader.
+
+Evidence: creating seven fields yields the expected text report, a 2541-byte
+%PDF-1.7 file, deterministic bytes across two runs, form list with names
+patient/agree/color/state/notes/submit/sig and kinds
+text/checkbox/radio/choice/choice/button/signature, and pdfxi info reporting one
+page. Rejections cover a missing --field, a short rectangle, a duplicate name,
+options on a text field, a radio without options, an off-page rectangle, and
+form list on a PDF without an AcroForm (present:false, zero fields).
+
+Gates: cargo test -p pdfxi-cli --test cli form_ = 2 passed; cargo test
+-p pdfxi-cli --bin pdfxi form = 3 passed; whole workspace fmt/clippy/tests green.
+
+Scope: all listed field kinds are reachable and reload from the written bytes.
+Creation targets a standalone one-page document; merging into an existing PDF
+and per-option radio appearance streams remain outside this row.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
+    "cli::form_create_writes_typed_fields_and_reloads_them",
+    "cli::form_create_and_list_reject_bad_input",
+    "form::tests::field_descriptions_parse_all_supported_kinds",
+    "form::tests::field_descriptions_reject_bad_input",
+    "form::tests::rectangles_validate_geometry",
     "build::tests::create_text_field_with_typed_properties",
     "build::tests::create_checkbox_field",
     "build::tests::create_radio_group_with_options_and_flag",
