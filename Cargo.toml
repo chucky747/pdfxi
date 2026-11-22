@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -41,18 +41,18 @@ toml = "0.8"
 # unused workspace dependency, and binaries with no dependents (`pdfxi-app`,
 # `pdfxi-cli`) plus crates nobody uses yet (`pdfxi-edit`) would trip it. Add the
 # entry with the first dependent.
-pdfxi-accessibility = { path = "crates/pdfxi-accessibility", version = "0.1.0" }
-pdfxi-assistant = { path = "crates/pdfxi-assistant", version = "0.1.0" }
-pdfxi-automation = { path = "crates/pdfxi-automation", version = "0.1.0" }
-pdfxi-convert = { path = "crates/pdfxi-convert", version = "0.1.0", default-features = false }
-pdfxi-core = { path = "crates/pdfxi-core", version = "0.1.0" }
-pdfxi-document = { path = "crates/pdfxi-document", version = "0.1.0" }
-pdfxi-forms = { path = "crates/pdfxi-forms", version = "0.1.0" }
-pdfxi-render = { path = "crates/pdfxi-render", version = "0.1.0" }
-pdfxi-security = { path = "crates/pdfxi-security", version = "0.1.0" }
-pdfxi-standards = { path = "crates/pdfxi-standards", version = "0.1.0" }
-pdfxi-testkit = { path = "crates/pdfxi-testkit", version = "0.1.0" }
-pdfxi-text = { path = "crates/pdfxi-text", version = "0.1.0" }
+pdfxi-accessibility = { path = "crates/pdfxi-accessibility", version = "0.1.1" }
+pdfxi-assistant = { path = "crates/pdfxi-assistant", version = "0.1.1" }
+pdfxi-automation = { path = "crates/pdfxi-automation", version = "0.1.1" }
+pdfxi-convert = { path = "crates/pdfxi-convert", version = "0.1.1", default-features = false }
+pdfxi-core = { path = "crates/pdfxi-core", version = "0.1.1" }
+pdfxi-document = { path = "crates/pdfxi-document", version = "0.1.1" }
+pdfxi-forms = { path = "crates/pdfxi-forms", version = "0.1.1" }
+pdfxi-render = { path = "crates/pdfxi-render", version = "0.1.1" }
+pdfxi-security = { path = "crates/pdfxi-security", version = "0.1.1" }
+pdfxi-standards = { path = "crates/pdfxi-standards", version = "0.1.1" }
+pdfxi-testkit = { path = "crates/pdfxi-testkit", version = "0.1.1" }
+pdfxi-text = { path = "crates/pdfxi-text", version = "0.1.1" }
 
 [profile.dev]
 debug = 1

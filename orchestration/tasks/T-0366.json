@@ -1,0 +1,20 @@
+{
+  "id": "T-0366",
+  "lane": "orchestrator",
+  "title": "Corrected release v0.1.1 and evidence accuracy",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0364", "T-0365"],
+  "owns": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "docs/evidence/platform/T-0363.md",
+    "docs/evidence/ui/T-0362.md",
+    "orchestration/blockers/ENV-gui-session-wedged.md",
+    "docs/evidence/platform/T-0366.md",
+    "orchestration/tasks/T-0366.json"
+  ],
+  "acceptance": "Workspace version 0.1.1; package rebuilt at 0.1.1 and installed; installed Help serves the current guide (no docs\\docs); shortcuts and hashes verified; goal-verify --all green at the release HEAD; corrected tag v0.1.1 cut and pushed; evidence records exit codes, the tag object/commit, and force-stop wording accurately.",
+  "notes": "Post-review release correction. v0.1.0 stays immutable at 2e24f52 and is superseded by v0.1.1; no tag is moved or deleted.",
+  "evidence": "docs/evidence/platform/T-0366.md"
+}

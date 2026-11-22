@@ -11,7 +11,7 @@ A fresh viewer launch created a real top-level window and terminated cleanly:
 ```text
 > target\integration\debug\pdfxi-ui.exe --light fixtures\minimal.pdf
 PID=29308 HWND=10029370 RESPONDING=True EXITED=False
-Stop-Process -> EXITED-CLEAN
+Stop-Process (force-stop) -> process gone
 ```
 
 No orphaned `pdfxi-ui` process remained. The print-to-PDF end-to-end test also
