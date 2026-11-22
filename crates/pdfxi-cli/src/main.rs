@@ -109,6 +109,8 @@ mod portfolio;
 mod read_aloud;
 /// `pdfxi reflow`: lay page text out as a narrow reading column.
 mod reflow;
+/// `pdfxi structure apply`: write a tagged-PDF structure tree.
+mod structure;
 /// `pdfxi update`: append an incremental revision with new information.
 mod update;
 /// `pdfxi versions`: store page-text snapshots and diff revisions.
@@ -412,6 +414,12 @@ enum Command {
         /// The font operation to perform.
         #[command(subcommand)]
         command: FontCommand,
+    },
+    /// Write a tagged-PDF structure tree into a document.
+    Structure {
+        /// The structure operation to perform.
+        #[command(subcommand)]
+        command: StructureCommand,
     },
     /// Append an incremental revision with updated document information.
     ///
@@ -1222,6 +1230,25 @@ enum FontCommand {
     },
 }
 
+/// Operations on the `pdfxi structure` command group.
+#[derive(Debug, Subcommand)]
+enum StructureCommand {
+    /// Write a tagged structure tree from a JSON description.
+    Apply {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the tagged document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// JSON tree description with `lang`, `nodes` and `roots`.
+        #[arg(long, value_name = "PATH")]
+        tree: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Operations on the `pdfxi create` command group.
 #[derive(Debug, Subcommand)]
 enum CreateCommand {
@@ -1924,6 +1951,14 @@ fn main() -> anyhow::Result<()> {
                 align: &align,
                 json,
             }),
+        },
+        Command::Structure { command } => match command {
+            StructureCommand::Apply {
+                file,
+                out,
+                tree,
+                json,
+            } => structure::run_apply(&file, &out, &tree, json),
         },
         Command::Update {
             file,

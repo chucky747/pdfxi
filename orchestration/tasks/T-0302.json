@@ -1,0 +1,19 @@
+{
+  "id": "T-0302",
+  "lane": "core",
+  "title": "Tagged structure-tree host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0301"],
+  "owns": [
+    "crates/pdfxi-cli/src/structure.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0302.md",
+    "orchestration/feature-updates/T-0302.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli structure_apply and cargo test -p pdfxi-cli --bin pdfxi structure:: pass; pdfxi structure apply merges a JSON tag tree into real PDF bytes, saves, reopens and verifies the struct tree/parent tree/elements/StructParents while preserving page text; STD-006 moves to verified.",
+  "notes": "Hosts pdfxi_accessibility::write_structure_tree by remapping objects, merging catalog entries, appending marked-content overlays and verifying the saved tree.",
+  "evidence": "docs/evidence/cli/T-0302.md"
+}

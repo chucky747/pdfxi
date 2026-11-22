@@ -3540,6 +3540,214 @@ fn font_add_text_handles_an_authoring_page_and_alignment() {
 }
 
 #[test]
+fn structure_apply_writes_a_tagged_tree_on_a_real_page() {
+    let source = root_fixture("minimal.pdf");
+    let out = TempOut::new("pdf");
+    let tree = TempPath::new("json");
+    tree.write(
+        br#"{
+  "lang": "en-US",
+  "nodes": [
+    { "id": 1, "role": "Document", "page": 0, "children": [2, 3] },
+    { "id": 2, "role": "H1", "page": 0, "bbox": [72, 700, 400, 730], "text": "Hello, PDFXI!" },
+    { "id": 3, "role": "P", "page": 0, "bbox": [72, 650, 400, 690], "text": "Tagged structure proof" }
+  ],
+  "roots": [1]
+}"#,
+    );
+
+    let applied = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--tree",
+        tree.arg(),
+        "--json",
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+    let value: Value = serde_json::from_str(&stdout(&applied)).expect("valid JSON");
+    assert_eq!(value["lang"], "en-US");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["nodes"], 3);
+    assert_eq!(value["struct_elements"], 3);
+    assert_eq!(value["pages_tagged"], 1);
+    assert_eq!(value["certification_claimed"], false);
+    let roles: Vec<&str> = value["roles"]
+        .as_array()
+        .expect("roles")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(roles, ["Document", "H1", "P"]);
+    assert!(value["struct_tree_root"].as_u64().unwrap_or(0) > 0);
+
+    let bytes = fs::read(&out.path).expect("tagged bytes");
+    let text = String::from_utf8_lossy(&bytes);
+    for key in ["/StructTreeRoot", "/StructParents", "/ParentTree", "/MCID"] {
+        assert!(text.contains(key), "saved bytes are missing {key}");
+    }
+    assert_ne!(
+        fs::read(&source).expect("source"),
+        bytes,
+        "tagging must write a new document"
+    );
+
+    let info = run(&["info", out.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+
+    let checked = run(&["accessibility", "check", out.arg(), "--json"]);
+    assert!(
+        !checked.status.success(),
+        "the title finding keeps exit code 1"
+    );
+    let report: Value = serde_json::from_str(&stdout(&checked)).expect("valid JSON");
+    let findings = report["findings"].as_array().expect("findings");
+    let codes: Vec<&str> = findings
+        .iter()
+        .filter_map(|finding| finding["code"].as_str())
+        .collect();
+    assert_eq!(codes, ["UA-0001"], "tagging clears the structure findings");
+    for cleared in [
+        "PDFUA1.NOT_MARKED",
+        "PDFUA1.NO_LANG",
+        "PDFUA1.NO_STRUCT_TREE_ROOT",
+    ] {
+        assert!(!codes.contains(&cleared), "{cleared} should be cleared");
+    }
+}
+
+#[test]
+fn structure_apply_tags_every_page_and_rejects_bad_trees() {
+    let source = root_fixture("realworld/powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let tree = TempPath::new("json");
+    tree.write(
+        br#"{
+  "lang": "en-GB",
+  "nodes": [
+    { "id": 1, "role": "Document", "page": 0, "children": [2, 3, 4] },
+    { "id": 2, "role": "H1", "page": 0, "bbox": [72, 700, 500, 740], "text": "Slide one" },
+    { "id": 3, "role": "H2", "page": 1, "bbox": [72, 700, 500, 740], "text": "Slide two" },
+    { "id": 4, "role": "P", "page": 2, "bbox": [72, 660, 500, 700], "text": "Slide three" }
+  ],
+  "roots": [1]
+}"#,
+    );
+
+    let applied = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--tree",
+        tree.arg(),
+        "--json",
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+    let value: Value = serde_json::from_str(&stdout(&applied)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert_eq!(value["pages_tagged"], 3);
+    assert_eq!(value["lang"], "en-GB");
+    let roles: Vec<&str> = value["roles"]
+        .as_array()
+        .expect("roles")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(roles, ["Document", "H1", "H2", "P"]);
+
+    let before = fs::read(&source).expect("source bytes");
+    let bad = TempPath::new("json");
+    bad.write(br#"{"nodes":[{"id":1,"role":"Widget","page":0}],"roots":[1]}"#);
+    let rejected = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--tree",
+        bad.arg(),
+    ]);
+    assert!(!rejected.status.success());
+    assert!(
+        stderr(&rejected).contains("unknown structure role"),
+        "{}",
+        stderr(&rejected)
+    );
+    assert_eq!(
+        before,
+        fs::read(&source).expect("source bytes"),
+        "input untouched"
+    );
+
+    let malformed = TempPath::new("json");
+    malformed.write(br#"{"nodes":[{"id":1,"role":"P","page":0,"children":[2]}],"roots":[1]}"#);
+    let broken = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--tree",
+        malformed.arg(),
+    ]);
+    assert!(
+        !broken.status.success(),
+        "dangling children must be rejected"
+    );
+
+    let no_roots = TempPath::new("json");
+    no_roots.write(br#"{"nodes":[{"id":1,"role":"P","page":0}],"roots":[]}"#);
+    let empty = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--tree",
+        no_roots.arg(),
+    ]);
+    assert!(
+        !empty.status.success(),
+        "a tree with no roots must be rejected"
+    );
+
+    let out_of_range = TempPath::new("json");
+    out_of_range.write(br#"{"nodes":[{"id":1,"role":"P","page":9}],"roots":[1]}"#);
+    let bad_page = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--tree",
+        out_of_range.arg(),
+    ]);
+    assert!(
+        !bad_page.status.success(),
+        "a page out of range must be rejected"
+    );
+
+    let missing = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--tree",
+        TempPath::new("json").arg(),
+    ]);
+    assert!(
+        !missing.status.success(),
+        "an absent tree file must be rejected"
+    );
+}
+
+#[test]
 fn versions_snapshot_list_diff_and_remove() {
     let left_text = TempPath::new("txt");
     let right_text = TempPath::new("txt");

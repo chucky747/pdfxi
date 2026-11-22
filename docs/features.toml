@@ -4468,17 +4468,67 @@ tests = [
 title = "Transparency and blend modes"
 
 [[feature]]
-docs = "crates/pdfxi-accessibility/src/structure.rs, docs/evidence/author/T-0177.md"
+docs = [
+    "crates/pdfxi-cli/src/structure.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0302.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/author/T-0177.md"
+evidence = "docs/evidence/cli/T-0302.md"
 id = "STD-006"
-notes = "Bounded structure-role model, canonical token round-trip, ActualText/expansion/Alt round-trip, artifact marked content, parent-tree index, object-level projection and typed semantic validation. Host boundary: no xref/object-stream byte emission in pdfxi-core, no tag-tree UI; the projection is a canonical intermediate and overlays are merged by the host via compose_page_content."
+notes = """
+Verified through `pdfxi structure apply <FILE> --out PATH --tree PATH [--json]`.
+
+The tree is JSON: `lang`, `nodes` (id, role, page, optional bbox, text, alt,
+actual_text, expansion, artifact, children) and `roots`. Roles accept model and
+PDF names (P/Paragraph, H1/Heading1, TD/TableData, ...) and anything else is
+rejected before the document is touched. A11yTree::new enforces unique ids, known
+children, acyclic roots and reachable nodes; write_structure_tree enforces the
+/ActualText, /E and artifact rules.
+
+The host remaps the generated objects to fresh numbers after
+allocate_object_number, resolves placeholder page references to real pages,
+merges catalog /StructTreeRoot, /ParentTree, /Lang, /MarkInfo and
+/ViewerPreferences, writes /StructParents on every page and appends each page's
+marked-content overlay to /Contents. It saves, reopens and verifies that the
+catalog root matches, /MarkInfo /Marked is true, /Lang exists, the root's
+/ParentTree /Nums is non-empty, every /StructElem has /S, /P and a /Pg that is a
+real page, the role count matches the writer and every role is known, every page
+has /StructParents, and page text is unchanged. certification_claimed is always
+false.
+
+Evidence: minimal.pdf yields lang en-US, pages 1, nodes 3, struct_elements 3,
+generated_objects 5, struct_tree_root 6, pages_tagged 1 and roles
+Document,H1,P. pdfxi text still returns the original page text,
+pdfxi accessibility check drops PDFUA1.NOT_MARKED, PDFUA1.NO_LANG and
+PDFUA1.NO_STRUCT_TREE_ROOT leaving only the unrelated UA-0001 title finding, and
+two runs are byte-identical. The real three-page powerpoint-slides.pdf tags all
+three pages with roles Document,H1,H2,P and lang en-GB. Unknown roles, dangling
+children, empty roots, out-of-range pages and an absent tree file are rejected;
+the input file stays byte-identical.
+
+Gates: cargo test -p pdfxi-cli --test cli structure_apply = 2 passed; cargo test
+-p pdfxi-cli --bin pdfxi structure:: = 1 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: the tag tree comes from a JSON description rather than layout inference;
+overlays are marked content only; PDF/UA is not certified and the title remains
+the caller's responsibility.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::structure_apply_writes_a_tagged_tree_on_a_real_page",
+    "cli::structure_apply_tags_every_page_and_rejects_bad_trees",
+    "structure::tests::roles_parse_model_and_pdf_names",
     "structure::tests::projection_rejects_a_dangling_parent",
     "structure::tests::projection_rejects_a_parent_cycle",
     "structure::tests::projection_rejects_duplicate_mcids",
+    "structure::tests::round_trip_reconstructs_original_tree",
+    "structure::tests::pages_carry_struct_parents_and_mcid_overlay",
+    "structure::tests::existing_content_bytes_are_preserved_by_overlay_composition",
+    "structure::tests::actual_text_and_expansion_are_serialized_and_restored",
+    "structure::tests::artifact_is_marked_content_not_a_structure_element",
 ]
 title = "Tagged PDF and structure tree"
 

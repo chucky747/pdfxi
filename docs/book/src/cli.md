@@ -59,6 +59,7 @@ pdfxi <COMMAND> --help
 | `versions diff <LEFT> <RIGHT> [--store PATH] [--json]` | Diff two snapshots or a snapshot and a PDF | verified (`MANAGE-005`) |
 | `versions remove <ID> --store PATH [--json]` | Remove a stored snapshot | verified (`MANAGE-005`) |
 | `font add-text <FILE> --out PATH --text T --rect x0,y0,x1,y1 [--page N] [--font-size PT] [--align left\|center\|right] [--json]` | Embed the CID font and insert text | verified (`STD-004`) |
+| `structure apply <FILE> --out PATH --tree PATH [--json]` | Write a tagged-PDF structure tree | verified (`STD-006`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -127,7 +128,15 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `font add-text` embeds the bundled Courier Prime program (SIL OFL 1.1) as a
+- `structure apply` reads a JSON tree (`lang`, `nodes` with role/page/bbox/
+  text/`alt`/`actual_text`/`expansion`/`artifact`/children, and `roots`),
+  validates it, then merges `pdfxi_accessibility::write_structure_tree` into a
+  real document: remapped structure objects, `/StructTreeRoot`, `/ParentTree`,
+  `/Lang`, `/MarkInfo` and `/ViewerPreferences` in the catalog, `/StructParents`
+  and an appended marked-content overlay on every page. It saves, reopens and
+  verifies the tree root type, parent tree, every element's `/S`/`/P`/`/Pg`,
+  the role count and the unchanged page text. No conformance certification is
+  claimed.- `font add-text` embeds the bundled Courier Prime program (SIL OFL 1.1) as a
   `/Type0` font with a `/CIDFontType2` descendant, `/FontFile2`, `/CIDToGIDMap`,
   CID-keyed `/W` widths and a `/ToUnicode` CMap, writes a wrapped text box with
   that font, saves, and reopens the result. It verifies the font graph and that
