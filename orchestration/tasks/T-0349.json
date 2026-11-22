@@ -1,0 +1,19 @@
+{
+  "id": "T-0349",
+  "lane": "convert",
+  "title": "Authenticated security-envelope host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0348"],
+  "owns": [
+    "crates/pdfxi-cli/src/envelope.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0349.md",
+    "orchestration/feature-updates/T-0349.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli envelope_ passes; pdfxi envelope seal/open/verify handle real authenticated and unkeyed envelopes, enforce recipient permissions and typed key errors; SEC-010 moves to verified.",
+  "notes": "Hosts build_authenticated_security_envelope/open_security_envelope_with_key plus recipient authorization. Integrity/authentication only; certificate-addressed attachment encryption stays a backend boundary.",
+  "evidence": "docs/evidence/cli/T-0349.md"
+}

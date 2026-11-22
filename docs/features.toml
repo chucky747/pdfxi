@@ -3087,33 +3087,57 @@ docs = [
     "crates/pdfxi-security/src/digital_id_lifecycle.rs",
     "crates/pdfxi-security/src/error.rs",
     "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-cli/src/envelope.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/security/T-0176.md",
+    "docs/evidence/cli/T-0349.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security: 345 passed, 0 failed. New tests: security_envelope::tests::envelope_debug_redacts_payload_bytes, authenticated_envelope_round_trip_is_reported_as_authenticated, tampered_payload_with_recomputed_unkeyed_tag_is_rejected_when_key_is_required, wrong_key_is_rejected_and_empty_key_is_a_typed_error, unkeyed_envelope_is_never_accepted_by_the_keyed_opener, authenticated_envelope_without_a_mac_tag_is_malformed, crypto::sha::tests::hmac_sha256_matches_rfc_4231_vectors, xmp_scrub::tests::uri_only_in_an_unselected_property_value_is_not_a_residual (all ok). fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0176.md."
+evidence = "docs/evidence/cli/T-0349.md"
 id = "SEC-010"
 notes = """
-Hardened from the T-0162 state. The integrity-only SecurityEnvelope can now be
+Hardened from the T-0162 state. The integrity-only SecurityEnvelope can be
 built with a caller-supplied authentication key: an authenticated (version 2)
 envelope carries a keyed HMAC-SHA256 tag in addition to the unkeyed SHA-256
 digest, and open_security_envelope_with_key requires that key and verifies both
-tags before returning. A tampered payload or permission block with a recomputed
-unkeyed tag is rejected (EnvelopeAuthenticationFailed), as is a wrong key;
-an unkeyed envelope is never accepted by the keyed opener. Backward
-compatibility is preserved: version-1 integration-only envelopes still open via
-open_security_envelope and report Integrity::Unkeyed, with the explicit warning
-that their payload and permissions are untrusted. Both envelope `Debug` impls
-render the payload as a length only. The shared HMAC-SHA256 primitive gained an
-RFC 4231 known-answer test and replaced a private copy in digital_id_lifecycle;
-its long-key branch (32 bytes into a 64-byte block) was corrected. The adjacent
-XMP scrub residual check now uses parsed namespace declarations rather than a
-raw substring, so a selected URI occurring only in an unselected value is not
-reported. CertificateEnvelope, EncryptionScope and the protection-policy model
-are unchanged. Local/offline only; still no network, licence server, new deps
-or panics.
+tags. A tampered payload or permission block with a recomputed unkeyed tag is
+rejected, as is a wrong key; an unkeyed envelope is never accepted by the keyed
+opener. Version-1 envelopes still open via open_security_envelope and report
+Integrity::Unkeyed. Both Debug impls render the payload as a length only.
+
+T-0349 adds the caller. `pdfxi envelope seal INPUT --out ENVELOPE --recipient
+LABEL[:PERM,PERM] ... [--permissions LIST] [--key-file PATH | --key-hex HEX]
+[--json]` reads any payload file, builds a v2 authenticated envelope when a key
+is supplied or a v1 integrity envelope without one, and writes the container.
+Recipients are LABEL (envelope permissions) or LABEL:PERM,PERM; the mask comes
+from --permissions (all, none, read-only or a comma list of print, modify, copy,
+annotate, fill, accessibility, assemble, print-high). `pdfxi envelope open
+ENVELOPE --out FILE [key options] [--recipient LABEL --require PERM] [--json]`
+verifies both tags, writes the payload and reports version, integrity, payload
+length, recipients and permissions; `verify` omits the write. An authenticated
+envelope is never accepted without the key and an unkeyed envelope is never
+accepted with one. Keys are read from a file or hex and never printed. With no
+key the command warns that the payload and permissions are unauthenticated.
+
+Evidence: seal report v2/authenticated, 1,082 bytes, 978-byte payload, two
+recipients (alice print+modify, bob print) and all eight permissions; verify
+authorizes alice for print; open writes a byte-identical 978-byte payload. The
+unkeyed path reports v1/unkeyed with the warning and opens 978 bytes. Denied
+modify, unknown recipient, wrong key, missing key on v2, a key on v1, a flipped
+container byte, no recipients and an empty label are typed errors.
+
+Gates: CLI envelope_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: authenticated integrity envelopes (recipients, declared permissions,
+SHA-256 integrity, keyed HMAC-SHA256 authentication). The payload is stored
+verbatim, so there is no confidentiality. Certificate-addressed encryption
+(CertificateEnvelope/EncryptionScope over attachments) remains a model and
+caller-supplied key-wrap-provider boundary and is not exposed by this command.
+Declared permissions are an authenticated statement, not enforcement.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "security_envelope::tests::envelope_debug_redacts_payload_bytes",
     "security_envelope::tests::authenticated_envelope_round_trip_is_reported_as_authenticated",
@@ -3125,6 +3149,8 @@ tests = [
     "crypto::sha::tests::hmac_sha256_matches_rfc_4231_vectors",
     "xmp_scrub::tests::uri_only_in_an_unselected_property_value_is_not_a_residual",
     "xmp_scrub::tests::verify_scrub_detects_a_residual_as_a_typed_error",
+    "cli::envelope_authenticated_round_trip_and_authorization",
+    "cli::envelope_unkeyed_mode_and_bad_inputs",
 ]
 title = "Security envelopes and attachment encryption"
 

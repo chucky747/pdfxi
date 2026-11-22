@@ -49,6 +49,7 @@ command.
 | Sign and certify documents | `SEC-005` | verified | `pdfxi-security::pdf_signature` | `sign create` / `sign verify` |
 | Trust manager and revocation checks | `SEC-007` | verified | `pdfxi-security::TrustManager` + CRLs | `trust verify` |
 | Digital IDs and certificate management | `SEC-004` | verified | `pdfxi-security::digital_id_lifecycle` | `id inspect/import/list/remove` |
+| Security envelopes and attachment encryption | `SEC-010` | verified | `pdfxi-security::security_envelope` | `envelope seal/open/verify` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -687,6 +688,28 @@ is checked as PDF/X-4 plus the document-part requirements: a catalog
 page (`PDFVT1.DPART_PAGE_UNASSIGNED`). A passing verdict is a deterministic
 subset preflight, not a conformance certification; reported-only constraints
 list what the profile did not inspect.
+### Security envelopes
+
+`SEC-010` (verified) hosts the authenticated local envelope from
+`pdfxi_security::security_envelope`:
+
+```text
+pdfxi envelope seal INPUT --out ENVELOPE --recipient LABEL[:PERM,PERM] ...
+    [--permissions LIST] [--key-file PATH | --key-hex HEX] [--json]
+pdfxi envelope open ENVELOPE --out FILE [key options] [--recipient LABEL --require PERM]
+pdfxi envelope verify ENVELOPE [key options] [--recipient LABEL --require PERM]
+```
+
+With a key, `seal` writes a version-2 envelope carrying an unkeyed SHA-256
+integrity tag and a keyed HMAC-SHA256 authentication tag; without one it writes
+a version-1 integrity envelope and warns that the payload and permissions are
+unauthenticated. `open`/`verify` check both tags, reject a keyed envelope
+without the key and an unkeyed envelope with one, and can check that a named
+recipient holds a permission. The payload is stored verbatim: this provides
+integrity and authentication, **not** confidentiality. Certificate-addressed
+attachment encryption remains a model boundary that needs a caller-supplied
+key-wrap provider.
+
 ### Digital IDs
 
 `SEC-004` (verified) hosts the digital-ID lifecycle from

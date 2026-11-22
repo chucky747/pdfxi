@@ -72,6 +72,8 @@ mod api;
 mod color;
 /// pdfxi create portfolio: assemble a PDF portfolio from real files.
 mod create_portfolio;
+/// pdfxi envelope: authenticated local security envelopes.
+mod envelope;
 /// pdfxi export postscript: positioned text subset as DSC PostScript.
 mod export_postscript;
 /// pdfxi find-files: cross-file text search over a folder.
@@ -449,6 +451,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Seal, open or verify an authenticated local security envelope.
+    Envelope {
+        /// Envelope action.
+        #[command(subcommand)]
+        command: EnvelopeCommand,
     },
     /// Inspect, catalogue, list or remove local digital IDs.
     Id {
@@ -2147,6 +2155,77 @@ enum ProductionCommand {
     },
 }
 
+/// Actions of the `envelope` command.
+#[derive(Debug, Subcommand)]
+enum EnvelopeCommand {
+    /// Wrap a file with recipients, permissions and an optional HMAC tag.
+    Seal {
+        /// Payload file.
+        input: PathBuf,
+        /// Written envelope.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Recipient as `LABEL[:PERM,PERM]` (repeatable).
+        #[arg(long = "recipient", value_name = "LABEL[:PERM]")]
+        recipient: Vec<String>,
+        /// Envelope-wide permissions.
+        #[arg(long, default_value = "all")]
+        permissions: String,
+        /// Raw HMAC key file.
+        #[arg(long, value_name = "PATH")]
+        key_file: Option<PathBuf>,
+        /// HMAC key as hex.
+        #[arg(long, value_name = "HEX")]
+        key_hex: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open an envelope, optionally checking one recipient's permission.
+    Open {
+        /// Envelope file.
+        envelope: PathBuf,
+        /// Destination for the payload.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Raw HMAC key file.
+        #[arg(long, value_name = "PATH")]
+        key_file: Option<PathBuf>,
+        /// HMAC key as hex.
+        #[arg(long, value_name = "HEX")]
+        key_hex: Option<String>,
+        /// Recipient label for an authorization check.
+        #[arg(long, value_name = "LABEL")]
+        recipient: Option<String>,
+        /// Permission the recipient must hold.
+        #[arg(long, value_name = "PERM")]
+        require: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify an envelope without writing the payload.
+    Verify {
+        /// Envelope file.
+        envelope: PathBuf,
+        /// Raw HMAC key file.
+        #[arg(long, value_name = "PATH")]
+        key_file: Option<PathBuf>,
+        /// HMAC key as hex.
+        #[arg(long, value_name = "HEX")]
+        key_hex: Option<String>,
+        /// Recipient label for an authorization check.
+        #[arg(long, value_name = "LABEL")]
+        recipient: Option<String>,
+        /// Permission the recipient must hold.
+        #[arg(long, value_name = "PERM")]
+        require: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Identity file inputs for `pdfxi id`.
 #[derive(Debug, Args)]
 struct IdentityArgs {
@@ -3415,6 +3494,57 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Envelope { command } => match command {
+            EnvelopeCommand::Seal {
+                input,
+                out,
+                recipient,
+                permissions,
+                key_file,
+                key_hex,
+                json,
+            } => envelope::seal(
+                &input,
+                &out,
+                &recipient,
+                &permissions,
+                key_file.as_deref(),
+                key_hex.as_deref(),
+                json,
+            ),
+            EnvelopeCommand::Open {
+                envelope,
+                out,
+                key_file,
+                key_hex,
+                recipient,
+                require,
+                json,
+            } => envelope::open(
+                &envelope,
+                &out,
+                key_file.as_deref(),
+                key_hex.as_deref(),
+                recipient.as_deref(),
+                require.as_deref(),
+                json,
+            ),
+            EnvelopeCommand::Verify {
+                envelope,
+                key_file,
+                key_hex,
+                recipient,
+                require,
+                json,
+            } => envelope::verify(
+                &envelope,
+                key_file.as_deref(),
+                key_hex.as_deref(),
+                recipient.as_deref(),
+                require.as_deref(),
+                json,
+            ),
+        },
         Command::Id { command } => match command {
             IdCommand::Inspect {
                 identity,

@@ -13092,6 +13092,288 @@ fn trust_rejects_bad_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// envelope: authenticated local security envelopes (T-0349)
+// ---------------------------------------------------------------------------
+
+const ENVELOPE_KEY_HEX: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+#[test]
+fn envelope_authenticated_round_trip_and_authorization() {
+    let dir = TempDir::new();
+    let payload = create_text_pdf("Envelope payload.");
+    let envelope = dir.child("payload.env");
+    let envelope_arg = envelope.to_str().expect("envelope");
+
+    let sealed = run(&[
+        "envelope",
+        "seal",
+        payload.arg(),
+        "--out",
+        envelope_arg,
+        "--recipient",
+        "alice:print,modify",
+        "--recipient",
+        "bob:print",
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+        "--json",
+    ]);
+    assert!(sealed.status.success(), "stderr: {}", stderr(&sealed));
+    let value: Value = serde_json::from_str(&stdout(&sealed)).expect("seal JSON");
+    assert_eq!(value["version"], 2);
+    assert_eq!(value["integrity"], "authenticated");
+    assert_eq!(value["recipients"], 2);
+    assert_eq!(value["labels"], serde_json::json!(["alice", "bob"]));
+    assert_eq!(
+        value["permissions"].as_array().expect("permissions").len(),
+        8
+    );
+    let payload_bytes = fs::read(&payload.path).expect("payload bytes");
+    assert_eq!(value["payload_len"], payload_bytes.len());
+    let envelope_bytes = fs::read(&envelope).expect("envelope written");
+    assert_eq!(value["bytes"], envelope_bytes.len());
+
+    let out = dir.child("payload.out");
+    let opened = run(&[
+        "envelope",
+        "open",
+        envelope_arg,
+        "--out",
+        out.to_str().expect("out"),
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+        "--json",
+    ]);
+    assert!(opened.status.success(), "stderr: {}", stderr(&opened));
+    let value: Value = serde_json::from_str(&stdout(&opened)).expect("open JSON");
+    assert_eq!(value["integrity"], "authenticated");
+    assert_eq!(value["integrity_ok"], true);
+    assert_eq!(value["out"], out.to_str().expect("out"));
+    assert_eq!(fs::read(&out).expect("payload out"), payload_bytes);
+
+    let verified = run(&[
+        "envelope",
+        "verify",
+        envelope_arg,
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+        "--json",
+    ]);
+    assert!(verified.status.success(), "stderr: {}", stderr(&verified));
+    let value: Value = serde_json::from_str(&stdout(&verified)).expect("verify JSON");
+    assert_eq!(value["out"], Value::Null);
+
+    let wrong_key = run(&[
+        "envelope",
+        "verify",
+        envelope_arg,
+        "--key-hex",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    ]);
+    assert!(!wrong_key.status.success());
+    assert!(
+        stderr(&wrong_key).contains("authentication"),
+        "{}",
+        stderr(&wrong_key)
+    );
+
+    let missing_key = run(&["envelope", "verify", envelope_arg]);
+    assert!(!missing_key.status.success());
+    assert!(
+        stderr(&missing_key).contains("authentication"),
+        "{}",
+        stderr(&missing_key)
+    );
+
+    let allowed = run(&[
+        "envelope",
+        "verify",
+        envelope_arg,
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+        "--recipient",
+        "alice",
+        "--require",
+        "print",
+    ]);
+    assert!(allowed.status.success(), "stderr: {}", stderr(&allowed));
+    assert!(stdout(&allowed).contains("authorized: alice"));
+
+    let denied = run(&[
+        "envelope",
+        "verify",
+        envelope_arg,
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+        "--recipient",
+        "bob",
+        "--require",
+        "modify",
+    ]);
+    assert!(!denied.status.success());
+    assert!(
+        stderr(&denied).contains("not granted"),
+        "{}",
+        stderr(&denied)
+    );
+
+    let unknown = run(&[
+        "envelope",
+        "verify",
+        envelope_arg,
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+        "--recipient",
+        "carol",
+        "--require",
+        "print",
+    ]);
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("not addressed"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    let half = run(&[
+        "envelope",
+        "verify",
+        envelope_arg,
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+        "--recipient",
+        "alice",
+    ]);
+    assert!(!half.status.success());
+    assert!(
+        stderr(&half).contains("must be supplied together"),
+        "{}",
+        stderr(&half)
+    );
+}
+
+#[test]
+fn envelope_unkeyed_mode_and_bad_inputs() {
+    let dir = TempDir::new();
+    let payload = create_text_pdf("Unkeyed payload.");
+    let envelope = dir.child("unkeyed.env");
+    let envelope_arg = envelope.to_str().expect("envelope");
+
+    let sealed = run(&[
+        "envelope",
+        "seal",
+        payload.arg(),
+        "--out",
+        envelope_arg,
+        "--recipient",
+        "reader:print",
+    ]);
+    assert!(sealed.status.success(), "stderr: {}", stderr(&sealed));
+    let text = stdout(&sealed);
+    assert!(text.contains("integrity: unkeyed"), "{text}");
+    assert!(text.contains("not authenticated"), "{text}");
+
+    let out = dir.child("unkeyed.out");
+    let opened = run(&[
+        "envelope",
+        "open",
+        envelope_arg,
+        "--out",
+        out.to_str().expect("out"),
+    ]);
+    assert!(opened.status.success(), "stderr: {}", stderr(&opened));
+    assert_eq!(
+        fs::read(&out).expect("payload out"),
+        fs::read(&payload.path).expect("payload")
+    );
+
+    let keyed = run(&[
+        "envelope",
+        "verify",
+        envelope_arg,
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+    ]);
+    assert!(!keyed.status.success());
+
+    let tampered_path = dir.child("tampered.env");
+    let mut tampered = fs::read(&envelope).expect("envelope");
+    let index = tampered.len() / 2;
+    tampered[index] ^= 0x01;
+    fs::write(&tampered_path, tampered).expect("write tampered envelope");
+    let tampered_open = run(&["envelope", "verify", tampered_path.to_str().expect("path")]);
+    assert!(!tampered_open.status.success());
+
+    let no_recipient = run(&[
+        "envelope",
+        "seal",
+        payload.arg(),
+        "--out",
+        dir.child("none.env").to_str().expect("path"),
+    ]);
+    assert!(!no_recipient.status.success());
+    assert!(
+        stderr(&no_recipient).contains("at least one --recipient"),
+        "{}",
+        stderr(&no_recipient)
+    );
+
+    let conflict = run(&[
+        "envelope",
+        "seal",
+        payload.arg(),
+        "--out",
+        dir.child("conflict.env").to_str().expect("path"),
+        "--recipient",
+        "a",
+        "--key-file",
+        payload.arg(),
+        "--key-hex",
+        ENVELOPE_KEY_HEX,
+    ]);
+    assert!(!conflict.status.success());
+    assert!(
+        stderr(&conflict).contains("cannot be combined"),
+        "{}",
+        stderr(&conflict)
+    );
+
+    let empty = dir.child("empty.bin");
+    fs::write(&empty, b"").expect("write empty");
+    let empty_seal = run(&[
+        "envelope",
+        "seal",
+        empty.to_str().expect("path"),
+        "--out",
+        dir.child("empty.env").to_str().expect("path"),
+        "--recipient",
+        "a",
+    ]);
+    assert!(!empty_seal.status.success());
+    assert!(
+        stderr(&empty_seal).contains("empty"),
+        "{}",
+        stderr(&empty_seal)
+    );
+
+    let bad_recipient = run(&[
+        "envelope",
+        "seal",
+        payload.arg(),
+        "--out",
+        dir.child("bad.env").to_str().expect("path"),
+        "--recipient",
+        ":print",
+    ]);
+    assert!(!bad_recipient.status.success());
+    assert!(
+        stderr(&bad_recipient).contains("non-empty label"),
+        "{}",
+        stderr(&bad_recipient)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // id: digital-ID metadata catalog (T-0348)
 // ---------------------------------------------------------------------------
 
