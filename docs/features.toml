@@ -1889,34 +1889,57 @@ title = "Export accessible text and tagged content"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/conformance.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "crates/pdfxi-convert/tests/conformance_export.rs",
-    "crates/pdfxi-convert/tests/t0180_closure.rs",
-    "docs/evidence/convert/T-0180.md",
+    "crates/pdfxi-cli/src/conformance.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0294.md",
 ]
 domain = "Export"
-evidence = "docs/evidence/convert/T-0180.md"
+evidence = "docs/evidence/cli/T-0294.md"
 id = "EXPORT-008"
 notes = """
-Library-level gap closed. The conformance export plan now covers profile
-selection (PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1; PDF/A-3b shares the
-PDF/A rules), minimum-version/metadata/output-intent/ICC placeholder steps in
-canonical order, and forbidden-entry handling: each target declares its
-forbidden catalog entries, `ForbiddenEntryPolicy::Report` records typed warnings
-and `::Reject` fails with `ConformanceExportError::ForbiddenEntry` before any
-bytes are written. Nested `/Names /EmbeddedFiles` is detected. Every report and
-plan states `certification = false`; the normalizer never claims conformance.
-Independent validator confirmation (veraPDF / pdfxi-standards) remains a CI
-oracle, not a runtime dependency of this crate.
+Verified through a new pdfxi export conformance host over
+pdfxi-convert::conformance. Profiles PDF/A-1b, PDF/A-2b, PDF/A-3b, PDF/X-1a,
+PDF/X-4 and PDF/E-1 resolve from canonical labels or compact lowercase
+spellings (pdfa-2b, pdfx-4, pdfe-1). --plan prints the byte-free ConformancePlan
+with enforced and report-only steps and writes nothing. Exports normalize the
+header version, add the required XMP and output-intent placeholders (each
+switchable off), detect forbidden catalog entries under --policy report and fail
+before writing under --policy reject, validate an explicit --output-intent
+subtype against the target, and rewrite the xref deterministically.
 
-Remaining host-only integration (listed verbatim): "CLI/UI wiring that selects
-the conformance target and writes the normalized bytes to a host-chosen path;
-independent validator confirmation in CI, not at runtime."
+Before writing, the host reopens the normalized bytes with pdfxi-core and checks
+the page count and every page's text against the source, the header version
+against the target minimum, /Metadata when the target requires XMP and
+/OutputIntents when it requires an output intent. The report always states
+certification_claimed=false and prints the stable scope note; the XMP and ICC
+streams are placeholders and every other constraint is reported only.
+
+Evidence: the PDF/A-2b plan lists 7 steps (4 enforced, 3 report-only);
+minimal.pdf normalizes with pages_verified 1 and the four enforced families plus
+EXPORT.XMP_PLACEHOLDER_ADDED and EXPORT.OUTPUT_INTENT_PLACEHOLDER_ADDED warnings;
+pdfxi text matches before and after. PDF/X-4 on the authoring fixture works the
+same way, and PDF/E-1 enforces only minimum_version. A PDF/E-1 request with
+GTS_PDFA1 is a typed contradictory-request error. A catalog carrying
+/JavaScript is refused under --policy reject ('PDF/A-1b' forbids catalog entry
+/JavaScript) and reported as present_forbidden_entries ["/JavaScript"] under
+report.
+
+Gates: cargo test -p pdfxi-cli --test cli export_conformance = 2 passed; cargo
+test -p pdfxi-cli --bin pdfxi conformance = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: all six profiles are selectable and reachable from the CLI with verified
+text and required catalog entries; real XMP/ICC content and independent
+validator confirmation are not claimed.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
+    "cli::export_conformance_plan_and_profiles_preserve_text",
+    "cli::export_conformance_forbidden_entry_policy_is_typed",
+    "conformance::tests::policies_parse_and_reject_unknown_names",
+    "conformance::tests::target_labels_resolve_case_insensitively",
+    "conformance::tests::header_versions_parse",
     "conformance::tests::t0180_forbidden_entry_tables_cover_all_required_profiles",
     "conformance::tests::t0180_plan_lists_forbidden_entries_in_stable_order",
     "conformance::tests::t0180_export_reports_forbidden_catalog_entries",

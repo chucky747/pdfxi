@@ -45,6 +45,7 @@ pdfxi <COMMAND> --help
 | `update <FILE> --out PATH [--title T] [--author A] [--subject S] [--keywords K] [--producer P]` | Append a validated incremental revision | verified (`STD-010`) |
 | `linearize <FILE> --out PATH [--version 1.7] [--json]` | Write a fully linearized file | verified (`STD-003`) |
 | `pack <FILE> --out PATH [--no-compress] [--max-objects N] [--json]` | Pack objects into object streams and an xref stream | verified (`STD-003`) |
+| `export conformance <FILE> --profile PROFILE [--out PATH] [--plan] [--policy report\|reject] [--output-intent SUBTYPE] [--json]` | Normalize for PDF/A, PDF/X or PDF/E | verified (`EXPORT-008`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -113,7 +114,15 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `linearize` writes a complete linearized file: a `/Linearized` parameter
+- `export conformance` accepts canonical labels (`PDF/A-2b`) and compact
+  lowercase spellings (`pdfa-2b`, `pdfx-4`, `pdfe-1`). It normalizes the header
+  version, adds the XMP and output-intent placeholders the target requires,
+  detects forbidden catalog entries, and rewrites the xref deterministically.
+  `--plan` prints the byte-free plan without writing; `--policy reject` fails on
+  the first forbidden entry instead of recording a warning; the `--no-*` flags
+  disable individual normalizations. The report always states
+  `certification_claimed: false` and prints the scope note, because the XMP and
+  ICC streams are placeholders and every other constraint is reported only.- `linearize` writes a complete linearized file: a `/Linearized` parameter
   dictionary, page-offset and shared-object hint tables, a first-page classic
   xref, and a main xref whose `/Prev` points back at it. The command re-reads
   the output, checks the declared `/L` against the written bytes and the

@@ -3175,6 +3175,222 @@ fn linearize_and_pack_handle_a_hybrid_source() {
 }
 
 #[test]
+fn export_conformance_plan_and_profiles_preserve_text() {
+    let source = root_fixture("minimal.pdf");
+    let plan = run(&[
+        "export",
+        "conformance",
+        source.to_str().expect("utf-8"),
+        "--profile",
+        "pdfa-2b",
+        "--plan",
+        "--json",
+    ]);
+    assert!(plan.status.success(), "stderr: {}", stderr(&plan));
+    let value: Value = serde_json::from_str(&stdout(&plan)).expect("valid JSON");
+    assert_eq!(value["target"], "PDF/A-2b");
+    assert_eq!(value["minimum_version"], "1.7");
+    assert_eq!(value["certification_claimed"], false);
+    assert!(
+        value["steps"].as_array().expect("steps").len() >= 5,
+        "{}",
+        stdout(&plan)
+    );
+
+    let source_text = run(&["text", source.to_str().expect("utf-8")]);
+    let pdfa = TempOut::new("pdf");
+    let normalized = run(&[
+        "export",
+        "conformance",
+        source.to_str().expect("utf-8"),
+        "--out",
+        pdfa.arg(),
+        "--profile",
+        "pdfa-2b",
+        "--json",
+    ]);
+    assert!(
+        normalized.status.success(),
+        "stderr: {}",
+        stderr(&normalized)
+    );
+    let value: Value = serde_json::from_str(&stdout(&normalized)).expect("valid JSON");
+    assert_eq!(value["target"], "PDF/A-2b");
+    assert_eq!(value["certification_claimed"], false);
+    assert_eq!(value["pages_verified"], 1);
+    assert_eq!(value["output_version"], "1.7");
+    let enforced = value["enforced"].as_array().expect("enforced");
+    assert!(enforced.iter().any(|item| item == "xmp_metadata_presence"));
+    assert!(enforced.iter().any(|item| item == "output_intent_presence"));
+    assert!(
+        value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "EXPORT.XMP_PLACEHOLDER_ADDED")
+    );
+    let saved_text = run(&["text", pdfa.arg()]);
+    assert!(
+        saved_text.status.success(),
+        "stderr: {}",
+        stderr(&saved_text)
+    );
+    assert_eq!(stdout(&source_text), stdout(&saved_text));
+
+    let pdfe = TempOut::new("pdf");
+    let engineering = run(&[
+        "export",
+        "conformance",
+        source.to_str().expect("utf-8"),
+        "--out",
+        pdfe.arg(),
+        "--profile",
+        "pdfe-1",
+        "--json",
+    ]);
+    assert!(
+        engineering.status.success(),
+        "stderr: {}",
+        stderr(&engineering)
+    );
+    let value: Value = serde_json::from_str(&stdout(&engineering)).expect("valid JSON");
+    assert_eq!(value["target"], "PDF/E-1");
+    assert_eq!(value["enforced"], serde_json::json!(["minimum_version"]));
+
+    let unsupported = run(&[
+        "export",
+        "conformance",
+        source.to_str().expect("utf-8"),
+        "--out",
+        pdfa.arg(),
+        "--profile",
+        "pdfa-9",
+    ]);
+    assert!(!unsupported.status.success());
+    assert!(
+        stderr(&unsupported).contains("PDF/A-1b"),
+        "{}",
+        stderr(&unsupported)
+    );
+
+    let contradictory = run(&[
+        "export",
+        "conformance",
+        source.to_str().expect("utf-8"),
+        "--out",
+        pdfa.arg(),
+        "--profile",
+        "pdfe-1",
+        "--output-intent",
+        "GTS_PDFA1",
+    ]);
+    assert!(!contradictory.status.success());
+    assert!(
+        stderr(&contradictory).contains("does not use output intents"),
+        "{}",
+        stderr(&contradictory)
+    );
+
+    let missing_out = run(&[
+        "export",
+        "conformance",
+        source.to_str().expect("utf-8"),
+        "--profile",
+        "pdfa-2b",
+    ]);
+    assert!(!missing_out.status.success());
+}
+
+#[test]
+fn export_conformance_forbidden_entry_policy_is_typed() {
+    use pdfxi_core::{Document, Object};
+
+    let mut document =
+        Document::from_bytes(pdfxi_testkit::minimal_pdf()).expect("minimal fixture parses");
+    let root = document.root().expect("catalog id");
+    let mut catalog = document
+        .object(root)
+        .expect("catalog object")
+        .as_dictionary()
+        .expect("catalog dictionary")
+        .clone();
+    catalog.insert("JavaScript".to_owned(), Object::Name("Example".to_owned()));
+    document
+        .set_object(root, Object::Dictionary(catalog))
+        .expect("stage catalog");
+    let bytes = document.save().expect("save fixture with /JavaScript");
+    let source = TempPath::new("pdf");
+    source.write(&bytes);
+    let out = TempOut::new("pdf");
+
+    let rejected = run(&[
+        "export",
+        "conformance",
+        source.arg(),
+        "--out",
+        out.arg(),
+        "--profile",
+        "pdfa-1b",
+        "--policy",
+        "reject",
+    ]);
+    eprintln!(
+        "REJECTED status={:?} stdout={} stderr={}",
+        rejected.status,
+        stdout(&rejected),
+        stderr(&rejected)
+    );
+    assert!(!rejected.status.success());
+    assert!(
+        stderr(&rejected).contains("forbids"),
+        "{}",
+        stderr(&rejected)
+    );
+
+    let reported = run(&[
+        "export",
+        "conformance",
+        source.arg(),
+        "--out",
+        out.arg(),
+        "--profile",
+        "pdfa-1b",
+        "--policy",
+        "report",
+        "--json",
+    ]);
+    assert!(reported.status.success(), "stderr: {}", stderr(&reported));
+    let value: Value = serde_json::from_str(&stdout(&reported)).expect("valid JSON");
+    let entries = value["present_forbidden_entries"]
+        .as_array()
+        .expect("forbidden entries");
+    assert!(
+        entries.iter().any(|entry| entry == "/JavaScript"),
+        "{}",
+        stdout(&reported)
+    );
+    assert_eq!(value["certification_claimed"], false);
+
+    let bad_policy = run(&[
+        "export",
+        "conformance",
+        source.arg(),
+        "--out",
+        out.arg(),
+        "--profile",
+        "pdfa-1b",
+        "--policy",
+        "ignore",
+    ]);
+    assert!(!bad_policy.status.success());
+    assert!(
+        stderr(&bad_policy).contains("--policy"),
+        "{}",
+        stderr(&bad_policy)
+    );
+}
+
+#[test]
 fn update_appends_a_validated_incremental_revision() {
     let source = root_fixture("minimal.pdf");
     let out = TempOut::new("pdf");

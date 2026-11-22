@@ -85,6 +85,8 @@ mod pages;
 mod annotate;
 /// `pdfxi compare`: side-by-side revision compare of two PDFs.
 mod compare;
+/// `pdfxi export conformance`: normalize for PDF/A, PDF/X and PDF/E targets.
+mod conformance;
 /// `pdfxi decorate`: stamp headers and footers on pages.
 mod decorate;
 /// `pdfxi linearize` and `pdfxi pack`: choose the on-disk object layout.
@@ -1039,6 +1041,44 @@ enum ExportCommand {
         #[arg(long, value_enum, default_value = "structured")]
         format: TaggedOutputFormat,
     },
+    /// Normalize a PDF for a PDF/A, PDF/X or PDF/E target.
+    ///
+    /// This is subset normalization: it raises the header version when needed,
+    /// adds the required XMP and output-intent placeholders, checks for
+    /// forbidden catalog entries, rewrites the xref deterministically, and
+    /// reports every enforced and reported-only constraint. It never claims
+    /// certification.
+    Conformance {
+        /// Path to the source PDF.
+        input: PathBuf,
+        /// Destination path; required unless `--plan` is used.
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+        /// Target profile, for example pdfa-2b, pdfx-4 or pdfe-1.
+        #[arg(long, value_name = "PROFILE")]
+        profile: String,
+        /// Forbidden-entry policy: report (default) or reject.
+        #[arg(long, default_value = "report")]
+        policy: String,
+        /// Explicit output-intent subtype, for example GTS_PDFA1.
+        #[arg(long, value_name = "SUBTYPE")]
+        output_intent: Option<String>,
+        /// Do not raise the header version to the target minimum.
+        #[arg(long)]
+        no_normalize_version: bool,
+        /// Do not add the XMP metadata placeholder.
+        #[arg(long)]
+        no_xmp: bool,
+        /// Do not add the output-intent placeholder.
+        #[arg(long)]
+        no_output_intent: bool,
+        /// Print the byte-free plan instead of exporting.
+        #[arg(long)]
+        plan: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Page-level edit operations exposed by `pdfxi pages`.
@@ -1778,6 +1818,29 @@ fn main() -> anyhow::Result<()> {
                 output,
                 format,
             } => export::export_tagged(&input, &output, format.format()),
+            ExportCommand::Conformance {
+                input,
+                out,
+                profile,
+                policy,
+                output_intent,
+                no_normalize_version,
+                no_xmp,
+                no_output_intent,
+                plan,
+                json,
+            } => conformance::run_conformance(conformance::ExportRequest {
+                input: &input,
+                out: out.as_deref(),
+                profile: &profile,
+                policy: &policy,
+                output_intent: output_intent.as_deref(),
+                normalize_version: !no_normalize_version,
+                add_xmp_metadata: !no_xmp,
+                add_output_intent: !no_output_intent,
+                plan_only: plan,
+                json,
+            }),
         },
         Command::Action { command } => match command {
             ActionCommand::List { file } => action::list_actions(&file),

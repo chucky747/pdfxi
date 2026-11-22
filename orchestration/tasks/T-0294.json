@@ -1,0 +1,19 @@
+{
+  "id": "T-0294",
+  "lane": "convert",
+  "title": "Conformance export host for PDF/A, PDF/X and PDF/E",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0293"],
+  "owns": [
+    "crates/pdfxi-cli/src/conformance.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0294.md",
+    "orchestration/feature-updates/T-0294.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli export_conformance and cargo test -p pdfxi-cli --bin pdfxi conformance pass; pdfxi export conformance plans, exports and verifies all six supported profiles; EXPORT-008 moves to verified.",
+  "notes": "Hosts the existing conformance plan/normalizer: profile resolution (canonical and compact labels), --plan, --policy report|reject, --output-intent validation, individual --no-* switches, and post-export verification of page text, header version and required catalog entries.",
+  "evidence": "docs/evidence/cli/T-0294.md"
+}
