@@ -391,6 +391,17 @@ pub enum AnnotationEditError {
     /// A callout anchor was not a finite point.
     #[error("the callout anchor must be a finite point")]
     InvalidAnchor,
+    /// A file-attachment name was empty or contained a path separator.
+    #[error("attachment name {0:?} is not a single valid file name")]
+    InvalidAttachmentName(String),
+    /// A file-attachment payload exceeded the documented cap.
+    #[error("attachment has {bytes} bytes; the maximum is {limit}")]
+    AttachmentTooLarge {
+        /// Supplied payload size.
+        bytes: usize,
+        /// The documented cap, [`MAX_ATTACHMENT_BYTES`].
+        limit: usize,
+    },
     /// A polygon annotation was too small or enclosed no area.
     #[error("a polygon annotation requires at least three vertices and positive-area bounds")]
     DegeneratePolygon,
@@ -1292,6 +1303,140 @@ fn border_style_dictionary(width: f32) -> Object {
     border.insert("S".to_owned(), pdf_name("S"));
     Object::Dictionary(border)
 }
+
+/// Add a file-attachment annotation that embeds `bytes`.
+///
+/// The annotation uses `/Subtype /FileAttachment` with a `/Paperclip` icon and
+/// `/FS` pointing at a `/Filespec` whose `/EF /F` is an `/EmbeddedFile` stream
+/// containing the payload. The name is validated as a single attachment
+/// reference (no path separators, no control characters), and the embedded bytes
+/// are capped at [`MAX_ATTACHMENT_BYTES`] so a hostile caller cannot force an
+/// unbounded object into the document. The annotation is also discoverable
+/// through `pdfxi_core::Document::attachments` because the `/FS` file name is
+/// the attachment name.
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::InvalidAttachmentName`] for a bad name,
+/// [`AnnotationEditError::AttachmentTooLarge`] above the cap,
+/// [`AnnotationEditError::EmptyShapeRect`] for an empty rectangle, a bounds
+/// error, or a core error when the object cannot be staged.
+pub fn add_file_attachment(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    name: &str,
+    bytes: &[u8],
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    if name.trim().is_empty()
+        || name
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | '\u{0}') || character.is_control())
+    {
+        return Err(AnnotationEditError::InvalidAttachmentName(name.to_owned()));
+    }
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err(AnnotationEditError::AttachmentTooLarge {
+            bytes: bytes.len(),
+            limit: MAX_ATTACHMENT_BYTES,
+        });
+    }
+    if rect.is_empty() {
+        return Err(AnnotationEditError::EmptyShapeRect);
+    }
+
+    let current = effective_document(document)?;
+    let page_info = current.page(page_index)?;
+    ensure_rect_on_page(page_index, page_info.media_box, rect)?;
+    let mut page = read_page_state(&current, page_index)?;
+    let ids = allocate_ids(document, 4)?;
+    let appearance_id = ids[0];
+    let annotation_id = ids[1];
+    let stream_id = ids[2];
+    let filespec_id = ids[3];
+    let generated = format!("pdfxi-attachment-{}", annotation_id.number);
+    if annotation_id_exists(&current, &page.annots, &generated)? {
+        return Err(AnnotationEditError::DuplicateId {
+            id: generated,
+            page: page_index,
+        });
+    }
+    let date = now_pdf_date();
+
+    // Embedded file stream.
+    let mut params = Dictionary::new();
+    params.insert(
+        "Size".to_owned(),
+        Object::Integer(i64::try_from(bytes.len()).unwrap_or(i64::MAX)),
+    );
+    params.insert("ModDate".to_owned(), pdf_text(&date));
+    let mut stream_dictionary = Dictionary::new();
+    stream_dictionary.insert("Type".to_owned(), pdf_name("EmbeddedFile"));
+    stream_dictionary.insert(
+        "Length".to_owned(),
+        Object::Integer(i64::try_from(bytes.len()).unwrap_or(i64::MAX)),
+    );
+    stream_dictionary.insert("Params".to_owned(), Object::Dictionary(params));
+    let stream = Object::Stream {
+        dictionary: stream_dictionary,
+        data: bytes.to_vec(),
+    };
+
+    // File specification referenced by the annotation.
+    let mut embedded = Dictionary::new();
+    embedded.insert(
+        "F".to_owned(),
+        Object::Reference(ObjectId::new(stream_id.number, stream_id.generation)),
+    );
+    let mut filespec = Dictionary::new();
+    filespec.insert("Type".to_owned(), pdf_name("Filespec"));
+    filespec.insert("F".to_owned(), pdf_text(name));
+    filespec.insert("UF".to_owned(), pdf_text(name));
+    filespec.insert("EF".to_owned(), Object::Dictionary(embedded));
+    filespec.insert("Desc".to_owned(), pdf_text(author));
+
+    let mut annotation = Dictionary::new();
+    annotation.insert("Type".to_owned(), pdf_name("Annot"));
+    annotation.insert("Subtype".to_owned(), pdf_name("FileAttachment"));
+    annotation.insert("Rect".to_owned(), rect_array(rect));
+    annotation.insert("Contents".to_owned(), pdf_text(name));
+    annotation.insert("T".to_owned(), pdf_text(author));
+    annotation.insert("NM".to_owned(), pdf_text(&generated));
+    annotation.insert("M".to_owned(), pdf_text(&date));
+    annotation.insert("Name".to_owned(), pdf_name("Paperclip"));
+    annotation.insert(
+        "FS".to_owned(),
+        Object::Reference(ObjectId::new(filespec_id.number, filespec_id.generation)),
+    );
+    annotation.insert("F".to_owned(), Object::Integer(4));
+    annotation.insert("AP".to_owned(), appearance_dictionary(appearance_id));
+
+    document.set_object(stream_id, stream)?;
+    document.set_object(filespec_id, Object::Dictionary(filespec))?;
+    document.set_object(
+        appearance_id,
+        note_icon_appearance(f64::from(NOTE_ICON_SIZE), ATTACHMENT_ICON_COLOR),
+    )?;
+    document.set_object(annotation_id, Object::Dictionary(annotation))?;
+    page.annots
+        .items_mut()
+        .push(Object::Reference(annotation_id));
+    stage_page_state(document, page)?;
+
+    Ok(AnnotationRef {
+        id: generated,
+        object: annotation_id,
+        page_index,
+        subtype: AnnotationSubtype::Other("FileAttachment".to_owned()),
+    })
+}
+
+/// Largest attachment payload a single annotation may embed, in bytes.
+pub const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Icon colour for a file-attachment annotation.
+const ATTACHMENT_ICON_COLOR: [f64; 3] = [0.95, 0.75, 0.15];
 
 /// List the annotations on `page_index`, resolving each referenced dictionary.
 ///

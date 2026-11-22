@@ -650,6 +650,11 @@ enum DecorateCommand {
 }
 
 /// Operations on the `pdfxi annotate` command group.
+///
+/// The `Add` variant carries every option for six annotation kinds, so it is
+/// much larger than `List`. The value is constructed once from the command line
+/// and never stored in a collection, so the size difference costs nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum AnnotateCommand {
     /// Add one free-text, callout or cloud annotation and save the result.
@@ -665,15 +670,30 @@ enum AnnotateCommand {
         /// Annotation kind.
         #[arg(long, value_enum)]
         kind: annotate::AnnotationKind,
-        /// Rectangle in points: `x0,y0,x1,y1`.
+        /// Rectangle in points: `x0,y0,x1,y1` (not used by pencil).
         #[arg(long, value_name = "RECT")]
-        rect: String,
+        rect: Option<String>,
         /// Text for a free text or callout annotation.
         #[arg(long, value_name = "TEXT")]
         text: Option<String>,
         /// Leader-line anchor in points: `x,y` (callouts).
         #[arg(long, value_name = "POINT")]
         anchor: Option<String>,
+        /// File to embed (file-attachment annotations).
+        #[arg(long, value_name = "PATH")]
+        attachment: Option<PathBuf>,
+        /// Attachment name written to `/FS`; defaults to the file name.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Pencil strokes: `x0,y0 x1,y1; x2,y2 ...`.
+        #[arg(long, value_name = "STROKES")]
+        ink: Option<String>,
+        /// Pencil stroke width in points (0.1-32).
+        #[arg(long, default_value_t = 2.0)]
+        stroke_width: f32,
+        /// Stamp caption, e.g. Approved or Draft.
+        #[arg(long, value_name = "NAME")]
+        stamp_name: Option<String>,
         /// Font size in points (4-72).
         #[arg(long, default_value_t = 11.0)]
         font_size: f32,
@@ -1125,6 +1145,11 @@ fn main() -> anyhow::Result<()> {
                 rect,
                 text,
                 anchor,
+                attachment,
+                name,
+                ink,
+                stroke_width,
+                stamp_name,
                 font_size,
                 author,
                 json,
@@ -1133,11 +1158,19 @@ fn main() -> anyhow::Result<()> {
                 &out,
                 page,
                 kind,
-                &rect,
+                rect.as_deref(),
                 text.as_deref(),
                 anchor.as_deref(),
                 font_size,
                 &author,
+                attachment
+                    .as_deref()
+                    .map(|path| path.to_string_lossy())
+                    .as_deref(),
+                name.as_deref(),
+                ink.as_deref(),
+                stroke_width,
+                stamp_name.as_deref(),
                 json,
             ),
             AnnotateCommand::List { file, page, json } => annotate::run_list(&file, page, json),

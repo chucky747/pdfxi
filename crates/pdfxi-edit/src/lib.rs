@@ -111,13 +111,14 @@ pub use content_edit::{
 };
 pub use document_annotations::{
     ARROW_HEAD_LENGTH, AnnotationEditError, AnnotationRef, AnnotationState, AnnotationSubtype,
-    AnnotationView, MARKUP_STROKE_COLOR, MARKUP_STROKE_WIDTH, MAX_INK_PATHS, MAX_INK_POINTS,
-    MAX_INK_STROKE_WIDTH, MAX_MARKUP_QUADS, MAX_POLYGON_VERTICES, MAX_STAMP_TEXT_CHARS,
-    MIN_INK_STROKE_WIDTH, NOTE_ICON_SIZE, STAMP_COLOR, STAMP_NAMES, ShapeStyle, add_callout,
-    add_circle, add_circle_styled, add_cloud, add_free_text, add_highlight, add_ink, add_line,
-    add_line_styled, add_polygon, add_polygon_styled, add_square, add_square_styled, add_stamp,
-    add_strikeout, add_text_note, add_underline, delete_annotation, export_xfdf, import_xfdf,
-    list_annotations, reply_to, set_state, update_contents,
+    AnnotationView, MARKUP_STROKE_COLOR, MARKUP_STROKE_WIDTH, MAX_ATTACHMENT_BYTES, MAX_INK_PATHS,
+    MAX_INK_POINTS, MAX_INK_STROKE_WIDTH, MAX_MARKUP_QUADS, MAX_POLYGON_VERTICES,
+    MAX_STAMP_TEXT_CHARS, MIN_INK_STROKE_WIDTH, NOTE_ICON_SIZE, STAMP_COLOR, STAMP_NAMES,
+    ShapeStyle, add_callout, add_circle, add_circle_styled, add_cloud, add_file_attachment,
+    add_free_text, add_highlight, add_ink, add_line, add_line_styled, add_polygon,
+    add_polygon_styled, add_square, add_square_styled, add_stamp, add_strikeout, add_text_note,
+    add_underline, delete_annotation, export_xfdf, import_xfdf, list_annotations, reply_to,
+    set_state, update_contents,
 };
 pub use find_replace::{
     FindReplaceError, ReplaceAllPlan, ReplaceLimits, ReplaceStep, SearchDocument, SearchHit,

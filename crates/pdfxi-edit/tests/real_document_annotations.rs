@@ -13,10 +13,10 @@ use pdfxi_core::{Dictionary, Document, Object, ObjectId};
 use pdfxi_edit::{
     AnnotationEditError, AnnotationKind, AnnotationState, AnnotationSubtype, MAX_INK_PATHS,
     MAX_INK_POINTS, MAX_MARKUP_QUADS, MAX_POLYGON_VERTICES, MAX_STAMP_TEXT_CHARS, Point, Rect,
-    ShapeStyle, add_callout, add_circle, add_cloud, add_free_text, add_highlight, add_ink,
-    add_line, add_polygon, add_polygon_styled, add_square, add_square_styled, add_stamp,
-    add_strikeout, add_text_note, add_underline, delete_annotation, export_xfdf, import_xfdf,
-    list_annotations, reply_to, set_state, update_contents,
+    ShapeStyle, add_callout, add_circle, add_cloud, add_file_attachment, add_free_text,
+    add_highlight, add_ink, add_line, add_polygon, add_polygon_styled, add_square,
+    add_square_styled, add_stamp, add_strikeout, add_text_note, add_underline, delete_annotation,
+    export_xfdf, import_xfdf, list_annotations, reply_to, set_state, update_contents,
 };
 use pdfxi_render::pdfium_backend::PdfiumRenderer;
 use pdfxi_render::{CancellationToken, PageIndex, RenderedPage, Renderer};
@@ -1826,5 +1826,95 @@ fn free_text_rejects_bad_sizes_text_and_geometry() {
             "A"
         ),
         Err(AnnotationEditError::InvalidAnchor)
+    ));
+}
+
+#[test]
+fn file_attachment_survives_a_save_and_is_discoverable_as_an_attachment() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let payload = b"attachment payload with binary \x00 bytes";
+    let added = add_file_attachment(
+        &mut document,
+        0,
+        rect(72.0, 700.0, 96.0, 724.0),
+        "evidence.bin",
+        payload,
+        "Alice",
+    )
+    .expect("add file attachment");
+
+    let bytes = document.save().expect("save annotated document");
+    let reopened = Document::from_bytes(bytes).expect("annotated output reparses");
+
+    let views = list_annotations(&reopened, 0).expect("list annotations");
+    let view = views
+        .iter()
+        .find(|view| view.id == added.id)
+        .expect("attachment annotation listed");
+    assert_eq!(view.subtype.as_pdf_name(), "FileAttachment");
+    assert_eq!(view.author, "Alice");
+
+    // The annotation is also a document attachment via core's attachment reader.
+    let attachments = reopened.attachments().expect("read attachments");
+    assert!(
+        attachments
+            .iter()
+            .any(|attachment| attachment.name == "evidence.bin"),
+        "{attachments:?}"
+    );
+    assert_eq!(
+        reopened
+            .attachment_bytes("evidence.bin")
+            .expect("read attachment bytes"),
+        payload
+    );
+}
+
+#[test]
+fn file_attachment_rejects_bad_names_sizes_and_rectangles() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    assert!(matches!(
+        add_file_attachment(
+            &mut document,
+            0,
+            rect(72.0, 700.0, 96.0, 724.0),
+            "",
+            b"x",
+            "A"
+        ),
+        Err(AnnotationEditError::InvalidAttachmentName(_))
+    ));
+    assert!(matches!(
+        add_file_attachment(
+            &mut document,
+            0,
+            rect(72.0, 700.0, 96.0, 724.0),
+            "a/b.bin",
+            b"x",
+            "A"
+        ),
+        Err(AnnotationEditError::InvalidAttachmentName(_))
+    ));
+    assert!(matches!(
+        add_file_attachment(
+            &mut document,
+            0,
+            rect(72.0, 700.0, 96.0, 724.0),
+            "a\\b.bin",
+            b"x",
+            "A"
+        ),
+        Err(AnnotationEditError::InvalidAttachmentName(_))
+    ));
+    assert!(matches!(
+        add_file_attachment(
+            &mut document,
+            0,
+            rect(72.0, 700.0, 72.0, 724.0),
+            "ok.bin",
+            b"x",
+            "A"
+        ),
+        Err(AnnotationEditError::EmptyShapeRect)
     ));
 }

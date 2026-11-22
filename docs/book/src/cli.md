@@ -31,7 +31,7 @@ pdfxi <COMMAND> --help
 | `decorate watermark <FILE> --out PATH --text TEXT [--opacity F] [--rotation D] [--tile] [--json]` | Stamp a text watermark | verified (`EDIT-009`) |
 | `decorate bates <FILE> --out PATH [--prefix TEXT] [--start N] [--digits N] [--increment N] [--corner C] [--json]` | Stamp sequential Bates numbers | verified (`EDIT-010`) |
 | `api [--once]` | Local JSON request/response API over stdio | verified (`AUTO-006`) |
-| `annotate add <FILE> --out PATH --kind free-text\|callout\|cloud --rect x0,y0,x1,y1 [--text T] [--anchor x,y] [--json]` | Add a drawing annotation | verified (`REVIEW-002`) |
+| `annotate add <FILE> --out PATH --kind free-text\|callout\|cloud\|pencil\|stamp\|file-attachment [--rect x0,y0,x1,y1] [--text T] [--ink STROKES] [--stamp-name N] [--attachment PATH] [--json]` | Add a drawing annotation | verified (`REVIEW-002`, `REVIEW-003`) |
 | `annotate list <FILE> [--page N] [--json]` | List one page's annotations | verified (`REVIEW-002`) |
 
 Commands are integration-tested by invoking the real binary; see
@@ -96,6 +96,13 @@ Commands are integration-tested by invoking the real binary; see
   cloud. `--page` is one-based, `--rect`/`--anchor` are points, and `--font-size`
   is limited to 4-72. `annotate list` reads back every annotation with its `/NM`
   id, subtype, text, author, rect and date.
+- `annotate add --kind pencil` takes `--ink "x0,y0 x1,y1; x2,y2"` and
+  `--stroke-width`; `--kind stamp` takes `--stamp-name` (for example Approved)
+  and `--text`; `--kind file-attachment` takes `--attachment PATH` and an
+  optional `--name`. An attachment is embedded as an `/EmbeddedFile` stream
+  referenced by the annotation's `/FS`, so `pdfxi attachments` lists it and
+  `pdfxi attachments --extract` writes the exact bytes. Pencil does not use
+  `--rect`; the library derives it from the stroke bounds.
 
 Exit codes:
 

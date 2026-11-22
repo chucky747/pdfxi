@@ -9,7 +9,9 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use pdfxi_core::Document;
-use pdfxi_edit::{Point, Rect, add_callout, add_cloud, add_free_text, list_annotations};
+use pdfxi_edit::{
+    Point, Rect, add_callout, add_cloud, add_file_attachment, add_free_text, list_annotations,
+};
 use serde::Serialize;
 
 /// Which drawing annotation `annotate add` creates.
@@ -21,6 +23,12 @@ pub(crate) enum AnnotationKind {
     Callout,
     /// A scalloped cloud border (`/Subtype /Polygon`, `/IT /PolygonCloud`).
     Cloud,
+    /// An embedded-file attachment with a paperclip icon.
+    FileAttachment,
+    /// A freehand pencil stroke set (`/Subtype /Ink`).
+    Pencil,
+    /// A standard stamp (`/Subtype /Stamp`).
+    Stamp,
 }
 
 /// One annotation row in the JSON report.
@@ -81,6 +89,25 @@ fn parse_rect(text: &str) -> anyhow::Result<Rect> {
     Ok(rect)
 }
 
+/// Parse `x0,y0 x1,y1; x2,y2` into ink strokes.
+fn parse_ink(text: &str) -> anyhow::Result<Vec<Vec<Point>>> {
+    let mut paths = Vec::new();
+    for stroke in text.split(';') {
+        let points = stroke
+            .split_whitespace()
+            .map(parse_point)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        if points.is_empty() {
+            continue;
+        }
+        paths.push(points);
+    }
+    if paths.is_empty() {
+        bail!("--ink needs at least one stroke of `x,y` points");
+    }
+    Ok(paths)
+}
+
 /// Parse `x,y` into a point.
 fn parse_point(text: &str) -> anyhow::Result<Point> {
     let values: Vec<f32> = text
@@ -107,30 +134,78 @@ pub(crate) fn run_add(
     out: &Path,
     page: usize,
     kind: AnnotationKind,
-    rect: &str,
+    rect: Option<&str>,
     text: Option<&str>,
     anchor: Option<&str>,
     font_size: f32,
     author: &str,
+    attachment: Option<&str>,
+    name: Option<&str>,
+    ink: Option<&str>,
+    stroke_width: f32,
+    stamp_name: Option<&str>,
     json: bool,
 ) -> anyhow::Result<()> {
     if page == 0 {
         bail!("--page is one-based and must be at least 1");
     }
-    let rect = parse_rect(rect)?;
+    let rect = rect.map(parse_rect).transpose()?;
     let mut document = load(file)?;
     let index = page - 1;
+    let required_rect = || rect.context("--rect is required for this annotation kind");
     let identifier = match kind {
         AnnotationKind::FreeText => {
             let text = text.context("--text is required for a free-text annotation")?;
-            add_free_text(&mut document, index, rect, text, font_size, author)?
+            add_free_text(
+                &mut document,
+                index,
+                required_rect()?,
+                text,
+                font_size,
+                author,
+            )?
         }
         AnnotationKind::Callout => {
             let text = text.context("--text is required for a callout")?;
             let anchor = parse_point(anchor.context("--anchor is required for a callout")?)?;
-            add_callout(&mut document, index, rect, anchor, text, font_size, author)?
+            add_callout(
+                &mut document,
+                index,
+                required_rect()?,
+                anchor,
+                text,
+                font_size,
+                author,
+            )?
         }
-        AnnotationKind::Cloud => add_cloud(&mut document, index, rect, author)?,
+        AnnotationKind::Cloud => add_cloud(&mut document, index, required_rect()?, author)?,
+        AnnotationKind::Pencil => {
+            let paths = parse_ink(ink.context("--ink is required for a pencil annotation")?)?;
+            pdfxi_edit::add_ink(
+                &mut document,
+                index,
+                &paths,
+                stroke_width,
+                text.unwrap_or(""),
+                author,
+            )?
+        }
+        AnnotationKind::Stamp => {
+            let stamp = stamp_name.context("--stamp-name is required for a stamp")?;
+            let text = text.context("--text is required for a stamp")?;
+            pdfxi_edit::add_stamp(&mut document, index, required_rect()?, stamp, text, author)?
+        }
+        AnnotationKind::FileAttachment => {
+            let path = attachment.context("--attachment is required for a file attachment")?;
+            let bytes =
+                std::fs::read(path).with_context(|| format!("read attachment payload {path}"))?;
+            let default_name = Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "attachment.bin".to_owned());
+            let name = name.unwrap_or(&default_name);
+            add_file_attachment(&mut document, index, required_rect()?, name, &bytes, author)?
+        }
     };
 
     let bytes = document.save().context("save the annotated document")?;

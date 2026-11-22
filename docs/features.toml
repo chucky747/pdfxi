@@ -2758,14 +2758,55 @@ tests = [
 title = "Free text callout line arrow shape and cloud"
 
 [[feature]]
-docs = "crates/pdfxi-edit/src/markup.rs, docs/evidence/author/T-0114.md"
+docs = [
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "crates/pdfxi-cli/src/annotate.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0290.md",
+]
 domain = "Review"
-evidence = "docs/evidence/author/T-0114.md"
+evidence = "docs/evidence/cli/T-0290.md"
 id = "REVIEW-003"
-notes = "Ink, stamp catalog/presets, and attachment references validated against traversal; caller bytes are never read."
+notes = '''
+Verified through a new writer and an extended CLI host. add_file_attachment stages
+an /EmbeddedFile stream (/Params /Size /ModDate), a /Filespec (/F, /UF, /EF /F,
+/Desc) and a /Subtype /FileAttachment annotation with a /Paperclip icon and /FS
+pointing at the specification. Names must be single references (no /, \, control
+characters) and payloads are capped at MAX_ATTACHMENT_BYTES (64 MiB) with typed
+errors InvalidAttachmentName and AttachmentTooLarge. Because /FS carries the
+name, pdfxi_core::Document::attachments() finds it, so the existing
+`pdfxi attachments` command lists and extracts it.
+
+`pdfxi annotate add` now accepts six kinds; pencil takes --ink "x0,y0 x1,y1; ..."
+plus --stroke-width and derives its rect from the stroke bounds, stamp takes
+--stamp-name plus --text, and file-attachment takes --attachment PATH with an
+optional --name. `pdfxi annotate list` prints id, subtype, text, author, rect and
+date.
+
+Evidence on fixtures/authoring/authoring-page-boxes.pdf: a two-stroke pencil
+annotation is listed as Ink with rect 70 558 162 622 (bounds plus half the
+3-point stroke), a stamp reads "Approved 2026" as Stamp, and an embedded
+evidence.bin (22 bytes) is listed by `pdfxi attachments` with page 1 and
+extracted byte-for-byte. On the real Excel fixture, the integration test saves,
+reopens, asserts the FileAttachment listing, Document::attachments() membership
+and attachment_bytes equality including a NUL byte.
+
+Gates: cargo test -p pdfxi-edit --test real_document_annotations file_attachment
+= 2 passed; cargo test -p pdfxi-cli --test cli annotate = 5 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: all three annotation kinds are reachable and survive save/reopen; stamp
+presets and styles use library defaults, and the interactive pencil tool remains
+app-level and is not claimed.
+'''
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
+    "file_attachment_survives_a_save_and_is_discoverable_as_an_attachment",
+    "file_attachment_rejects_bad_names_sizes_and_rectangles",
+    "cli::annotate_adds_pencil_and_stamp",
+    "cli::annotate_file_attachment_is_extractable",
+    "cli::annotate_add_and_list_round_trip",
     "markup::tests::stamp_catalog_covers_every_caption_with_a_deterministic_preset",
     "markup::tests::attachment_reference_validation_rejects_traversal_and_unsafe_names",
 ]

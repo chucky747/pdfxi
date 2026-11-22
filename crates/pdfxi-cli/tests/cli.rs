@@ -2763,6 +2763,122 @@ fn attachments_report_an_embedded_file() {
 }
 
 #[test]
+fn annotate_adds_pencil_and_stamp() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let pencil = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        first.arg(),
+        "--kind",
+        "pencil",
+        "--ink",
+        "72,600 120,620 160,600; 80,560 140,560",
+        "--stroke-width",
+        "3",
+        "--text",
+        "Pencil note",
+        "--author",
+        "Dana",
+    ]);
+    assert!(pencil.status.success(), "stderr: {}", stderr(&pencil));
+    assert!(
+        stdout(&pencil).contains("added: pdfxi-ink-"),
+        "{}",
+        stdout(&pencil)
+    );
+
+    let stamp = run(&[
+        "annotate",
+        "add",
+        first.arg(),
+        "--out",
+        second.arg(),
+        "--kind",
+        "stamp",
+        "--rect",
+        "400,600,560,650",
+        "--stamp-name",
+        "Approved",
+        "--text",
+        "Approved 2026",
+        "--author",
+        "Eve",
+    ]);
+    assert!(stamp.status.success(), "stderr: {}", stderr(&stamp));
+
+    let listed = run(&["annotate", "list", second.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    let rows = value["annotations"].as_array().expect("annotations array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["subtype"], "Ink");
+    assert_eq!(rows[0]["author"], "Dana");
+    assert_eq!(rows[1]["subtype"], "Stamp");
+    assert_eq!(rows[1]["contents"], "Approved 2026");
+}
+
+#[test]
+fn annotate_file_attachment_is_extractable() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let payload = TempPath::new("bin");
+    let bytes = b"attachment payload 123";
+    payload.write(bytes);
+    let out = TempOut::new("pdf");
+    let added = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--kind",
+        "file-attachment",
+        "--rect",
+        "72,700,96,724",
+        "--attachment",
+        payload.arg(),
+        "--name",
+        "evidence.bin",
+        "--author",
+        "Alice",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+
+    let listed = run(&["attachments", out.arg()]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let text = stdout(&listed);
+    assert!(text.contains("name: evidence.bin"), "{text}");
+    assert!(text.contains("size: 22"), "{text}");
+
+    let directory = std::env::temp_dir().join(format!(
+        "pdfxi-attach-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    let extraction = run(&[
+        "attachments",
+        out.arg(),
+        "--extract",
+        directory.to_str().expect("utf-8 dir"),
+    ]);
+    assert!(
+        extraction.status.success(),
+        "stderr: {}",
+        stderr(&extraction)
+    );
+    let extracted = fs::read(directory.join("evidence.bin")).expect("extracted attachment");
+    assert_eq!(extracted, bytes);
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
 fn annotate_add_and_list_round_trip() {
     let source = authoring_fixture("authoring-page-boxes.pdf");
     let out = TempOut::new("pdf");

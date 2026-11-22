@@ -1,0 +1,22 @@
+{
+  "id": "T-0290",
+  "lane": "author",
+  "title": "File-attachment annotations and a CLI host for pencil, stamp and attachments",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0289"],
+  "owns": [
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-edit/tests/real_document_annotations.rs",
+    "crates/pdfxi-cli/src/annotate.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0290.md",
+    "orchestration/feature-updates/T-0290.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit --test real_document_annotations and cargo test -p pdfxi-cli pass; pdfxi annotate add writes pencil, stamp and file-attachment annotations, the attachment extracts byte-for-byte through pdfxi attachments, and REVIEW-003 moves to verified.",
+  "notes": "Adds add_file_attachment (embedded stream + filespec + FileAttachment annotation) and extends the annotate host with pencil (--ink/--stroke-width), stamp (--stamp-name) and file-attachment (--attachment/--name) kinds.",
+  "evidence": "docs/evidence/cli/T-0290.md"
+}
