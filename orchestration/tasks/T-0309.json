@@ -1,0 +1,19 @@
+{
+  "id": "T-0309",
+  "lane": "automation",
+  "title": "Watched-folder schedule host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0308"],
+  "owns": [
+    "crates/pdfxi-cli/src/watch.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0309.md",
+    "orchestration/feature-updates/T-0309.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli watch_ passes; pdfxi watch polls a real folder through PollSchedule, writes converted files, persists and reloads markers, and rejects unsafe output or invalid schedules; AUTO-003 moves to verified.",
+  "notes": "Adds the host half of the watched-folder model: canonical folders, schedule ticks, passthrough conversion, output writes and atomic marker snapshots.",
+  "evidence": "docs/evidence/cli/T-0309.md"
+}

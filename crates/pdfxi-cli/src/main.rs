@@ -66,6 +66,8 @@ mod action;
 mod api;
 /// pdfxi ops: enumerate and resolve scriptable automation operations.
 mod ops;
+/// pdfxi watch: one host-driven poll of a watched folder.
+mod watch;
 
 // PDF creation (`create`) and accessible-text export (`export`) built on
 // pdfxi-convert and the accessibility tree builder.
@@ -714,6 +716,45 @@ enum Command {
         /// The registry operation to perform.
         #[command(subcommand)]
         command: OpsCommand,
+    },
+    /// Poll a watched folder once through a deterministic schedule.
+    ///
+    /// Advances host ticks through `PollSchedule`, polls when due, writes
+    /// converted files beneath `--out`, and persists the processed-file markers.
+    /// No thread or OS watcher is started; invoke the command from a scheduler.
+    Watch {
+        /// Folder to scan (must exist).
+        folder: PathBuf,
+        /// Output directory; created when absent and must be outside the folder.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Eligible extension; repeat for several (default: pdf).
+        #[arg(long = "ext", value_name = "EXT", default_value = "pdf")]
+        extensions: Vec<String>,
+        /// Output-name suffix (default: pdf).
+        #[arg(long, value_name = "EXT", default_value = "pdf")]
+        suffix: String,
+        /// Marker snapshot to load and atomically replace.
+        #[arg(long, value_name = "PATH")]
+        markers: Option<PathBuf>,
+        /// Poll every N ticks; zero polls on every tick.
+        #[arg(long, default_value_t = 0)]
+        poll_every: u64,
+        /// Backoff base delay in ticks.
+        #[arg(long, default_value_t = 1)]
+        base_ticks: u64,
+        /// Backoff ceiling in ticks.
+        #[arg(long, default_value_t = 64)]
+        max_ticks: u64,
+        /// Backoff growth per thousand (1000..=10000).
+        #[arg(long, default_value_t = 2000)]
+        multiplier: u32,
+        /// Number of host ticks to advance (default: 1).
+        #[arg(long, default_value_t = 1)]
+        ticks: u64,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -2522,6 +2563,31 @@ fn main() -> anyhow::Result<()> {
                 json,
             } => ops::run_resolve(&name, &assignments, json),
         },
+        Command::Watch {
+            folder,
+            out,
+            extensions,
+            suffix,
+            markers,
+            poll_every,
+            base_ticks,
+            max_ticks,
+            multiplier,
+            ticks,
+            json,
+        } => watch::run_watch(
+            &folder,
+            &out,
+            &extensions,
+            &suffix,
+            markers.as_deref(),
+            poll_every,
+            base_ticks,
+            max_ticks,
+            multiplier,
+            ticks,
+            json,
+        ),
     }
 }
 

@@ -24,6 +24,7 @@ pdfxi <COMMAND> --help
 | `action show <FILE> <NAME>` | Show an action's steps and parameters | implemented |
 | `action run <FILE> <NAME> --input <PATH>... [--output-dir DIR] [--json]` | Run an action over inputs | implemented, staging-only |
 | `droplet <ACTION_FILE> <NAME> <INPUT>... [--json]` | Explorer-friendly `action run` | implemented, staging-only |
+| `watch <FOLDER> --out DIR [--markers PATH] [--ext EXT] [--poll-every N] [--ticks N] [--json]` | One scheduled watched-folder poll with persisted markers | verified (`AUTO-003`) |
 | `portfolio <FILE> [--json] [--extract DIR]` | List or extract a portfolio collection | verified (`VIEW-014`) |
 | `compare <LEFT> <RIGHT> [--json] [--lines] [--fail-on-difference]` | Text compare of two revisions | verified (`VIEW-015`) |
 | `reflow <FILE> [--width N] [--page N] [--json]` | Reading-order text column | verified (`VIEW-013`) |
@@ -135,7 +136,13 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `ops` is the CLI adapter for `pdfxi_automation::OperationRegistry`. `list`
+- `watch` performs one host-driven poll of a real folder. It canonicalizes the
+  folder and output directory (which must be outside the folder), loads a marker
+  snapshot when present, advances a deterministic `PollSchedule` for `--ticks`
+  (polling only when the decision is due), converts eligible files with the
+  passthrough converter, writes them beneath `--out`, records per-file
+  outcomes, and atomically replaces the marker snapshot. No thread or OS
+  watcher is started; a scheduler invokes the command repeatedly.- `ops` is the CLI adapter for `pdfxi_automation::OperationRegistry`. `list`
   prints every default operation with `name`, optional `?` and type markers;
   `resolve` turns `name=value` arguments into a typed, alphabetically ordered
   call plan, rejecting unknown operations/parameters, missing required values,

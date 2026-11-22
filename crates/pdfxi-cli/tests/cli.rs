@@ -1239,6 +1239,45 @@ fn action_run_rejects_escaping_export_targets() {
 // create (CREATE-003 images, CREATE-004 text/Markdown)
 // ---------------------------------------------------------------------------
 
+/// A unique temporary directory, removed on drop.
+struct TempDir {
+    path: PathBuf,
+    display: String,
+}
+
+impl TempDir {
+    /// Create a unique directory.
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("pdfxi-cli-dir-{}-{nanos}-{id}", std::process::id()));
+        fs::create_dir_all(&path).expect("create temporary directory");
+        let display = path.to_string_lossy().into_owned();
+        Self { path, display }
+    }
+
+    /// Return the directory as a command-line argument.
+    fn arg(&self) -> &str {
+        &self.display
+    }
+
+    /// Return a child path.
+    fn child(&self, name: &str) -> PathBuf {
+        self.path.join(name)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 /// A unique temporary path used as either a command input or output.
 struct TempPath {
     path: PathBuf,
@@ -3708,6 +3747,183 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
         stderr(&empty_name).contains("must not be empty"),
         "{}",
         stderr(&empty_name)
+    );
+}
+
+#[test]
+fn watch_processes_files_and_persists_markers() {
+    let watched = TempDir::new();
+    let out = TempDir::new();
+    let markers = TempPath::new("json");
+    fs::write(watched.child("a.pdf"), b"AAA").expect("write a");
+    fs::write(watched.child("b.pdf"), b"BBBB").expect("write b");
+    fs::write(watched.child("notes.txt"), b"note").expect("write txt");
+
+    let first = run(&[
+        "watch",
+        watched.arg(),
+        "--out",
+        out.arg(),
+        "--markers",
+        markers.arg(),
+        "--json",
+    ]);
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    let value: Value = serde_json::from_str(&stdout(&first)).expect("valid JSON");
+    assert_eq!(value["extensions"], serde_json::json!(["pdf"]));
+    assert_eq!(value["suffix"], "pdf");
+    assert_eq!(value["ticks"], 1);
+    assert_eq!(value["polls"], 1);
+    assert_eq!(value["written"], 2);
+    assert_eq!(value["marker_count"], 2);
+    assert_eq!(value["decisions"][0]["decision"], "due");
+    let reports = value["reports"].as_array().expect("reports");
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0]["converted"], 2);
+    assert_eq!(reports[0]["skipped"], 0);
+    assert_eq!(reports[0]["unsupported"], 1);
+    assert_eq!(reports[0]["failed"], 0);
+    let files = reports[0]["files"].as_array().expect("files");
+    let states: Vec<&str> = files
+        .iter()
+        .filter_map(|file| file["state"].as_str())
+        .collect();
+    assert_eq!(states, ["converted", "converted", "unsupported"]);
+
+    assert_eq!(
+        fs::read(out.child("a.pdf")).expect("a output"),
+        b"AAA".to_vec()
+    );
+    assert_eq!(
+        fs::read(out.child("b.pdf")).expect("b output"),
+        b"BBBB".to_vec()
+    );
+    assert!(!out.child("notes.pdf").exists());
+    let snapshot = fs::read_to_string(&markers.path).expect("markers");
+    assert!(snapshot.contains("\"a.pdf\""), "{snapshot}");
+    assert!(snapshot.contains("\"b.pdf\""), "{snapshot}");
+
+    let second = run(&[
+        "watch",
+        watched.arg(),
+        "--out",
+        out.arg(),
+        "--markers",
+        markers.arg(),
+        "--json",
+    ]);
+    assert!(second.status.success(), "stderr: {}", stderr(&second));
+    let value: Value = serde_json::from_str(&stdout(&second)).expect("valid JSON");
+    assert_eq!(value["written"], 0);
+    assert_eq!(value["marker_count"], 2);
+    assert_eq!(value["reports"][0]["converted"], 0);
+    assert_eq!(value["reports"][0]["skipped"], 2);
+    assert_eq!(value["reports"][0]["unsupported"], 1);
+    assert_eq!(
+        fs::read_to_string(&markers.path).expect("markers again"),
+        snapshot,
+        "unchanged markers are byte-identical"
+    );
+
+    let scheduled = run(&[
+        "watch",
+        watched.arg(),
+        "--out",
+        out.arg(),
+        "--markers",
+        markers.arg(),
+        "--poll-every",
+        "2",
+        "--ticks",
+        "3",
+        "--json",
+    ]);
+    assert!(scheduled.status.success(), "stderr: {}", stderr(&scheduled));
+    let value: Value = serde_json::from_str(&stdout(&scheduled)).expect("valid JSON");
+    assert_eq!(value["ticks"], 3);
+    assert_eq!(value["polls"], 1);
+    let decisions = value["decisions"].as_array().expect("decisions");
+    assert_eq!(decisions.len(), 3);
+    assert_eq!(decisions[0]["decision"], "wait");
+    assert_eq!(decisions[0]["wait_ticks"], 1);
+    assert_eq!(decisions[1]["decision"], "due");
+    assert_eq!(decisions[2]["decision"], "wait");
+    assert!(
+        value["schedule"]
+            .as_str()
+            .unwrap_or("")
+            .contains("interval=every_ticks:2"),
+        "{}",
+        value["schedule"]
+    );
+}
+
+#[test]
+fn watch_rejects_unsafe_or_invalid_setups() {
+    let watched = TempDir::new();
+    let out = TempDir::new();
+    fs::write(watched.child("a.pdf"), b"AAA").expect("write a");
+
+    let missing = run(&["watch", TempPath::new("dir").arg(), "--out", out.arg()]);
+    assert!(!missing.status.success());
+
+    let inside = watched.child("inside");
+    fs::create_dir_all(&inside).expect("create nested out");
+    let inside_arg = inside.to_str().expect("utf-8");
+    let rejected = run(&["watch", watched.arg(), "--out", inside_arg]);
+    assert!(!rejected.status.success());
+    assert!(
+        stderr(&rejected).contains("inside the watched folder"),
+        "{}",
+        stderr(&rejected)
+    );
+
+    let zero_ticks = run(&["watch", watched.arg(), "--out", out.arg(), "--ticks", "0"]);
+    assert!(!zero_ticks.status.success());
+
+    let zero_base = run(&[
+        "watch",
+        watched.arg(),
+        "--out",
+        out.arg(),
+        "--base-ticks",
+        "0",
+    ]);
+    assert!(!zero_base.status.success());
+    assert!(
+        stderr(&zero_base).contains("base_ticks must be positive"),
+        "{}",
+        stderr(&zero_base)
+    );
+
+    let bad_multiplier = run(&[
+        "watch",
+        watched.arg(),
+        "--out",
+        out.arg(),
+        "--multiplier",
+        "999",
+    ]);
+    assert!(!bad_multiplier.status.success());
+
+    let bad_ext = run(&["watch", watched.arg(), "--out", out.arg(), "--ext", "p df"]);
+    assert!(!bad_ext.status.success());
+
+    let markers = TempPath::new("json");
+    markers.write(b"not a snapshot");
+    let bad_markers = run(&[
+        "watch",
+        watched.arg(),
+        "--out",
+        out.arg(),
+        "--markers",
+        markers.arg(),
+    ]);
+    assert!(!bad_markers.status.success());
+    assert!(
+        stderr(&bad_markers).contains("parse markers"),
+        "{}",
+        stderr(&bad_markers)
     );
 }
 
