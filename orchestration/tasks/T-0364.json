@@ -1,0 +1,16 @@
+{
+  "id": "T-0364",
+  "lane": "orchestrator",
+  "title": "Installer docs merge fix (review blocking 1)",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0363"],
+  "owns": [
+    "scripts/install.ps1",
+    "docs/evidence/platform/T-0364.md",
+    "orchestration/tasks/T-0364.json"
+  ],
+  "acceptance": "scripts/install.ps1 merges the user guide into an existing install without creating docs\\docs, removes a stale nested copy from earlier installs, and a two-install regression test proves the installed <target>\\docs guide is current.",
+  "notes": "Fresh-eyes review blocking finding: Copy-Item -Recurse onto an existing docs dir created docs\\docs, so the installed viewer served the stale guide.",
+  "evidence": "docs/evidence/platform/T-0364.md"
+}

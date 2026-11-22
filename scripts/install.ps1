@@ -51,10 +51,19 @@ if (Test-Path -LiteralPath $licenceSource -PathType Container) {
     }
 }
 # The user guide ships under docs\ so Help can open it from the install directory.
+# Copy the contents (not the directory itself) so an upgrade merges over the
+# previous guide instead of nesting a second docs\docs copy.
 $docsSource = Join-Path $source 'docs'
 if (Test-Path -LiteralPath $docsSource -PathType Container) {
     $docsTarget = Join-Path $target 'docs'
-    Copy-Item -LiteralPath $docsSource -Destination $docsTarget -Recurse -Force
+    New-Item -ItemType Directory -Force -Path $docsTarget | Out-Null
+    Copy-Item -Path (Join-Path $docsSource '*') -Destination $docsTarget -Recurse -Force
+    # Older installers created a duplicate under docs\docs; remove it so the
+    # viewer (which serves <install>\docs) always sees the current guide.
+    $nested = Join-Path $docsTarget 'docs'
+    if (Test-Path -LiteralPath $nested -PathType Container) {
+        Remove-Item -LiteralPath $nested -Recurse -Force
+    }
 }
 
 function New-ShellLink {
