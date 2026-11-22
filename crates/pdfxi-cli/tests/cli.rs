@@ -3064,6 +3064,97 @@ fn annotate_rejects_bad_requests() {
 }
 
 #[test]
+fn update_appends_a_validated_incremental_revision() {
+    let source = root_fixture("minimal.pdf");
+    let out = TempOut::new("pdf");
+    let updated = run(&[
+        "update",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--title",
+        "Incremental title",
+        "--author",
+        "PDFXI",
+    ]);
+    assert!(updated.status.success(), "stderr: {}", stderr(&updated));
+    let text = stdout(&updated);
+    assert!(text.contains("xref_chain_verified: true"), "{text}");
+    assert!(text.contains("revision: Classic"), "{text}");
+    assert!(text.contains("text_pages_verified: 1"), "{text}");
+    assert!(text.contains("title: Incremental title"), "{text}");
+
+    let original = fs::read(&source).expect("source bytes");
+    let saved = fs::read(&out.path).expect("saved bytes");
+    assert!(saved.starts_with(&original), "original bytes are a prefix");
+    assert!(saved.len() > original.len(), "a revision was appended");
+
+    let missing = run(&[
+        "update",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+    ]);
+    assert!(!missing.status.success());
+    assert!(stderr(&missing).contains("--title"), "{}", stderr(&missing));
+}
+
+#[test]
+fn update_handles_a_hybrid_xref_source_honestly() {
+    let source = root_fixture("realworld/microsoft-excel-2019-sample.pdf");
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let updated = run(&[
+        "update",
+        source.to_str().expect("utf-8"),
+        "--out",
+        first.arg(),
+        "--title",
+        "Hybrid incremental",
+        "--json",
+    ]);
+    assert!(updated.status.success(), "stderr: {}", stderr(&updated));
+    let value: Value = serde_json::from_str(&stdout(&updated)).expect("valid JSON");
+    let original = fs::read(&source).expect("source bytes");
+    assert_eq!(
+        value["preserved_prefix_bytes"].as_u64(),
+        Some(original.len() as u64)
+    );
+    assert!(value["appended_bytes"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(value["xref_chain_verified"].as_bool(), Some(false));
+    assert!(
+        value["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("XRefStm"),
+        "{}",
+        stdout(&updated)
+    );
+    assert_eq!(value["page_count"].as_u64(), Some(2));
+    assert_eq!(value["text_pages_verified"].as_u64(), Some(2));
+    assert_eq!(value["title"], "Hybrid incremental");
+
+    let saved = fs::read(&first.path).expect("saved bytes");
+    assert!(saved.starts_with(&original), "prefix preserved");
+    let first_len = saved.len();
+
+    let chained = run(&[
+        "update",
+        first.arg(),
+        "--out",
+        second.arg(),
+        "--subject",
+        "Second revision",
+    ]);
+    assert!(chained.status.success(), "stderr: {}", stderr(&chained));
+    assert!(
+        stdout(&chained).contains(&format!("preserved_prefix: {first_len}")),
+        "{}",
+        stdout(&chained)
+    );
+}
+
+#[test]
 fn outline_add_rename_move_remove_round_trip() {
     let source = root_fixture("realworld/powerpoint-slides.pdf");
     let first = TempOut::new("pdf");

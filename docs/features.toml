@@ -4363,26 +4363,49 @@ tests = [
 title = "PDF/UA conformance"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/preservation.rs, crates/pdfxi-core/src/incremental.rs, docs/evidence/core/T-0184.md"
+docs = [
+    "crates/pdfxi-cli/src/update.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0292.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/hardening/T-0207.md"
+evidence = "docs/evidence/cli/T-0292.md"
 id = "STD-010"
 notes = """
-Incremental save now accepts both classic-table and cross-reference-stream
-sources (ISO 32000-1 7.5.6/7.5.8). Document::save_incremental appends a section
-whose kind matches the source's final section: a /Type /XRef stream with /W,
-/Index, /Size, /Prev and carried-over /Root, /Info and /ID for stream sources,
-or a classic table for classic and hybrid sources (the /XRefStm marker is
-dropped). The original bytes remain an exact prefix; changed objects are written
-as plain type-1 entries and no new object streams are created. The Excel 2019
-hybrid fixture now round-trips with both pages and their text intact. Encrypted
-sources, full rewrite (save), the optimizer and page-plan output still decline
-xref-stream input; the xref stream writer uses 4-byte offsets and uncompressed
-entry rows.
+Verified through a new pdfxi update host. The command reads the current /Info
+dictionary, applies --title/--author/--subject/--keywords/--producer, stages it
+with Document::set_info, saves through Document::save_incremental (so the
+original bytes stay an exact prefix and only changed objects plus a matching
+classic or xref-stream section are appended), validates the result and only then
+writes --out.
+
+Classic and plain xref-stream sources are validated with
+Document::validate_incremental under PreservationPolicy::minimal() with page-text
+comparison: exact prefix, /Prev chain, page count and every page's text. Sources
+that already carry a hybrid /XRefStm section cannot be walked by that chain
+validator, so the host verifies prefix, page count and page text directly and
+reports xref_chain_verified=false with a note naming the hybrid section; it never
+claims the chain check passed.
+
+Evidence: minimal.pdf gives preserved_prefix 595, appended 229, revision Classic
+at offset 641, 1 page and 1 verified text page with the new title. The real
+microsoft-excel-2019-sample.pdf (92366 bytes, 2 pages) gives preserved_prefix
+92366, appended 514, page_count 2, text_pages_verified 2, the new title/author,
+and xref_chain_verified=false with the documented note; a second run appends
+another revision and preserves the first output's 92880 bytes as its prefix.
+Byte comparison confirms the source is unchanged.
+
+Gates: cargo test -p pdfxi-cli --test cli update = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: incremental update and preservation validation are reachable for
+information edits; page-content edits still use the full-rewrite page planner.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
+    "cli::update_appends_a_validated_incremental_revision",
+    "cli::update_handles_a_hybrid_xref_source_honestly",
     "real_world_pdf_text_is_extractable",
     "real_world_pdf_incremental_save_preserves_pages_and_text",
     "xref_tests::incremental_save_of_xref_stream_source_appends_matching_stream_section",

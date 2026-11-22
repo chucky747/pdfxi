@@ -99,6 +99,8 @@ mod portfolio;
 mod read_aloud;
 /// `pdfxi reflow`: lay page text out as a narrow reading column.
 mod reflow;
+/// `pdfxi update`: append an incremental revision with new information.
+mod update;
 // Optional-content layers (`layers`).
 mod layers;
 mod repair;
@@ -361,6 +363,37 @@ enum Command {
         /// The attachment operation to perform.
         #[command(subcommand)]
         command: AttachCommand,
+    },
+    /// Append an incremental revision with updated document information.
+    ///
+    /// Every original byte stays an exact prefix; only the changed objects and
+    /// a new cross-reference section are appended. The saved file is validated
+    /// against the original prefix, xref chain, page count and page text before
+    /// the report is printed.
+    Update {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the incremental revision.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// New document title (`/Title`).
+        #[arg(long, value_name = "TEXT")]
+        title: Option<String>,
+        /// New author (`/Author`).
+        #[arg(long, value_name = "TEXT")]
+        author: Option<String>,
+        /// New subject (`/Subject`).
+        #[arg(long, value_name = "TEXT")]
+        subject: Option<String>,
+        /// New keywords (`/Keywords`).
+        #[arg(long, value_name = "TEXT")]
+        keywords: Option<String>,
+        /// New producer (`/Producer`).
+        #[arg(long, value_name = "TEXT")]
+        producer: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Rewrite a document with the optimizer and report what changed.
     ///
@@ -1467,6 +1500,25 @@ fn main() -> anyhow::Result<()> {
                 json,
             } => navigation::run_attach_remove(&file, &out, &name, json),
         },
+        Command::Update {
+            file,
+            out,
+            title,
+            author,
+            subject,
+            keywords,
+            producer,
+            json,
+        } => update::run_update(update::UpdateRequest {
+            file: &file,
+            out: &out,
+            title: title.as_deref(),
+            author: author.as_deref(),
+            subject: subject.as_deref(),
+            keywords: keywords.as_deref(),
+            producer: producer.as_deref(),
+            json,
+        }),
         Command::Decorate { command } => match command {
             DecorateCommand::HeaderFooter {
                 file,

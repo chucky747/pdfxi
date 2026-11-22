@@ -1,0 +1,19 @@
+{
+  "id": "T-0292",
+  "lane": "core",
+  "title": "Incremental update and preservation host",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0291"],
+  "owns": [
+    "crates/pdfxi-cli/src/update.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0292.md",
+    "orchestration/feature-updates/T-0292.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli update passes; pdfxi update appends an incremental revision, validates the prefix/chain/pages/text and writes the result; STD-010 moves to verified.",
+  "notes": "Adds the pdfxi update host over Document::set_info + save_incremental + validate_incremental, with an explicit prefix/page/text fallback for hybrid /XRefStm sources.",
+  "evidence": "docs/evidence/cli/T-0292.md"
+}

@@ -42,6 +42,7 @@ pdfxi <COMMAND> --help
 | `link remove <FILE> --out PATH --page N --index K` | Remove a link annotation | verified (`EDIT-011`) |
 | `attach add <FILE> --out PATH --attachment PATH [--name NAME] [--description D] [--mime TYPE]` | Embed a file in the name tree | verified (`EDIT-011`) |
 | `attach remove <FILE> --out PATH --name NAME` | Remove an embedded file | verified (`EDIT-011`) |
+| `update <FILE> --out PATH [--title T] [--author A] [--subject S] [--keywords K] [--producer P]` | Append a validated incremental revision | verified (`STD-010`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -110,7 +111,15 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `link add` writes a real `/Link` annotation with `/Rect`, `/H`, `/Border`,
+- `update` rewrites nothing: it stages the `/Info` change and calls the core
+  incremental writer, so every original byte remains an exact prefix and only
+  the changed objects plus a new cross-reference section are appended. The
+  result is checked with the preservation validator (prefix, `/Prev` chain,
+  page count and page text) before it is written. Sources that already carry a
+  hybrid `/XRefStm` section cannot be walked by that chain check, so for them
+  the command verifies prefix, page count and every page's text directly and
+  prints `xref_chain_verified: false` with the reason; it never claims the chain
+  check passed.- `link add` writes a real `/Link` annotation with `/Rect`, `/H`, `/Border`,
   `/C` and either `/A << /S /URI ... >>` or a `/Dest [page /Fit]` array that
   references the document's page object. `link remove` counts links in
   annotation order, so `--index 0` removes the first link on the page.
