@@ -475,6 +475,21 @@ enum Command {
         /// Write every portfolio file into this directory.
         #[arg(long, value_name = "DIR")]
         extract: Option<PathBuf>,
+        /// Destination for a management edit.
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+        /// Add a file as `LOCAL=IN-PORTFOLIO-NAME`.
+        #[arg(long = "add", value_name = "LOCAL=NAME")]
+        add: Vec<String>,
+        /// Rename or move an entry as `OLD=NEW`.
+        #[arg(long = "rename", value_name = "OLD=NEW")]
+        rename: Vec<String>,
+        /// Set an entry description as `NAME=TEXT`.
+        #[arg(long = "describe", value_name = "NAME=TEXT")]
+        describe: Vec<String>,
+        /// Remove an entry by name.
+        #[arg(long = "remove", value_name = "NAME")]
+        remove: Vec<String>,
     },
     /// Compare two PDFs page by page, side by side.
     ///
@@ -2482,7 +2497,34 @@ fn main() -> anyhow::Result<()> {
             file,
             json,
             extract,
-        } => portfolio::run_portfolio(&file, json, extract.as_deref()),
+            out,
+            add,
+            rename,
+            describe,
+            remove,
+        } => {
+            let managed = out.is_some()
+                || !add.is_empty()
+                || !rename.is_empty()
+                || !describe.is_empty()
+                || !remove.is_empty();
+            if managed {
+                let out = out.context("management requires --out PATH")?;
+                portfolio::manage_portfolio(
+                    &file,
+                    &portfolio::ManageRequest {
+                        out: &out,
+                        add: &add,
+                        rename: &rename,
+                        describe: &describe,
+                        remove: &remove,
+                        json,
+                    },
+                )
+            } else {
+                portfolio::run_portfolio(&file, json, extract.as_deref())
+            }
+        }
         Command::Compare {
             left,
             right,

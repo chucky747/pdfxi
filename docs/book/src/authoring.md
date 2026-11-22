@@ -26,6 +26,7 @@ command.
 | PostScript export (positioned text subset) | `EXPORT-009` | verified | `pdfxi-convert::postscript` + `pdfxi-edit::text_blocks` | `export postscript` |
 | Transparency and blend modes | `STD-005` | verified | `pdfxi-core::transparency` | `transparency inspect` |
 | Cross-file search | `MANAGE-003` | verified | `pdfxi-core` page text + `pdfxi-text` search | `find-files` |
+| PDF Portfolio management | `MANAGE-004` | verified | `pdfxi-convert::portfolio_package` | `portfolio --out` with edit flags |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -48,6 +49,19 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Portfolio management is exposed as:
+
+```text
+pdfxi portfolio <FILE.pdf> --out <OUT.pdf>
+    [--add LOCAL=NAME] [--rename OLD=NEW] [--describe NAME=TEXT]
+    [--remove NAME] [--json]
+```
+
+The command loads every embedded entry and its bytes, applies additions,
+renames/moves, description changes and removals in that order, validates the
+resulting manifest, rebuilds the collection with `build_portfolio_package`, and
+reopens it to compare every embedded stream with the source bytes. Listing and
+`--extract` remain the default when no edit flag is given.
 Cross-file search is exposed as:
 
 ```text

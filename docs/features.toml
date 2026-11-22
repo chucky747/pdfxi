@@ -4358,14 +4358,45 @@ tests = [
 title = "Cross-file search and index"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/portfolio_manage.rs, docs/evidence/app/T-0179.md"
+docs = [
+    "crates/pdfxi-cli/src/portfolio.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0327.md",
+]
 domain = "Document Management"
-evidence = "docs/evidence/app/T-0179.md"
+evidence = "docs/evidence/cli/T-0327.md"
 id = "MANAGE-004"
-notes = "Validated add/remove/rename/move/describe operations with rollback on failure, deterministic serialization and an exact parse round-trip. Host boundary: no management UI; applying the plan to a real embedded-file collection is done through the portfolio package path in pdfxi-convert."
+notes = """
+Verified through `pdfxi portfolio <FILE.pdf> --out OUT.pdf [--add LOCAL=NAME]
+[--rename OLD=NEW] [--describe NAME=TEXT] [--remove NAME] [--json]`.
+
+The host loads every /Names /EmbeddedFiles entry and its bytes through
+portfolio_items + attachment_bytes, applies additions, renames/moves,
+description changes and removals in that order, validates the resulting
+PortfolioManifest, rebuilds the collection with build_portfolio_package while
+preserving each entry's bytes, then reopens the output and checks the count,
+paths and every embedded stream against the source.
+
+Evidence: editing a two-entry portfolio with rename docs/brief.txt to
+docs/renamed.txt, description Renamed brief, adding extra.txt as docs/extra.txt
+and removing docs/notes.txt reports four operations, two entries (extra.txt 11
+bytes, renamed.txt 16 bytes), 1194 bytes and verified true. Listing the result
+shows both entries and the description; extraction writes the renamed brief and
+extra bytes. A missing rename/remove target, an added ../ name, a management
+call without --out and a non-portfolio input all fail with typed errors.
+
+Gates: cargo test -p pdfxi-cli --test cli portfolio_manage = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: collection entries only. The rebuilt package uses the title portfolio and
+does not preserve custom covers, thumbnails, column layouts or the original
+Collection display schema.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::portfolio_manage_renames_describes_adds_and_removes",
+    "cli::portfolio_manage_rejects_bad_requests",
     "portfolio_manage::tests::plan_round_trips_all_operation_kinds",
     "portfolio_manage::tests::parse_rejects_malformed_lines_with_typed_errors",
     "portfolio_manage::tests::describe_updates_entry_and_emits_plan",

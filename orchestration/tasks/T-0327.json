@@ -1,0 +1,19 @@
+{
+  "id": "T-0327",
+  "lane": "convert",
+  "title": "Portfolio management host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0326"],
+  "owns": [
+    "crates/pdfxi-cli/src/portfolio.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0327.md",
+    "orchestration/feature-updates/T-0327.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli portfolio_manage passes; pdfxi portfolio with edit flags renames/describes/adds/removes real entries, rebuilds the package and verifies bytes; MANAGE-004 moves to verified.",
+  "notes": "Loads entries via portfolio_items/attachment_bytes, applies ops, rebuilds with build_portfolio_package and re-verifies.",
+  "evidence": "docs/evidence/cli/T-0327.md"
+}

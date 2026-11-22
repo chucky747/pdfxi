@@ -4606,6 +4606,165 @@ fn script_run_enforces_sandbox_and_budget() {
 }
 
 #[test]
+fn portfolio_manage_renames_describes_adds_and_removes() {
+    let dir = TempDir::new();
+    fs::write(dir.child("brief.txt"), b"Case brief body.").expect("brief");
+    fs::write(dir.child("notes.txt"), b"Hearing notes.").expect("notes");
+    fs::write(dir.child("extra.txt"), b"Extra file.").expect("extra");
+    let manifest = dir.child("manifest.json");
+    fs::write(
+        &manifest,
+        br#"{"title":"Case file","entries":[
+            {"name":"docs/brief.txt","description":"Case brief","order":0,"file":"brief.txt"},
+            {"name":"docs/notes.txt","order":1,"file":"notes.txt"}
+        ]}"#,
+    )
+    .expect("manifest");
+    let source = dir.child("source.pdf");
+    let created = run(&[
+        "create",
+        "portfolio",
+        manifest.to_str().expect("manifest"),
+        "--out",
+        source.to_str().expect("source"),
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    let managed = dir.child("managed.pdf");
+    let edited = run(&[
+        "portfolio",
+        source.to_str().expect("source"),
+        "--out",
+        managed.to_str().expect("managed"),
+        "--rename",
+        "docs/brief.txt=docs/renamed.txt",
+        "--describe",
+        "docs/renamed.txt=Renamed brief",
+        "--add",
+        &format!("{}=docs/extra.txt", dir.child("extra.txt").display()),
+        "--remove",
+        "docs/notes.txt",
+        "--json",
+    ]);
+    assert!(edited.status.success(), "stderr: {}", stderr(&edited));
+    let value: Value = serde_json::from_str(&stdout(&edited)).expect("valid JSON");
+    assert_eq!(value["verified"], true);
+    assert_eq!(value["operations"].as_array().expect("operations").len(), 4);
+    let entries = value["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["path"], "docs/extra.txt");
+    assert_eq!(entries[1]["path"], "docs/renamed.txt");
+    assert_eq!(entries[1]["description"], "Renamed brief");
+
+    let document = pdfxi_core::Document::from_bytes(fs::read(&managed).expect("managed bytes"))
+        .expect("reopen managed");
+    let items = document.portfolio_items().expect("items");
+    assert_eq!(items.len(), 2);
+    let brief = items
+        .iter()
+        .find(|item| item.path == "docs/renamed.txt")
+        .expect("renamed brief");
+    assert_eq!(brief.description.as_deref(), Some("Renamed brief"));
+    assert_eq!(
+        document.attachment_bytes(&brief.key).expect("brief bytes"),
+        b"Case brief body."
+    );
+
+    let extract = dir.child("out");
+    let listed = run(&[
+        "portfolio",
+        managed.to_str().expect("managed"),
+        "--extract",
+        extract.to_str().expect("extract"),
+    ]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    assert_eq!(
+        fs::read(extract.join("docs/extra.txt")).expect("extra"),
+        b"Extra file."
+    );
+    assert!(!extract.join("docs/notes.txt").exists());
+}
+
+#[test]
+fn portfolio_manage_rejects_bad_requests() {
+    let dir = TempDir::new();
+    fs::write(dir.child("brief.txt"), b"Brief.").expect("brief");
+    let manifest = dir.child("manifest.json");
+    fs::write(
+        &manifest,
+        br#"{"title":"T","entries":[{"name":"docs/brief.txt","file":"brief.txt"}]}"#,
+    )
+    .expect("manifest");
+    let source = dir.child("source.pdf");
+    let created = run(&[
+        "create",
+        "portfolio",
+        manifest.to_str().expect("manifest"),
+        "--out",
+        source.to_str().expect("source"),
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    let missing = run(&[
+        "portfolio",
+        source.to_str().expect("source"),
+        "--out",
+        dir.child("x.pdf").to_str().expect("out"),
+        "--rename",
+        "absent.txt=new.txt",
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("no entry"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let unsafe_name = run(&[
+        "portfolio",
+        source.to_str().expect("source"),
+        "--out",
+        dir.child("x.pdf").to_str().expect("out"),
+        "--add",
+        &format!("{}=../escape.txt", dir.child("brief.txt").display()),
+    ]);
+    assert!(!unsafe_name.status.success());
+    assert!(
+        stderr(&unsafe_name).contains("parent component"),
+        "{}",
+        stderr(&unsafe_name)
+    );
+
+    let no_out = run(&[
+        "portfolio",
+        source.to_str().expect("source"),
+        "--rename",
+        "docs/brief.txt=new.txt",
+    ]);
+    assert!(!no_out.status.success());
+    assert!(
+        stderr(&no_out).contains("requires --out"),
+        "{}",
+        stderr(&no_out)
+    );
+
+    let not_portfolio = run(&[
+        "portfolio",
+        create_text_pdf("Not a portfolio.").arg(),
+        "--out",
+        dir.child("x.pdf").to_str().expect("out"),
+        "--remove",
+        "x.txt",
+    ]);
+    assert!(!not_portfolio.status.success());
+    assert!(
+        stderr(&not_portfolio).contains("not a portfolio"),
+        "{}",
+        stderr(&not_portfolio)
+    );
+}
+
+#[test]
 fn office_plan_and_convert_import_to_pdf() {
     let dir = TempDir::new();
     let manifest = dir.path.join("import.json");

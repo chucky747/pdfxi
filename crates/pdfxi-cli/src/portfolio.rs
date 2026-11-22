@@ -13,7 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
+use pdfxi_convert::{PortfolioEntry, PortfolioManifest, build_portfolio_package};
 use pdfxi_core::Document;
 use serde::Serialize;
 
@@ -245,6 +246,185 @@ fn path_components(path: &Path) -> Option<Vec<String>> {
         parts.push(part.to_ascii_lowercase());
     }
     Some(parts)
+}
+
+/// One editable portfolio entry.
+struct ManageEntry {
+    /// In-portfolio path.
+    name: String,
+    /// Optional description.
+    description: String,
+    /// Embedded bytes.
+    bytes: Vec<u8>,
+}
+
+/// One portfolio management request.
+pub(crate) struct ManageRequest<'a> {
+    /// Destination PDF.
+    pub out: &'a Path,
+    /// `LOCAL=NAME` additions.
+    pub add: &'a [String],
+    /// `OLD=NEW` renames/moves.
+    pub rename: &'a [String],
+    /// `NAME=TEXT` descriptions.
+    pub describe: &'a [String],
+    /// Names to remove.
+    pub remove: &'a [String],
+    /// Emit JSON.
+    pub json: bool,
+}
+
+/// Split an `A=B` assignment.
+fn assignment<'a>(text: &'a str, what: &str) -> anyhow::Result<(&'a str, &'a str)> {
+    let (left, right) = text
+        .split_once('=')
+        .with_context(|| format!("{what} {text:?} must be A=B"))?;
+    if left.trim().is_empty() {
+        bail!("{what} {text:?} has an empty name");
+    }
+    Ok((left, right))
+}
+
+/// Load every entry and its bytes from a portfolio PDF.
+fn load_entries(document: &Document) -> anyhow::Result<Vec<ManageEntry>> {
+    let items = document
+        .portfolio_items()
+        .map_err(|error| anyhow::anyhow!("read portfolio files: {error}"))?;
+    let mut entries = Vec::with_capacity(items.len());
+    for item in items {
+        let bytes = document
+            .attachment_bytes(&item.key)
+            .map_err(|error| anyhow::anyhow!("read embedded {}: {error}", item.path))?;
+        entries.push(ManageEntry {
+            name: item.path,
+            description: item.description.unwrap_or_default(),
+            bytes,
+        });
+    }
+    Ok(entries)
+}
+
+/// `pdfxi portfolio --out ... [management flags]`.
+pub(crate) fn manage_portfolio(file: &Path, request: &ManageRequest<'_>) -> anyhow::Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let document = Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    if !document.is_portfolio().unwrap_or(false) {
+        bail!("{} is not a portfolio (no /Collection)", file.display());
+    }
+    let mut entries = load_entries(&document)?;
+    let mut operations: Vec<String> = Vec::new();
+
+    for text in request.add {
+        let (local, name) = assignment(text, "addition")?;
+        let bytes = std::fs::read(local).with_context(|| format!("read addition {local}"))?;
+        entries.push(ManageEntry {
+            name: name.to_owned(),
+            description: String::new(),
+            bytes,
+        });
+        operations.push(format!("add {name}"));
+    }
+    for text in request.rename {
+        let (old, new) = assignment(text, "rename")?;
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.name == old)
+            .with_context(|| format!("portfolio has no entry {old:?}"))?;
+        entry.name = new.to_owned();
+        operations.push(format!("rename {old} -> {new}"));
+    }
+    for text in request.describe {
+        let (name, description) = assignment(text, "description")?;
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.name == name)
+            .with_context(|| format!("portfolio has no entry {name:?}"))?;
+        entry.description = description.to_owned();
+        operations.push(format!("describe {name}"));
+    }
+    for name in request.remove {
+        let position = entries
+            .iter()
+            .position(|entry| entry.name == *name)
+            .with_context(|| format!("portfolio has no entry {name:?}"))?;
+        entries.remove(position);
+        operations.push(format!("remove {name}"));
+    }
+
+    let manifest_entries: Vec<PortfolioEntry> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            PortfolioEntry::new(entry.name.clone(), entry.description.clone(), index)
+        })
+        .collect();
+    let manifest = PortfolioManifest::new("portfolio", manifest_entries);
+    manifest
+        .validate()
+        .map_err(|error| anyhow::anyhow!("portfolio manifest: {error}"))?;
+    let sources: Vec<(&str, Vec<u8>)> = entries
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.bytes.clone()))
+        .collect();
+    let package = build_portfolio_package(&manifest, &sources)
+        .map_err(|error| anyhow::anyhow!("build portfolio: {error}"))?;
+    let saved = package.to_bytes();
+    std::fs::write(request.out, &saved)
+        .with_context(|| format!("write {}", request.out.display()))?;
+
+    let reopened = Document::from_bytes(saved.clone())
+        .map_err(|error| anyhow::anyhow!("reopen {}: {error}", request.out.display()))?;
+    let items = reopened
+        .portfolio_items()
+        .map_err(|error| anyhow::anyhow!("read managed portfolio: {error}"))?;
+    if items.len() != entries.len() {
+        bail!(
+            "wrote {} portfolio item(s) but the manifest has {}",
+            items.len(),
+            entries.len()
+        );
+    }
+    for entry in &entries {
+        let item = items
+            .iter()
+            .find(|item| item.path == entry.name)
+            .with_context(|| format!("managed portfolio lost {}", entry.name))?;
+        let stored = reopened
+            .attachment_bytes(&item.key)
+            .map_err(|error| anyhow::anyhow!("read managed {}: {error}", entry.name))?;
+        if stored != entry.bytes {
+            bail!("managed bytes for {} do not match", entry.name);
+        }
+    }
+
+    let report = serde_json::json!({
+        "file": file.display().to_string(),
+        "out": request.out.display().to_string(),
+        "operations": operations,
+        "entries": items
+            .iter()
+            .map(|item| serde_json::json!({
+                "path": item.path,
+                "description": item.description,
+                "size": item.size,
+            }))
+            .collect::<Vec<_>>(),
+        "bytes": saved.len(),
+        "verified": true,
+    });
+    if request.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("out: {}", request.out.display());
+        println!("operations: {}", operations.len());
+        for operation in &operations {
+            println!("  {operation}");
+        }
+        println!("entries: {}", items.len());
+        println!("verified: true  bytes: {}", saved.len());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
