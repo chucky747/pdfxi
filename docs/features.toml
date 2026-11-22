@@ -953,31 +953,57 @@ title = "Email-to-PDF capture"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/postscript_contract.rs",
-    "crates/pdfxi-convert/src/postscript_ingest.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0174.md",
+    "crates/pdfxi-convert/src/postscript_pdf.rs",
+    "crates/pdfxi-cli/src/create.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0306.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 5 new postscript_contract tests pass, including ps_assembly_plan_counts_supported_text_and_vector_content, ps_assembly_plan_types_unsupported_constructs, ps_assembly_strict_mode_rejects_unsupported_constructs (typed Unsupported kind=curve) and ps_assembly_plan_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
+evidence = "docs/evidence/cli/T-0306.md"
 id = "CREATE-013"
 notes = """
-Library-level gap closed: `pdfxi_convert::postscript_contract` turns the bounded
-DSC reader's output into a deterministic `PsAssemblyPlan`: per-page counts of
-supported text/line/rect/image constructs, an assigned media box, ordinal-
-sorted pages, and a typed `PsUnsupportedConstruct` for every reported finding
-(curve, transform, image, binary data, font metrics, operator, ...). Strict
-mode promotes findings to the reader's typed `PsIngestError::Unsupported`.
+Verified through `pdfxi create postscript <INPUT.ps|eps> <OUTPUT.pdf> [--strict]
+[--json]`.
 
-Honest remaining scope (narrowed): no Turing-complete PostScript interpreter,
-CTM/clipping/color modelling, Bezier approximation, image/font embedding, DSC
-(atend) resolution, %%Include* following, external Distiller/Ghostscript, or
-CLI/UI. Library-level scope is complete for the bounded subset; see the row
-verification policy in `docs/ASSUMPTIONS.md`.
+The command reads real PostScript bytes and calls ingest_postscript (or
+ingest_postscript_strict). A new pdfxi-convert::postscript_pdf writer turns the
+captured PsContent into PDF: standard Type 1 fonts (Helvetica/Bold, Courier,
+Times), Latin-1 literal strings with delimiter escapes, re/f/S rectangles and
+m/l/S lines. Page boxes come from %%BoundingBox, otherwise content extents plus
+a margin; object numbers and number formatting are fixed, so imports are
+byte-identical. The host reopens the output, checks the page count and confirms
+every captured text run extracts from its page.
+
+It reports kind (PS/EPS), pages, declared pages, bounding box, text/line/rect
+counts, unsupported findings (page, kind, token, reason), clean, strict and
+bytes. Unsupported constructs are reported, or rejected with --strict.
+
+Evidence: a one-page PS file with bbox 0 0 300 200, one show, one rectfill and
+one stroked line reports kind PS, pages 1, 1 text/1 line/1 rectangle, clean
+true, verified_pages 1, 1181 bytes; pdfxi info reports 1 page and pdfxi text
+extracts "Hello PostScript"; repeated imports are byte-identical. An EPS body
+reports kind EPS; a two-page file reports pages 2 and verified_pages 2; an arc
+file reports clean false with complex-path/token fill and operator/token arc,
+and --strict fails; a file without %!PS-Adobe fails with the missing-header
+error.
+
+Gates: cargo test -p pdfxi-cli --test cli create_postscript = 2 passed; cargo test
+-p pdfxi-convert postscript_pdf = 4 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: documented text/line/rectangle subset, not an interpreter: curves,
+arbitrary paths, images, transforms, colour spaces, non-standard fonts and DSC
+includes are reported or rejected; no external Distiller/Ghostscript.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::create_postscript_writes_text_and_vector_pdf",
+    "cli::create_postscript_handles_eps_pages_and_unsupported_constructs",
+    "postscript_pdf::tests::numbers_are_trimmed_and_negative_zero_is_normalized",
+    "postscript_pdf::tests::text_escapes_delimiters_and_replaces_non_latin1",
+    "postscript_pdf::tests::writer_emits_text_vector_and_pages",
+    "postscript_pdf::tests::empty_document_and_bad_boxes_are_typed_errors",
     "postscript_contract::tests::ps_assembly_plan_counts_supported_text_and_vector_content",
     "postscript_contract::tests::ps_assembly_plan_types_unsupported_constructs",
     "postscript_contract::tests::ps_assembly_strict_mode_rejects_unsupported_constructs",

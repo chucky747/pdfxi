@@ -1,0 +1,21 @@
+{
+  "id": "T-0306",
+  "lane": "convert",
+  "title": "PostScript ingestion host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0305"],
+  "owns": [
+    "crates/pdfxi-convert/src/postscript_pdf.rs",
+    "crates/pdfxi-convert/src/lib.rs",
+    "crates/pdfxi-cli/src/create.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0306.md",
+    "orchestration/feature-updates/T-0306.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli create_postscript and cargo test -p pdfxi-convert postscript_pdf pass; pdfxi create postscript writes a real PDF from DSC input, reopens and extracts captured text, and reports/rejects unsupported constructs; CREATE-013 moves to verified.",
+  "notes": "Adds the missing PsContent-to-PDF writer (standard Type 1 fonts, text/rect/line content streams, deterministic objects) and exposes ingest_postscript through the CLI.",
+  "evidence": "docs/evidence/cli/T-0306.md"
+}

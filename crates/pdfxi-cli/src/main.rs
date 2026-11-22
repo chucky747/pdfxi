@@ -1383,6 +1383,23 @@ enum CreateCommand {
         #[arg(long)]
         markdown: bool,
     },
+    /// Create a PDF from the supported PostScript or EPS subset.
+    ///
+    /// DSC headers and a bounded text/line/rectangle operator subset are
+    /// ingested. Constructs outside that subset are reported (or rejected with
+    /// `--strict`) rather than guessed; this is not a PostScript interpreter.
+    Postscript {
+        /// Path to the PostScript or EPS source.
+        input: PathBuf,
+        /// Destination path for the generated PDF.
+        output: PathBuf,
+        /// Reject any construct outside the supported subset.
+        #[arg(long)]
+        strict: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Operations on the `pdfxi export` command group.
@@ -2346,6 +2363,12 @@ fn main() -> anyhow::Result<()> {
                 },
                 markdown,
             ),
+            CreateCommand::Postscript {
+                input,
+                output,
+                strict,
+                json,
+            } => create::create_postscript(&input, &output, strict, json),
         },
         Command::Export { command } => match command {
             ExportCommand::Tagged {

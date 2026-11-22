@@ -3540,6 +3540,146 @@ fn font_add_text_handles_an_authoring_page_and_alignment() {
 }
 
 #[test]
+fn create_postscript_writes_text_and_vector_pdf() {
+    let source = TempPath::new("ps");
+    source.write(
+        b"%!PS-Adobe-3.0\n%%BoundingBox: 0 0 300 200\n%%Pages: 1\n%%Page: 1 1\n/F1 findfont 18 scalefont setfont\n20 150 moveto (Hello PostScript) show\n10 10 100 40 rectfill\n5 5 moveto 150 5 lineto 2 setlinewidth stroke\nshowpage\n%%Trailer\n",
+    );
+    let out = TempOut::new("pdf");
+    let created = run(&["create", "postscript", source.arg(), out.arg(), "--json"]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["kind"], "PS");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["declared_pages"], 1);
+    assert_eq!(value["bounding_box"], serde_json::json!([0, 0, 300, 200]));
+    assert_eq!(value["text_runs"], 1);
+    assert_eq!(value["lines"], 1);
+    assert_eq!(value["rectangles"], 1);
+    assert_eq!(
+        value["unsupported"].as_array().expect("unsupported").len(),
+        0
+    );
+    assert_eq!(value["clean"], true);
+    assert_eq!(value["verified_pages"], 1);
+
+    let info = run(&["info", out.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+    let text = run(&["text", out.arg()]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    assert!(
+        stdout(&text).contains("Hello PostScript"),
+        "{}",
+        stdout(&text)
+    );
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&["create", "postscript", source.arg(), again.arg()]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        fs::read(&out.path).expect("first"),
+        fs::read(&again.path).expect("second"),
+        "PostScript import is deterministic"
+    );
+    assert_ne!(
+        fs::read(&source.path).expect("source"),
+        fs::read(&out.path).expect("output")
+    );
+}
+
+#[test]
+fn create_postscript_handles_eps_pages_and_unsupported_constructs() {
+    let eps = TempPath::new("eps");
+    eps.write(
+        b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 200 100\n/Helvetica findfont 12 scalefont setfont\n10 40 moveto (EPS body) show\n",
+    );
+    let eps_out = TempOut::new("pdf");
+    let created = run(&["create", "postscript", eps.arg(), eps_out.arg(), "--json"]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["kind"], "EPS");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["text_runs"], 1);
+    let text = run(&["text", eps_out.arg()]);
+    assert!(stdout(&text).contains("EPS body"), "{}", stdout(&text));
+
+    let multipage = TempPath::new("ps");
+    multipage.write(
+        b"%!PS-Adobe-3.0\n%%BoundingBox: 0 0 200 100\n%%Pages: 2\n%%Page: one 1\n/Courier findfont 10 scalefont setfont\n10 50 moveto (first page) show\nshowpage\n%%Page: two 2\n10 50 moveto (second page) show\nshowpage\n%%Trailer\n",
+    );
+    let multi_out = TempOut::new("pdf");
+    let created = run(&[
+        "create",
+        "postscript",
+        multipage.arg(),
+        multi_out.arg(),
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["pages"], 2);
+    assert_eq!(value["declared_pages"], 2);
+    assert_eq!(value["verified_pages"], 2);
+    let info = run(&["info", multi_out.arg()]);
+    assert!(stdout(&info).contains("pages: 2"), "{}", stdout(&info));
+
+    let bad = TempPath::new("ps");
+    bad.write(
+        b"%!PS-Adobe-3.0\n%%BoundingBox: 0 0 100 100\nnewpath 10 10 moveto 50 50 80 10 0 360 arc fill\nshowpage\n",
+    );
+    let bad_out = TempOut::new("pdf");
+    let reported = run(&["create", "postscript", bad.arg(), bad_out.arg(), "--json"]);
+    assert!(reported.status.success(), "stderr: {}", stderr(&reported));
+    let value: Value = serde_json::from_str(&stdout(&reported)).expect("valid JSON");
+    assert_eq!(value["clean"], false);
+    let unsupported = value["unsupported"].as_array().expect("unsupported");
+    assert!(!unsupported.is_empty());
+    assert!(
+        unsupported.iter().any(|finding| finding["token"] == "arc"),
+        "{}",
+        stdout(&reported)
+    );
+
+    let strict = run(&[
+        "create",
+        "postscript",
+        bad.arg(),
+        TempOut::new("pdf").arg(),
+        "--strict",
+    ]);
+    assert!(!strict.status.success());
+    assert!(
+        stderr(&strict).contains("unsupported PostScript construct"),
+        "{}",
+        stderr(&strict)
+    );
+
+    let malformed = TempPath::new("ps");
+    malformed.write(b"not postscript");
+    let failed = run(&[
+        "create",
+        "postscript",
+        malformed.arg(),
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!failed.status.success());
+    assert!(
+        stderr(&failed).contains("missing %!PS-Adobe DSC header"),
+        "{}",
+        stderr(&failed)
+    );
+
+    let missing = run(&[
+        "create",
+        "postscript",
+        TempPath::new("ps").arg(),
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!missing.status.success());
+}
+
+#[test]
 fn form_distribute_exports_a_round_tripping_bundle() {
     let form = TempOut::new("pdf");
     let created = run(&[

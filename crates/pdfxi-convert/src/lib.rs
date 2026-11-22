@@ -231,6 +231,7 @@ pub mod portfolio_package;
 pub mod postscript;
 pub mod postscript_contract;
 pub mod postscript_ingest;
+pub mod postscript_pdf;
 pub mod preflight;
 pub mod print_capture;
 pub mod print_job;
@@ -369,6 +370,7 @@ pub use postscript_ingest::{
     PsUnsupportedFinding, ingest_postscript, ingest_postscript_str, ingest_postscript_strict,
     ingest_postscript_with_options,
 };
+pub use postscript_pdf::{PsPdfError, PsPdfOptions, write_postscript_pdf};
 pub use preflight::{
     BytePreflightError, BytePreflightReport, PreflightOptions, PreflightReport,
     REPORTED_ONLY_CHECKS, build_preflight_input, preflight_bytes,

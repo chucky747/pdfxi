@@ -12,6 +12,7 @@ command.
 |---|---|---|---|---|
 | Plain text and a documented Markdown subset | `CREATE-004` | verified | `pdfxi-convert::create` | `create text` |
 | PNG and JPEG images | `CREATE-003` | verified | `pdfxi-convert::create` | `create image` |
+| PostScript and EPS (bounded subset) | `CREATE-013` | verified | `pdfxi-convert::postscript_ingest` + `postscript_pdf` | `create postscript` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
 | Local HTML and a CSS subset | `CREATE-005` | verified | `pdfxi-convert::create::html` | — |
 | Office, scan, portfolios | `CREATE-006`–`CREATE-010` | planned | — | — |
@@ -32,6 +33,19 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+PostScript import is exposed as:
+
+```text
+pdfxi create postscript <INPUT.ps|eps> <OUTPUT.pdf> [--strict] [--json]
+```
+
+The DSC header (`%%BoundingBox`, `%%Pages`, `%%Page`) and a bounded text, line
+and axis-aligned rectangle subset are ingested and written as a real PDF with
+standard Type 1 fonts. Constructs outside that subset (arcs, arbitrary paths,
+images, transforms, unknown operators) are reported per page instead of being
+guessed; `--strict` turns any finding into a typed error. The command reopens
+its output, checks the page count and confirms every captured text run extracts.
+This is not a PostScript interpreter.
 Both accept `--page-size letter|a4`, `--margin <PT>`, `--font-size <PT>` and
 `--line-height <FACTOR>`; `create text` also accepts `--markdown` to force the
 Markdown parser regardless of extension. Output is deterministic — the same
