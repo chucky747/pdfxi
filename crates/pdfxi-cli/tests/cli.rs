@@ -2515,6 +2515,237 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// flatten: bake annotation appearances into content (T-0357)
+// ---------------------------------------------------------------------------
+
+/// A one-page fixture with a Square annotation (real `/AP /N` appearance) and a
+/// link annotation. `acroform` optionally adds the widget form.
+fn t0357_annotated_pdf() -> Vec<u8> {
+    let appearance = "1 0 0 RG 2 w 0 0 m 200 100 l S";
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Contents 6 0 R /Annots [4 0 R 7 0 R] >>"
+                .to_owned(),
+            "<< /Type /Annot /Subtype /Square /Rect [100 100 300 200] \
+             /AP << /N 5 0 R >> >>"
+                .to_owned(),
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Length {} >>\nstream\n{}\nendstream",
+                appearance.len(),
+                appearance
+            ),
+            "<< /Length 3 >>\nstream\nq Q\nendstream".to_owned(),
+            "<< /Type /Annot /Subtype /Link /Rect [10 10 100 100] \
+             /A << /S /URI /URI (https://example.com) >> >>"
+                .to_owned(),
+        ],
+    )
+}
+
+/// A one-page fixture whose only annotation is an AcroForm widget with a normal
+/// appearance and a catalog `/AcroForm`.
+fn t0357_widget_pdf() -> Vec<u8> {
+    let appearance = "0 1 0 RG 1 w 0 0 200 30 re S";
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Contents 6 0 R /Annots [4 0 R] >>"
+                .to_owned(),
+            "<< /Type /Annot /Subtype /Widget /T (Name) /Rect [100 100 300 130] \
+             /AP << /N 5 0 R >> >>"
+                .to_owned(),
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 200 30] /Length {} >>\nstream\n{}\nendstream",
+                appearance.len(),
+                appearance
+            ),
+            "<< /Length 3 >>\nstream\nq Q\nendstream".to_owned(),
+        ],
+    )
+}
+
+/// Page dictionary of the first page of a PDF.
+fn first_page_dictionary(bytes: &[u8]) -> (pdfxi_core::Document, pdfxi_core::Dictionary) {
+    let document = pdfxi_core::Document::from_bytes(bytes.to_vec()).expect("reparse");
+    let page = document.page(0).expect("page 0");
+    let dictionary = document
+        .object(page.id)
+        .expect("page object")
+        .as_dictionary()
+        .cloned()
+        .expect("page dictionary");
+    (document, dictionary)
+}
+
+#[test]
+fn flatten_bakes_appearances_and_keeps_links() {
+    let pdf = TempPdf::new(&t0357_annotated_pdf());
+    let out = TempDir::new();
+    let flat = out.child("flat.pdf");
+    let output = run(&[
+        "flatten",
+        pdf.arg(),
+        "--out",
+        flat.to_str().expect("out"),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("flatten JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["flattened"], 1);
+    assert_eq!(value["widgets"], 0);
+    assert_eq!(value["skipped"], 0);
+    assert_eq!(value["acroform_removed"], false);
+    assert_eq!(value["dry_run"], false);
+    assert_eq!(value["resources"][0]["name"], "XiFm0");
+    let kinds: Vec<&str> = value["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(kinds, ["flattened", "kept-link"]);
+
+    let bytes = fs::read(&flat).expect("read flattened PDF");
+    let (document, dictionary) = first_page_dictionary(&bytes);
+    let annots = dictionary
+        .get("Annots")
+        .and_then(pdfxi_core::Object::as_array)
+        .map(<[_]>::len)
+        .unwrap_or(0);
+    assert_eq!(annots, 1, "only the link must remain interactive");
+    let content = document.page_content(0).expect("page content");
+    let content = String::from_utf8_lossy(&content);
+    assert!(content.contains("/XiFm0 Do"), "content: {content}");
+    let resources = dictionary
+        .get("Resources")
+        .and_then(pdfxi_core::Object::as_reference)
+        .and_then(|id| document.object(id).ok())
+        .and_then(|object| object.as_dictionary().cloned())
+        .expect("page resources");
+    let xobjects = resources
+        .get("XObject")
+        .and_then(pdfxi_core::Object::as_dictionary)
+        .cloned()
+        .expect("XObject dictionary");
+    let form = xobjects
+        .get("XiFm0")
+        .and_then(pdfxi_core::Object::as_reference)
+        .and_then(|id| document.object(id).ok())
+        .expect("form XObject");
+    match form {
+        pdfxi_core::Object::Stream { dictionary, data } => {
+            assert_eq!(
+                dictionary.get("Subtype").and_then(|v| v.as_name()),
+                Some("Form")
+            );
+            assert_eq!(data, b"1 0 0 RG 2 w 0 0 m 200 100 l S");
+        }
+        other => panic!("expected a stream, got {other:?}"),
+    }
+
+    // A dry run reports the same work without writing anything.
+    let dry = out.child("dry.pdf");
+    let output = run(&[
+        "flatten",
+        pdf.arg(),
+        "--out",
+        dry.to_str().expect("dry out"),
+        "--dry-run",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("dry JSON");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["flattened"], 1);
+    assert_eq!(value["out"], Value::Null);
+    assert!(!dry.exists(), "a dry run must not write a file");
+}
+
+#[test]
+fn flatten_removes_the_acroform_when_no_widget_survives() {
+    let pdf = TempPdf::new(&t0357_widget_pdf());
+    let out = TempDir::new();
+    let flat = out.child("widget.pdf");
+    let output = run(&[
+        "flatten",
+        pdf.arg(),
+        "--out",
+        flat.to_str().expect("out"),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("flatten JSON");
+    assert_eq!(value["flattened"], 1);
+    assert_eq!(value["widgets"], 1);
+    assert_eq!(value["acroform_removed"], true);
+    assert_eq!(value["events"][0]["field_name"], "Name");
+
+    let bytes = fs::read(&flat).expect("read flattened PDF");
+    let (document, dictionary) = first_page_dictionary(&bytes);
+    assert!(
+        !dictionary.contains_key("Annots"),
+        "the widget must be removed"
+    );
+    let catalog = document
+        .root()
+        .and_then(|id| document.object(id))
+        .expect("catalog")
+        .as_dictionary()
+        .cloned()
+        .expect("catalog dictionary");
+    assert!(
+        !catalog.contains_key("AcroForm"),
+        "the AcroForm must be removed"
+    );
+}
+
+#[test]
+fn flatten_rejects_bad_pages_and_inputs() {
+    let pdf = TempPdf::new(&t0357_annotated_pdf());
+    let out = TempDir::new();
+    let out_arg = out.child("out.pdf");
+    let out_arg = out_arg.to_str().expect("out");
+    for (args, needle) in [
+        (vec!["--page", "0"], "one-based"),
+        (vec!["--page", "2"], "outside 1..=1"),
+        (vec!["--page", "1", "--page", "1"], "more than once"),
+    ] {
+        let mut command = vec!["flatten", pdf.arg(), "--out", out_arg];
+        command.extend(args.iter().copied());
+        let output = run(&command);
+        assert!(!output.status.success(), "args: {args:?}");
+        assert!(
+            stderr(&output).contains(needle),
+            "{needle}: {}",
+            stderr(&output)
+        );
+    }
+
+    let missing = TempDir::new().child("absent.pdf");
+    let output = run(&[
+        "flatten",
+        missing.to_str().expect("missing"),
+        "--out",
+        out_arg,
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("read"), "{}", stderr(&output));
+
+    let bad = TempPdf::new(b"not a pdf");
+    let output = run(&["flatten", bad.arg(), "--out", out_arg]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("parse"), "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
 // timestamp: RFC 3161 token mint and validation (T-0356)
 // ---------------------------------------------------------------------------
 

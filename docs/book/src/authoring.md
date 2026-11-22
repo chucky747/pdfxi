@@ -20,6 +20,7 @@ command.
 | Watched-folder conversion | `CREATE-014` | verified | `pdfxi-automation::watched` + `pdfxi-convert` adapters | `watch` |
 | Static form-field recognition | `FORMS-005` | verified | `pdfxi-forms::recognition` | `form recognize` |
 | Font size/spacing/colour restyle | `EDIT-002` | verified | `pdfxi-edit::restyle_run_text` | `restyle` |
+| Flatten annotations and form fields | `EDIT-012` | verified | `pdfxi-edit::flatten` + real `/AP` streams | `flatten` |
 | Action Wizard create/edit/import/export | `AUTO-001` | verified | `pdfxi-automation::action_document` + real action operations | `action create` / `action run --execute` |
 | Batch processing and command sequences | `AUTO-002` | verified | `pdfxi-automation::sequence_batch` + sandboxed scripts | `action sequence` |
 | Alt text and table editor | `ACCESS-002` | verified | tagged structure `/XI_NodeId` entries | `accessibility alt` / `accessibility table` |
@@ -210,6 +211,22 @@ succeeded item is written to `<stem>.sequence.pdf` (or beneath `--out-dir`),
 read back and reparsed. The report gives the state, completed steps, failure,
 output path, size and page count per item; the command exits non-zero if any
 item failed.
+
+Annotation and widget appearances are flattened as:
+
+```text
+pdfxi flatten FILE.pdf --out OUT.pdf [--page N] [--keep-widgets-without-appearance]
+    [--drop-links] [--dry-run] [--json]
+```
+
+Each annotation's real `/AP /N` stream is decoded and its appearance bytes are
+materialized as a form XObject under the page's `/Resources /XObject`; the model
+appends the placement matrix and `Do` to the page `/Contents` and removes the
+flattened entry from `/Annots`. Links are preserved by default (`--drop-links`
+flattens them too), widgets without an appearance are removed unless
+`--keep-widgets-without-appearance` is set, and the catalog `/AcroForm` is
+removed when no widget survives. The written PDF is reopened and the emitted
+resources are verified. `--dry-run` reports the same plan without writing.
 
 Text restyling is exposed as:
 

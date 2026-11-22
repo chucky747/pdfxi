@@ -1717,18 +1717,67 @@ tests = [
 title = "Bookmarks links and attachments editing"
 
 [[feature]]
-docs = "crates/pdfxi-edit/src/flatten.rs, docs/evidence/author/T-0085.md"
+docs = [
+    "crates/pdfxi-edit/src/flatten.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-cli/src/flatten.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/author/T-0085.md",
+    "docs/evidence/author/T-0357.md",
+]
 domain = "Edit"
-evidence = "docs/evidence/author/T-0085.md"
+evidence = "docs/evidence/author/T-0357.md"
 id = "EDIT-012"
-notes = "Headless flatten backend; /Rotate applied by the viewer only, AcroForm kept when untouched widgets remain."
+notes = """
+T-0085 delivered the headless flatten model: page dictionaries, content and
+appearance bytes in, flattened content plus filtered dictionaries out, with
+/Rotate validated but not baked into placement (the viewer rotates the whole
+page), AcroForm retained whenever an untargeted page still has a widget,
+deterministic output and cancellation. Its note recorded that the model has no
+PDF object store: materializing appearance XObjects and writing the result back
+was a downstream-writer boundary.
+
+T-0357 supplies the writer and host. `pdfxi flatten FILE.pdf --out OUT.pdf
+[--page N] [--keep-widgets-without-appearance] [--drop-links] [--dry-run]
+[--json]` resolves every page /Annots entry, decodes each /AP /N stream
+(unfiltered or FlateDecode; any other filter is a typed error), and projects the
+annotation into the model's dependency-free Dict/Value form with /AP /N replaced
+by a side-table name. After the model runs, the host writes the page /Contents
+as the flattened stream, materializes every emitted appearance as a real form
+XObject under a fresh page /Resources /XObject (preserving the source stream
+dictionary so /Group, /SMask and /Resources survive), removes flattened entries
+from /Annots while retaining original objects for kept links and skipped
+entries, and removes the catalog /AcroForm when the report says no widget
+survives. The written file is reopened: page count is checked and every emitted
+resource must exist in the page /XObject dictionary. --dry-run reports the same
+plan without writing.
+
+Evidence: a one-page fixture with a Square annotation (real /AP /N form stream)
+and a link flattens to 1 annotation (the link) with page content
+`q 1 0 0 1 100 100 cm /XiFm0 Do Q` and a form XObject whose stream bytes equal
+the appearance (30 bytes); a widget fixture with /T (Name) and a catalog
+/AcroForm reports widgets=1 and acroform-removed=true and the rewritten PDF has
+no /Annots and no /AcroForm; the dry run writes nothing. Page 0, an
+out-of-range page, duplicate pages, missing files, non-PDFs and unsupported
+appearance filters are typed rejections.
+
+Gates: CLI flatten_ tests 3 passed; whole workspace fmt/clippy/tests green.
+
+Scope: real appearances are baked into content on real documents. Interactive
+annotation editing, generating appearances for annotations without /AP and
+/Rotate-baked placement are not claimed.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "flatten::tests::text_annotation_flatten_appends_placement_and_removes_entry",
     "flatten::tests::page_rotate_does_not_change_placement_and_appearance_maps_into_rect",
     "flatten::tests::acroform_is_kept_when_an_untargeted_page_still_has_a_widget",
     "flatten::tests::output_is_deterministic_across_runs",
+    "cli::flatten_bakes_appearances_and_keeps_links",
+    "cli::flatten_removes_the_acroform_when_no_widget_survives",
+    "cli::flatten_rejects_bad_pages_and_inputs",
 ]
 title = "Flatten annotations and form fields"
 

@@ -195,6 +195,8 @@ mod update;
 /// `pdfxi versions`: store page-text snapshots and diff revisions.
 mod versions;
 // Optional-content layers (`layers`).
+/// `pdfxi flatten`: bake annotation appearances into page content.
+mod flatten;
 mod layers;
 mod repair;
 /// `pdfxi action sequence`: run Action Wizard steps over real documents.
@@ -475,6 +477,33 @@ enum Command {
         /// Timestamp action.
         #[command(subcommand)]
         command: TimestampCommand,
+    },
+    /// Flatten annotation and widget appearances into page content.
+    ///
+    /// Every `/AP /N` appearance is materialized as a form XObject, appended to
+    /// the page content and removed from `/Annots`. Links are preserved by
+    /// default. The written PDF is reopened and checked.
+    Flatten {
+        /// Source PDF.
+        file: PathBuf,
+        /// Where to write the flattened PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// One-based page to flatten; repeatable (default: every page).
+        #[arg(long, value_name = "N")]
+        page: Vec<usize>,
+        /// Keep widgets that have no usable normal appearance.
+        #[arg(long)]
+        keep_widgets_without_appearance: bool,
+        /// Flatten link annotations too instead of preserving them.
+        #[arg(long)]
+        drop_links: bool,
+        /// Report what would happen without writing a file.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Inspect, catalogue, list or remove local digital IDs.
     Id {
@@ -3762,6 +3791,23 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Flatten {
+            file,
+            out,
+            page,
+            keep_widgets_without_appearance,
+            drop_links,
+            dry_run,
+            json,
+        } => flatten::flatten_document(
+            &file,
+            &out,
+            &page,
+            keep_widgets_without_appearance,
+            drop_links,
+            dry_run,
+            json,
+        ),
         Command::Timestamp { command } => match command {
             TimestampCommand::Sign {
                 content,

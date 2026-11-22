@@ -1,0 +1,19 @@
+{
+  "id": "T-0357",
+  "lane": "author",
+  "title": "Flatten host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0356"],
+  "owns": [
+    "crates/pdfxi-cli/src/flatten.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/author/T-0357.md",
+    "orchestration/feature-updates/T-0357.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli flatten_ passes; pdfxi flatten decodes real /AP /N streams, drives pdfxi_edit::flatten, materializes form XObjects, rewrites /Annots and /AcroForm, reopens and verifies the output, and supports a dry run; EDIT-012 moves to verified.",
+  "notes": "Downstream writer for the headless flatten model. Interactive editing, appearance generation and /Rotate-baked placement remain out of scope.",
+  "evidence": "docs/evidence/author/T-0357.md"
+}
