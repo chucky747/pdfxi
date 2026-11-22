@@ -2441,6 +2441,16 @@ fn root_fixture(name: &str) -> PathBuf {
     path
 }
 
+/// Every non-empty line the `text` command prints, one line per page here.
+fn all_page_texts(path: &Path) -> Vec<String> {
+    let output = run(&["text", path.to_str().expect("utf-8 path")]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    stdout(&output)
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+}
+
 /// Extract the page texts from a PDF through the CLI and return them in order.
 fn page_texts(path: &Path) -> Vec<String> {
     let output = run(&["text", path.to_str().expect("utf-8 path")]);
@@ -2750,6 +2760,128 @@ fn attachments_report_an_embedded_file() {
     assert!(text.contains("name: notes.txt"), "{text}");
     assert!(text.contains("size: 5"), "{text}");
     assert!(text.contains("description: Sample notes"), "{text}");
+}
+
+#[test]
+fn decorate_bates_numbers_every_page() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "decorate",
+        "bates",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--prefix",
+        "EX-",
+        "--digits",
+        "6",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("stamped: 3"), "{text}");
+    assert!(text.contains("numbers: EX-000001 .. EX-000003"), "{text}");
+
+    let pages = page_texts(&out.path);
+    assert_eq!(pages.len(), 3);
+    for (index, page) in pages.iter().enumerate() {
+        assert!(
+            page.contains(&format!("EX-{:06}", index + 1)),
+            "page {}: {page}",
+            index + 1
+        );
+    }
+    assert!(pages[0].contains("Lantern"), "original text is kept");
+}
+
+#[test]
+fn decorate_bates_honours_start_increment_and_suffix() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "decorate",
+        "bates",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--prefix",
+        "B-",
+        "--suffix=-A",
+        "--start",
+        "10",
+        "--digits",
+        "4",
+        "--increment",
+        "5",
+        "--corner",
+        "top-left",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert_eq!(value["stamped"], 3);
+    assert_eq!(value["first"], "B-0010-A");
+    assert_eq!(value["last"], "B-0020-A");
+    assert_eq!(value["increment"], 5);
+    assert_eq!(value["digits"], 4);
+
+    let pages = page_texts(&out.path);
+    assert!(pages[0].contains("B-0010-A"), "{:?}", pages[0]);
+    assert!(pages[1].contains("B-0015-A"), "{:?}", pages[1]);
+    assert!(pages[2].contains("B-0020-A"), "{:?}", pages[2]);
+}
+
+#[test]
+fn decorate_bates_places_number_on_a_rotated_page() {
+    let source = authoring_fixture("authoring-rotation.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "decorate",
+        "bates",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--prefix",
+        "R-",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let pages = all_page_texts(&out.path);
+    assert_eq!(pages.len(), 3);
+    assert!(pages[0].contains("Rotated page one"), "{:?}", pages[0]);
+    assert!(pages[0].contains("R-000001"), "{:?}", pages[0]);
+    assert!(pages[2].contains("R-000003"), "{:?}", pages[2]);
+}
+
+#[test]
+fn decorate_bates_rejects_invalid_configuration() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let bad_digits = run(&[
+        "decorate",
+        "bates",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--digits",
+        "0",
+    ]);
+    assert!(!bad_digits.status.success(), "zero digits must fail");
+    assert!(
+        !stderr(&bad_digits).is_empty() || !stdout(&bad_digits).is_empty(),
+        "the failure must explain itself"
+    );
+
+    let bad_start = run(&[
+        "decorate",
+        "bates",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--start",
+        "0",
+    ]);
+    assert!(!bad_start.status.success(), "start 0 must fail");
 }
 
 #[test]

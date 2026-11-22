@@ -29,6 +29,7 @@ pdfxi <COMMAND> --help
 | `optimize <FILE> --out PATH [--remove-metadata] [--remove-optional] [--no-compress] [--json]` | Compact the object graph and report | verified (`EDIT-014`) |
 | `decorate header-footer <FILE> --out PATH [--header TEXT] [--footer TEXT] [--side left\|center\|right] [--json]` | Stamp headers and footers | verified (`EDIT-008`) |
 | `decorate watermark <FILE> --out PATH --text TEXT [--opacity F] [--rotation D] [--tile] [--json]` | Stamp a text watermark | verified (`EDIT-009`) |
+| `decorate bates <FILE> --out PATH [--prefix TEXT] [--start N] [--digits N] [--increment N] [--corner C] [--json]` | Stamp sequential Bates numbers | verified (`EDIT-010`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -73,6 +74,11 @@ Commands are integration-tested by invoking the real binary; see
   are merged into a copy of each page's resources under names the page does not
   already use. Placeholders are `{page}`, `{pages}`, `{date}`, `{title}` and
   `{filename}`; an unknown placeholder is an error.
+- `decorate bates` numbers pages in ascending order, starting at `--start`
+  (at least 1) with `--increment` per page, zero-padded to `--digits`. The stamp
+  is drawn through the same display-to-page transform as headers, so a rotated
+  page gets an upright number in the requested corner. Quote or escape a prefix
+  or suffix that begins with `-` (`--suffix=-A`).
 
 Exit codes:
 
@@ -105,6 +111,7 @@ pdfxi read-aloud .\fixtures\realworld\powerpoint-slides.pdf --wpm 150 --seek 1 -
 pdfxi optimize .\fixtures\realworld\powerpoint-slides.pdf --out .\optimized.pdf
 pdfxi decorate header-footer .\fixtures\realworld\powerpoint-slides.pdf --out .\paged.pdf --footer "Page {page} of {pages}"
 pdfxi decorate watermark .\fixtures\realworld\powerpoint-slides.pdf --out .\draft.pdf --text DRAFT --opacity 0.2
+pdfxi decorate bates .\fixtures\realworld\powerpoint-slides.pdf --out .\exhibits.pdf --prefix "EX-" --digits 6
 ```
 
 See [Automation](automation.md) for the action-file format and the staging-only

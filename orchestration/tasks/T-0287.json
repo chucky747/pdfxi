@@ -1,0 +1,19 @@
+{
+  "id": "T-0287",
+  "lane": "core",
+  "title": "Bates numbering through pdfxi decorate bates",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0286"],
+  "owns": [
+    "crates/pdfxi-cli/src/decorate.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0287.md",
+    "orchestration/feature-updates/T-0287.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli passes; pdfxi decorate bates numbers every page from a real plan, honours start/increment/digits/suffix, places an upright number on a rotated page and rejects invalid configuration; EDIT-010 moves to verified.",
+  "notes": "Host for build_bates_plan: renders each BatesStamp text at its position through transform_for_page, stamps all pages with PageOperation::StampPages, and reports first/last number.",
+  "evidence": "docs/evidence/cli/T-0287.md"
+}

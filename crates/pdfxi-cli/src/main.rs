@@ -604,6 +604,41 @@ enum DecorateCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Stamp a sequential Bates number on every page.
+    Bates {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the decorated document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Number prefix.
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
+        prefix: String,
+        /// Number suffix.
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
+        suffix: String,
+        /// First number (must not be zero).
+        #[arg(long, default_value_t = 1)]
+        start: u64,
+        /// Zero-padded digit width (1-20).
+        #[arg(long, default_value_t = 6)]
+        digits: usize,
+        /// Per-page increment.
+        #[arg(long, default_value_t = 1)]
+        increment: u64,
+        /// Corner the number is anchored to.
+        #[arg(long, value_enum, default_value_t = decorate::BatesCorner::BottomRight)]
+        corner: decorate::BatesCorner,
+        /// Font size in points (4-200).
+        #[arg(long, default_value_t = 10.0)]
+        font_size: f32,
+        /// Page margin in points.
+        #[arg(long, default_value_t = 36.0)]
+        margin: f32,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Operations on the `pdfxi create` command group.
@@ -1070,6 +1105,33 @@ fn main() -> anyhow::Result<()> {
                     opacity,
                     rotation,
                     tile,
+                    json,
+                },
+            ),
+            DecorateCommand::Bates {
+                file,
+                out,
+                prefix,
+                suffix,
+                start,
+                digits,
+                increment,
+                corner,
+                font_size,
+                margin,
+                json,
+            } => decorate::run_bates(
+                &file,
+                &out,
+                &decorate::BatesRequest {
+                    prefix: &prefix,
+                    suffix: &suffix,
+                    start,
+                    digits,
+                    increment,
+                    corner,
+                    font_size,
+                    margin,
                     json,
                 },
             ),

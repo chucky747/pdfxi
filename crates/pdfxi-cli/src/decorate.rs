@@ -16,9 +16,11 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use pdfxi_core::{Document, PageOperation, PagePlan, StampOverlay};
 use pdfxi_edit::{
+    BatesAnchor, BatesColor, BatesConfig, BatesMargins, BatesPageBounds, BatesStyle,
     HeaderFooterLayout, Margins, MarkContent, PageGeometry, PageIndex, PageSetContext, Placement,
     Rect, Slot, SlotContent, StandardFont, TextColor, TextStyle, Token, Watermark,
-    WatermarkPosition, WatermarkStyle, render_watermark_page_set,
+    WatermarkPosition, WatermarkStyle, build_bates_plan, escape_literal, render_watermark_page_set,
+    transform_for_page,
 };
 use serde::Serialize;
 
@@ -250,7 +252,228 @@ fn parse_tokens(template: &str) -> anyhow::Result<Vec<Token>> {
     Ok(tokens)
 }
 
-/// Stamp a text watermark on every page.
+/// Which corner or edge the Bates number is anchored to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BatesCorner {
+    /// Lower-right corner (the conventional position).
+    BottomRight,
+    /// Bottom centre.
+    BottomCenter,
+    /// Lower-left corner.
+    BottomLeft,
+    /// Upper-right corner.
+    TopRight,
+    /// Top centre.
+    TopCenter,
+    /// Upper-left corner.
+    TopLeft,
+}
+
+impl BatesCorner {
+    /// The model anchor for this corner.
+    fn anchor(self) -> BatesAnchor {
+        match self {
+            Self::BottomRight => BatesAnchor::BottomRight,
+            Self::BottomCenter => BatesAnchor::BottomCenter,
+            Self::BottomLeft => BatesAnchor::BottomLeft,
+            Self::TopRight => BatesAnchor::TopRight,
+            Self::TopCenter => BatesAnchor::TopCenter,
+            Self::TopLeft => BatesAnchor::TopLeft,
+        }
+    }
+}
+
+/// One `decorate bates` request.
+pub(crate) struct BatesRequest<'a> {
+    /// Number prefix.
+    pub prefix: &'a str,
+    /// Number suffix.
+    pub suffix: &'a str,
+    /// First number.
+    pub start: u64,
+    /// Zero-padded digit width.
+    pub digits: usize,
+    /// Per-page increment.
+    pub increment: u64,
+    /// Anchor corner.
+    pub corner: BatesCorner,
+    /// Font size in points.
+    pub font_size: f32,
+    /// Page margin in points.
+    pub margin: f32,
+    /// Emit JSON.
+    pub json: bool,
+}
+
+/// Stamp a Bates number on every page.
+///
+/// The plan comes from `pdfxi-edit`'s Bates model; the text is drawn through
+/// the same display-to-page transform the header/footer renderer uses, so a
+/// rotated page receives upright, correctly placed numbers.
+pub(crate) fn run_bates(file: &Path, out: &Path, request: &BatesRequest<'_>) -> anyhow::Result<()> {
+    let BatesRequest {
+        prefix,
+        suffix,
+        start,
+        digits,
+        increment,
+        corner,
+        font_size,
+        margin,
+        json,
+    } = *request;
+    if !(4.0..=200.0).contains(&font_size) {
+        bail!("--font-size must be between 4 and 200 points");
+    }
+    if margin < 0.0 {
+        bail!("--margin must not be negative");
+    }
+    if start == 0 {
+        bail!("--start must be at least 1");
+    }
+    if increment == 0 {
+        bail!("--increment must be at least 1");
+    }
+
+    let document = load(file)?;
+    let count = document
+        .page_count()
+        .with_context(|| format!("count pages of {}", file.display()))?;
+    if count == 0 {
+        bail!("{} has no pages", file.display());
+    }
+    let geometries = page_geometries(&document, count)?;
+
+    let config = BatesConfig::new(prefix, suffix, start, digits)?
+        .with_increment(increment)
+        .with_anchor(corner.anchor())
+        .with_style(BatesStyle::new(
+            StandardFont::Helvetica,
+            font_size,
+            BatesColor::new(0.0, 0.0, 0.0)?,
+            BatesMargins::uniform(margin)?,
+        )?);
+    let bounds: Vec<BatesPageBounds> = geometries
+        .iter()
+        .enumerate()
+        .map(|(index, geometry)| {
+            let box_rect = geometry.media_box();
+            BatesPageBounds::new(
+                index,
+                box_rect.x0(),
+                box_rect.y0(),
+                box_rect.x1(),
+                box_rect.y1(),
+            )
+        })
+        .collect();
+    // No date stamp is configured, so the clock value is never read; passing a
+    // constant keeps the command deterministic.
+    let bates_plan = build_bates_plan(&config, &bounds, 0)?;
+    let style_font_size = config.style().font_size();
+    let first_number = bates_plan
+        .stamps()
+        .first()
+        .map(|stamp| stamp.text().to_owned())
+        .unwrap_or_default();
+    let last_number = bates_plan
+        .stamps()
+        .last()
+        .map(|stamp| stamp.text().to_owned())
+        .unwrap_or_default();
+
+    let mut stamps = Vec::with_capacity(bates_plan.len());
+    for stamp in bates_plan.stamps() {
+        let Some(geometry) = geometries.get(stamp.page_index()) else {
+            bail!(
+                "Bates plan targets page {} of {}",
+                stamp.page_index() + 1,
+                geometries.len()
+            );
+        };
+        let position = stamp.position();
+        let content = format!(
+            "q\n{} cm\nBT /F1 {size} Tf {x} {y} Td ({text}) Tj ET\nQ\n",
+            transform_for_page(geometry).to_pdf(),
+            size = style_font_size,
+            x = position.x0(),
+            y = position.y0(),
+            text = escape_literal(stamp.text()),
+        );
+        stamps.push((
+            stamp.page_index(),
+            StampOverlay {
+                content: content.into_bytes(),
+                fonts: vec![(
+                    "F1".to_owned(),
+                    StandardFont::Helvetica.base_name().to_owned(),
+                )],
+                ext_gstates: Vec::new(),
+                front: true,
+            },
+        ));
+    }
+
+    let stamped = stamps.len();
+    let plan = PagePlan::identity()
+        .then(PageOperation::StampPages { overlays: stamps })
+        .context("build the Bates plan")?;
+    let bytes = document
+        .apply_page_plan(&plan)
+        .context("apply the Bates plan")?;
+    std::fs::write(out, &bytes).with_context(|| format!("write {}", out.display()))?;
+
+    let report = BatesReport {
+        file: file.display().to_string(),
+        out: out.display().to_string(),
+        pages: count,
+        stamped,
+        prefix: prefix.to_owned(),
+        suffix: suffix.to_owned(),
+        start,
+        digits,
+        increment,
+        first: first_number,
+        last: last_number,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("file: {}", report.file);
+        println!("out:  {}", report.out);
+        println!("pages: {}", report.pages);
+        println!("stamped: {}", report.stamped);
+        println!("numbers: {} .. {}", report.first, report.last);
+    }
+    Ok(())
+}
+
+/// JSON shape of `pdfxi decorate bates --json`.
+#[derive(Serialize)]
+struct BatesReport {
+    /// Input file.
+    file: String,
+    /// Written file.
+    out: String,
+    /// Pages in the document.
+    pages: usize,
+    /// Pages that received a number.
+    stamped: usize,
+    /// Number prefix.
+    prefix: String,
+    /// Number suffix.
+    suffix: String,
+    /// First number.
+    start: u64,
+    /// Zero-padded digit width.
+    digits: usize,
+    /// Per-page increment.
+    increment: u64,
+    /// Full text of the first stamp.
+    first: String,
+    /// Full text of the last stamp.
+    last: String,
+}
 ///
 /// `opacity` is written as an `/ExtGState` alpha and merged into the page's own
 /// resources; `--tile` repeats the mark on a grid instead of centring it.

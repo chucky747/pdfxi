@@ -1428,14 +1428,48 @@ tests = [
 title = "Watermarks and backgrounds"
 
 [[feature]]
-docs = "crates/pdfxi-edit/src/bates.rs, docs/evidence/author/T-0164.md"
+docs = [
+    "crates/pdfxi-cli/src/decorate.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0287.md",
+]
 domain = "Edit"
-evidence = "docs/evidence/author/T-0164.md"
+evidence = "docs/evidence/cli/T-0287.md"
 id = "EDIT-010"
-notes = "Library-level Bates plan with numbering math, anchored positions, date stamping and typed validation; host serialization applies stamps to page content."
+notes = """
+Verified through the CLI host. `pdfxi decorate bates <FILE> --out PATH
+[--prefix TEXT] [--suffix TEXT] [--start N] [--digits N] [--increment N]
+[--corner C] [--font-size N] [--margin N] [--json]` builds the plan with
+`build_bates_plan` from one `BatesPageBounds` per page (media box from
+`Document::page_frame`), renders each `BatesStamp::text()` at
+`stamp.position()` through `transform_for_page` (rotation-aware), escapes it with
+`escape_literal`, and applies every stamp with `PageOperation::StampPages`. The
+clock passed to the plan is constant because no date stamp is configured, so the
+command is deterministic.
+
+Evidence on fixtures/realworld/powerpoint-slides.pdf: EX-000001..EX-000003 on the
+three pages with the original text intact; with --start 10 --digits 4
+--increment 5 --suffix=-A the stamps are B-0010-A, B-0015-A, B-0020-A. On
+fixtures/authoring/authoring-rotation.pdf (three rotated pages) the numbers
+R-000001..R-000003 extract alongside the original text, proving the display-to-
+page transform. Zero digits and --start 0 are rejected.
+
+Gates: cargo test -p pdfxi-cli = 37 bin + 125 integration + 1 doc test; clippy
+-p pdfxi-cli --all-targets -D warnings = 0; fmt --all --check = 0.
+
+Scope: one number per page with prefix, suffix, padding, increment and six
+corners; date stamps, first-page styling and page ranges are not exposed.
+"""
 priority = "P2"
-status = "model"
-tests = ["bates::tests::stamps_are_deterministically_ordered_by_page_index"]
+status = "verified"
+tests = [
+    "cli::decorate_bates_numbers_every_page",
+    "cli::decorate_bates_honours_start_increment_and_suffix",
+    "cli::decorate_bates_places_number_on_a_rotated_page",
+    "cli::decorate_bates_rejects_invalid_configuration",
+    "pages::tests::stamp_appends_content_and_merges_fonts_without_collisions",
+    "bates::tests::stamps_are_deterministically_ordered_by_page_index",
+]
 title = "Bates numbering"
 
 [[feature]]
