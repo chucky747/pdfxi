@@ -301,8 +301,19 @@ impl Measurement {
     }
 
     /// Converts the raw geometry into the display unit without rounding.
+    ///
+    /// Distances and perimeters scale linearly. Area is a squared quantity, so
+    /// it scales by the square of the linear factor: a square that is one inch
+    /// on a side reports `1.0 in²`, not `72 in²`.
     pub fn value(&self) -> Result<f64, MeasurementError> {
-        let value = self.scale.convert(self.kind.value_in_points());
+        let points = self.kind.value_in_points();
+        let value = match self.kind {
+            MeasurementKind::Area { .. } => {
+                let per_point = self.scale.convert(1.0);
+                points * per_point * per_point
+            }
+            _ => self.scale.convert(points),
+        };
         if !value.is_finite() {
             return Err(MeasurementError::NonFiniteValue);
         }
@@ -400,6 +411,36 @@ mod tests {
 
     fn point(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    #[test]
+    fn area_scales_by_the_square_of_the_linear_factor() {
+        let square = vec![
+            point(0.0, 0.0),
+            point(72.0, 0.0),
+            point(72.0, 72.0),
+            point(0.0, 72.0),
+        ];
+        let area = Measurement::area(square, MeasureScale::for_unit(MeasureUnit::Inch))
+            .expect("area")
+            .with_decimals(4);
+        assert!((area.value().expect("value") - 1.0).abs() < 1e-12);
+        assert_eq!(
+            area.appearance().expect("appearance").summary,
+            "area 1.0000 in\u{00B2}"
+        );
+
+        let perimeter = Measurement::perimeter(
+            vec![
+                point(0.0, 0.0),
+                point(72.0, 0.0),
+                point(72.0, 72.0),
+                point(0.0, 72.0),
+            ],
+            MeasureScale::for_unit(MeasureUnit::Inch),
+        )
+        .expect("perimeter");
+        assert!((perimeter.value().expect("value") - 4.0).abs() < 1e-12);
     }
 
     #[test]

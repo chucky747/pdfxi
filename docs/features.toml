@@ -3233,14 +3233,50 @@ tests = [
 title = "Compare two PDFs and summarize changes"
 
 [[feature]]
-docs = "crates/pdfxi-edit/src/measurement.rs, docs/evidence/author/T-0114.md"
+docs = [
+    "crates/pdfxi-cli/src/measure.rs",
+    "crates/pdfxi-edit/src/measurement.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0307.md",
+]
 domain = "Review"
-evidence = "docs/evidence/author/T-0114.md"
+evidence = "docs/evidence/cli/T-0307.md"
 id = "REVIEW-009"
-notes = "Distance/area/perimeter geometry with unit conversion, scale validation, and deterministic appearance summaries."
+notes = """
+Verified through `pdfxi measure <FILE> --points "x,y;x,y[;x,y...]"
+[--page N] [--unit pt|in|mm|cm|ft] [--dpi D] [--decimals N] [--json]`.
+
+The host reads the real page media box and rejects any point outside it. Two
+points produce a Measurement::distance; three or more produce polygon area
+(shoelace) and perimeter in one run. Scale is for_unit(--unit), from_dpi(--dpi,
+inches) or identity points; --unit and --dpi are mutually exclusive. Unknown
+units, non-positive DPI, precision above 6, page 0 and a missing page fail with
+actionable errors. Results carry value, unit, stable appearance summary and
+vector-command count.
+
+Area conversion was fixed: Measurement::value previously multiplied polygon area
+by the linear factor, so a 10x10 pt square reported 72 in² instead of 1 in². Area
+now scales by the square of the linear factor; a regression test asserts a 72x72
+pt square is exactly 1.0000 in² while its perimeter stays 4.0 in.
+
+Evidence: 0,0;3,4 on minimal.pdf reports page_box 0 0 612 792, points 2, pt, and
+distance 5.00 pt with 2 commands. A (100,100),(200,100),(200,150) triangle in
+inches reports area 0.48 in² (4 commands) and perimeter 3.64 in. A 150 pt span at
+--dpi 150 reports 1.00 in. A 100 pt span on the landscape
+powerpoint-slides.pdf reports 3.53 cm with a wider-than-tall page box.
+
+Gates: cargo test -p pdfxi-cli --test cli measure_ = 2 passed; cargo test
+-p pdfxi-edit measurement:: = 11 passed; whole workspace fmt/clippy/tests green.
+
+Scope: coordinates come from the caller, as a GUI measure tool would; there is
+no persisted measurement annotation, snapping, or arc/angle measurement.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::measure_distance_area_and_perimeter_on_real_pages",
+    "cli::measure_rejects_out_of_box_points_and_bad_options",
+    "measurement::tests::area_scales_by_the_square_of_the_linear_factor",
     "measurement::tests::area_and_perimeter_use_shoelace_and_edge_lengths",
     "measurement::tests::appearance_summary_rounds_deterministically",
 ]

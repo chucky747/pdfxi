@@ -98,6 +98,8 @@ mod form;
 /// `pdfxi linearize` and `pdfxi pack`: choose the on-disk object layout.
 mod layout;
 mod links;
+/// `pdfxi measure`: page-space distance, area and perimeter.
+mod measure;
 /// `pdfxi outline`, `pdfxi link` and `pdfxi attach`: edit bookmarks, links
 /// and embedded files (`navigation`).
 mod navigation;
@@ -241,6 +243,32 @@ enum Command {
         /// Maximum replacements; zero uses the built-in limit of 1000.
         #[arg(long, default_value_t = 0)]
         limit: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Measure distance, area or perimeter on a page.
+    ///
+    /// Two points produce a distance; three or more produce polygon area and
+    /// perimeter. Points are page coordinates and must lie inside the media box.
+    Measure {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// One-based page number.
+        #[arg(long, default_value_t = 1)]
+        page: usize,
+        /// Points as `x,y;x,y[;x,y...]` in PDF page coordinates.
+        #[arg(long, value_name = "POINTS")]
+        points: String,
+        /// Display unit: pt (default), in, mm, cm or ft.
+        #[arg(long, value_name = "UNIT")]
+        unit: Option<String>,
+        /// Treat the page as scanned at this DPI and report inches.
+        #[arg(long, value_name = "DPI")]
+        dpi: Option<f64>,
+        /// Rounding precision, 0-6.
+        #[arg(long, default_value_t = 2)]
+        decimals: u8,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -1783,6 +1811,15 @@ fn main() -> anyhow::Result<()> {
             limit,
             json,
         }),
+        Command::Measure {
+            file,
+            page,
+            points,
+            unit,
+            dpi,
+            decimals,
+            json,
+        } => measure::run_measure(&file, page, &points, unit.as_deref(), dpi, decimals, json),
         Command::Render {
             file,
             page,

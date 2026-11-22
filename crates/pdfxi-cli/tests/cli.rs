@@ -3540,6 +3540,158 @@ fn font_add_text_handles_an_authoring_page_and_alignment() {
 }
 
 #[test]
+fn measure_distance_area_and_perimeter_on_real_pages() {
+    let page = root_fixture("minimal.pdf");
+    let distance = run(&[
+        "measure",
+        page.to_str().expect("utf-8"),
+        "--points",
+        "0,0;3,4",
+        "--json",
+    ]);
+    assert!(distance.status.success(), "stderr: {}", stderr(&distance));
+    let value: Value = serde_json::from_str(&stdout(&distance)).expect("valid JSON");
+    assert_eq!(value["page"], 1);
+    assert_eq!(
+        value["page_box"],
+        serde_json::json!([0.0, 0.0, 612.0, 792.0])
+    );
+    assert_eq!(value["points"], 2);
+    assert_eq!(value["unit"], "pt");
+    assert_eq!(value["units_per_point"], 1.0);
+    let results = value["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["kind"], "distance");
+    assert_eq!(results[0]["value"], 5.0);
+    assert_eq!(results[0]["unit"], "pt");
+    assert_eq!(results[0]["summary"], "distance 5.00 pt");
+    assert_eq!(results[0]["commands"], 2);
+
+    let polygon = run(&[
+        "measure",
+        page.to_str().expect("utf-8"),
+        "--points",
+        "100,100;200,100;200,150",
+        "--unit",
+        "in",
+        "--json",
+    ]);
+    assert!(polygon.status.success(), "stderr: {}", stderr(&polygon));
+    let value: Value = serde_json::from_str(&stdout(&polygon)).expect("valid JSON");
+    assert_eq!(value["points"], 3);
+    assert_eq!(value["unit"], "in");
+    let results = value["results"].as_array().expect("results");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["kind"], "area");
+    assert_eq!(results[0]["value"], 0.48);
+    assert_eq!(results[0]["unit"], "in²");
+    assert_eq!(results[0]["summary"], "area 0.48 in²");
+    assert_eq!(results[0]["commands"], 4);
+    assert_eq!(results[1]["kind"], "perimeter");
+    assert_eq!(results[1]["value"], 3.64);
+    assert_eq!(results[1]["summary"], "perimeter 3.64 in");
+
+    let dpi = run(&[
+        "measure",
+        page.to_str().expect("utf-8"),
+        "--points",
+        "0,0;150,0",
+        "--dpi",
+        "150",
+        "--json",
+    ]);
+    assert!(dpi.status.success(), "stderr: {}", stderr(&dpi));
+    let value: Value = serde_json::from_str(&stdout(&dpi)).expect("valid JSON");
+    assert_eq!(value["unit"], "in");
+    assert_eq!(value["results"][0]["value"], 1.0);
+
+    let slides = root_fixture("realworld/powerpoint-slides.pdf");
+    let landscape = run(&[
+        "measure",
+        slides.to_str().expect("utf-8"),
+        "--points",
+        "0,0;100,0",
+        "--unit",
+        "cm",
+        "--json",
+    ]);
+    assert!(landscape.status.success(), "stderr: {}", stderr(&landscape));
+    let value: Value = serde_json::from_str(&stdout(&landscape)).expect("valid JSON");
+    assert_eq!(value["results"][0]["value"], 3.53);
+    let box_values = value["page_box"].as_array().expect("page box");
+    assert_eq!(box_values.len(), 4);
+    assert!(
+        box_values[2].as_f64().unwrap_or(0.0) > box_values[3].as_f64().unwrap_or(0.0),
+        "first slide is landscape: {}",
+        stdout(&landscape)
+    );
+}
+
+#[test]
+fn measure_rejects_out_of_box_points_and_bad_options() {
+    let page = root_fixture("minimal.pdf");
+    let path = page.to_str().expect("utf-8");
+    let outside = run(&["measure", path, "--points", "0,0;900,0"]);
+    assert!(!outside.status.success());
+    assert!(
+        stderr(&outside).contains("outside the page box"),
+        "{}",
+        stderr(&outside)
+    );
+
+    let one = run(&["measure", path, "--points", "10,10"]);
+    assert!(!one.status.success());
+    assert!(
+        stderr(&one).contains("at least two points"),
+        "{}",
+        stderr(&one)
+    );
+
+    let unit = run(&["measure", path, "--points", "0,0;1,1", "--unit", "parsec"]);
+    assert!(!unit.status.success());
+    assert!(
+        stderr(&unit).contains("unknown --unit"),
+        "{}",
+        stderr(&unit)
+    );
+
+    let both = run(&[
+        "measure", path, "--points", "0,0;1,1", "--unit", "in", "--dpi", "72",
+    ]);
+    assert!(!both.status.success());
+    assert!(
+        stderr(&both).contains("mutually exclusive"),
+        "{}",
+        stderr(&both)
+    );
+
+    let zero_dpi = run(&["measure", path, "--points", "0,0;1,1", "--dpi", "0"]);
+    assert!(!zero_dpi.status.success());
+
+    let decimals = run(&["measure", path, "--points", "0,0;1,1", "--decimals", "7"]);
+    assert!(!decimals.status.success());
+    assert!(
+        stderr(&decimals).contains("between 0 and 6"),
+        "{}",
+        stderr(&decimals)
+    );
+
+    let zero_page = run(&["measure", path, "--points", "0,0;1,1", "--page", "0"]);
+    assert!(!zero_page.status.success());
+
+    let missing_page = run(&["measure", path, "--points", "0,0;1,1", "--page", "9"]);
+    assert!(!missing_page.status.success());
+    assert!(
+        stderr(&missing_page).contains("does not exist"),
+        "{}",
+        stderr(&missing_page)
+    );
+
+    let missing_file = run(&["measure", TempPath::new("pdf").arg(), "--points", "0,0;1,1"]);
+    assert!(!missing_file.status.success());
+}
+
+#[test]
 fn create_postscript_writes_text_and_vector_pdf() {
     let source = TempPath::new("ps");
     source.write(

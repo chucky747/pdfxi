@@ -1,0 +1,20 @@
+{
+  "id": "T-0307",
+  "lane": "core",
+  "title": "Page measurement host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0306"],
+  "owns": [
+    "crates/pdfxi-cli/src/measure.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "crates/pdfxi-edit/src/measurement.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0307.md",
+    "orchestration/feature-updates/T-0307.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli measure_ and cargo test -p pdfxi-edit measurement:: pass; pdfxi measure validates points against the real page box and reports distance/area/perimeter with units, DPI scale and appearance summaries; REVIEW-009 moves to verified.",
+  "notes": "Adds a page-aware measurement CLI and fixes area conversion to use the square of the linear scale factor.",
+  "evidence": "docs/evidence/cli/T-0307.md"
+}

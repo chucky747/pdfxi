@@ -18,6 +18,7 @@ pdfxi <COMMAND> --help
 | `text <FILE>` | Plain text from page content streams | verified (`AUTO-010`) |
 | `search <FILE> <QUERY> [--case-sensitive] [--whole-word] [--json]` | Cross-page text search | implemented |
 | `replace <FILE> --out PATH --find T --replace T [--case-sensitive] [--whole-word] [--diacritic-insensitive] [--limit N] [--json]` | Literal find-and-replace across a document | verified (`EDIT-003`) |
+| `measure <FILE> --points "x,y;x,y[;...]" [--page N] [--unit pt\|in\|mm\|cm\|ft] [--dpi D] [--decimals N] [--json]` | Distance, area and perimeter on a page | verified (`REVIEW-009`) |
 | `render <FILE> --page N --scale S --out PATH [--format png\|ppm]` | Rasterize one page | implemented, `pdfium` build |
 | `action list <FILE>` | List named actions in an action file | implemented |
 | `action show <FILE> <NAME>` | Show an action's steps and parameters | implemented |
@@ -132,7 +133,11 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `replace` is the writing half of `find_replace`: it locates literal matches in
+- `measure` validates the supplied page points against the page's media box and
+  reports a distance for two points or polygon area and perimeter for three or
+  more. Units convert through `MeasureScale` (`pt`, `in`, `mm`, `cm`, `ft`, or a
+  scan DPI in inches); area uses the square of the linear factor. Every result
+  carries the deterministic appearance summary and its vector-command count.- `replace` is the writing half of `find_replace`: it locates literal matches in
   the run model, rewrites the containing run through `replace_run_text`, saves,
   reopens and re-extracts to report `initial_matches`, `replaced` and
   `remaining`. Matches must lie inside one run; a match spanning two runs is
