@@ -35,6 +35,8 @@ command.
 | Geospatial viewports and coordinate mapping | `MEDIA-004` | verified | `pdfxi-render::geospatial` | `geo info` / `geo to-pdf` / `geo to-geo` |
 | U3D/PRC 3D annotations | `MEDIA-003` | verified | `pdfxi-render::three_d` | `media3d` / `--extract` |
 | Interactive actions and triggers | `MEDIA-005` | verified | `pdfxi-render::actions` | `interactions [--strict]` |
+| Audio and video annotations | `MEDIA-001` | verified | `pdfxi-render::media` | `media list [--extract]` |
+| HTML5 media replacement for Flash | `MEDIA-002` | verified | `pdfxi-render::html5_media` | `media html5` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -474,6 +476,32 @@ are accepted; `JavaScript`, `Launch`, `ImportData`, `SubmitForm` and
 sound actions are reported as unsupported. `--strict` exits non-zero when any
 action is rejected; otherwise the report lists every action with its status.
 No action is ever executed.
+
+### Media annotations and the HTML5 envelope
+
+`MEDIA-001` and `MEDIA-002` (verified) host `pdfxi_render::media` and
+`pdfxi_render::html5_media`:
+
+```text
+pdfxi media list <INPUT.pdf> [--extract DIR] [--json]
+pdfxi media html5 --source SRC=MIME [--source ...] [--poster SRC]
+    [--controls] [--autoplay] [--loop] [--muted] [--width N] [--height N]
+    [--out PATH] [--json]
+```
+
+`media list` reads real `/Sound`, `/Movie` and `/Screen` annotations, maps their
+primary source (`object:n:g` for an embedded stream, `file:name` for a movie
+file), a MIME type (from the movie extension when the PDF does not declare one),
+volume, activation and rendition, and prints the playback plan and host
+requirements. `--extract DIR` writes the decoded embedded payload (for example
+the Sound stream) so an external player can open it. No audio or video is
+played.
+
+`media html5` validates local-only sources (an `@` prefix marks an embedded
+stream) and writes a deterministic, inert `<audio>`/`<video>` element wrapped in
+a complete HTML document with a strict content-security policy. Remote URLs,
+absolute paths, traversal segments, control characters and oversized dimensions
+are rejected. This is the HTML5 replacement surface for a Flash-era player.
 
 ## Page boxes and page operations
 

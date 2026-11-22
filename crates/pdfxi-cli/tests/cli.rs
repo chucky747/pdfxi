@@ -11206,6 +11206,226 @@ fn cli_version_starts_with_the_full_command_tree() {
     assert!(stdout(&output).contains("pdfxi"), "{}", stdout(&output));
 }
 
+// ---------------------------------------------------------------------------
+// media: media annotations and HTML5 envelope (T-0336)
+// ---------------------------------------------------------------------------
+
+/// A one-page PDF with a `/Sound` stream annotation and a `/Movie` annotation.
+fn t0336_media_pdf() -> (Vec<u8>, Vec<u8>) {
+    let audio = b"RIFF....WAVEfmt fake-audio-payload".to_vec();
+    let bodies: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Sound /Rect [72 600 92 620] /Sound 6 0 R >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Movie /Rect [100 400 400 600] \
+          /Movie << /F (clip.mp4) /T (Intro clip) >> /Volume 0.5 >>"
+            .to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n%PDFXI\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, body) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    offsets.push(out.len());
+    out.extend_from_slice(
+        format!("6 0 obj\n<< /R 8000 /Length {} >>\nstream\n", audio.len()).as_bytes(),
+    );
+    out.extend_from_slice(&audio);
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+    let xref = out.len();
+    let size = offsets.len() + 1;
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    (out, audio)
+}
+
+#[test]
+fn media_list_reports_sound_and_movie_annotations() {
+    let (pdf, payload) = t0336_media_pdf();
+    let file = TempPdf::new(&pdf);
+    let output = run(&["media", "list", file.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["annotations"], 2);
+    let rows = value["rows"].as_array().expect("rows");
+    let sound = &rows[0];
+    assert_eq!(sound["kind"], "Sound");
+    assert_eq!(sound["annotation"], 4);
+    assert_eq!(sound["source"], "object:6:0");
+    assert_eq!(sound["mime_type"], "audio/x-pdf-sound");
+    assert_eq!(sound["volume"], 1.0);
+    assert_eq!(sound["needs_host_player"], true);
+    assert!(
+        sound["requirements"]
+            .as_array()
+            .expect("requirements")
+            .iter()
+            .any(|req| req == "media-player")
+    );
+    let movie = &rows[1];
+    assert_eq!(movie["kind"], "Movie");
+    assert_eq!(movie["source"], "file:clip.mp4");
+    assert_eq!(movie["mime_type"], "video/mp4");
+    assert_eq!(movie["volume"], 0.5);
+    assert!(
+        movie["descriptor"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("media-plan/v1|kind=Movie|source=file:clip.mp4")
+    );
+    assert!(
+        sound["descriptor"]
+            .as_str()
+            .unwrap_or("")
+            .contains("kind=Sound")
+    );
+    assert!(!payload.is_empty());
+}
+
+#[test]
+fn media_extracts_the_embedded_sound_payload() {
+    let (pdf, payload) = t0336_media_pdf();
+    let file = TempPdf::new(&pdf);
+    let dir = TempDir::new();
+    let output = run(&["media", "list", file.arg(), "--extract", dir.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("extracted:"),
+        "{}",
+        stdout(&output)
+    );
+    let extracted = fs::read(dir.child("4-Sound.bin")).expect("sound payload");
+    assert_eq!(extracted, payload);
+}
+
+#[test]
+fn media_html5_writes_a_local_only_envelope() {
+    let dir = TempDir::new();
+    let out = dir.child("player.html");
+    let output = run(&[
+        "media",
+        "html5",
+        "--source",
+        "clip.mp4=video/mp4",
+        "--source",
+        "@embedded.mp4=video/mp4",
+        "--poster",
+        "cover.png",
+        "--controls",
+        "--loop",
+        "--width",
+        "640",
+        "--height",
+        "360",
+        "--out",
+        out.to_str().expect("out"),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let page = fs::read_to_string(&out).expect("HTML written");
+    assert!(page.starts_with("<!DOCTYPE html>"), "{page}");
+    assert!(
+        page.contains("default-src 'none'; media-src 'self'; img-src 'self'"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<video controls loop poster=\"cover.png\" width=\"640\" height=\"360\">"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<source src=\"clip.mp4\" type=\"video/mp4\"/>"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<source src=\"@embedded.mp4\" type=\"video/mp4\"/>"),
+        "{page}"
+    );
+    assert!(page.contains("</video>"), "{page}");
+
+    let json = run(&[
+        "media",
+        "html5",
+        "--source",
+        "clip.mp4=video/mp4",
+        "--out",
+        out.to_str().expect("out"),
+        "--json",
+    ]);
+    assert!(json.status.success(), "stderr: {}", stderr(&json));
+    let value: Value = serde_json::from_str(&stdout(&json)).expect("valid JSON");
+    assert_eq!(value["element"], "video");
+    assert!(
+        value["descriptor"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("html5-plan/v1|element=video|sources=relative:clip.mp4")
+    );
+    assert!(value["markup"].as_str().unwrap_or("").contains("<video"));
+}
+
+#[test]
+fn media_html5_rejects_remote_traversal_and_oversize_input() {
+    let remote = run(&[
+        "media",
+        "html5",
+        "--source",
+        "https://evil.test/a.mp4=video/mp4",
+    ]);
+    assert!(!remote.status.success());
+    assert!(
+        stderr(&remote).contains("remote media source"),
+        "{}",
+        stderr(&remote)
+    );
+
+    let traversal = run(&["media", "html5", "--source", "../a.mp4=video/mp4"]);
+    assert!(!traversal.status.success());
+    assert!(
+        stderr(&traversal).contains("parent-directory traversal"),
+        "{}",
+        stderr(&traversal)
+    );
+
+    let oversized = run(&[
+        "media",
+        "html5",
+        "--source",
+        "clip.mp4=video/mp4",
+        "--width",
+        "9000",
+    ]);
+    assert!(!oversized.status.success());
+    assert!(
+        stderr(&oversized).contains("8192"),
+        "{}",
+        stderr(&oversized)
+    );
+
+    let none = run(&["media", "html5"]);
+    assert!(!none.status.success());
+}
+
+#[test]
+fn media_list_rejects_documents_without_media() {
+    let plain = create_text_pdf("No media annotations.");
+    let output = run(&["media", "list", plain.arg()]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("no /Sound, /Movie or /Screen"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

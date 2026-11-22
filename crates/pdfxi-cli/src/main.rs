@@ -82,6 +82,8 @@ mod geo;
 mod home;
 /// pdfxi interactions: audit /AA additional actions.
 mod interactions;
+/// pdfxi media: media annotations and the HTML5 replacement envelope.
+mod media;
 /// pdfxi media3d: read /3D annotations and extract payloads.
 mod media3d;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
@@ -411,6 +413,12 @@ enum Command {
         /// Geospatial action.
         #[command(subcommand)]
         command: GeoCommand,
+    },
+    /// Inspect media annotations or write the HTML5 replacement envelope.
+    Media {
+        /// Media action.
+        #[command(subcommand)]
+        command: MediaCommand,
     },
     /// Audit `/AA` additional actions against the safe-action whitelist.
     Interactions {
@@ -1968,6 +1976,55 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `media` command.
+#[derive(Debug, Subcommand)]
+enum MediaCommand {
+    /// List `/Sound`, `/Movie` and `/Screen` annotations and their plans.
+    List {
+        /// PDF file.
+        file: PathBuf,
+        /// Directory for extracted embedded payloads.
+        #[arg(long, value_name = "DIR")]
+        extract: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write the local-only HTML5 `<audio>`/`<video>` envelope.
+    Html5 {
+        /// Source as `SRC=MIME`; a leading `@` marks an embedded stream.
+        #[arg(long = "source", value_name = "SRC=MIME", required = true)]
+        source: Vec<String>,
+        /// Poster image reference.
+        #[arg(long, value_name = "SRC")]
+        poster: Option<String>,
+        /// Show native playback controls.
+        #[arg(long)]
+        controls: bool,
+        /// Start playback automatically.
+        #[arg(long)]
+        autoplay: bool,
+        /// Loop playback.
+        #[arg(long = "loop")]
+        loop_play: bool,
+        /// Start muted.
+        #[arg(long)]
+        muted: bool,
+        /// Element width in CSS pixels (0 = unspecified).
+        #[arg(long, default_value_t = 0)]
+        width: u32,
+        /// Element height in CSS pixels (0 = unspecified).
+        #[arg(long, default_value_t = 0)]
+        height: u32,
+        /// Write the complete HTML document here; stdout receives the element.
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `geo` command.
 #[derive(Debug, Subcommand)]
 enum GeoCommand {
@@ -2776,6 +2833,36 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Media { command } => match command {
+            MediaCommand::List {
+                file,
+                extract,
+                json,
+            } => media::list(&file, extract.as_deref(), json),
+            MediaCommand::Html5 {
+                source,
+                poster,
+                controls,
+                autoplay,
+                loop_play,
+                muted,
+                width,
+                height,
+                out,
+                json,
+            } => media::html5(
+                &source,
+                poster.as_deref(),
+                controls,
+                autoplay,
+                loop_play,
+                muted,
+                width,
+                height,
+                out.as_deref(),
+                json,
+            ),
+        },
         Command::Interactions { file, strict, json } => {
             interactions::interactions(&file, strict, json)
         }

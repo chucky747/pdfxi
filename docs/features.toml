@@ -4629,26 +4629,41 @@ title = "Network and SharePoint-style integration"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/media.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0336.md",
     "crates/pdfxi-render/src/media.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0169.md: 3 new media::tests pass (MIME-preference rendition selection and typed miss, byte-stable playback-plan descriptor, escaped source descriptors); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0336.md"
 id = "MEDIA-001"
 notes = """
-Host-agnostic multimedia annotation model is complete at library level: bounded
-/Sound, /Movie and /Screen sources, poster, typed activation whitelist, volume
-and control flags; rendition selection by default, named, MIME preference or
-clamped index (a missing named/MIME rendition is a typed MediaError). resolve_plan
-emits a deterministic PlaybackPlan with explicit host requirements and a
-byte-stable descriptor. Host boundary: no codec is decoded, no OS media sink or
-network source is opened, and PDF object streams are caller-supplied; those are
-native/host player work, so this is verified for the data/plan model only (ADR 0008).
+Verified through `pdfxi media list <INPUT.pdf> [--extract DIR] [--json]`.
+
+The host scans every page /Annots for Sound, Movie and Screen annotations, reads
+the /Sound stream or the /Movie file specification, derives a MIME type from the
+movie extension when the PDF declares none, reads /Volume and validates the
+MediaDictionary through MediaAnnotation. It prints the active rendition,
+activation, volume, host requirements and plan descriptor, and --extract DIR
+writes the decoded embedded payload as <annotation>-<kind>.bin.
+
+Evidence: a real fixture with a 34-byte /Sound stream and a
+/Movie << /F (clip.mp4) >> at /Volume 0.5 reports 2 annotations: Sound
+object:6:0 audio/x-pdf-sound volume 1.00 and Movie file:clip.mp4 video/mp4
+volume 0.50, both host-player true with the media-player requirement and stable
+plans; extraction writes 4-Sound.bin with the exact 34 payload bytes. A plain
+PDF fails with a typed no-media error.
+
+Scope: no playback; the host player realises the plan. /Screen rendition
+selection from /A is not decoded and embedded Movie file specifications are
+reported but not extracted.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::media_list_reports_sound_and_movie_annotations",
+    "cli::media_extracts_the_embedded_sound_payload",
+    "cli::media_list_rejects_documents_without_media",
     "media::tests::preferred_mime_selection_resolves_from_the_rendition_set",
     "media::tests::playback_plan_descriptor_is_byte_stable_and_reflects_flags",
     "media::tests::media_source_descriptors_distinguish_variants_and_escape_delimiters",
@@ -4657,27 +4672,39 @@ title = "Audio and video annotations"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/media.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0336.md",
     "crates/pdfxi-render/src/html5_media.rs",
-    "crates/pdfxi-render/src/lib.rs",
-    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0169.md: 2 new html5_media::tests pass (control characters rejected in sources/posters, byte-stable descriptor reflecting element/flags); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0336.md"
 id = "MEDIA-002"
 notes = """
-Local-only HTML5 envelope is complete at library level: bounded sources that are
-embedded (@name) or relative local paths, with remote/protocol-relative URLs,
-schemes, absolute paths, traversal, markup punctuation and now all control
-characters rejected as typed Html5MediaError. to_markup emits deterministic inert
-<audio>/<video> markup and the new descriptor() gives a byte-stable identity.
-Host boundary: the host renders the element; nothing is fetched, decoded or
-executed, and no real Flash/RichMedia-to-HTML5 content migration of a PDF is
-performed here (the host builds the envelope input), so this is verified for the
-descriptor/markup model only (ADR 0008).
+Verified through `pdfxi media html5 --source SRC=MIME [--source ...]
+[--poster SRC] [--controls] [--autoplay] [--loop] [--muted] [--width N]
+[--height N] [--out PATH] [--json]`.
+
+Sources are validated by Html5Descriptor (embedded @name or relative local
+path); the deterministic <audio>/<video> element is wrapped in a complete HTML
+document with a strict content-security policy (default-src 'none';
+media-src 'self'; img-src 'self'; style-src 'unsafe-inline'). --out writes the
+document, otherwise stdout receives the element.
+
+Evidence: two sources (clip.mp4 video/mp4 and @embedded.mp4 video/mp4), a
+cover.png poster and 640x360 produce the html5-plan descriptor and a document
+whose body is <video controls poster="cover.png" width="640" height="360"> with
+both <source> entries. Remote URLs, parent-directory traversal and a 9000-pixel
+dimension are rejected with typed errors, and --source is required.
+
+Scope: local-only and inert; no remote media, scripting, network access or
+RichMedia annotation authoring.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::media_html5_writes_a_local_only_envelope",
+    "cli::media_html5_rejects_remote_traversal_and_oversize_input",
     "html5_media::tests::control_characters_in_references_are_rejected",
     "html5_media::tests::descriptor_is_byte_stable_and_reflects_the_envelope",
 ]

@@ -1,0 +1,19 @@
+{
+  "id": "T-0336",
+  "lane": "convert",
+  "title": "Media annotation and HTML5 hosts",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0335"],
+  "owns": [
+    "crates/pdfxi-cli/src/media.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0336.md",
+    "orchestration/feature-updates/T-0336.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli media_ passes; pdfxi media list reads real Sound/Movie/Screen annotations and resolves plans (with payload extraction) and pdfxi media html5 writes a local-only inert HTML5 player envelope; MEDIA-001 and MEDIA-002 move to verified.",
+  "notes": "Hosts pdfxi_render::media and pdfxi_render::html5_media over real annotations and local media references.",
+  "evidence": "docs/evidence/cli/T-0336.md"
+}
