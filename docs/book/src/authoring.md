@@ -27,6 +27,7 @@ command.
 | Transparency and blend modes | `STD-005` | verified | `pdfxi-core::transparency` | `transparency inspect` |
 | Cross-file search | `MANAGE-003` | verified | `pdfxi-core` page text + `pdfxi-text` search | `find-files` |
 | PDF Portfolio management | `MANAGE-004` | verified | `pdfxi-convert::portfolio_package` | `portfolio --out` with edit flags |
+| Unicode CJK and RTL analysis | `PLAT-007` | verified | `pdfxi-core::unicode` | `unicode analyze` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -49,6 +50,18 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Unicode analysis is exposed as:
+
+```text
+pdfxi unicode analyze <FILE.pdf> [--font FAMILY=SCRIPTS ...] [--json]
+pdfxi unicode analyze --text TEXT [--font ...] [--json]
+```
+
+The command extracts real page text (or uses `--text`), reports the dominant
+script, base direction and logical bidi runs, and, when `--font` candidates are
+supplied (`FAMILY=latin,cjk,hebrew,arabic,other`), builds the ordered fallback
+chain per run through `pdfxi_core::unicode`. It performs no shaping,
+rasterization or font I/O; a shaper consumes the plan.
 Portfolio management is exposed as:
 
 ```text

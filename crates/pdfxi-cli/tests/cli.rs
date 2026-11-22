@@ -8549,6 +8549,108 @@ fn export_postscript_handles_pages_and_missing_inputs() {
 }
 
 #[test]
+fn unicode_analyze_reports_scripts_and_fallback() {
+    let text = "hello \u{05e9}\u{05dc}\u{05d5}\u{05dd} \u{4e16}\u{754c}";
+    let analyzed = run(&[
+        "unicode",
+        "analyze",
+        "--text",
+        text,
+        "--font",
+        "Latin=Latin",
+        "--font",
+        "Hebrew=Hebrew",
+        "--font",
+        "CJK=CJK",
+        "--font",
+        "Neutral=Other",
+        "--json",
+    ]);
+    assert!(analyzed.status.success(), "stderr: {}", stderr(&analyzed));
+    let value: Value = serde_json::from_str(&stdout(&analyzed)).expect("valid JSON");
+    assert_eq!(value["source"], "--text");
+    assert_eq!(value["base_direction"], "ltr");
+    assert!(value["dominant"].as_str().is_some());
+    let runs = value["runs"].as_array().expect("runs");
+    assert!(
+        runs.iter()
+            .any(|run| run["script"] == "hebrew" && run["direction"] == "rtl"),
+        "{runs:?}"
+    );
+    assert!(runs.iter().any(|run| run["script"] == "cjk"), "{runs:?}");
+    let fallback = value["fallback"].as_array().expect("fallback");
+    let hebrew = fallback
+        .iter()
+        .find(|step| step["script"] == "hebrew")
+        .expect("hebrew fallback");
+    assert_eq!(hebrew["chain"], serde_json::json!(["Hebrew"]));
+    assert!(
+        value["fallback_summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("hebrew:Hebrew")
+    );
+
+    let pdf = create_text_pdf("hello world");
+    let analyzed = run(&["unicode", "analyze", pdf.arg(), "--json"]);
+    assert!(analyzed.status.success(), "stderr: {}", stderr(&analyzed));
+    let value: Value = serde_json::from_str(&stdout(&analyzed)).expect("valid JSON");
+    assert!(value["source"].as_str().unwrap_or("").ends_with(".pdf"));
+    assert_eq!(value["dominant"], "latin");
+    assert_eq!(value["base_direction"], "ltr");
+    assert!(value["characters"].as_u64().unwrap_or(0) >= 11);
+}
+
+#[test]
+fn unicode_analyze_rejects_bad_inputs() {
+    let unknown = run(&[
+        "unicode",
+        "analyze",
+        "--text",
+        "abc",
+        "--font",
+        "Latin=Klingon",
+    ]);
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("unknown script"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    let blank = run(&["unicode", "analyze", "--text", "   "]);
+    assert!(!blank.status.success());
+    assert!(stderr(&blank).contains("empty"), "{}", stderr(&blank));
+
+    let missing_font = run(&[
+        "unicode",
+        "analyze",
+        "--text",
+        "\u{05e9}\u{05dc}\u{05d5}\u{05dd}",
+        "--font",
+        "Latin=Latin",
+    ]);
+    assert!(!missing_font.status.success());
+    assert!(
+        stderr(&missing_font).contains("no font candidate"),
+        "{}",
+        stderr(&missing_font)
+    );
+
+    let missing = run(&["unicode", "analyze", TempPath::new("pdf").arg()]);
+    assert!(!missing.status.success());
+
+    let both = run(&[
+        "unicode",
+        "analyze",
+        TempPath::new("pdf").arg(),
+        "--text",
+        "abc",
+    ]);
+    assert!(!both.status.success());
+}
+
+#[test]
 fn transparency_inspect_reads_groups_and_blend_states() {
     let source = TempPath::new("pdf");
     source.write(&transparency_pdf());

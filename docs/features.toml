@@ -4747,14 +4747,45 @@ tests = [
 title = "Deployment preferences and customization"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/unicode.rs, docs/evidence/core/T-0181.md"
+docs = [
+    "crates/pdfxi-cli/src/unicode.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0328.md",
+]
 domain = "Platform"
-evidence = "docs/evidence/core/T-0181.md"
+evidence = "docs/evidence/cli/T-0328.md"
 id = "PLAT-007"
-notes = "Script classification, bidi run/direction resolution with caller override, grapheme-boundary validation, deterministic analysis report, and an ordered font fallback chain per run from caller-supplied candidates. Host boundary: no rasterizer and no external shaper backend; the plan is consumed by the render lane."
+notes = """
+Verified through `pdfxi unicode analyze <FILE.pdf> [--font FAMILY=SCRIPTS ...]
+[--json]` and `pdfxi unicode analyze --text TEXT [--font ...] [--json]`.
+
+The host extracts every page's real text through pdfxi-core (or uses --text),
+runs analyze_text for the dominant script, base direction and logical bidi
+runs, and with --font FAMILY=script1,script2 candidates runs
+fallback_plan_from_text to report the ordered chain per run. --json emits
+bytes/characters, run offsets/script/direction/text and the fallback
+summary/steps. No shaping or rasterization is performed.
+
+Evidence: mixed Latin/Hebrew/CJK text with Latin, Hebrew, CJK and Other
+candidates reports base ltr, a hebrew rtl run, a cjk run, a hebrew:Hebrew chain
+and the fallback summary; a real text PDF reports source *.pdf, dominant latin,
+base ltr and at least 11 characters. An unknown script, blank text, Hebrew text
+with only a Latin candidate, a missing PDF and the file/--text conflict fail
+with typed or parser errors.
+
+Gates: cargo test -p pdfxi-cli --test cli unicode_analyze = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: analysis and fallback planning only; no shaping, font loading/selection,
+visual reordering, rasterization or PDF content injection. Neutral/whitespace
+characters form an other run, so an other candidate is required for text that
+contains them.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::unicode_analyze_reports_scripts_and_fallback",
+    "cli::unicode_analyze_rejects_bad_inputs",
     "unicode::tests::fallback_plan_selects_ordered_font_chain_per_run",
     "unicode::tests::explicit_base_direction_overrides_first_strong",
     "unicode::tests::text_analysis_validates_grapheme_boundaries",

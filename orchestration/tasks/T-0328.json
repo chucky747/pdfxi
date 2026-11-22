@@ -1,0 +1,19 @@
+{
+  "id": "T-0328",
+  "lane": "convert",
+  "title": "Unicode analysis host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0327"],
+  "owns": [
+    "crates/pdfxi-cli/src/unicode.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0328.md",
+    "orchestration/feature-updates/T-0328.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli unicode_analyze passes; pdfxi unicode analyze reports scripts, bidi runs and fallback chains from real PDF text or --text; PLAT-007 moves to verified.",
+  "notes": "Hosts pdfxi-core::unicode analyze_text/fallback_plan_from_text over extracted page text.",
+  "evidence": "docs/evidence/cli/T-0328.md"
+}

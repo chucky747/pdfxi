@@ -92,6 +92,8 @@ mod script;
 mod toolset;
 /// pdfxi transparency inspect: read blend modes and transparency groups.
 mod transparency;
+/// pdfxi unicode analyze: scripts, bidi runs and font fallback.
+mod unicode;
 /// pdfxi watch: one host-driven poll of a watched folder.
 mod watch;
 
@@ -384,6 +386,17 @@ enum Command {
         /// Integration action.
         #[command(subcommand)]
         command: OfficeCommand,
+    },
+    /// Analyze scripts, bidi runs and font fallback for PDF text.
+    ///
+    /// Reads the document's real page text (or `--text`) and reports the
+    /// dominant script, base direction, logical bidi runs and, when
+    /// `--font FAMILY=SCRIPTS` candidates are supplied, the ordered fallback
+    /// chain per run. No shaping or rasterization is performed.
+    Unicode {
+        /// Analysis action.
+        #[command(subcommand)]
+        command: UnicodeCommand,
     },
     /// Search the text of PDF files in a folder or explicit list.
     ///
@@ -1829,6 +1842,25 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `unicode` command.
+#[derive(Debug, Subcommand)]
+enum UnicodeCommand {
+    /// Analyze one PDF's text or a literal `--text` string.
+    Analyze {
+        /// Source PDF; omit when using `--text`.
+        file: Option<PathBuf>,
+        /// Literal text to analyze instead of a PDF.
+        #[arg(long, value_name = "TEXT", conflicts_with = "file")]
+        text: Option<String>,
+        /// Font candidate as `FAMILY=script1,script2`; repeat for a chain.
+        #[arg(long = "font", value_name = "FAMILY=SCRIPTS")]
+        font: Vec<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `transparency` command.
 #[derive(Debug, Subcommand)]
 enum TransparencyCommand {
@@ -2450,6 +2482,14 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Unicode { command } => match command {
+            UnicodeCommand::Analyze {
+                file,
+                text,
+                font,
+                json,
+            } => unicode::analyze(file.as_deref(), text.as_deref(), &font, json),
+        },
         Command::FindFiles {
             inputs,
             query,
