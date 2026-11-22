@@ -3751,6 +3751,159 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn form_recognize_writes_fields_from_hints() {
+    let dir = TempDir::new();
+    let manifest = dir.path.join("hints.json");
+    fs::write(
+        &manifest,
+        br#"{"hints":[
+            {"kind":"label","page":0,"x":40,"y":700,"width":80,"height":14,"text":"Name"},
+            {"kind":"input","page":0,"x":130,"y":698,"width":200,"height":18},
+            {"kind":"label","page":0,"x":40,"y":660,"width":80,"height":14,"text":"Agree"},
+            {"kind":"checkbox","page":0,"x":130,"y":658,"width":14,"height":14},
+            {"kind":"input","page":0,"x":40,"y":600,"width":200,"height":18,"name":"notes"},
+            {"kind":"label","page":0,"x":40,"y":560,"width":80,"height":14,"text":"Orphan"}
+        ]}"#,
+    )
+    .expect("write manifest");
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "recognize",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["hints"], 6);
+    assert_eq!(value["recognized"], 3);
+    assert_eq!(value["orphans"], serde_json::json!(["Orphan"]));
+    assert_eq!(value["loaded"], 3);
+    let fields = value["fields"].as_array().expect("fields");
+    assert_eq!(fields.len(), 3);
+    assert_eq!(fields[0]["name"], "name");
+    assert_eq!(fields[0]["kind"], "text");
+    assert_eq!(fields[0]["label"], "Name");
+    assert_eq!(fields[0]["rank"], 0);
+    assert_eq!(fields[1]["name"], "agree");
+    assert_eq!(fields[1]["kind"], "checkbox");
+    assert_eq!(fields[2]["name"], "notes");
+    assert_eq!(fields[2]["kind"], "text");
+
+    let list = run(&["form", "list", out.arg()]);
+    assert!(list.status.success(), "stderr: {}", stderr(&list));
+    let report = stdout(&list);
+    assert!(report.contains("name  [text]"), "{report}");
+    assert!(report.contains("agree  [checkbox]"), "{report}");
+    assert!(report.contains("notes  [text]"), "{report}");
+    assert!(report.contains("fields: 3"), "{report}");
+
+    let bytes = fs::read(&out.path).expect("recognized form");
+    let document = pdfxi_core::Document::from_bytes(bytes.clone()).expect("parse form");
+    assert_eq!(document.page_count().expect("pages"), 1);
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&[
+        "form",
+        "recognize",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        again.arg(),
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second recognized form"),
+        "recognition is deterministic"
+    );
+}
+
+#[test]
+fn form_recognize_rejects_bad_hints() {
+    let dir = TempDir::new();
+
+    let labels_only = dir.path.join("labels.json");
+    fs::write(
+        &labels_only,
+        br#"{"hints":[{"kind":"label","page":0,"x":0,"y":0,"width":10,"height":10,"text":"Only"}]}"#,
+    )
+    .expect("write labels manifest");
+    let no_controls = run(&[
+        "form",
+        "recognize",
+        labels_only.to_str().expect("manifest path"),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!no_controls.status.success());
+    assert!(
+        stderr(&no_controls).contains("no form controls were recognized"),
+        "{}",
+        stderr(&no_controls)
+    );
+
+    let unknown = dir.path.join("unknown.json");
+    fs::write(
+        &unknown,
+        br#"{"hints":[{"kind":"signature","page":0,"x":0,"y":0,"width":10,"height":10}]}"#,
+    )
+    .expect("write unknown manifest");
+    let bad_kind = run(&[
+        "form",
+        "recognize",
+        unknown.to_str().expect("manifest path"),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!bad_kind.status.success());
+    assert!(
+        stderr(&bad_kind).contains("unknown hint kind"),
+        "{}",
+        stderr(&bad_kind)
+    );
+
+    let negative = dir.path.join("negative.json");
+    fs::write(
+        &negative,
+        br#"{"hints":[{"kind":"input","page":0,"x":0,"y":0,"width":-1,"height":10}]}"#,
+    )
+    .expect("write negative manifest");
+    let bad_rect = run(&[
+        "form",
+        "recognize",
+        negative.to_str().expect("manifest path"),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!bad_rect.status.success());
+
+    let malformed = dir.path.join("malformed.json");
+    fs::write(&malformed, b"not json").expect("write malformed manifest");
+    assert!(
+        !run(&[
+            "form",
+            "recognize",
+            malformed.to_str().expect("manifest path"),
+            "--out",
+            TempOut::new("pdf").arg()
+        ])
+        .status
+        .success()
+    );
+
+    let missing = run(&[
+        "form",
+        "recognize",
+        dir.path.join("absent.json").to_str().expect("path"),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!missing.status.success());
+}
+
+#[test]
 fn watch_converts_text_html_and_images_to_pdf() {
     let watched = TempDir::new();
     let out = TempDir::new();

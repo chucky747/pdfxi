@@ -1,0 +1,19 @@
+{
+  "id": "T-0319",
+  "lane": "convert",
+  "title": "Static form recognition host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0318"],
+  "owns": [
+    "crates/pdfxi-cli/src/form.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0319.md",
+    "orchestration/feature-updates/T-0319.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli form_recognize passes; pdfxi form recognize reads real hints, writes an AcroForm PDF and reloads its fields; FORMS-005 moves to verified.",
+  "notes": "Hosts pdfxi-forms::recognition: hints JSON -> RecognitionPlan -> ConversionPlan -> serialize_form_pdf with reload verification.",
+  "evidence": "docs/evidence/cli/T-0319.md"
+}

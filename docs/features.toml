@@ -2304,14 +2304,46 @@ tests = [
 title = "Form field actions and tab order"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/recognition.rs, docs/evidence/forms/T-0115.md"
+docs = [
+    "crates/pdfxi-cli/src/form.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0319.md",
+]
 domain = "Forms"
-evidence = "docs/evidence/forms/T-0115.md"
+evidence = "docs/evidence/cli/T-0319.md"
 id = "FORMS-005"
-notes = "Heuristic conversion of caller-supplied static control hints into an AcroForm plan; no OCR."
+notes = """
+Verified through `pdfxi form recognize <HINTS.json> --out FORM.pdf [--json]`.
+
+The manifest lists caller-classified rectangles (label, input, checkbox, radio or
+choice) in page points with optional text/name. recognize pairs each control
+with at most one nearby label on the same page and assigns stable names,
+confidence and reading rank. conversion_plan yields FieldSpecs;
+field_dictionary/widget_annotation build the dictionaries and
+serialize_form_pdf writes a one-page US-Letter AcroForm PDF. The bytes are
+reloaded through pdfxi-forms::load_acroform and pdfxi-core; field count, names
+and page count must agree before the file is written.
+
+Evidence: a six-hint manifest recognizes three controls (name text with label
+Name confidence .85, agree checkbox with label Agree confidence .95, notes text
+confidence .65), reports Orphan as an orphan label, writes 1369 bytes and
+reloads 3 fields; pdfxi form list shows name/agree/notes and fields: 3, and
+pdfxi info reports PDF 1.7 and one page. Labels-only hints fail with 'no form
+controls were recognized', an unknown kind fails with the expected list, a
+negative rectangle fails, and malformed JSON or a missing manifest fail.
+
+Gates: cargo test -p pdfxi-cli --test cli form_recognize = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: hints are caller-classified; no OCR or page-content analysis. The output
+is a fresh one-page form, not an overlay on an existing PDF, and radio groups
+get one On option.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::form_recognize_writes_fields_from_hints",
+    "cli::form_recognize_rejects_bad_hints",
     "recognition::tests::recognizes_controls_with_confidence_and_reading_order",
     "recognition::tests::conversion_plan_builds_form_and_acroform_dictionary",
 ]

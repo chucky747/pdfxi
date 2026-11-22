@@ -18,6 +18,7 @@ command.
 | Office integration round trip | `PLAT-003` | verified | `pdfxi-convert::office_integration` | `office plan` / `office convert` |
 | Sandboxed Acrobat-compatible JavaScript | `AUTO-004` | verified | `pdfxi-automation::js` | `script run` |
 | Watched-folder conversion | `CREATE-014` | verified | `pdfxi-automation::watched` + `pdfxi-convert` adapters | `watch` |
+| Static form-field recognition | `FORMS-005` | verified | `pdfxi-forms::recognition` | `form recognize` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -40,6 +41,20 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Static form recognition is exposed as:
+
+```text
+pdfxi form recognize <HINTS.json> --out <FORM.pdf> [--json]
+```
+
+`HINTS.json` lists caller-classified rectangles in page points:
+`{"hints":[{"kind":"label","page":0,"x":40,"y":700,"width":80,"height":14,"text":"Name"},{"kind":"input","page":0,"x":130,"y":698,"width":200,"height":18}]}`.
+`kind` is `label`, `input`, `checkbox`, `radio` or `choice`; an optional `name`
+overrides the generated field name. `recognize` pairs each control with at most
+one nearby label on the same page, produces stable names/confidence in reading
+order, and writes a one-page AcroForm PDF that is reloaded through
+`pdfxi-forms` and `pdfxi-core` before it is reported. Unmatched labels are
+listed as orphans. No OCR or page-content analysis is performed.
 Watched-folder conversion is exposed as:
 
 ```text

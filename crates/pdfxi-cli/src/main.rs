@@ -1367,6 +1367,22 @@ enum FormCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Recognize static label/control hints and write an AcroForm PDF.
+    ///
+    /// The manifest supplies caller-classified rectangles (label, input,
+    /// checkbox, radio, choice) in page points. Recognition pairs each control
+    /// with at most one nearby label, assigns stable names and confidence, and
+    /// the written form is reloaded before it is reported.
+    Recognize {
+        /// Recognition manifest JSON.
+        manifest: PathBuf,
+        /// Destination form PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// List the terminal fields of a form PDF.
     List {
         /// Path to the PDF file.
@@ -2387,6 +2403,11 @@ fn main() -> anyhow::Result<()> {
         },
         Command::Form { command } => match command {
             FormCommand::Create { out, fields, json } => form::run_create(&out, &fields, json),
+            FormCommand::Recognize {
+                manifest,
+                out,
+                json,
+            } => form::run_recognize(&manifest, &out, json),
             FormCommand::List { file, json } => form::run_list(&file, json),
             FormCommand::Validate {
                 file,

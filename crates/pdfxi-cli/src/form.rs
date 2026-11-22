@@ -19,12 +19,13 @@ use pdfxi_core::{Document, Object, ObjectId};
 use pdfxi_forms::{
     AcroFormModel, ActionCollector, ActionReport, BlankBundle, BundleMeta, Calculation,
     CalculationOp, CalculationPlan, CalculationStep, DocumentRights, Field, FieldProperties,
-    FieldSpec, FieldType, FieldValue, Form, FormSource, NavPolicy, ObjectRef, PdfDocument,
-    PdfValue, PropertySet, ReaderEnablePlan, ResponseFile, ResponseFormat, TabOrder, TabPolicy,
-    TabWidget, UsageRight, UsageRightsSignature, WidgetRect, load_acroform, merge_responses,
-    parse_bundle, parse_pdf, parse_rights_dictionary, read_acroform, serialize_form_pdf,
+    FieldSpec, FieldType, FieldValue, Form, FormHint, FormSource, HintKind, NavPolicy, ObjectRef,
+    PdfDocument, PdfValue, PropertySet, ReaderEnablePlan, ResponseFile, ResponseFormat, TabOrder,
+    TabPolicy, TabWidget, UsageRight, UsageRightsSignature, WidgetRect, load_acroform,
+    merge_responses, parse_bundle, parse_pdf, parse_rights_dictionary, read_acroform, recognize,
+    serialize_form_pdf,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Page width emitted by `serialize_form_pdf`.
 const PAGE_WIDTH: f32 = 612.0;
@@ -1855,4 +1856,214 @@ mod tests {
             PdfValue::Reference(pdfxi_forms::ObjectRef::new(7, 0))
         );
     }
+}
+
+/// One hint in the recognition manifest.
+#[derive(Debug, Deserialize)]
+struct HintInput {
+    /// `label`, `input`, `checkbox`, `radio` or `choice`.
+    kind: String,
+    /// Zero-based page index.
+    page: u32,
+    /// Lower-left x in points.
+    x: f32,
+    /// Lower-left y in points.
+    y: f32,
+    /// Width in points.
+    width: f32,
+    /// Height in points.
+    height: f32,
+    /// Visible label or prompt.
+    #[serde(default)]
+    text: Option<String>,
+    /// Explicit field name.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// The recognition manifest.
+#[derive(Debug, Deserialize)]
+struct RecognitionFile {
+    /// Static control and label hints.
+    hints: Vec<HintInput>,
+}
+
+/// One recognized field row.
+#[derive(Serialize)]
+struct RecognizedRow {
+    /// Generated field name.
+    name: String,
+    /// Field type label.
+    kind: String,
+    /// Zero-based page.
+    page: u32,
+    /// Widget rectangle.
+    rect: [f32; 4],
+    /// Paired label, when any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    /// Heuristic confidence.
+    confidence: f32,
+    /// Reading-order rank.
+    rank: usize,
+}
+
+/// JSON shape of `pdfxi form recognize`.
+#[derive(Serialize)]
+struct RecognizeReport {
+    /// Source manifest.
+    manifest: String,
+    /// Written form PDF.
+    out: String,
+    /// Hints supplied.
+    hints: usize,
+    /// Controls recognized.
+    recognized: usize,
+    /// Label texts with no control.
+    orphans: Vec<String>,
+    /// Recognized fields in reading order.
+    fields: Vec<RecognizedRow>,
+    /// Bytes written.
+    bytes: usize,
+    /// Fields read back from the written PDF.
+    loaded: usize,
+}
+
+/// Parse one hint kind.
+fn parse_hint_kind(text: &str) -> anyhow::Result<HintKind> {
+    match text.to_ascii_lowercase().as_str() {
+        "label" => Ok(HintKind::Label),
+        "input" | "input-box" | "text" => Ok(HintKind::InputBox),
+        "checkbox" | "check" => Ok(HintKind::CheckBox),
+        "radio" | "radio-group" => Ok(HintKind::RadioGroup),
+        "choice" | "combo" | "list" => Ok(HintKind::Choice),
+        other => {
+            bail!("unknown hint kind {other:?}; expected label, input, checkbox, radio or choice")
+        }
+    }
+}
+
+/// `pdfxi form recognize`.
+pub(crate) fn run_recognize(manifest: &Path, out: &Path, json: bool) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(manifest)
+        .with_context(|| format!("read manifest {}", manifest.display()))?;
+    let file: RecognitionFile = serde_json::from_str(&text)
+        .with_context(|| format!("parse manifest {}", manifest.display()))?;
+    let mut hints = Vec::with_capacity(file.hints.len());
+    for (index, hint) in file.hints.iter().enumerate() {
+        let kind =
+            parse_hint_kind(&hint.kind).with_context(|| format!("hint {index}: {}", hint.kind))?;
+        let mut model = FormHint::new(
+            kind,
+            WidgetRect::new(hint.x, hint.y, hint.width, hint.height),
+            hint.page,
+        );
+        if let Some(label) = &hint.text {
+            model = model.with_text(label.clone());
+        }
+        if let Some(name) = &hint.name {
+            model = model.with_name(name.clone());
+        }
+        hints.push(model);
+    }
+    let plan = recognize(&hints).map_err(|error| anyhow::anyhow!("recognize hints: {error}"))?;
+    if plan.fields().is_empty() {
+        bail!("no form controls were recognized");
+    }
+    let conversion = plan
+        .conversion_plan()
+        .map_err(|error| anyhow::anyhow!("convert recognized hints: {error}"))?;
+    let specs = conversion.specs();
+    let fields: Vec<PdfValue> = specs
+        .iter()
+        .map(|spec| {
+            spec.field_dictionary()
+                .map_err(|error| anyhow::anyhow!("build field {:?}: {error}", spec.name()))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let widgets: Vec<PdfValue> = specs
+        .iter()
+        .map(|spec| {
+            spec.widget_annotation()
+                .map_err(|error| anyhow::anyhow!("build widget {:?}: {error}", spec.name()))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let page = pdfxi_forms::ObjectRef::new(PAGE_OBJECT, 0);
+    let bytes = serialize_form_pdf(&fields, &widgets, Some(page))
+        .map_err(|error| anyhow::anyhow!("serialize recognized form: {error}"))?;
+    let loaded = loaded_fields(&bytes)?.context("the serialized document has no /AcroForm")?;
+    if loaded.len() != plan.fields().len() {
+        bail!(
+            "wrote {} fields but reloaded {}",
+            plan.fields().len(),
+            loaded.len()
+        );
+    }
+    let core = pdfxi_core::Document::from_bytes(bytes.clone())
+        .map_err(|error| anyhow::anyhow!("general reader rejected the form PDF: {error}"))?;
+    let pages = core
+        .pages()
+        .map_err(|error| anyhow::anyhow!("read form page tree: {error}"))?;
+    if pages.len() != 1 {
+        bail!("expected one page in the form PDF, found {}", pages.len());
+    }
+    std::fs::write(out, &bytes).with_context(|| format!("write {}", out.display()))?;
+
+    let report = RecognizeReport {
+        manifest: manifest.display().to_string(),
+        out: out.display().to_string(),
+        hints: hints.len(),
+        recognized: plan.fields().len(),
+        orphans: plan.orphan_labels().to_vec(),
+        fields: plan
+            .fields()
+            .iter()
+            .map(|field| RecognizedRow {
+                name: field.name().to_owned(),
+                kind: field.field_type().to_string(),
+                page: field.page(),
+                rect: [
+                    field.rect().x,
+                    field.rect().y,
+                    field.rect().width,
+                    field.rect().height,
+                ],
+                label: field.label().map(str::to_owned),
+                confidence: field.confidence(),
+                rank: field.rank(),
+            })
+            .collect(),
+        bytes: bytes.len(),
+        loaded: loaded.len(),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!("out: {}", report.out);
+    println!(
+        "hints: {}  recognized: {}  orphans: {}  bytes: {}  loaded: {}",
+        report.hints,
+        report.recognized,
+        report.orphans.len(),
+        report.bytes,
+        report.loaded
+    );
+    for row in &report.fields {
+        let rect = format!(
+            "{} {} {} {}",
+            row.rect[0], row.rect[1], row.rect[2], row.rect[3]
+        );
+        match &row.label {
+            Some(label) => println!(
+                "field: {} [{}] page {} rect: {rect} label: {} confidence: {:.2}",
+                row.name, row.kind, row.page, label, row.confidence
+            ),
+            None => println!(
+                "field: {} [{}] page {} rect: {rect} confidence: {:.2}",
+                row.name, row.kind, row.page, row.confidence
+            ),
+        }
+    }
+    Ok(())
 }
