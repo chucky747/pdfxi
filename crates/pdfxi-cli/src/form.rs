@@ -18,9 +18,10 @@ use anyhow::{Context, bail};
 use pdfxi_core::{Document, Object, ObjectId};
 use pdfxi_forms::{
     AcroFormModel, ActionCollector, ActionReport, Calculation, CalculationOp, CalculationPlan,
-    CalculationStep, Field, FieldProperties, FieldSpec, FieldType, FieldValue, Form, FormSource,
-    NavPolicy, ObjectRef, PdfDocument, PdfValue, PropertySet, TabOrder, TabPolicy, TabWidget,
-    WidgetRect, load_acroform, parse_pdf, read_acroform, serialize_form_pdf,
+    CalculationStep, DocumentRights, Field, FieldProperties, FieldSpec, FieldType, FieldValue,
+    Form, FormSource, NavPolicy, ObjectRef, PdfDocument, PdfValue, PropertySet, ReaderEnablePlan,
+    TabOrder, TabPolicy, TabWidget, UsageRight, UsageRightsSignature, WidgetRect, load_acroform,
+    parse_pdf, parse_rights_dictionary, read_acroform, serialize_form_pdf,
 };
 use serde::Serialize;
 
@@ -1059,6 +1060,237 @@ pub(crate) fn run_calculate(
     for row in &payload.results {
         println!("{} = {}", row.target, row.value);
     }
+    Ok(())
+}
+
+/// One parsed reader-enable right.
+fn parse_rights(text: &str) -> anyhow::Result<DocumentRights> {
+    let mut rights = DocumentRights::new();
+    for token in text.split(',') {
+        let key = token.trim().to_ascii_lowercase().replace('_', "-");
+        let right = match key.as_str() {
+            "" => continue,
+            "fill" | "fill-in" | "form-fill" => UsageRight::FillIn,
+            "save" => UsageRight::Save,
+            "annotate" | "annotation" => UsageRight::Annotate,
+            "assemble" => UsageRight::Assemble,
+            "copy" | "copy-extract" | "extract" => UsageRight::CopyExtract,
+            "accessibility" | "a11y" => UsageRight::Accessibility,
+            "all" => {
+                for right in UsageRight::ALL {
+                    rights = rights.with(right);
+                }
+                continue;
+            }
+            other => bail!(
+                "unknown right {other:?}; expected fill, save, annotate, assemble, copy-extract, accessibility or all"
+            ),
+        };
+        rights = rights.with(right);
+    }
+    if rights.bits() == 0 {
+        bail!("--rights must name at least one right");
+    }
+    Ok(rights)
+}
+
+/// Convert a forms value into a core object for writing.
+fn to_core_object(value: &PdfValue, depth: u8) -> anyhow::Result<Object> {
+    if depth > 64 {
+        bail!("reader-enable dictionary is nested too deeply");
+    }
+    Ok(match value {
+        PdfValue::Null => Object::Null,
+        PdfValue::Bool(flag) => Object::Boolean(*flag),
+        PdfValue::Number(number) => {
+            if !number.is_finite() {
+                bail!("reader-enable dictionary carries a non-finite number");
+            }
+            if number.fract() == 0.0 && number.abs() <= 9_007_199_254_740_992.0 {
+                Object::Integer(*number as i64)
+            } else {
+                Object::Real(*number)
+            }
+        }
+        PdfValue::Integer(value) => {
+            Object::Integer(i64::try_from(*value).context("reader-enable integer out of range")?)
+        }
+        PdfValue::Text(text) => Object::String(pdfxi_core::encode_text_string(text)),
+        PdfValue::Name(name) => Object::Name(name.clone()),
+        PdfValue::Array(items) => Object::Array(
+            items
+                .iter()
+                .map(|item| to_core_object(item, depth + 1))
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        ),
+        PdfValue::Dictionary(entries) => Object::Dictionary(
+            entries
+                .iter()
+                .map(|(key, item)| Ok((key.clone(), to_core_object(item, depth + 1)?)))
+                .collect::<anyhow::Result<std::collections::BTreeMap<_, _>>>()?,
+        ),
+        PdfValue::Reference(_) => bail!("reader-enable dictionary must not carry references"),
+        PdfValue::Stream { .. } => bail!("reader-enable dictionary must not carry streams"),
+    })
+}
+
+/// Report written by `pdfxi form reader-enable`.
+#[derive(Serialize)]
+struct ReaderEnableReport {
+    /// Input file.
+    file: String,
+    /// Written file.
+    out: String,
+    /// Pages in the document.
+    pages: usize,
+    /// Granted rights, sorted by label.
+    rights: Vec<String>,
+    /// Local filter name.
+    filter: String,
+    /// Placeholder `/Contents` size.
+    placeholder_bytes: usize,
+    /// Optional reason metadata.
+    reason: Option<String>,
+    /// Whether the local policy allows filling.
+    can_fill: bool,
+    /// Whether the local policy allows saving.
+    can_save: bool,
+    /// Always `false`: this is compatibility metadata, not certification.
+    certified: bool,
+    /// Bytes written.
+    bytes: usize,
+}
+
+/// `pdfxi form reader-enable`.
+pub(crate) fn run_reader_enable(
+    file: &Path,
+    out: &Path,
+    rights_text: &str,
+    reason: Option<&str>,
+    placeholder_bytes: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    let rights = parse_rights(rights_text)?;
+    let mut signature = UsageRightsSignature::local().with_placeholder_bytes(placeholder_bytes);
+    if let Some(reason) = reason {
+        signature = signature.with_reason(reason);
+    }
+    let plan = ReaderEnablePlan::new(rights).with_signature(signature);
+    plan.validate()
+        .map_err(|error| anyhow::anyhow!("reader-enable plan: {error}"))?;
+    let generated = to_core_object(
+        &plan
+            .to_dictionary()
+            .map_err(|error| anyhow::anyhow!("reader-enable dictionary: {error}"))?,
+        0,
+    )?;
+    let Object::Dictionary(generated) = generated else {
+        bail!("reader-enable dictionary is not a dictionary");
+    };
+    let ur = generated
+        .get("Perms")
+        .and_then(Object::as_dictionary)
+        .and_then(|perms| perms.get("UR"))
+        .cloned()
+        .context("generated reader-enable dictionary has no /Perms /UR")?;
+
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let mut document = Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let pages = document
+        .page_count()
+        .map_err(|error| anyhow::anyhow!("count pages: {error}"))?;
+    let catalog_id = document
+        .root()
+        .map_err(|error| anyhow::anyhow!("read catalog: {error}"))?;
+    let mut catalog = document
+        .object(catalog_id)
+        .map_err(|error| anyhow::anyhow!("load catalog: {error}"))?
+        .as_dictionary()
+        .context("catalog is not a dictionary")?
+        .clone();
+    let mut perms = catalog
+        .get("Perms")
+        .and_then(Object::as_dictionary)
+        .cloned()
+        .unwrap_or_default();
+    perms.insert("UR".to_owned(), ur);
+    catalog.insert("Perms".to_owned(), Object::Dictionary(perms));
+    document
+        .set_object(catalog_id, Object::Dictionary(catalog))
+        .map_err(|error| anyhow::anyhow!("stage catalog: {error}"))?;
+    let saved = document
+        .save()
+        .with_context(|| format!("save {}", out.display()))?;
+    std::fs::write(out, &saved).with_context(|| format!("write {}", out.display()))?;
+
+    let reopened = Document::from_bytes(saved.clone())
+        .map_err(|error| anyhow::anyhow!("reopen {}: {error}", out.display()))?;
+    let catalog = reopened
+        .object(
+            reopened
+                .root()
+                .map_err(|error| anyhow::anyhow!("read saved catalog: {error}"))?,
+        )
+        .map_err(|error| anyhow::anyhow!("load saved catalog: {error}"))?;
+    let parsed = parse_rights_dictionary(&to_forms_value(&catalog, 0)).map_err(|error| {
+        anyhow::anyhow!("saved /Perms /UR is not a valid reader-enable dictionary: {error}")
+    })?;
+    let expected = plan.report();
+    let actual = parsed.report();
+    if actual.rights() != expected.rights() {
+        bail!(
+            "saved rights {:?} do not match the requested {:?}",
+            actual.rights(),
+            expected.rights()
+        );
+    }
+    if actual.filter() != expected.filter() {
+        bail!(
+            "saved filter {:?} does not match {:?}",
+            actual.filter(),
+            expected.filter()
+        );
+    }
+    let can_fill = parsed
+        .can_fill()
+        .map_err(|error| anyhow::anyhow!("fill decision: {error}"))?
+        .is_allowed();
+    let can_save = parsed
+        .can_save()
+        .map_err(|error| anyhow::anyhow!("save decision: {error}"))?
+        .is_allowed();
+
+    let report = ReaderEnableReport {
+        file: file.display().to_string(),
+        out: out.display().to_string(),
+        pages,
+        rights: actual.rights().to_vec(),
+        filter: actual.filter().to_owned(),
+        placeholder_bytes: actual.placeholder_bytes(),
+        reason: reason.map(str::to_owned),
+        can_fill,
+        can_save,
+        certified: false,
+        bytes: saved.len(),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!("file: {}", report.file);
+    println!("out:  {}", report.out);
+    println!("pages: {}", report.pages);
+    println!("rights: {}", report.rights.join(","));
+    println!("filter: {}", report.filter);
+    println!("placeholder_bytes: {}", report.placeholder_bytes);
+    if let Some(reason) = &report.reason {
+        println!("reason: {reason}");
+    }
+    println!("can_fill: {}", report.can_fill);
+    println!("can_save: {}", report.can_save);
+    println!("certified: false");
+    println!("bytes: {}", report.bytes);
     Ok(())
 }
 

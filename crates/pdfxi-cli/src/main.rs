@@ -1161,6 +1161,30 @@ enum FormCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Write local reader-enable rights metadata into `/Perms /UR`.
+    ///
+    /// This is compatibility metadata for form filling and saving, not Adobe
+    /// certification and not a cryptographic signature.
+    ReaderEnable {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Comma-separated rights: fill, save, annotate, assemble, copy-extract,
+        /// accessibility or all.
+        #[arg(long, default_value = "fill,save")]
+        rights: String,
+        /// Optional reason metadata.
+        #[arg(long, value_name = "TEXT")]
+        reason: Option<String>,
+        /// Placeholder `/Contents` size in bytes (1-65536).
+        #[arg(long, default_value_t = 4096)]
+        placeholder_bytes: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Operations on the `pdfxi accessibility` command group.
@@ -1964,6 +1988,21 @@ fn main() -> anyhow::Result<()> {
                 form::run_tabs(&file, policy.as_deref(), nav, json)
             }
             FormCommand::Actions { file, json } => form::run_actions(&file, json),
+            FormCommand::ReaderEnable {
+                file,
+                out,
+                rights,
+                reason,
+                placeholder_bytes,
+                json,
+            } => form::run_reader_enable(
+                &file,
+                &out,
+                &rights,
+                reason.as_deref(),
+                placeholder_bytes,
+                json,
+            ),
         },
         Command::Accessibility { command } => match command {
             AccessibilityCommand::Check {

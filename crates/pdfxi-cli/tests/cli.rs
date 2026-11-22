@@ -3540,6 +3540,165 @@ fn font_add_text_handles_an_authoring_page_and_alignment() {
 }
 
 #[test]
+fn form_reader_enable_writes_rights_and_fill_save_decisions() {
+    let source = root_fixture("minimal.pdf");
+    let out = TempOut::new("pdf");
+    let enabled = run(&[
+        "form",
+        "reader-enable",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--rights",
+        "fill,save",
+        "--reason",
+        "local trial",
+        "--json",
+    ]);
+    assert!(enabled.status.success(), "stderr: {}", stderr(&enabled));
+    let value: Value = serde_json::from_str(&stdout(&enabled)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["rights"], serde_json::json!(["fill-in", "save"]));
+    assert_eq!(value["filter"], "PDFXI.ReaderEnable.Local");
+    assert_eq!(value["placeholder_bytes"], 4096);
+    assert_eq!(value["reason"], "local trial");
+    assert_eq!(value["can_fill"], true);
+    assert_eq!(value["can_save"], true);
+    assert_eq!(value["certified"], false);
+
+    let bytes = fs::read(&out.path).expect("enabled bytes");
+    let text = String::from_utf8_lossy(&bytes);
+    for key in ["/Perms", "/UR", "/Ff", "PDFXI.ReaderEnable.Local"] {
+        assert!(text.contains(key), "saved bytes are missing {key}");
+    }
+    assert_ne!(fs::read(&source).expect("source"), bytes);
+
+    let save_only = TempOut::new("pdf");
+    let second = run(&[
+        "form",
+        "reader-enable",
+        out.arg(),
+        "--out",
+        save_only.arg(),
+        "--rights",
+        "save",
+        "--json",
+    ]);
+    assert!(second.status.success(), "stderr: {}", stderr(&second));
+    let value: Value = serde_json::from_str(&stdout(&second)).expect("valid JSON");
+    assert_eq!(value["rights"], serde_json::json!(["save"]));
+    assert_eq!(value["can_fill"], false);
+    assert_eq!(value["can_save"], true);
+
+    let info = run(&["info", out.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+
+    let bad = run(&[
+        "form",
+        "reader-enable",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--rights",
+        "fill,teleport",
+    ]);
+    assert!(!bad.status.success());
+    assert!(stderr(&bad).contains("unknown right"), "{}", stderr(&bad));
+
+    let zero = run(&[
+        "form",
+        "reader-enable",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--placeholder-bytes",
+        "0",
+    ]);
+    assert!(!zero.status.success());
+    assert!(
+        stderr(&zero).contains("outside 1..=65536"),
+        "{}",
+        stderr(&zero)
+    );
+}
+
+#[test]
+fn form_reader_enable_keeps_fields_and_handles_every_right() {
+    let form = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        form.arg(),
+        "--field",
+        "text:Name:72,600,168,20",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    let out = TempOut::new("pdf");
+    let enabled = run(&[
+        "form",
+        "reader-enable",
+        form.arg(),
+        "--out",
+        out.arg(),
+        "--rights",
+        "all",
+        "--placeholder-bytes",
+        "128",
+        "--json",
+    ]);
+    assert!(enabled.status.success(), "stderr: {}", stderr(&enabled));
+    let value: Value = serde_json::from_str(&stdout(&enabled)).expect("valid JSON");
+    assert_eq!(value["placeholder_bytes"], 128);
+    let rights: Vec<&str> = value["rights"]
+        .as_array()
+        .expect("rights")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(
+        rights,
+        [
+            "fill-in",
+            "save",
+            "annotate",
+            "assemble",
+            "copy-extract",
+            "accessibility"
+        ]
+    );
+    assert_eq!(value["can_fill"], true);
+    assert_eq!(value["can_save"], true);
+
+    let listed = run(&["form", "list", out.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    let fields = value["fields"].as_array().expect("fields");
+    assert_eq!(fields.len(), 1, "{}", stdout(&listed));
+    assert_eq!(fields[0]["name"], "Name");
+
+    let repeated = TempOut::new("pdf");
+    let again = run(&[
+        "form",
+        "reader-enable",
+        form.arg(),
+        "--out",
+        repeated.arg(),
+        "--rights",
+        "all",
+        "--placeholder-bytes",
+        "128",
+    ]);
+    assert!(again.status.success(), "stderr: {}", stderr(&again));
+    assert_eq!(
+        fs::read(&out.path).expect("first"),
+        fs::read(&repeated.path).expect("second"),
+        "reader-enable output is deterministic"
+    );
+}
+
+#[test]
 fn replace_rewrites_text_and_reports_remaining_matches() {
     let source = root_fixture("minimal.pdf");
     let out = TempOut::new("pdf");

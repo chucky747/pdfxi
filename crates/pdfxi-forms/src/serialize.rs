@@ -796,6 +796,7 @@ fn parse_value(cursor: &mut Cursor<'_>, depth: usize) -> Result<PdfValue, ParseE
                 data,
             })
         }
+        b'<' => parse_hex_string(cursor),
         b'0'..=b'9' | b'+' | b'-' | b'.' => parse_number_or_reference(cursor),
         b't' if cursor.data.get(cursor.pos..cursor.pos + 4) == Some(b"true".as_slice()) => {
             cursor.pos += 4;
@@ -903,6 +904,33 @@ fn parse_string(cursor: &mut Cursor<'_>) -> Result<PdfValue, ParseError> {
         }
     }
     Err(ParseError::UnexpectedEof("string"))
+}
+
+fn parse_hex_string(cursor: &mut Cursor<'_>) -> Result<PdfValue, ParseError> {
+    cursor.pos += 1;
+    let mut digits = Vec::new();
+    loop {
+        let byte = cursor
+            .peek()
+            .ok_or(ParseError::UnexpectedEof("hex string"))?;
+        cursor.pos += 1;
+        match byte {
+            b'>' => break,
+            byte if byte.is_ascii_whitespace() => continue,
+            byte => {
+                let digit = hex_digit(byte).ok_or_else(|| {
+                    ParseError::UnexpectedToken(format!("invalid hex digit 0x{byte:02X}"))
+                })?;
+                digits.push(digit);
+            }
+        }
+    }
+    if digits.len() % 2 == 1 {
+        digits.push(0);
+    }
+    let (pairs, _) = digits.as_chunks::<2>();
+    let bytes: Vec<u8> = pairs.iter().map(|pair| (pair[0] << 4) | pair[1]).collect();
+    Ok(PdfValue::Text(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 fn decode_name(raw: &[u8]) -> String {
@@ -1215,5 +1243,26 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "[0 9007199254740993 18446744073709551615]"
         );
+    }
+
+    #[test]
+    fn hex_strings_parse_with_whitespace_and_odd_digits() {
+        let mut cursor = Cursor::new(b"<48656C6C6F>", 0);
+        assert_eq!(
+            parse_value(&mut cursor, 0).unwrap(),
+            PdfValue::Text("Hello".to_owned())
+        );
+        let mut cursor = Cursor::new(b"<48 65 6C 6C 6F>", 0);
+        assert_eq!(
+            parse_value(&mut cursor, 0).unwrap(),
+            PdfValue::Text("Hello".to_owned())
+        );
+        let mut cursor = Cursor::new(b"<48656C6C6F7>", 0);
+        assert_eq!(
+            parse_value(&mut cursor, 0).unwrap(),
+            PdfValue::Text("Hellop".to_owned())
+        );
+        let mut cursor = Cursor::new(b"<4Z>", 0);
+        assert!(parse_value(&mut cursor, 0).is_err());
     }
 }

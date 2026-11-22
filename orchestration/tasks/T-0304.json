@@ -1,0 +1,20 @@
+{
+  "id": "T-0304",
+  "lane": "forms",
+  "title": "Reader-enable rights host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0303"],
+  "owns": [
+    "crates/pdfxi-cli/src/form.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "crates/pdfxi-forms/src/serialize.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0304.md",
+    "orchestration/feature-updates/T-0304.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli form_reader_enable passes; pdfxi form reader-enable writes and reparses /Perms /UR on real PDFs, reports fill/save decisions and keeps existing fields readable; FORMS-008 moves to verified.",
+  "notes": "Writes ReaderEnablePlan metadata into the catalog, preserves other /Perms keys, verifies with parse_rights_dictionary, and adds hexadecimal-string parsing to the forms mini parser.",
+  "evidence": "docs/evidence/cli/T-0304.md"
+}

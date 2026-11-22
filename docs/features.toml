@@ -2289,14 +2289,56 @@ tests = [
 title = "Flatten forms and preserve appearance"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/reader_enable.rs, docs/evidence/forms/T-0135.md"
+docs = [
+    "crates/pdfxi-cli/src/form.rs",
+    "crates/pdfxi-forms/src/serialize.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0304.md",
+]
 domain = "Forms"
-evidence = "docs/evidence/forms/T-0135.md"
+evidence = "docs/evidence/cli/T-0304.md"
 id = "FORMS-008"
-notes = "Local replacement per ADR 0008: ReaderEnablePlan + FillSavePolicy + parse_rights_dictionary provide /Perms /UR compatibility metadata with a local signature placeholder, can_fill/can_save decisions, and typed validation of existing rights dictionaries. No cryptography and no Adobe certification claim."
+notes = """
+Verified through `pdfxi form reader-enable <FILE> --out PATH [--rights LIST]
+[--reason TEXT] [--placeholder-bytes N] [--json]`.
+
+Rights accept fill/fill-in, save, annotate, assemble, copy/copy-extract,
+accessibility/a11y or all; unknown names and an empty set are rejected before
+the document is read. ReaderEnablePlan with a local UsageRightsSignature
+validates filter, reason and placeholder size (1..=65536) and produces the
+/Perms /UR dictionary. The host converts the forms value to core objects,
+preserves any other /Perms entries, replaces only /UR, stages the catalog and
+saves. It reopens the output, converts the catalog back and runs
+parse_rights_dictionary, checking that saved rights and filter match and
+reporting can_fill/can_save. certified is always false: the filter is
+PDFXI-local and /Contents is ASCII 0 placeholders, not a signature.
+
+A full core save canonicalises strings to hexadecimal, which the forms mini
+parser rejected. This task adds hexadecimal-string parsing (with whitespace and
+odd-digit padding) so form list still reads a reader-enabled form, with a
+regression test.
+
+Evidence: minimal.pdf fill+save reports rights fill-in/save, filter
+PDFXI.ReaderEnable.Local, placeholder 4096, can_fill/can_save true, certified
+false, 8896 bytes, and saved bytes contain /Perms, /UR, /Ff and the filter. A
+save-only grant reports can_fill false and can_save true. Enabling every right on
+a created form at 128 bytes keeps the Name field visible through form list and
+is byte-identical across runs. Unknown rights and placeholder 0 are typed
+errors.
+
+Gates: cargo test -p pdfxi-cli --test cli form_reader_enable = 2 passed; cargo
+test -p pdfxi-forms serialize:: = 14 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: local compatibility metadata only; no cryptography, signature, Adobe
+certification or rights enforcement, and only /UR is written.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::form_reader_enable_writes_rights_and_fill_save_decisions",
+    "cli::form_reader_enable_keeps_fields_and_handles_every_right",
+    "serialize::tests::hex_strings_parse_with_whitespace_and_odd_digits",
     "reader_enable::tests::rights_round_trip_through_dictionary",
     "reader_enable::tests::can_fill_allowed_when_fill_in_granted",
     "reader_enable::tests::can_save_allowed_when_save_granted",
