@@ -199,6 +199,8 @@ mod layers;
 mod repair;
 /// `pdfxi action sequence`: run Action Wizard steps over real documents.
 mod sequence;
+/// `pdfxi timestamp`: mint and validate RFC 3161 timestamp tokens.
+mod timestamp;
 
 use std::path::{Path, PathBuf};
 
@@ -467,6 +469,12 @@ enum Command {
         /// Envelope action.
         #[command(subcommand)]
         command: EnvelopeCommand,
+    },
+    /// Mint and validate RFC 3161 timestamp tokens.
+    Timestamp {
+        /// Timestamp action.
+        #[command(subcommand)]
+        command: TimestampCommand,
     },
     /// Inspect, catalogue, list or remove local digital IDs.
     Id {
@@ -1449,6 +1457,78 @@ enum ActionCommand {
         /// Directory for the written PDFs (defaults to each input's folder).
         #[arg(long, value_name = "DIR")]
         out_dir: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi timestamp` command group.
+#[derive(Debug, Subcommand)]
+enum TimestampCommand {
+    /// Mint an RFC 3161 timestamp token locally from an RSA identity.
+    ///
+    /// This is an offline TSA: no network request is made. The token covers the
+    /// digest of `--content` and is signed with `--key` for `--cert`.
+    Sign {
+        /// Content file whose digest is stamped.
+        content: PathBuf,
+        /// Written DER token.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Unencrypted RSA private key (PKCS#8 or PKCS#1 PEM).
+        #[arg(long, value_name = "PATH")]
+        key: PathBuf,
+        /// TSA certificate PEM or DER.
+        #[arg(long, value_name = "PATH")]
+        cert: PathBuf,
+        /// Imprint digest: `sha256`, `sha384` or `sha512`.
+        #[arg(long, default_value = "sha256")]
+        digest: String,
+        /// TSA policy OID.
+        #[arg(long, default_value = "1.3.6.1.4.1.13762.3.1")]
+        policy: String,
+        /// TSA serial number.
+        #[arg(long, default_value_t = 1)]
+        serial: u64,
+        /// `genTime` in Unix seconds (defaults to the system clock).
+        #[arg(long, value_name = "UNIX")]
+        time: Option<u64>,
+        /// Nonce echoed in the token.
+        #[arg(long)]
+        nonce: Option<u64>,
+        /// Set the ordering flag.
+        #[arg(long)]
+        ordering: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate an RFC 3161 timestamp token against caller-supplied trust.
+    Verify {
+        /// DER token to validate.
+        token: PathBuf,
+        /// Content file the token must cover.
+        #[arg(long, value_name = "PATH")]
+        content: PathBuf,
+        /// TSA certificate PEM or DER (the first certificate is the signer).
+        #[arg(long, value_name = "PATH")]
+        cert: PathBuf,
+        /// Trust anchor PEM or DER; repeatable. Defaults to `--cert`.
+        #[arg(long = "anchor", value_name = "PATH")]
+        anchor: Vec<PathBuf>,
+        /// Intermediate certificate PEM or DER; repeatable.
+        #[arg(long = "chain", value_name = "PATH")]
+        chain: Vec<PathBuf>,
+        /// Expected nonce; the token must echo it.
+        #[arg(long)]
+        nonce: Option<u64>,
+        /// Validation clock in Unix seconds for the future-skew guard.
+        #[arg(long, value_name = "UNIX")]
+        at: Option<u64>,
+        /// Do not require the RFC 3161 timeStamping EKU on the TSA certificate.
+        #[arg(long)]
+        allow_any_eku: bool,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -3682,6 +3762,44 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Timestamp { command } => match command {
+            TimestampCommand::Sign {
+                content,
+                out,
+                key,
+                cert,
+                digest,
+                policy,
+                serial,
+                time,
+                nonce,
+                ordering,
+                json,
+            } => timestamp::sign(
+                &content, &out, &key, &cert, &digest, &policy, serial, time, nonce, ordering, json,
+            ),
+            TimestampCommand::Verify {
+                token,
+                content,
+                cert,
+                anchor,
+                chain,
+                nonce,
+                at,
+                allow_any_eku,
+                json,
+            } => timestamp::verify(
+                &token,
+                &content,
+                &cert,
+                &anchor,
+                &chain,
+                nonce,
+                at,
+                allow_any_eku,
+                json,
+            ),
+        },
         Command::Envelope { command } => match command {
             EnvelopeCommand::Seal {
                 input,

@@ -1,0 +1,20 @@
+{
+  "id": "T-0356",
+  "lane": "security",
+  "title": "Timestamp token host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0355"],
+  "owns": [
+    "crates/pdfxi-cli/src/timestamp.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/Cargo.toml",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/security/T-0356.md",
+    "orchestration/feature-updates/T-0356.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli timestamp_ passes; pdfxi timestamp sign mints a real RFC 3161 CMS token from a caller-supplied RSA identity and pdfxi timestamp verify validates CMS integrity, imprint, skew, TSA chain/EKU and nonce with the documented statuses; SEC-006 moves to verified.",
+  "notes": "Offline TSA host plus full validation. Online TSA transport, OCSP/CRL inside a PDF signature workflow and the trust-manager desktop UI remain out of scope.",
+  "evidence": "docs/evidence/security/T-0356.md"
+}

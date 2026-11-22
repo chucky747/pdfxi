@@ -2515,6 +2515,265 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// timestamp: RFC 3161 token mint and validation (T-0356)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn timestamp_signs_and_validates_a_real_token() {
+    let dir = TempDir::new();
+    let (key, cert) = write_test_identity(&dir, "PDFXI Timestamp Authority");
+    let content = dir.child("content.bin");
+    fs::write(&content, b"bytes covered by the timestamp imprint").expect("write content");
+    let token = dir.child("token.der");
+    let signed = run(&[
+        "timestamp",
+        "sign",
+        content.to_str().expect("content"),
+        "--out",
+        token.to_str().expect("token"),
+        "--key",
+        key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--time",
+        "1650000000",
+        "--nonce",
+        "42",
+        "--serial",
+        "9",
+        "--policy",
+        "1.2.3.4",
+        "--json",
+    ]);
+    assert!(signed.status.success(), "stderr: {}", stderr(&signed));
+    let value: Value = serde_json::from_str(&stdout(&signed)).expect("sign JSON");
+    assert_eq!(value["digest"], "sha256");
+    assert_eq!(value["serial"], 9);
+    assert_eq!(value["gen_time"], 1_650_000_000);
+    assert_eq!(value["nonce"], 42);
+    assert_eq!(value["policy"], "1.2.3.4");
+    assert!(token.exists(), "the token must be written");
+    assert!(value["bytes"].as_u64().unwrap_or(0) > 100);
+
+    let verified = run(&[
+        "timestamp",
+        "verify",
+        token.to_str().expect("token"),
+        "--content",
+        content.to_str().expect("content"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--at",
+        "1650000000",
+        "--nonce",
+        "42",
+        "--allow-any-eku",
+        "--json",
+    ]);
+    assert!(verified.status.success(), "stderr: {}", stderr(&verified));
+    let value: Value = serde_json::from_str(&stdout(&verified)).expect("verify JSON");
+    assert_eq!(value["status"], "valid");
+    assert_eq!(value["valid"], true);
+    assert_eq!(value["signature_status"], "valid");
+    assert_eq!(value["serial"], 9);
+    assert_eq!(value["gen_time"], 1_650_000_000);
+    assert_eq!(value["nonce"], 42);
+    assert_eq!(value["policy"], "1.2.3.4");
+    assert_eq!(value["digest"], "sha256");
+    assert_eq!(value["imprint"].as_str().map(str::len), Some(64));
+    assert!(
+        value["signer"]
+            .as_str()
+            .unwrap_or("")
+            .contains("PDFXI Timestamp")
+    );
+
+    // A different content file must fail the imprint check.
+    let other = dir.child("other.bin");
+    fs::write(&other, b"different bytes").expect("write other content");
+    let mismatch = run(&[
+        "timestamp",
+        "verify",
+        token.to_str().expect("token"),
+        "--content",
+        other.to_str().expect("other"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--at",
+        "1650000000",
+        "--allow-any-eku",
+        "--json",
+    ]);
+    assert!(!mismatch.status.success());
+    let value: Value = serde_json::from_str(&stdout(&mismatch)).expect("verify JSON");
+    assert_eq!(value["status"], "imprint-mismatch");
+    assert_eq!(value["valid"], false);
+    assert_eq!(value["signature_status"], "tampered");
+
+    // A different expected nonce must fail the replay check.
+    let wrong_nonce = run(&[
+        "timestamp",
+        "verify",
+        token.to_str().expect("token"),
+        "--content",
+        content.to_str().expect("content"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--at",
+        "1650000000",
+        "--nonce",
+        "43",
+        "--allow-any-eku",
+    ]);
+    assert!(!wrong_nonce.status.success());
+    assert!(stderr(&wrong_nonce).contains("nonce-mismatch"));
+
+    // The RFC 3161 timeStamping EKU is required unless explicitly waived.
+    let missing_eku = run(&[
+        "timestamp",
+        "verify",
+        token.to_str().expect("token"),
+        "--content",
+        content.to_str().expect("content"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--at",
+        "1650000000",
+    ]);
+    assert!(!missing_eku.status.success());
+    assert!(stderr(&missing_eku).contains("timestamp-eku-missing"));
+
+    // A token minted outside the certificate window is not valid at genTime.
+    let early = dir.child("early.der");
+    let signed = run(&[
+        "timestamp",
+        "sign",
+        content.to_str().expect("content"),
+        "--out",
+        early.to_str().expect("early"),
+        "--key",
+        key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--time",
+        "1500000000",
+    ]);
+    assert!(signed.status.success(), "stderr: {}", stderr(&signed));
+    let expired = run(&[
+        "timestamp",
+        "verify",
+        early.to_str().expect("early"),
+        "--content",
+        content.to_str().expect("content"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--at",
+        "1500000000",
+        "--allow-any-eku",
+        "--json",
+    ]);
+    assert!(!expired.status.success());
+    let value: Value = serde_json::from_str(&stdout(&expired)).expect("verify JSON");
+    assert_eq!(value["status"], "certificate-not-valid-at-gen-time");
+    assert_eq!(value["signature_status"], "expired");
+
+    // A foreign trust anchor makes the same token untrusted.
+    let foreign_dir = TempDir::new();
+    let (_, foreign_cert) = write_test_identity(&foreign_dir, "Foreign TSA");
+    let untrusted = run(&[
+        "timestamp",
+        "verify",
+        token.to_str().expect("token"),
+        "--content",
+        content.to_str().expect("content"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--anchor",
+        foreign_cert.to_str().expect("anchor"),
+        "--at",
+        "1650000000",
+        "--allow-any-eku",
+        "--json",
+    ]);
+    assert!(!untrusted.status.success());
+    let value: Value = serde_json::from_str(&stdout(&untrusted)).expect("verify JSON");
+    assert_eq!(value["status"], "untrusted-tsa");
+    assert_eq!(value["signature_status"], "unknown");
+}
+
+#[test]
+fn timestamp_rejects_bad_tokens_and_arguments() {
+    let dir = TempDir::new();
+    let (key, cert) = write_test_identity(&dir, "PDFXI TSA Two");
+    let content = dir.child("content.bin");
+    fs::write(&content, b"payload").expect("write content");
+    for (args, needle) in [
+        (
+            vec!["--digest", "md5", "--time", "1650000000"],
+            "unsupported digest",
+        ),
+        (
+            vec!["--policy", "1", "--time", "1650000000"],
+            "at least two arcs",
+        ),
+        (
+            vec!["--policy", "1.x.3", "--time", "1650000000"],
+            "not a number",
+        ),
+    ] {
+        let bad_out = dir.child("bad.der");
+        let mut command = vec![
+            "timestamp",
+            "sign",
+            content.to_str().expect("content"),
+            "--out",
+            bad_out.to_str().expect("out"),
+            "--key",
+            key.to_str().expect("key"),
+            "--cert",
+            cert.to_str().expect("cert"),
+        ];
+        command.extend(args.iter().copied());
+        let output = run(&command);
+        assert!(!output.status.success(), "args: {args:?}");
+        assert!(
+            stderr(&output).contains(needle),
+            "{needle}: {}",
+            stderr(&output)
+        );
+    }
+
+    let missing = dir.child("absent.bin");
+    let output = run(&[
+        "timestamp",
+        "sign",
+        missing.to_str().expect("missing"),
+        "--out",
+        dir.child("out.der").to_str().expect("out"),
+        "--key",
+        key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("read"), "{}", stderr(&output));
+
+    let garbage = dir.child("garbage.der");
+    fs::write(&garbage, b"not a token").expect("write garbage");
+    let output = run(&[
+        "timestamp",
+        "verify",
+        garbage.to_str().expect("garbage"),
+        "--content",
+        content.to_str().expect("content"),
+        "--cert",
+        cert.to_str().expect("cert"),
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("validate"), "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
 // action sequence: real document execution of wizard steps (T-0355)
 // ---------------------------------------------------------------------------
 

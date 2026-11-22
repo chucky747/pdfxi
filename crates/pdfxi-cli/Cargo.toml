@@ -46,6 +46,10 @@ pdfxi-app = { path = "../pdfxi-app", version = "0.1.0" }
 pdfxi-render = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
+# Real RSA signing and verification for `pdfxi timestamp` (RFC 3161 tokens).
+# Already in the workspace lock graph through `pdfxi-security`.
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = "0.10"
 
 [features]
 default = []
@@ -59,7 +63,5 @@ pdfxi-testkit = { workspace = true }
 # new external dependency or licence is introduced.
 der = "0.7"
 rand = "0.8"
-rsa = { version = "0.9", features = ["sha2"] }
-sha2 = "0.10"
 spki = "0.7"
 x509-cert = { version = "0.2", features = ["builder", "pem"] }

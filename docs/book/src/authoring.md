@@ -53,6 +53,7 @@ command.
 | Digital IDs and certificate management | `SEC-004` | verified | `pdfxi-security::digital_id_lifecycle` | `id inspect/import/list/remove` |
 | Security envelopes and attachment encryption | `SEC-010` | verified | `pdfxi-security::security_envelope` | `envelope seal/open/verify` |
 | Policy-based protection replacement | `SEC-011` | verified | `pdfxi-security::policy` | `protection apply` |
+| Timestamp and signature validation | `SEC-006` | verified | `pdfxi-security::timestamp` | `timestamp sign` / `timestamp verify` |
 | Full screen and presentation mode | `VIEW-012` | verified | `pdfxi-app::presentation` | `present` |
 | Loupe magnifier and gesture navigation | `VIEW-018` | verified | `pdfxi-app::loupe` | `loupe` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
@@ -763,6 +764,27 @@ home|end|escape|a`, `gesture:swipe-left|swipe-right|long-press` and
 `tick:SECONDS`, and reports the outcome, slide/page, auto-advance state and the
 full-screen layout for the page's real size. The OS full-screen window, native
 event capture, timer thread and animation remain the GUI host boundary.
+
+### Timestamp tokens
+
+`SEC-006` (verified) hosts the RFC 3161 timestamp pipeline:
+
+```text
+pdfxi timestamp sign CONTENT --out TOKEN.der --key KEY.pem --cert CERT.pem
+    [--digest sha256|sha384|sha512] [--policy OID] [--serial N] [--time UNIX]
+    [--nonce N] [--ordering] [--json]
+
+pdfxi timestamp verify TOKEN.der --content CONTENT --cert CERT.pem
+    [--anchor PEM] [--chain PEM] [--nonce N] [--at UNIX] [--allow-any-eku] [--json]
+```
+
+`sign` mints a real CMS `SignedData` token locally from a caller-supplied RSA
+identity (an offline TSA; no network request). `verify` validates the CMS
+signature, message imprint, future-skew guard, TSA chain and RFC 3161
+timeStamping EKU, and the optional nonce, reporting the exact
+`TimestampStatus` plus a conservative signature-status mapping. Trust anchors
+default to `--cert`; `--at` pins the validation clock for reproducible results.
+A token that is not `valid` exits non-zero.
 
 ### Policy-based protection
 
