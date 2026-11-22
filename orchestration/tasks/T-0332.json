@@ -1,0 +1,19 @@
+{
+  "id": "T-0332",
+  "lane": "convert",
+  "title": "Accessibility tree navigation and reflow hosts",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0331"],
+  "owns": [
+    "crates/pdfxi-cli/src/a11y_nav.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0332.md",
+    "orchestration/feature-updates/T-0332.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli accessibility_ passes; pdfxi accessibility tree/nav/layout build the screen-reader tree from a real page count, audit the high-contrast palette and traversal, and compute reflow metrics from a real media box; ACCESS-004 and ACCESS-006 move to verified.",
+  "notes": "Hosts pdfxi_app::a11y and pdfxi_app::nav over real documents without a window, screen reader or key events.",
+  "evidence": "docs/evidence/cli/T-0332.md"
+}

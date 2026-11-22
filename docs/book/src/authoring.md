@@ -30,6 +30,8 @@ command.
 | Unicode CJK and RTL analysis | `PLAT-007` | verified | `pdfxi-core::unicode` | `unicode analyze` |
 | Home recents, favorites, collections | `MANAGE-002` | verified | `pdfxi-app::home` | `home list/add/favorite/collection` |
 | Read aloud with system speech | `ACCESS-005` | verified | `pdfxi-app::read_aloud` + Windows `System.Speech` | `read-aloud --voices` / `read-aloud --speak` |
+| Reflow, high contrast, keyboard navigation | `ACCESS-004` | verified | `pdfxi-app::nav` | `accessibility nav` / `accessibility layout` |
+| Screen reader tree and accesskit roles | `ACCESS-006` | verified | `pdfxi-app::a11y` | `accessibility tree` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -385,6 +387,35 @@ intent. `color convert` runs the analytic matrix/TRC or gray-gamma plan on
 normalised components and returns PCS XYZ or linear luminance. Profiles that
 need a full colour-management module are reported as `needs-backend:<reason>` and
 are never approximated.
+
+### Accessibility tree, navigation and reflow
+
+`ACCESS-006` (verified) and `ACCESS-004` (verified) host the window-free
+accessibility models:
+
+```text
+pdfxi accessibility tree <INPUT.pdf> [--page N] [--focus REGION]
+    [--high-contrast] [--json]
+pdfxi accessibility nav [--theme standard|high-contrast] [--tabs N]
+    [--reverse] [--json]
+pdfxi accessibility layout <INPUT.pdf> [--page N] [--viewport WxH]
+    [--font-size PT] [--line-spacing FACTOR] [--margin PT] [--json]
+```
+
+`tree` builds the deterministic accessibility tree a screen reader receives
+from the real page count, the current page and the focus region, and prints
+every node with its AccessKit role, children, focus and spoken announcement. No
+screen-reader API is called; a platform bridge publishes this tree.
+
+`nav` audits the high-contrast palette against WCAG (AAA, 7:1, for the
+high-contrast theme; AA, 4.5:1, for the standard theme), prints the Tab ring and
+simulates forward or reverse Tab traversal, and lists the accessibility shortcut
+map (F6/Shift+F6 pane focus, F3 canvas, F4 find, Ctrl+Shift+H contrast, F5 read
+aloud).
+
+`layout` computes deterministic reflow metrics from the page's real media box
+and the requested viewport: content box, scale, line height, approximate
+characters per line and lines per viewport page.
 
 ## Page boxes and page operations
 

@@ -3804,14 +3804,44 @@ tests = [
 title = "Accessibility and PDF/UA checker"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/nav.rs, docs/evidence/app/T-0112.md"
+docs = [
+    "crates/pdfxi-cli/src/a11y_nav.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0332.md",
+    "crates/pdfxi-app/src/nav.rs",
+]
 domain = "Accessibility"
-evidence = "docs/evidence/app/T-0112.md"
+evidence = "docs/evidence/cli/T-0332.md"
 id = "ACCESS-004"
-notes = "Focus traversal, shortcut map, WCAG-audited contrast tokens, and reflow metrics."
+notes = """
+Verified through `pdfxi accessibility nav [--theme standard|high-contrast]
+[--tabs N] [--reverse] [--json]` and `pdfxi accessibility layout <INPUT.pdf>
+[--page N] [--viewport WxH] [--font-size PT] [--line-spacing FACTOR]
+[--margin PT] [--json]`.
+
+nav audits all five contrast pairs with the WCAG ratio function against AAA
+(7:1) for high contrast and AA (4.5:1) for standard, prints the default Tab
+ring, simulates forward or reverse Tabs and lists the accessibility shortcut
+map. The high-contrast palette reports ratios 21.00, 19.56, 16.75, 9.78 and
+19.56 against a 7.0 requirement; the standard palette reports 16.28, 12.69,
+7.57, 9.24 and 7.09 against 4.5; forward traversal is Toolbar -> Document tabs
+-> Page thumbnails and reverse traversal Status bar -> Links panel.
+
+layout reads the page's real media box and computes reflow_metrics for the
+viewport: a 612x792 page at 400x700 with 20-point margins reports content
+360x660, scale 0.588, line height 11.53, 87 approximate chars per line and 57
+lines per viewport page. A zero viewport, a malformed viewport and an
+out-of-range page fail with typed errors.
+
+Scope: the CLI audits and computes the model; it does not paint the theme, open
+a window or synthesize OS key events. The reflow text column remains
+`pdfxi reflow`.
+"""
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
+    "cli::accessibility_nav_audits_contrast_and_traversal",
+    "cli::accessibility_layout_uses_real_page_geometry",
     "nav::tests::focus_order_wraps_in_both_directions",
     "nav::tests::high_contrast_tokens_meet_aaa_on_every_audited_pair",
 ]
@@ -3870,14 +3900,38 @@ tests = [
 title = "Read aloud with system speech"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/a11y.rs, docs/evidence/app/T-0112.md"
+docs = [
+    "crates/pdfxi-cli/src/a11y_nav.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0332.md",
+    "crates/pdfxi-app/src/a11y.rs",
+]
 domain = "Accessibility"
-evidence = "docs/evidence/app/T-0112.md"
+evidence = "docs/evidence/cli/T-0332.md"
 id = "ACCESS-006"
-notes = "Accessibility tree, focus announcements, and a ui-gated egui/accesskit bridge with no new dependency."
+notes = """
+Verified through `pdfxi accessibility tree <INPUT.pdf> [--page N]
+[--focus REGION] [--high-contrast] [--json]`.
+
+The host reads the real page count, validates the current page, maps --focus to
+a FocusTarget, builds AccessibilitySnapshot and A11yTree::from_snapshot, and
+prints every node's AccessKit role name, children, focusability, disabled state,
+the focus announcement and the well-formed flag. A real 3-page fixture reports
+pages 3, focus 9, announcement "powerpoint-slides, Document", well formed and
+the Document/Page 1 nodes; --focus toolbar moves focus to node 3 with
+"Toolbar, Toolbar"; --high-contrast changes the status label to "High contrast
+on". An out-of-range page and an unknown region fail with typed errors.
+
+Scope: no window, AccessKit call or platform screen reader. The CLI publishes
+the deterministic tree a platform bridge consumes.
+"""
 priority = "P2"
-status = "model"
-tests = ["a11y::tests::tree_from_snapshot_is_deterministic_and_well_formed"]
+status = "verified"
+tests = [
+    "cli::accessibility_tree_reflects_real_pages_and_focus",
+    "cli::accessibility_tree_rejects_bad_pages_and_regions",
+    "a11y::tests::tree_from_snapshot_is_deterministic_and_well_formed",
+]
 title = "Screen reader and accesskit integration"
 
 [[feature]]

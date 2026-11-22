@@ -65,6 +65,8 @@ mod action;
 // Local line-delimited JSON automation API over stdin/stdout (`api`).
 /// pdfxi accessibility alt/table: edit tagged structure entries.
 mod a11y_edit;
+/// pdfxi accessibility tree/nav/layout: window-free accessibility hosts.
+mod a11y_nav;
 mod api;
 /// pdfxi color: ICC profiles, output intents and analytic transforms.
 mod color;
@@ -1767,6 +1769,67 @@ enum AccessibilityCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Build the accessibility tree a screen reader would receive.
+    ///
+    /// Uses the real page count from the document, the current page and the
+    /// selected focus region, then prints every node with its AccessKit role,
+    /// children and focus announcement. No screen-reader API is called; this is
+    /// the deterministic tree a platform bridge publishes.
+    Tree {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// One-based current page.
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Focus region: menubar, toolbar, tabs, thumbnails, canvas, find,
+        /// layers, bookmarks, attachments, links or status.
+        #[arg(long, value_name = "REGION")]
+        focus: Option<String>,
+        /// Report the high-contrast accessibility labels.
+        #[arg(long)]
+        high_contrast: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Audit the high-contrast palette, focus ring and shortcut map.
+    Nav {
+        /// Theme: `standard` or `high-contrast`.
+        #[arg(long, default_value = "high-contrast")]
+        theme: String,
+        /// Number of forward Tabs to simulate.
+        #[arg(long, default_value_t = 3)]
+        tabs: usize,
+        /// Traverse the focus ring backwards (Shift+Tab).
+        #[arg(long)]
+        reverse: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compute reflow metrics from a real page and a viewport.
+    Layout {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// One-based page.
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Viewport size as `WIDTHxHEIGHT` in points.
+        #[arg(long, value_name = "WxH", default_value = "612x792")]
+        viewport: String,
+        /// Base font size in points.
+        #[arg(long, default_value_t = 12.0)]
+        font_size: f32,
+        /// Line spacing factor.
+        #[arg(long, default_value_t = 1.4)]
+        line_spacing: f32,
+        /// Margin in points.
+        #[arg(long, default_value_t = 36.0)]
+        margin: f32,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Operations on the `pdfxi versions` command group.
@@ -3040,6 +3103,36 @@ fn main() -> anyhow::Result<()> {
                 scope,
                 json,
             } => a11y_edit::set_scope(&file, &out, node, scope.as_deref(), json),
+            AccessibilityCommand::Tree {
+                file,
+                page,
+                focus,
+                high_contrast,
+                json,
+            } => a11y_nav::tree(&file, page, focus.as_deref(), high_contrast, json),
+            AccessibilityCommand::Nav {
+                theme,
+                tabs,
+                reverse,
+                json,
+            } => a11y_nav::nav(&theme, tabs, reverse, json),
+            AccessibilityCommand::Layout {
+                file,
+                page,
+                viewport,
+                font_size,
+                line_spacing,
+                margin,
+                json,
+            } => a11y_nav::layout(
+                &file,
+                page,
+                &viewport,
+                font_size,
+                line_spacing,
+                margin,
+                json,
+            ),
             AccessibilityCommand::Check {
                 file,
                 title,

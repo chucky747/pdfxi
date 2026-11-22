@@ -10685,6 +10685,194 @@ fn color_rejects_bad_profiles_and_inputs() {
 }
 
 #[test]
+fn accessibility_tree_reflects_real_pages_and_focus() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "accessibility",
+        "tree",
+        source.to_str().expect("utf-8 source"),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert_eq!(value["current_page"], 1);
+    assert_eq!(value["well_formed"], true);
+    assert_eq!(value["focus"], 9);
+    assert_eq!(value["focus_announcement"], "powerpoint-slides, Document");
+    let nodes = value["nodes"].as_array().expect("nodes");
+    assert!(nodes.iter().any(|node| node["role"] == "Window"));
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node["label"] == "Toggle high contrast")
+    );
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node["label"] == "Page 1" && node["role"] == "Group")
+    );
+
+    let toolbar = run(&[
+        "accessibility",
+        "tree",
+        source.to_str().expect("utf-8 source"),
+        "--focus",
+        "toolbar",
+        "--high-contrast",
+        "--json",
+    ]);
+    assert!(toolbar.status.success(), "stderr: {}", stderr(&toolbar));
+    let value: Value = serde_json::from_str(&stdout(&toolbar)).expect("valid JSON");
+    assert_eq!(value["focus"], 3);
+    assert_eq!(value["focus_announcement"], "Toolbar, Toolbar");
+    assert_eq!(value["high_contrast"], true);
+    let nodes = value["nodes"].as_array().expect("nodes");
+    assert!(nodes.iter().any(|node| node["label"] == "High contrast on"));
+}
+
+#[test]
+fn accessibility_tree_rejects_bad_pages_and_regions() {
+    let source = create_text_pdf("One page.");
+    let page = run(&["accessibility", "tree", source.arg(), "--page", "9"]);
+    assert!(!page.status.success());
+    assert!(stderr(&page).contains("outside 1..=1"), "{}", stderr(&page));
+
+    let region = run(&["accessibility", "tree", source.arg(), "--focus", "sidebar"]);
+    assert!(!region.status.success());
+    assert!(
+        stderr(&region).contains("unknown focus target"),
+        "{}",
+        stderr(&region)
+    );
+}
+
+#[test]
+fn accessibility_nav_audits_contrast_and_traversal() {
+    let high = run(&[
+        "accessibility",
+        "nav",
+        "--theme",
+        "high-contrast",
+        "--tabs",
+        "3",
+        "--json",
+    ]);
+    assert!(high.status.success(), "stderr: {}", stderr(&high));
+    let value: Value = serde_json::from_str(&stdout(&high)).expect("valid JSON");
+    assert_eq!(value["theme"], "high-contrast");
+    assert_eq!(value["contrast_ok"], true);
+    let contrasts = value["contrasts"].as_array().expect("contrasts");
+    assert_eq!(contrasts.len(), 5);
+    for row in contrasts {
+        assert_eq!(row["required"], 7.0);
+        assert_eq!(row["passes"], true);
+        assert!(row["ratio"].as_f64().expect("ratio") >= 7.0);
+    }
+    assert!(
+        contrasts
+            .iter()
+            .any(|row| row["name"] == "foreground/background")
+    );
+    let order = value["focus_order"].as_array().expect("focus order");
+    assert_eq!(order.len(), 11);
+    assert_eq!(order[0], "Menu bar");
+    assert_eq!(
+        value["traversal"],
+        serde_json::json!(["Toolbar", "Document tabs", "Page thumbnails"])
+    );
+    let shortcuts = value["shortcuts"].as_array().expect("shortcuts");
+    assert!(
+        shortcuts
+            .iter()
+            .any(|row| row["shortcut"] == "Ctrl+Shift+H")
+    );
+    assert!(shortcuts.iter().any(|row| row["shortcut"] == "F6"));
+
+    let standard = run(&[
+        "accessibility",
+        "nav",
+        "--theme",
+        "standard",
+        "--tabs",
+        "2",
+        "--reverse",
+        "--json",
+    ]);
+    assert!(standard.status.success(), "stderr: {}", stderr(&standard));
+    let value: Value = serde_json::from_str(&stdout(&standard)).expect("valid JSON");
+    assert_eq!(value["theme"], "standard");
+    assert_eq!(value["contrasts"][0]["required"], 4.5);
+    assert_eq!(
+        value["traversal"],
+        serde_json::json!(["Status bar", "Links panel"])
+    );
+
+    let neon = run(&["accessibility", "nav", "--theme", "neon"]);
+    assert!(!neon.status.success());
+    assert!(stderr(&neon).contains("unknown theme"), "{}", stderr(&neon));
+}
+
+#[test]
+fn accessibility_layout_uses_real_page_geometry() {
+    let source = create_text_pdf("Reflow geometry.");
+    let output = run(&[
+        "accessibility",
+        "layout",
+        source.arg(),
+        "--viewport",
+        "400x700",
+        "--font-size",
+        "14",
+        "--margin",
+        "20",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["page_width"], 612.0);
+    assert_eq!(value["page_height"], 792.0);
+    assert_eq!(value["content_width"], 360.0);
+    assert_eq!(value["content_height"], 660.0);
+    let scale = value["scale"].as_f64().expect("scale");
+    assert!((scale - 360.0 / 612.0).abs() < 1e-6, "{scale}");
+    assert!(value["approx_chars_per_line"].as_u64().unwrap_or(0) > 0);
+    assert!(value["max_lines_per_page"].as_u64().unwrap_or(0) > 0);
+
+    let empty = run(&[
+        "accessibility",
+        "layout",
+        source.arg(),
+        "--viewport",
+        "0x700",
+    ]);
+    assert!(!empty.status.success());
+    assert!(
+        stderr(&empty).contains("must be positive"),
+        "{}",
+        stderr(&empty)
+    );
+
+    let malformed = run(&[
+        "accessibility",
+        "layout",
+        source.arg(),
+        "--viewport",
+        "wide",
+    ]);
+    assert!(!malformed.status.success());
+    assert!(
+        stderr(&malformed).contains("WIDTHxHEIGHT"),
+        "{}",
+        stderr(&malformed)
+    );
+
+    let page = run(&["accessibility", "layout", source.arg(), "--page", "4"]);
+    assert!(!page.status.success());
+    assert!(stderr(&page).contains("outside 1..=1"), "{}", stderr(&page));
+}
+
+#[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");
     let file = source.to_str().expect("utf-8 fixture");
