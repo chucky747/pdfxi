@@ -1,0 +1,19 @@
+{
+  "id": "T-0297",
+  "lane": "forms",
+  "title": "Form tab order and action hosts",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0296"],
+  "owns": [
+    "crates/pdfxi-cli/src/form.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0297.md",
+    "orchestration/feature-updates/T-0297.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli form_ and cargo test -p pdfxi-cli --bin pdfxi form:: pass; pdfxi form tabs orders real widget rects with policy overrides and navigation, pdfxi form actions parses /A and /AA with typed rejections, and FORMS-004 moves to verified.",
+  "notes": "Hosts taborder and actions over pdfxi-core + read_acroform, using real widget rectangles/pages; reports accepted reset/submit actions and rejected JavaScript/URI entries.",
+  "evidence": "docs/evidence/cli/T-0297.md"
+}

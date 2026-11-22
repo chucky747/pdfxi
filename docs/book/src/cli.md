@@ -50,6 +50,8 @@ pdfxi <COMMAND> --help
 | `form list <FILE> [--json]` | List AcroForm fields | verified (`FORMS-002`) |
 | `form validate <FILE> [--set NAME=VALUE] ... [--json]` | Validate field definitions and values | verified (`FORMS-003`) |
 | `form calculate <FILE> [--set NAME=VALUE] ... [--sum\|--product\|--average\|--min\|--max TARGET=SOURCES] ... [--decimals N] [--json]` | Evaluate calculations | verified (`FORMS-003`) |
+| `form tabs <FILE> [--policy rows\|columns\|structure\|annotations] [--include-read-only] [--no-wrap] [--json]` | Show tab order and navigation | verified (`FORMS-004`) |
+| `form actions <FILE> [--json]` | Show accepted and rejected field actions | verified (`FORMS-004`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -118,7 +120,15 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `form validate` loads the fields, applies `--set NAME=VALUE` assignments
+- `form tabs` reads the AcroForm `/Tabs` policy (`R`, `C`, `S` or `A`) and the
+  real widget rectangles and pages through the document-form model, orders the
+  widgets, and reports each field's next and previous target. `--policy`
+  overrides the file, `--include-read-only` keeps read-only widgets, and
+  `--no-wrap` stops at the ends instead of wrapping.
+- `form actions` walks each field and widget dictionary, parses `/A` and `/AA`
+  entries (`K`, `F`, `V`, `C`) into the safe reset/submit whitelist, and lists
+  every rejected action with its subtype and reason. Scripts are never parsed or
+  executed.- `form validate` loads the fields, applies `--set NAME=VALUE` assignments
   (`true`/`false` for checkboxes, `a|b` for choices/radio, numbers otherwise),
   then validates every definition and value through the property model. It
   prints a stable report and exits `2` when the form is invalid, `0` when it is

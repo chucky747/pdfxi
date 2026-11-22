@@ -1061,6 +1061,31 @@ enum FormCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Show the widget tab order and next/previous navigation.
+    Tabs {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Override the `/Tabs` policy: rows, columns, structure or annotations.
+        #[arg(long, value_name = "POLICY")]
+        policy: Option<String>,
+        /// Include read-only widgets in the traversal.
+        #[arg(long)]
+        include_read_only: bool,
+        /// Do not wrap at the ends of the order.
+        #[arg(long)]
+        no_wrap: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show accepted and rejected field actions.
+    Actions {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Operations on the `pdfxi create` command group.
@@ -1706,6 +1731,19 @@ fn main() -> anyhow::Result<()> {
                 }
                 form::run_calculate(&file, &assignments, &requests, decimals, json)
             }
+            FormCommand::Tabs {
+                file,
+                policy,
+                include_read_only,
+                no_wrap,
+                json,
+            } => {
+                let nav = pdfxi_forms::NavPolicy::default()
+                    .with_read_only(!include_read_only)
+                    .with_wrap(!no_wrap);
+                form::run_tabs(&file, policy.as_deref(), nav, json)
+            }
+            FormCommand::Actions { file, json } => form::run_actions(&file, json),
         },
         Command::Update {
             file,

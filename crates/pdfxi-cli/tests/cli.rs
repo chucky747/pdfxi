@@ -3381,6 +3381,213 @@ fn form_validate_and_calculate_use_typed_values() {
 }
 
 #[test]
+fn form_tabs_orders_widgets_and_navigates() {
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:patient:72,700,200,24",
+        "--field",
+        "checkbox:agree:72,660,14,14",
+        "--field",
+        "radio:color:72,620,14,14:red|green",
+        "--field",
+        "combo:state:72,580,200,24:CA|NY",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    let tabs = run(&["form", "tabs", out.arg(), "--json"]);
+    assert!(tabs.status.success(), "stderr: {}", stderr(&tabs));
+    let value: Value = serde_json::from_str(&stdout(&tabs)).expect("valid JSON");
+    assert_eq!(value["tabs_name"], "R");
+    assert_eq!(value["policy"], "rows");
+    assert_eq!(value["widgets"], 4);
+    let order: Vec<&str> = value["order"]
+        .as_array()
+        .expect("order")
+        .iter()
+        .map(|row| row["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(order, vec!["patient", "agree", "color", "state"]);
+    assert_eq!(value["order"][0]["page"], 1);
+    assert_eq!(value["order"][0]["rect"][0], 72.0);
+    assert_eq!(value["navigation"][0]["next"], "agree");
+    assert_eq!(value["navigation"][0]["previous"], "state");
+
+    let no_wrap = run(&["form", "tabs", out.arg(), "--no-wrap", "--json"]);
+    assert!(no_wrap.status.success(), "stderr: {}", stderr(&no_wrap));
+    let value: Value = serde_json::from_str(&stdout(&no_wrap)).expect("valid JSON");
+    assert_eq!(value["navigation"][0]["previous"], Value::Null);
+    assert_eq!(value["navigation"][3]["next"], Value::Null);
+
+    let columns = run(&["form", "tabs", out.arg(), "--policy", "columns", "--json"]);
+    assert!(columns.status.success(), "stderr: {}", stderr(&columns));
+    let value: Value = serde_json::from_str(&stdout(&columns)).expect("valid JSON");
+    assert_eq!(value["tabs_name"], "C");
+    assert_eq!(value["policy"], "columns");
+    let column_order: Vec<&str> = value["order"]
+        .as_array()
+        .expect("order")
+        .iter()
+        .map(|row| row["name"].as_str().expect("name"))
+        .collect();
+    assert_ne!(column_order, order, "columns policy reorders widgets");
+
+    let bad_policy = run(&["form", "tabs", out.arg(), "--policy", "diagonal"]);
+    assert!(!bad_policy.status.success());
+    assert!(
+        stderr(&bad_policy).contains("unknown tab policy"),
+        "{}",
+        stderr(&bad_policy)
+    );
+
+    let minimal = root_fixture("minimal.pdf");
+    let no_form = run(&["form", "tabs", minimal.to_str().expect("utf-8"), "--json"]);
+    assert!(no_form.status.success(), "stderr: {}", stderr(&no_form));
+    let value: Value = serde_json::from_str(&stdout(&no_form)).expect("valid JSON");
+    assert_eq!(value["widgets"], 0);
+}
+
+#[test]
+fn form_actions_report_supported_and_rejected_entries() {
+    use pdfxi_core::{Dictionary, Document, Object, decode_text_string};
+
+    fn action(subtype: &str) -> Object {
+        let mut dictionary = Dictionary::new();
+        dictionary.insert("S".to_owned(), Object::Name(subtype.to_owned()));
+        Object::Dictionary(dictionary)
+    }
+
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:patient:72,700,200,24",
+        "--field",
+        "combo:state:72,660,200,24:CA|NY",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    // Stage a main /A on patient and a /AA with K + F on state.
+    let mut document =
+        Document::from_bytes(fs::read(&out.path).expect("form bytes")).expect("form parses");
+    let root = document.root().expect("catalog");
+    let catalog = document
+        .object(root)
+        .expect("catalog object")
+        .as_dictionary()
+        .expect("catalog dictionary")
+        .clone();
+    let acroform_id = catalog
+        .get("AcroForm")
+        .and_then(Object::as_reference)
+        .expect("AcroForm reference");
+    let acroform = document
+        .object(acroform_id)
+        .expect("AcroForm object")
+        .as_dictionary()
+        .expect("AcroForm dictionary")
+        .clone();
+    let fields = acroform
+        .get("Fields")
+        .and_then(Object::as_array)
+        .expect("Fields array")
+        .to_vec();
+    let mut patched = 0;
+    for field in fields {
+        let Some(id) = field.as_reference() else {
+            continue;
+        };
+        let mut dictionary = document
+            .object(id)
+            .expect("field object")
+            .as_dictionary()
+            .expect("field dictionary")
+            .clone();
+        let name = dictionary
+            .get("T")
+            .and_then(|value| match value {
+                Object::String(bytes) => Some(decode_text_string(bytes)),
+                _ => None,
+            })
+            .unwrap_or_default();
+        match name.as_str() {
+            "patient" => {
+                let mut reset = Dictionary::new();
+                reset.insert("S".to_owned(), Object::Name("ResetForm".to_owned()));
+                reset.insert(
+                    "Fields".to_owned(),
+                    Object::Array(vec![Object::String(b"patient".to_vec())]),
+                );
+                dictionary.insert("A".to_owned(), Object::Dictionary(reset));
+                patched += 1;
+            }
+            "state" => {
+                let mut additional = Dictionary::new();
+                additional.insert("K".to_owned(), action("ResetForm"));
+                additional.insert("F".to_owned(), action("JavaScript"));
+                dictionary.insert("AA".to_owned(), Object::Dictionary(additional));
+                patched += 1;
+            }
+            _ => {}
+        }
+        document
+            .set_object(id, Object::Dictionary(dictionary))
+            .expect("stage field");
+    }
+    assert_eq!(patched, 2, "both fields patched");
+    let patched_bytes = document.save().expect("save patched form");
+    let patched_pdf = TempPath::new("pdf");
+    patched_pdf.write(&patched_bytes);
+    let artifact = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/lanes/forms/t0297");
+    if fs::create_dir_all(&artifact).is_ok() {
+        let _ = fs::write(artifact.join("actions.pdf"), &patched_bytes);
+    }
+
+    let actions = run(&["form", "actions", patched_pdf.arg(), "--json"]);
+    assert!(actions.status.success(), "stderr: {}", stderr(&actions));
+    let value: Value = serde_json::from_str(&stdout(&actions)).expect("valid JSON");
+    assert_eq!(value["present"], true);
+    let steps = value["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2, "{}", stdout(&actions));
+    assert_eq!(steps[0]["field"], "patient");
+    assert_eq!(steps[0]["site"], "A");
+    assert_eq!(steps[0]["action"], "ResetForm");
+    assert_eq!(steps[0]["fields"][0], "patient");
+    assert_eq!(steps[1]["field"], "state");
+    assert_eq!(steps[1]["site"], "K");
+    let unsupported = value["unsupported"].as_array().expect("unsupported");
+    assert_eq!(unsupported.len(), 1, "{}", stdout(&actions));
+    assert_eq!(unsupported[0]["field"], "state");
+    assert_eq!(unsupported[0]["site"], "F");
+    assert_eq!(unsupported[0]["action_type"], "JavaScript");
+    assert!(
+        unsupported[0]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("JavaScript"),
+        "{}",
+        stdout(&actions)
+    );
+
+    let minimal = root_fixture("minimal.pdf");
+    let no_form = run(&[
+        "form",
+        "actions",
+        minimal.to_str().expect("utf-8"),
+        "--json",
+    ]);
+    assert!(no_form.status.success(), "stderr: {}", stderr(&no_form));
+    let value: Value = serde_json::from_str(&stdout(&no_form)).expect("valid JSON");
+    assert_eq!(value["present"], false);
+    assert_eq!(value["steps"].as_array().expect("steps").len(), 0);
+}
+
+#[test]
 fn form_create_and_list_reject_bad_input() {
     let out = TempOut::new("pdf");
     let no_fields = run(&["form", "create", out.arg()]);

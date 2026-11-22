@@ -2138,17 +2138,54 @@ title = "Field properties calculations and validation"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-forms/src/taborder.rs",
-    "crates/pdfxi-forms/src/actions.rs",
-    "docs/evidence/forms/T-0090.md",
+    "crates/pdfxi-cli/src/form.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0297.md",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 184 passed, 0 failed; 22 new tests cover all four /Tabs orders, wrap and no-wrap traversal, hidden/read-only skipping, page subsets, K/F/V/C action parsing, typed rejection of JavaScript/URI/Launch/Import/Export, reset/submit plans, deterministic reports, unknown actions and malformed actions. Full output in docs/evidence/forms/T-0090.md."
+evidence = "docs/evidence/cli/T-0297.md"
 id = "FORMS-004"
-notes = "Model-level implementation in pdfxi-forms: /Tabs order parsing, deterministic widget ordering and next/previous navigation with a skip policy; /AA K/F/V/C and /A parsing into a typed safe whitelist (reset/submit only) with dangerous actions rejected and reported. No scripts are executed. Host adapters for structure-tree order, page geometry and plan execution are out of scope. See T-0090 notes. Tab-order traversal is proven in the shell by T-0243 (widget_order/focus_transition tests); the /AA actions remain model-level and are not claimed by the UI."
+notes = """
+Verified through two CLI hosts over pdfxi-core and pdfxi_forms::read_acroform.
+
+`pdfxi form tabs <FILE> [--policy rows|columns|structure|annotations]
+[--include-read-only] [--no-wrap] [--json]` reads the AcroForm /Tabs name
+(default R), builds TabWidgets from each field's real widget rectangle and page
+index, applies the requested or file policy, and reports the ordered widgets
+(name, one-based page, rect, read-only) plus every field's next and previous
+target. --include-read-only stops skipping read-only widgets and --no-wrap
+stops at the ends.
+
+`pdfxi form actions <FILE> [--json]` walks field and widget dictionaries, parses
+/A and /AA entries (K, F, V, C) into the safe ResetForm/SubmitForm whitelist and
+lists every rejected action with its site, subtype and reason. JavaScript and URI
+actions are rejected, never parsed or executed.
+
+Evidence: a four-widget form from `pdfxi form create` reports rows order
+patient/agree/color/state with real rects and one-based pages, wrapped
+next/previous pairs, a columns override that reorders the widgets and --no-wrap
+giving (none) at both ends. A two-field form with a staged /A ResetForm on
+patient and /AA K ResetForm plus F JavaScript on state reports two accepted steps
+(patient [A], state [K]) and one rejected JavaScript entry with its reason; the
+patched PDF is written to target/lanes/forms/t0297/actions.pdf. A form-free PDF
+reports present:false, zero actions and zero widgets; an unknown policy is a
+typed error.
+
+Gates: cargo test -p pdfxi-cli --test cli form_ = 5 passed; cargo test
+-p pdfxi-cli --bin pdfxi form:: = 8 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: tab order over real widget geometry/pages and the safe action whitelist
+are reachable; actions are reported not executed, and structure order still
+needs a caller-supplied structure mapping.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::form_tabs_orders_widgets_and_navigates",
+    "cli::form_actions_report_supported_and_rejected_entries",
+    "form::tests::tab_policies_parse_names_and_labels",
+    "form::tests::core_objects_convert_to_form_values",
     "taborder::tests::tabs_policy_parses_all_names_and_defaults",
     "taborder::tests::rows_order_is_top_to_bottom_then_left_to_right",
     "taborder::tests::columns_order_is_left_to_right_then_top_to_bottom",

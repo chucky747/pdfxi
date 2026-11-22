@@ -15,10 +15,12 @@
 use std::path::Path;
 
 use anyhow::{Context, bail};
+use pdfxi_core::{Document, Object, ObjectId};
 use pdfxi_forms::{
-    Calculation, CalculationOp, CalculationPlan, CalculationStep, Field, FieldProperties,
-    FieldSpec, FieldType, FieldValue, Form, FormSource, PdfDocument, PdfValue, PropertySet,
-    WidgetRect, load_acroform, parse_pdf, serialize_form_pdf,
+    AcroFormModel, ActionCollector, ActionReport, Calculation, CalculationOp, CalculationPlan,
+    CalculationStep, Field, FieldProperties, FieldSpec, FieldType, FieldValue, Form, FormSource,
+    NavPolicy, ObjectRef, PdfDocument, PdfValue, PropertySet, TabOrder, TabPolicy, TabWidget,
+    WidgetRect, load_acroform, parse_pdf, read_acroform, serialize_form_pdf,
 };
 use serde::Serialize;
 
@@ -421,6 +423,375 @@ pub(crate) fn run_list(file: &Path, json: bool) -> anyhow::Result<()> {
 /// Exit code used when a form has validation errors.
 pub(crate) const EXIT_INVALID_FORM: i32 = 2;
 
+/// Convert a core object into the forms model's value type.
+fn to_forms_value(object: &Object, depth: u8) -> PdfValue {
+    if depth > 64 {
+        return PdfValue::Null;
+    }
+    match object {
+        Object::Null => PdfValue::Null,
+        Object::Boolean(flag) => PdfValue::Bool(*flag),
+        Object::Integer(value) => PdfValue::Number(*value as f64),
+        Object::Real(value) => PdfValue::Number(*value),
+        Object::Name(name) => PdfValue::Name(name.clone()),
+        Object::String(bytes) => PdfValue::Text(pdfxi_core::decode_text_string(bytes)),
+        Object::Array(items) => PdfValue::Array(
+            items
+                .iter()
+                .map(|item| to_forms_value(item, depth + 1))
+                .collect(),
+        ),
+        Object::Dictionary(entries) => PdfValue::Dictionary(
+            entries
+                .iter()
+                .map(|(key, value)| (key.clone(), to_forms_value(value, depth + 1)))
+                .collect(),
+        ),
+        Object::Reference(id) => PdfValue::Reference(ObjectRef::new(id.number, id.generation)),
+        Object::Stream { dictionary, .. } => PdfValue::Dictionary(
+            dictionary
+                .iter()
+                .map(|(key, value)| (key.clone(), to_forms_value(value, depth + 1)))
+                .collect(),
+        ),
+    }
+}
+
+/// Adapter from a core document to the forms `FormSource` boundary.
+struct CoreSource<'a> {
+    document: &'a Document,
+}
+
+impl FormSource for CoreSource<'_> {
+    fn catalog(&self) -> PdfValue {
+        self.document
+            .root()
+            .ok()
+            .and_then(|id| self.document.object(id).ok())
+            .map(|object| to_forms_value(&object, 0))
+            .unwrap_or(PdfValue::Null)
+    }
+
+    fn resolve(&self, value: &PdfValue) -> Option<PdfValue> {
+        match value {
+            PdfValue::Reference(id) => self
+                .document
+                .object(ObjectId::new(id.number, id.generation))
+                .ok()
+                .map(|object| to_forms_value(&object, 0)),
+            other => Some(other.clone()),
+        }
+    }
+}
+
+/// Parse a `--policy` value (`rows`, `columns`, `structure`, `annotations`).
+fn parse_tab_policy(text: &str) -> anyhow::Result<TabPolicy> {
+    match text.to_ascii_lowercase().as_str() {
+        "r" | "rows" | "row" => Ok(TabPolicy::Rows),
+        "c" | "columns" | "column" => Ok(TabPolicy::Columns),
+        "s" | "structure" => Ok(TabPolicy::Structure),
+        "a" | "annotations" | "annotation" => Ok(TabPolicy::Annotations),
+        other => {
+            bail!("unknown tab policy {other:?}; expected rows, columns, structure or annotations")
+        }
+    }
+}
+
+/// Read the AcroForm `/Tabs` policy from the catalog.
+fn read_tabs_policy(document: &Document) -> TabPolicy {
+    let policy = document.root().ok().and_then(|root| {
+        let catalog = document.object(root).ok()?;
+        let catalog = catalog.as_dictionary()?;
+        let acroform = match catalog.get("AcroForm")? {
+            Object::Reference(id) => document.object(*id).ok()?,
+            other => other.clone(),
+        };
+        let acroform = acroform.as_dictionary()?;
+        acroform
+            .get("Tabs")
+            .and_then(Object::as_name)
+            .map(str::to_owned)
+    });
+    policy
+        .as_deref()
+        .map_or_else(TabPolicy::default, TabPolicy::from_name)
+}
+
+/// Build a tab order from the loaded field widgets.
+fn build_tab_order(model: &AcroFormModel, policy: TabPolicy) -> TabOrder {
+    let mut widgets = Vec::new();
+    let mut annotation_index = 0;
+    for field in &model.fields {
+        for widget in &field.widgets {
+            let mut tab = TabWidget::new(
+                field.name.clone(),
+                widget.page.unwrap_or(0),
+                annotation_index,
+            )
+            .with_rect(
+                widget.rect.left,
+                widget.rect.bottom,
+                widget.rect.right,
+                widget.rect.top,
+            );
+            tab.set_read_only(field.read_only);
+            widgets.push(tab);
+            annotation_index += 1;
+        }
+    }
+    TabOrder::new(policy, widgets)
+}
+
+/// One widget row in the tab-order report.
+#[derive(Serialize)]
+struct TabRow {
+    /// Fully qualified field name.
+    name: String,
+    /// One-based page number.
+    page: usize,
+    /// `[x0, y0, x1, y1]` in points.
+    rect: [f64; 4],
+    /// Whether the field is read-only.
+    read_only: bool,
+}
+
+/// One navigation transition.
+#[derive(Serialize)]
+struct NavRow {
+    /// Starting field.
+    from: String,
+    /// Next field, or `null` at the end when wrapping is disabled.
+    next: Option<String>,
+    /// Previous field, or `null` at the start when wrapping is disabled.
+    previous: Option<String>,
+}
+
+/// JSON shape of `pdfxi form tabs`.
+#[derive(Serialize)]
+struct TabsReport {
+    /// Inspected file.
+    file: String,
+    /// `/Tabs` name (`R`, `C`, `S` or `A`).
+    tabs_name: String,
+    /// Resolved policy label.
+    policy: String,
+    /// Number of widgets.
+    widgets: usize,
+    /// Widgets in tab order.
+    order: Vec<TabRow>,
+    /// Next/previous transitions under the navigation policy.
+    navigation: Vec<NavRow>,
+}
+
+/// `pdfxi form tabs`.
+pub(crate) fn run_tabs(
+    file: &Path,
+    policy_override: Option<&str>,
+    nav: NavPolicy,
+    json: bool,
+) -> anyhow::Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let document = Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let model =
+        read_acroform(&document).map_err(|error| anyhow::anyhow!("read AcroForm: {error}"))?;
+    let policy = match policy_override {
+        Some(text) => parse_tab_policy(text)?,
+        None => read_tabs_policy(&document),
+    };
+    let order = build_tab_order(&model, policy);
+    let navigation = order
+        .widgets()
+        .iter()
+        .map(|widget| NavRow {
+            from: widget.name().to_owned(),
+            next: order.next_after(widget.name(), &nav).map(str::to_owned),
+            previous: order
+                .previous_before(widget.name(), &nav)
+                .map(str::to_owned),
+        })
+        .collect();
+    let report = TabsReport {
+        file: file.display().to_string(),
+        tabs_name: policy.name().to_owned(),
+        policy: policy.label().to_owned(),
+        widgets: order.len(),
+        order: order
+            .widgets()
+            .iter()
+            .map(|widget| TabRow {
+                name: widget.name().to_owned(),
+                page: widget.page() + 1,
+                rect: widget.rect(),
+                read_only: widget.is_read_only(),
+            })
+            .collect(),
+        navigation,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!("file: {}", report.file);
+    println!("tabs: {} ({})", report.tabs_name, report.policy);
+    for (index, row) in report.order.iter().enumerate() {
+        println!(
+            "{}. {}  page {}  rect: {} {} {} {}",
+            index + 1,
+            row.name,
+            row.page,
+            row.rect[0],
+            row.rect[1],
+            row.rect[2],
+            row.rect[3]
+        );
+    }
+    for row in &report.navigation {
+        println!(
+            "{} -> {} / {}",
+            row.from,
+            row.next.as_deref().unwrap_or("(none)"),
+            row.previous.as_deref().unwrap_or("(none)")
+        );
+    }
+    println!("widgets: {}", report.widgets);
+    Ok(())
+}
+
+/// One accepted action row.
+#[derive(Serialize)]
+struct ActionStepRow {
+    /// Field carrying the action.
+    field: String,
+    /// Site: `A`, `K`, `F`, `V` or `C`.
+    site: String,
+    /// Action subtype.
+    action: String,
+    /// Fields the action names.
+    fields: Vec<String>,
+}
+
+/// One rejected action row.
+#[derive(Serialize)]
+struct UnsupportedRow {
+    /// Field carrying the action.
+    field: String,
+    /// Site: `A`, `K`, `F`, `V` or `C`.
+    site: String,
+    /// PDF subtype that was found.
+    action_type: String,
+    /// Why it was rejected.
+    reason: String,
+}
+
+/// JSON shape of `pdfxi form actions`.
+#[derive(Serialize)]
+struct ActionsReport {
+    /// Inspected file.
+    file: String,
+    /// Whether the catalog has an `/AcroForm`.
+    present: bool,
+    /// Accepted actions in execution order.
+    steps: Vec<ActionStepRow>,
+    /// Rejected actions in stable order.
+    unsupported: Vec<UnsupportedRow>,
+}
+
+/// Collect the actions attached to the loaded fields and widgets.
+fn collect_actions(document: &Document, model: &AcroFormModel) -> ActionReport {
+    let source = CoreSource { document };
+    let mut collector = ActionCollector::new();
+    for field in &model.fields {
+        let mut ids = Vec::new();
+        if let Some(id) = field.field_object {
+            ids.push(id);
+        }
+        for widget in &field.widgets {
+            if let Some(id) = widget.object
+                && !ids.contains(&id)
+            {
+                ids.push(id);
+            }
+        }
+        for id in ids {
+            let Ok(object) = document.object(id) else {
+                continue;
+            };
+            let Some(dictionary) = object.as_dictionary() else {
+                continue;
+            };
+            let converted = to_forms_value(&Object::Dictionary(dictionary.clone()), 0);
+            if let PdfValue::Dictionary(entries) = converted {
+                collector.add_field(&field.name, &entries, &source);
+            }
+        }
+    }
+    collector.finish()
+}
+
+/// `pdfxi form actions`.
+pub(crate) fn run_actions(file: &Path, json: bool) -> anyhow::Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let document = Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let model =
+        read_acroform(&document).map_err(|error| anyhow::anyhow!("read AcroForm: {error}"))?;
+    let report = collect_actions(&document, &model);
+    let payload = ActionsReport {
+        file: file.display().to_string(),
+        present: model.present,
+        steps: report
+            .plan()
+            .steps()
+            .iter()
+            .map(|step| ActionStepRow {
+                field: step.field.clone(),
+                site: step.site.label().to_owned(),
+                action: step.action.subtype().to_owned(),
+                fields: step.action.fields().to_vec(),
+            })
+            .collect(),
+        unsupported: report
+            .unsupported()
+            .iter()
+            .map(|row| UnsupportedRow {
+                field: row.field.clone(),
+                site: row.site.label().to_owned(),
+                action_type: row.action_type.clone(),
+                reason: row.reason.clone(),
+            })
+            .collect(),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+    println!("file: {}", payload.file);
+    println!("present: {}", payload.present);
+    for step in &payload.steps {
+        if step.fields.is_empty() {
+            println!("action: {} [{}] {}", step.field, step.site, step.action);
+        } else {
+            println!(
+                "action: {} [{}] {} fields: {}",
+                step.field,
+                step.site,
+                step.action,
+                step.fields.join(",")
+            );
+        }
+    }
+    for row in &payload.unsupported {
+        println!(
+            "unsupported: {} [{}] {}: {}",
+            row.field, row.site, row.action_type, row.reason
+        );
+    }
+    println!("actions: {}", payload.steps.len());
+    println!("unsupported_actions: {}", payload.unsupported.len());
+    Ok(())
+}
+
 /// One validation error row.
 #[derive(Serialize)]
 struct ValidationRow {
@@ -695,7 +1066,7 @@ pub(crate) fn run_calculate(
 mod tests {
     use super::{
         CalculationRequest, parse_assignment, parse_calculation, parse_field, parse_rect,
-        typed_value,
+        parse_tab_policy, to_forms_value, typed_value,
     };
 
     #[test]
@@ -824,6 +1195,53 @@ mod tests {
                 6
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn tab_policies_parse_names_and_labels() {
+        use pdfxi_forms::TabPolicy;
+
+        assert_eq!(parse_tab_policy("rows").expect("rows"), TabPolicy::Rows);
+        assert_eq!(parse_tab_policy("C").expect("columns"), TabPolicy::Columns);
+        assert_eq!(
+            parse_tab_policy("Structure").expect("structure"),
+            TabPolicy::Structure
+        );
+        assert_eq!(
+            parse_tab_policy("annotations").expect("annotations"),
+            TabPolicy::Annotations
+        );
+        assert!(parse_tab_policy("diagonal").is_err());
+    }
+
+    #[test]
+    fn core_objects_convert_to_form_values() {
+        use pdfxi_core::Object;
+        use pdfxi_forms::PdfValue;
+
+        assert_eq!(to_forms_value(&Object::Null, 0), PdfValue::Null);
+        assert_eq!(
+            to_forms_value(&Object::Boolean(true), 0),
+            PdfValue::Bool(true)
+        );
+        assert_eq!(
+            to_forms_value(&Object::Name("Tabs".to_owned()), 0),
+            PdfValue::Name("Tabs".to_owned())
+        );
+        let mut dictionary = std::collections::BTreeMap::new();
+        dictionary.insert("K".to_owned(), Object::Integer(3));
+        assert_eq!(
+            to_forms_value(&Object::Dictionary(dictionary), 0),
+            PdfValue::Dictionary(
+                [("K".to_owned(), PdfValue::Number(3.0))]
+                    .into_iter()
+                    .collect()
+            )
+        );
+        assert_eq!(
+            to_forms_value(&Object::Reference(pdfxi_core::ObjectId::new(7, 0)), 0),
+            PdfValue::Reference(pdfxi_forms::ObjectRef::new(7, 0))
         );
     }
 }
