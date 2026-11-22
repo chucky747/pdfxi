@@ -81,6 +81,8 @@ mod printer;
 // merge and split (`pages`).
 mod pages;
 // Link annotations and embedded-file attachments (`links`, `attachments`).
+/// `pdfxi annotate`: add and list drawing annotations.
+mod annotate;
 /// `pdfxi compare`: side-by-side revision compare of two PDFs.
 mod compare;
 /// `pdfxi decorate`: stamp headers and footers on pages.
@@ -332,6 +334,12 @@ enum Command {
         /// The decoration to apply.
         #[command(subcommand)]
         command: DecorateCommand,
+    },
+    /// Add or list drawing annotations on a page.
+    Annotate {
+        /// The annotation operation to perform.
+        #[command(subcommand)]
+        command: AnnotateCommand,
     },
     /// Rewrite a document with the optimizer and report what changed.
     ///
@@ -641,6 +649,53 @@ enum DecorateCommand {
     },
 }
 
+/// Operations on the `pdfxi annotate` command group.
+#[derive(Debug, Subcommand)]
+enum AnnotateCommand {
+    /// Add one free-text, callout or cloud annotation and save the result.
+    Add {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the annotated document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// One-based page to annotate.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        page: usize,
+        /// Annotation kind.
+        #[arg(long, value_enum)]
+        kind: annotate::AnnotationKind,
+        /// Rectangle in points: `x0,y0,x1,y1`.
+        #[arg(long, value_name = "RECT")]
+        rect: String,
+        /// Text for a free text or callout annotation.
+        #[arg(long, value_name = "TEXT")]
+        text: Option<String>,
+        /// Leader-line anchor in points: `x,y` (callouts).
+        #[arg(long, value_name = "POINT")]
+        anchor: Option<String>,
+        /// Font size in points (4-72).
+        #[arg(long, default_value_t = 11.0)]
+        font_size: f32,
+        /// Author name written to `/T`.
+        #[arg(long, default_value = "")]
+        author: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the annotations on one page.
+    List {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// One-based page to inspect.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        page: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
 /// Operations on the `pdfxi create` command group.
 #[derive(Debug, Subcommand)]
 enum CreateCommand {
@@ -1061,6 +1116,32 @@ fn main() -> anyhow::Result<()> {
             !no_compress,
             json,
         ),
+        Command::Annotate { command } => match command {
+            AnnotateCommand::Add {
+                file,
+                out,
+                page,
+                kind,
+                rect,
+                text,
+                anchor,
+                font_size,
+                author,
+                json,
+            } => annotate::run_add(
+                &file,
+                &out,
+                page,
+                kind,
+                &rect,
+                text.as_deref(),
+                anchor.as_deref(),
+                font_size,
+                &author,
+                json,
+            ),
+            AnnotateCommand::List { file, page, json } => annotate::run_list(&file, page, json),
+        },
         Command::Decorate { command } => match command {
             DecorateCommand::HeaderFooter {
                 file,

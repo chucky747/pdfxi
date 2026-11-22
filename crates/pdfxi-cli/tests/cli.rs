@@ -2763,6 +2763,191 @@ fn attachments_report_an_embedded_file() {
 }
 
 #[test]
+fn annotate_add_and_list_round_trip() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let out = TempOut::new("pdf");
+    let added = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--kind",
+        "free-text",
+        "--rect",
+        "72,600,320,660",
+        "--text",
+        "Free text note",
+        "--author",
+        "Alice",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    assert!(
+        stdout(&added).contains("added: pdfxi-freetext-"),
+        "{}",
+        stdout(&added)
+    );
+
+    let listed = run(&["annotate", "list", out.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    assert_eq!(value["page"], 1);
+    let rows = value["annotations"].as_array().expect("annotations array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["subtype"], "FreeText");
+    assert_eq!(rows[0]["contents"], "Free text note");
+    assert_eq!(rows[0]["author"], "Alice");
+    assert_eq!(rows[0]["rect"][0], 72.0);
+}
+
+#[test]
+fn annotate_adds_callout_and_cloud_and_keeps_earlier_ones() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let third = TempOut::new("pdf");
+    let add = |file: &std::path::Path, out: &TempOut, extra: &[&str]| {
+        let mut args = vec![
+            "annotate",
+            "add",
+            file.to_str().expect("utf-8"),
+            "--out",
+            out.arg(),
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+    let one = add(
+        &source,
+        &first,
+        &[
+            "--kind",
+            "free-text",
+            "--rect",
+            "72,600,320,660",
+            "--text",
+            "Text",
+            "--author",
+            "A",
+        ],
+    );
+    assert!(one.status.success(), "stderr: {}", stderr(&one));
+    let two = add(
+        &first.path,
+        &second,
+        &[
+            "--kind",
+            "callout",
+            "--rect",
+            "72,500,320,560",
+            "--anchor",
+            "60,470",
+            "--text",
+            "Callout",
+            "--author",
+            "B",
+        ],
+    );
+    assert!(two.status.success(), "stderr: {}", stderr(&two));
+    let three = add(
+        &second.path,
+        &third,
+        &[
+            "--kind",
+            "cloud",
+            "--rect",
+            "72,380,320,460",
+            "--author",
+            "C",
+        ],
+    );
+    assert!(three.status.success(), "stderr: {}", stderr(&three));
+
+    let listed = run(&["annotate", "list", third.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    let rows = value["annotations"].as_array().expect("annotations array");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["subtype"], "FreeText");
+    assert_eq!(rows[1]["subtype"], "FreeText");
+    assert_eq!(rows[2]["subtype"], "Polygon");
+    assert_eq!(rows[2]["author"], "C");
+    // The cloud keeps a margin for its bumps.
+    assert_eq!(rows[2]["rect"][0], 64.0);
+}
+
+#[test]
+fn annotate_rejects_bad_requests() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let out = TempOut::new("pdf");
+    let missing_text = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--kind",
+        "free-text",
+        "--rect",
+        "72,600,320,660",
+    ]);
+    assert!(!missing_text.status.success());
+    assert!(
+        stderr(&missing_text).contains("--text"),
+        "{}",
+        stderr(&missing_text)
+    );
+
+    let missing_anchor = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--kind",
+        "callout",
+        "--rect",
+        "72,500,320,560",
+        "--text",
+        "x",
+    ]);
+    assert!(!missing_anchor.status.success());
+    assert!(
+        stderr(&missing_anchor).contains("--anchor"),
+        "{}",
+        stderr(&missing_anchor)
+    );
+
+    let bad_rect = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--kind",
+        "cloud",
+        "--rect",
+        "10,10,10,20",
+    ]);
+    assert!(!bad_rect.status.success());
+
+    let blank = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--kind",
+        "free-text",
+        "--rect",
+        "72,600,320,660",
+        "--text",
+        "   ",
+    ]);
+    assert!(!blank.status.success());
+}
+
+#[test]
 fn decorate_bates_numbers_every_page() {
     let source = real_fixture("powerpoint-slides.pdf");
     let out = TempOut::new("pdf");

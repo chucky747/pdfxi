@@ -382,6 +382,15 @@ pub enum AnnotationEditError {
     /// A rectangle or ellipse annotation had no area.
     #[error("a shape annotation requires a rectangle with positive width and height")]
     EmptyShapeRect,
+    /// A free-text annotation font size was outside the supported range.
+    #[error("font size must be finite and in 4..=72 points, got {0}")]
+    InvalidFontSize(f32),
+    /// A free-text or callout annotation was given blank text.
+    #[error("a free-text annotation requires non-blank text")]
+    EmptyText,
+    /// A callout anchor was not a finite point.
+    #[error("the callout anchor must be a finite point")]
+    InvalidAnchor,
     /// A polygon annotation was too small or enclosed no area.
     #[error("a polygon annotation requires at least three vertices and positive-area bounds")]
     DegeneratePolygon,
@@ -886,6 +895,402 @@ pub fn add_stamp(
     author: &str,
 ) -> Result<AnnotationRef, AnnotationEditError> {
     add_stamp_with(document, page_index, rect, name, text, author, None, None)
+}
+
+/// Add a free-text annotation with a wrapped text appearance inside `rect`.
+///
+/// The annotation uses `/Subtype /FreeText`, `/DA` for the default appearance,
+/// and an `/AP /N` form that draws a thin border and wrapped lines of `text`.
+/// `font_size` must be finite and within `4.0..=72.0`.
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::InvalidFontSize`] for a bad size,
+/// [`AnnotationEditError::EmptyShapeRect`] for an empty rectangle,
+/// [`AnnotationEditError::EmptyContents`] for blank text, a page or bounds
+/// error, or a core error when the change cannot be staged.
+pub fn add_free_text(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    text: &str,
+    font_size: f32,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_text_box(
+        document,
+        page_index,
+        rect,
+        text,
+        font_size,
+        author,
+        None,
+        "pdfxi-freetext-",
+    )
+}
+
+/// Add a free-text callout: a text box plus a line to `anchor`.
+///
+/// The annotation uses `/Subtype /FreeText` with `/IT /FreeTextCallout` and
+/// `/CL [anchor, box edge]`, so a viewer draws the same leader line the
+/// appearance does. `anchor` must lie on the page.
+///
+/// # Errors
+///
+/// Returns the same typed errors as [`add_free_text`], plus
+/// [`AnnotationEditError::CoordinateOutsidePage`] when `anchor` is off the page.
+pub fn add_callout(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    anchor: Point,
+    text: &str,
+    font_size: f32,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    if !anchor.x.is_finite() || !anchor.y.is_finite() {
+        return Err(AnnotationEditError::InvalidAnchor);
+    }
+    add_text_box(
+        document,
+        page_index,
+        rect,
+        text,
+        font_size,
+        author,
+        Some(anchor),
+        "pdfxi-callout-",
+    )
+}
+
+/// Add a cloud border around `rect`.
+///
+/// The annotation uses `/Subtype /Polygon` with `/IT /PolygonCloud` and a
+/// scalloped appearance: overlapping stroked circles along the rectangle
+/// perimeter, which is how a cloud border reads at any zoom level.
+///
+/// # Errors
+///
+/// Returns [`AnnotationEditError::EmptyShapeRect`] for an empty rectangle, a
+/// bounds error, or a core error when the change cannot be staged.
+pub fn add_cloud(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    if rect.is_empty() {
+        return Err(AnnotationEditError::EmptyShapeRect);
+    }
+    let current = effective_document(document)?;
+    let page_info = current.page(page_index)?;
+    ensure_rect_on_page(page_index, page_info.media_box, rect)?;
+    let mut page = read_page_state(&current, page_index)?;
+    let ids = allocate_ids(document, 2)?;
+    let appearance_id = ids[0];
+    let annotation_id = ids[1];
+    let generated = format!("pdfxi-cloud-{}", annotation_id.number);
+    if annotation_id_exists(&current, &page.annots, &generated)? {
+        return Err(AnnotationEditError::DuplicateId {
+            id: generated,
+            page: page_index,
+        });
+    }
+    let date = now_pdf_date();
+
+    let mut dictionary = Dictionary::new();
+    dictionary.insert("Type".to_owned(), pdf_name("Annot"));
+    dictionary.insert("Subtype".to_owned(), pdf_name("Polygon"));
+    dictionary.insert("IT".to_owned(), pdf_name("PolygonCloud"));
+    dictionary.insert(
+        "Rect".to_owned(),
+        rect_array(
+            rect.inset(-CLOUD_BUMP_RADIUS, -CLOUD_BUMP_RADIUS)
+                .unwrap_or(rect),
+        ),
+    );
+    dictionary.insert("Contents".to_owned(), pdf_text("Cloud"));
+    dictionary.insert("T".to_owned(), pdf_text(author));
+    dictionary.insert("NM".to_owned(), pdf_text(&generated));
+    dictionary.insert("M".to_owned(), pdf_text(&date));
+    dictionary.insert(
+        "Vertices".to_owned(),
+        Object::Array(vec![
+            Object::Real(f64::from(rect.x0())),
+            Object::Real(f64::from(rect.y0())),
+            Object::Real(f64::from(rect.x1())),
+            Object::Real(f64::from(rect.y0())),
+            Object::Real(f64::from(rect.x1())),
+            Object::Real(f64::from(rect.y1())),
+            Object::Real(f64::from(rect.x0())),
+            Object::Real(f64::from(rect.y1())),
+        ]),
+    );
+    dictionary.insert("C".to_owned(), color_array(MARKUP_STROKE_COLOR));
+    dictionary.insert(
+        "BS".to_owned(),
+        border_style_dictionary(MARKUP_STROKE_WIDTH),
+    );
+    dictionary.insert("F".to_owned(), Object::Integer(4));
+    dictionary.insert("AP".to_owned(), appearance_dictionary(appearance_id));
+
+    let appearance = cloud_appearance(rect);
+    document.set_object(appearance_id, appearance)?;
+    document.set_object(annotation_id, Object::Dictionary(dictionary))?;
+    page.annots
+        .items_mut()
+        .push(Object::Reference(annotation_id));
+    stage_page_state(document, page)?;
+
+    Ok(AnnotationRef {
+        id: generated,
+        object: annotation_id,
+        page_index,
+        subtype: AnnotationSubtype::Other("Polygon".to_owned()),
+    })
+}
+
+/// Shared staging for a free-text box and a callout.
+#[allow(clippy::too_many_arguments)]
+fn add_text_box(
+    document: &mut Document,
+    page_index: usize,
+    rect: Rect,
+    text: &str,
+    font_size: f32,
+    author: &str,
+    anchor: Option<Point>,
+    prefix: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    if !font_size.is_finite() || !(4.0..=72.0).contains(&font_size) {
+        return Err(AnnotationEditError::InvalidFontSize(font_size));
+    }
+    if rect.is_empty() {
+        return Err(AnnotationEditError::EmptyShapeRect);
+    }
+    if text.trim().is_empty() {
+        return Err(AnnotationEditError::EmptyText);
+    }
+
+    let current = effective_document(document)?;
+    let page_info = current.page(page_index)?;
+    ensure_rect_on_page(page_index, page_info.media_box, rect)?;
+    if let Some(anchor) = anchor {
+        ensure_points_on_page(page_index, page_info.media_box, [anchor])?;
+    }
+    let mut page = read_page_state(&current, page_index)?;
+    let ids = allocate_ids(document, 2)?;
+    let appearance_id = ids[0];
+    let annotation_id = ids[1];
+    let generated = format!("{prefix}{}", annotation_id.number);
+    if annotation_id_exists(&current, &page.annots, &generated)? {
+        return Err(AnnotationEditError::DuplicateId {
+            id: generated,
+            page: page_index,
+        });
+    }
+    let date = now_pdf_date();
+
+    let mut dictionary = Dictionary::new();
+    dictionary.insert("Type".to_owned(), pdf_name("Annot"));
+    dictionary.insert("Subtype".to_owned(), pdf_name("FreeText"));
+    dictionary.insert("Rect".to_owned(), rect_array(rect));
+    dictionary.insert("Contents".to_owned(), pdf_text(text));
+    dictionary.insert("T".to_owned(), pdf_text(author));
+    dictionary.insert("NM".to_owned(), pdf_text(&generated));
+    dictionary.insert("M".to_owned(), pdf_text(&date));
+    dictionary.insert(
+        "DA".to_owned(),
+        pdf_text(&format!("/Helv {font_size:.3} Tf 0 g")),
+    );
+    dictionary.insert("F".to_owned(), Object::Integer(4));
+    dictionary.insert("AP".to_owned(), appearance_dictionary(appearance_id));
+    if let Some(anchor) = anchor {
+        dictionary.insert("IT".to_owned(), pdf_name("FreeTextCallout"));
+        let edge = nearest_box_point(rect, anchor);
+        dictionary.insert(
+            "CL".to_owned(),
+            Object::Array(vec![
+                Object::Real(f64::from(anchor.x)),
+                Object::Real(f64::from(anchor.y)),
+                Object::Real(f64::from(edge.x)),
+                Object::Real(f64::from(edge.y)),
+            ]),
+        );
+    }
+
+    let appearance = free_text_appearance(rect, text, font_size, anchor);
+    document.set_object(appearance_id, appearance)?;
+    document.set_object(annotation_id, Object::Dictionary(dictionary))?;
+    page.annots
+        .items_mut()
+        .push(Object::Reference(annotation_id));
+    stage_page_state(document, page)?;
+
+    Ok(AnnotationRef {
+        id: generated,
+        object: annotation_id,
+        page_index,
+        subtype: AnnotationSubtype::Other("FreeText".to_owned()),
+    })
+}
+
+/// Radius of one cloud bump, in points.
+const CLOUD_BUMP_RADIUS: f32 = 8.0;
+/// Bezier constant for a circular arc.
+const CIRCLE_KAPPA: f64 = 0.552_284_749_830_793_6;
+
+/// The point on the rectangle border nearest to `anchor`.
+fn nearest_box_point(rect: Rect, anchor: Point) -> Point {
+    Point::new(
+        anchor.x.clamp(rect.x0(), rect.x1()),
+        anchor.y.clamp(rect.y0(), rect.y1()),
+    )
+}
+
+/// Build the `/AP /N` form for a free-text box, in coordinates relative to `rect`.
+fn free_text_appearance(rect: Rect, text: &str, font_size: f32, anchor: Option<Point>) -> Object {
+    let width = f64::from(rect.width());
+    let height = f64::from(rect.height());
+    let size = f64::from(font_size);
+    let padding = (size * 0.5).min(width / 4.0).max(1.0);
+    let chars_per_line = (((width - 2.0 * padding) / (size * 0.5)).floor() as usize).max(1);
+    let lines = wrap_text(text, chars_per_line);
+    let mut data = String::from("q\n0.6 0.6 0.6 RG 0.75 w\n0 0 ");
+    data.push_str(&format!("{width:.3} {height:.3} re S\nQ\n"));
+    data.push_str("q\n0 0 0 rg\nBT\n");
+    data.push_str(&format!("/F1 {size:.3} Tf\n"));
+    let line_height = size * 1.2;
+    let mut baseline = height - padding - size;
+    for line in lines.iter().take(64) {
+        if baseline < padding {
+            break;
+        }
+        data.push_str(&format!(
+            "1 0 0 1 {padding:.3} {baseline:.3} Tm\n({}) Tj\n",
+            escape_literal(line)
+        ));
+        baseline -= line_height;
+    }
+    data.push_str("ET\nQ\n");
+    if let Some(anchor) = anchor {
+        let edge = nearest_box_point(rect, anchor);
+        data.push_str(&format!(
+            "q\n0 0 0 RG 0.75 w\n{x0:.3} {y0:.3} m {x1:.3} {y1:.3} l S\nQ\n",
+            x0 = f64::from(edge.x - rect.x0()),
+            y0 = f64::from(edge.y - rect.y0()),
+            x1 = f64::from(anchor.x - rect.x0()),
+            y1 = f64::from(anchor.y - rect.y0()),
+        ));
+    }
+
+    let mut font = Dictionary::new();
+    font.insert("Type".to_owned(), pdf_name("Font"));
+    font.insert("Subtype".to_owned(), pdf_name("Type1"));
+    font.insert("BaseFont".to_owned(), pdf_name("Helvetica"));
+    font.insert("Encoding".to_owned(), pdf_name("WinAnsiEncoding"));
+    let mut fonts = Dictionary::new();
+    fonts.insert("F1".to_owned(), Object::Dictionary(font));
+    let mut resources = Dictionary::new();
+    resources.insert("Font".to_owned(), Object::Dictionary(fonts));
+
+    let mut dictionary = form_dictionary(width, height);
+    dictionary.insert("Resources".to_owned(), Object::Dictionary(resources));
+    Object::Stream {
+        dictionary,
+        data: data.into_bytes(),
+    }
+}
+
+/// Build the `/AP /N` form for a cloud border around `rect`.
+fn cloud_appearance(rect: Rect) -> Object {
+    let width = f64::from(rect.width());
+    let height = f64::from(rect.height());
+    let radius = f64::from(CLOUD_BUMP_RADIUS)
+        .min(width / 4.0)
+        .min(height / 4.0);
+    let mut data = String::from("q\n");
+    data.push_str(&format!(
+        "{r:.3} {g:.3} {b:.3} RG\n{w:.3} w\n",
+        r = MARKUP_STROKE_COLOR[0],
+        g = MARKUP_STROKE_COLOR[1],
+        b = MARKUP_STROKE_COLOR[2],
+        w = f64::from(MARKUP_STROKE_WIDTH),
+    ));
+    let mut centre = |x: f64, y: f64| {
+        data.push_str(&circle_path(x, y, radius));
+    };
+    let columns = ((width / (radius * 2.0)).round() as usize).max(2);
+    let rows = ((height / (radius * 2.0)).round() as usize).max(2);
+    for index in 0..=columns {
+        let x = radius + (width - 2.0 * radius) * index as f64 / columns as f64;
+        centre(x, radius);
+        centre(x, height - radius);
+    }
+    for index in 0..=rows {
+        let y = radius + (height - 2.0 * radius) * index as f64 / rows as f64;
+        centre(radius, y);
+        centre(width - radius, y);
+    }
+    data.push_str("Q\n");
+    let mut dictionary = form_dictionary(width, height);
+    dictionary.insert(
+        "Resources".to_owned(),
+        Object::Dictionary(Dictionary::new()),
+    );
+    Object::Stream {
+        dictionary,
+        data: data.into_bytes(),
+    }
+}
+
+/// A closed circular path with four cubic segments.
+fn circle_path(cx: f64, cy: f64, radius: f64) -> String {
+    let k = radius * CIRCLE_KAPPA;
+    format!(
+        "{x0:.3} {cy:.3} m\n\
+         {x0:.3} {y1:.3} {x1:.3} {y2:.3} {cx:.3} {y2:.3} c\n\
+         {x2:.3} {y2:.3} {x3:.3} {y1:.3} {x3:.3} {cy:.3} c\n\
+         {x3:.3} {y3:.3} {x2:.3} {y4:.3} {cx:.3} {y4:.3} c\n\
+         {x1:.3} {y4:.3} {x0:.3} {y3:.3} {x0:.3} {cy:.3} c\nS\n",
+        x0 = cx - radius,
+        x1 = cx - k,
+        x2 = cx + k,
+        x3 = cx + radius,
+        y1 = cy - k,
+        y2 = cy - radius,
+        y3 = cy + k,
+        y4 = cy + radius,
+    )
+}
+
+/// Greedy word wrap to `chars_per_line` characters.
+fn wrap_text(text: &str, chars_per_line: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.chars().count() + 1 + word.chars().count() <= chars_per_line {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Build a `/BS` border dictionary with a solid stroke.
+fn border_style_dictionary(width: f32) -> Object {
+    let mut border = Dictionary::new();
+    border.insert("W".to_owned(), Object::Real(f64::from(width)));
+    border.insert("S".to_owned(), pdf_name("S"));
+    Object::Dictionary(border)
 }
 
 /// List the annotations on `page_index`, resolving each referenced dictionary.

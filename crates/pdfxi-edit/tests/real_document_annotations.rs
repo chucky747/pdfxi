@@ -13,10 +13,10 @@ use pdfxi_core::{Dictionary, Document, Object, ObjectId};
 use pdfxi_edit::{
     AnnotationEditError, AnnotationKind, AnnotationState, AnnotationSubtype, MAX_INK_PATHS,
     MAX_INK_POINTS, MAX_MARKUP_QUADS, MAX_POLYGON_VERTICES, MAX_STAMP_TEXT_CHARS, Point, Rect,
-    ShapeStyle, add_circle, add_highlight, add_ink, add_line, add_polygon, add_polygon_styled,
-    add_square, add_square_styled, add_stamp, add_strikeout, add_text_note, add_underline,
-    delete_annotation, export_xfdf, import_xfdf, list_annotations, reply_to, set_state,
-    update_contents,
+    ShapeStyle, add_callout, add_circle, add_cloud, add_free_text, add_highlight, add_ink,
+    add_line, add_polygon, add_polygon_styled, add_square, add_square_styled, add_stamp,
+    add_strikeout, add_text_note, add_underline, delete_annotation, export_xfdf, import_xfdf,
+    list_annotations, reply_to, set_state, update_contents,
 };
 use pdfxi_render::pdfium_backend::PdfiumRenderer;
 use pdfxi_render::{CancellationToken, PageIndex, RenderedPage, Renderer};
@@ -1690,4 +1690,141 @@ fn changed_pixels_outside(
         }
     }
     changed
+}
+
+#[test]
+fn free_text_callout_and_cloud_survive_a_full_rewrite() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let original_text = document.page_text(0).expect("page 1 text before editing");
+
+    let note = add_free_text(
+        &mut document,
+        0,
+        rect(72.0, 600.0, 320.0, 660.0),
+        "Free text note with several words to wrap",
+        11.0,
+        "Alice",
+    )
+    .expect("add free text");
+    let callout = add_callout(
+        &mut document,
+        0,
+        rect(72.0, 500.0, 320.0, 560.0),
+        Point::new(60.0, 470.0),
+        "Callout text",
+        12.0,
+        "Bob",
+    )
+    .expect("add callout");
+    let cloud =
+        add_cloud(&mut document, 0, rect(72.0, 380.0, 320.0, 460.0), "Carol").expect("add cloud");
+
+    let bytes = document.save().expect("save annotated document");
+    let reopened = Document::from_bytes(bytes).expect("annotated output reparses");
+    assert_eq!(
+        reopened.page_text(0).expect("page text after editing"),
+        original_text,
+        "annotations must not change the page text"
+    );
+
+    let views = list_annotations(&reopened, 0).expect("list annotations");
+    let free_text = views
+        .iter()
+        .find(|view| view.id == note.id)
+        .expect("free text listed");
+    assert_eq!(free_text.author, "Alice");
+    assert!(free_text.contents.contains("Free text note"));
+
+    let callout_view = views
+        .iter()
+        .find(|view| view.id == callout.id)
+        .expect("callout listed");
+    assert_eq!(callout_view.author, "Bob");
+
+    let cloud_view = views
+        .iter()
+        .find(|view| view.id == cloud.id)
+        .expect("cloud listed");
+    assert_eq!(cloud_view.vertices.len(), 4, "cloud carries four vertices");
+
+    // Each annotation points at a non-empty appearance stream.
+    for id in [note.object, callout.object, cloud.object] {
+        let annotation = reopened.object(id).expect("annotation object");
+        let dictionary = annotation.as_dictionary().expect("annotation dictionary");
+        assert_eq!(
+            dictionary.get("Subtype").and_then(Object::as_name),
+            Some(if id == cloud.object {
+                "Polygon"
+            } else {
+                "FreeText"
+            })
+        );
+        let appearance = dictionary
+            .get("AP")
+            .and_then(|ap| ap.as_dictionary())
+            .and_then(|ap| ap.get("N"))
+            .and_then(Object::as_reference)
+            .expect("appearance reference");
+        let stream = reopened.object(appearance).expect("appearance object");
+        let Object::Stream { data, .. } = stream else {
+            panic!("appearance must be a stream");
+        };
+        assert!(!data.is_empty());
+    }
+
+    let callout_dictionary = reopened
+        .object(callout.object)
+        .expect("callout object")
+        .as_dictionary()
+        .expect("callout dictionary")
+        .clone();
+    assert_eq!(
+        callout_dictionary.get("IT").and_then(Object::as_name),
+        Some("FreeTextCallout")
+    );
+    assert!(callout_dictionary.contains_key("CL"), "callout leader line");
+}
+
+#[test]
+fn free_text_rejects_bad_sizes_text_and_geometry() {
+    let mut document = Document::from_bytes(fixture()).expect("fixture parses");
+    let empty = rect(72.0, 600.0, 72.0, 660.0);
+    assert!(matches!(
+        add_free_text(&mut document, 0, empty, "x", 11.0, "A"),
+        Err(AnnotationEditError::EmptyShapeRect)
+    ));
+    assert!(matches!(
+        add_free_text(
+            &mut document,
+            0,
+            rect(72.0, 600.0, 320.0, 660.0),
+            "x",
+            100.0,
+            "A"
+        ),
+        Err(AnnotationEditError::InvalidFontSize(_))
+    ));
+    assert!(matches!(
+        add_free_text(
+            &mut document,
+            0,
+            rect(72.0, 600.0, 320.0, 660.0),
+            "  ",
+            11.0,
+            "A"
+        ),
+        Err(AnnotationEditError::EmptyText)
+    ));
+    assert!(matches!(
+        add_callout(
+            &mut document,
+            0,
+            rect(72.0, 500.0, 320.0, 560.0),
+            Point::new(f32::NAN, 470.0),
+            "x",
+            11.0,
+            "A"
+        ),
+        Err(AnnotationEditError::InvalidAnchor)
+    ));
 }

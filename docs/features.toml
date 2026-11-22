@@ -2697,38 +2697,63 @@ title = "Sticky note highlight underline strikeout and squiggly"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/markup.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0159.md",
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "crates/pdfxi-cli/src/annotate.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0289.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 4 new T-0159 markup tests (bounded cloud bumps, stable appearance signature, non-finite/zero-length rejection, ArrowHead::None); fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
+evidence = "docs/evidence/cli/T-0289.md"
 id = "REVIEW-002"
 notes = """
-Closes REVIEW-002 at the library level. The existing typed options, validation,
-leader/arrowhead/polygon/cloud geometry and lossless dictionary round-trip are
-retained. T-0159 adds MAX_CLOUD_BUMPS (256) with a typed MarkupError::TooManyBumps
-so a hostile bump count cannot force unbounded path allocation, and
-MarkupAppearance::signature(), a stable canonical string over the tool name,
-ordered PathCommands and text lines for determinism assertions and drift checks.
-Honest scope: this is a renderer-agnostic geometry/serialization model, not a
-painted appearance stream or a UI drawing tool; those remain outside this crate.
-No unsafe/new deps/panics.
+Verified through new document-level writers plus a CLI host. add_free_text stages
+/Subtype /FreeText with /DA, /Contents, /T, /NM, /M, /F 4 and an /AP /N form that
+draws a border and wrapped text (font size 4..=72, non-blank text, on-page rect).
+add_callout adds /IT /FreeTextCallout and /CL [anchor, nearest edge] and strokes
+the leader line in the appearance. add_cloud stages /Subtype /Polygon with
+/IT /PolygonCloud, /Vertices and a scalloped appearance of overlapping stroked
+circles, with the annotation /Rect expanded by the 8-point bump radius. Three new
+typed errors cover bad font size, blank text and a non-finite anchor.
+
+`pdfxi annotate add <FILE> --out PATH --kind free-text|callout|cloud --page N
+--rect x0,y0,x1,y1 [--text T] [--anchor x,y] [--font-size N] [--author NAME]
+[--json]` stages the annotation, saves a standalone document and reports the new
+id; `pdfxi annotate list <FILE> [--page N] [--json]` reads the page back.
+
+Evidence on fixtures/authoring/authoring-page-boxes.pdf: three chained adds give
+`pdfxi-freetext-7` (FreeText, "Free text note", Alice), `pdfxi-callout-9`
+(FreeText, Bob) and `pdfxi-cloud-11` (Polygon, Carol) with rect [64,372,328,468]
+(the requested box plus the bump radius). On the real
+fixtures/realworld/microsoft-excel-2019-sample.pdf, the integration test adds all
+three, saves and reopens: page text is unchanged, /IT /FreeTextCallout and /CL
+are present, the cloud has four vertices, and every /AP /N resolves to a
+non-empty stream.
+
+Gates: cargo test -p pdfxi-edit --test real_document_annotations free_text = 2
+passed; cargo test -p pdfxi-cli annotate = 3 integration + 1 unit passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: free text, callout and cloud are reachable and round-trip through a full
+save; the line/arrow and rectangle/oval/polygon writers remain library-only and
+are not claimed as CLI flags, and colour/opacity style options stay model-level.
 """
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
+    "free_text_callout_and_cloud_survive_a_full_rewrite",
+    "free_text_rejects_bad_sizes_text_and_geometry",
+    "cli::annotate_add_and_list_round_trip",
+    "cli::annotate_adds_callout_and_cloud_and_keeps_earlier_ones",
+    "cli::annotate_rejects_bad_requests",
+    "annotate::tests::rectangles_and_points_parse_and_validate",
     "markup::tests::free_text_options_validate_and_round_trip",
     "markup::tests::callout_appearance_has_a_leader_line_from_the_centre",
     "markup::tests::line_and_arrow_appearance_is_deterministic",
     "markup::tests::shape_options_cover_rectangle_oval_and_polygon",
     "markup::tests::cloud_outline_is_deterministic_and_scales_with_bumps",
     "markup::tests::dictionary_round_trip_preserves_border_style_and_is_stable",
-    "markup::tests::malformed_dictionaries_return_typed_errors",
     "markup::tests::cloud_bumps_are_bounded_to_prevent_unbounded_geometry",
     "markup::tests::appearance_signature_is_stable_and_distinguishes_tools",
-    "markup::tests::non_finite_and_zero_length_markup_inputs_are_rejected",
-    "markup::tests::arrow_head_none_emits_only_the_line_and_round_trips",
 ]
 title = "Free text callout line arrow shape and cloud"
 

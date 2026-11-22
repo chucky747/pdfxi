@@ -31,6 +31,8 @@ pdfxi <COMMAND> --help
 | `decorate watermark <FILE> --out PATH --text TEXT [--opacity F] [--rotation D] [--tile] [--json]` | Stamp a text watermark | verified (`EDIT-009`) |
 | `decorate bates <FILE> --out PATH [--prefix TEXT] [--start N] [--digits N] [--increment N] [--corner C] [--json]` | Stamp sequential Bates numbers | verified (`EDIT-010`) |
 | `api [--once]` | Local JSON request/response API over stdio | verified (`AUTO-006`) |
+| `annotate add <FILE> --out PATH --kind free-text\|callout\|cloud --rect x0,y0,x1,y1 [--text T] [--anchor x,y] [--json]` | Add a drawing annotation | verified (`REVIEW-002`) |
+| `annotate list <FILE> [--page N] [--json]` | List one page's annotations | verified (`REVIEW-002`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -88,6 +90,12 @@ Commands are integration-tested by invoking the real binary; see
   Commands are `version`, `commands`, `list-actions`, `show-action`, `dry-run`,
   `run-batch`, `list-toolsets`, `show-toolset`, `validate-toolset` and
   `run-toolset`; runs are staged, so no file is written by a batch.
+- `annotate add` writes real annotations: `/Subtype /FreeText` with `/DA` and a
+  wrapped-text appearance, `/IT /FreeTextCallout` with `/CL` for a callout, and
+  `/Subtype /Polygon` with `/IT /PolygonCloud` plus a scalloped appearance for a
+  cloud. `--page` is one-based, `--rect`/`--anchor` are points, and `--font-size`
+  is limited to 4-72. `annotate list` reads back every annotation with its `/NM`
+  id, subtype, text, author, rect and date.
 
 Exit codes:
 

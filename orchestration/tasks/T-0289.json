@@ -1,0 +1,22 @@
+{
+  "id": "T-0289",
+  "lane": "author",
+  "title": "Free text, callout and cloud annotations with a CLI host",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0288"],
+  "owns": [
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-edit/tests/real_document_annotations.rs",
+    "crates/pdfxi-cli/src/annotate.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0289.md",
+    "orchestration/feature-updates/T-0289.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit --test real_document_annotations and cargo test -p pdfxi-cli pass; pdfxi annotate add writes real FreeText / callout / Polygon cloud annotations that survive a save and can be listed back; REVIEW-002 moves to verified.",
+  "notes": "Adds add_free_text, add_callout and add_cloud to the document-level annotation writers and hosts them in pdfxi annotate add/list with rect/anchor parsing and typed validation.",
+  "evidence": "docs/evidence/cli/T-0289.md"
+}
