@@ -55,6 +55,7 @@ command.
 | Security envelopes and attachment encryption | `SEC-010` | verified | `pdfxi-security::security_envelope` | `envelope seal/open/verify` |
 | Policy-based protection replacement | `SEC-011` | verified | `pdfxi-security::policy` | `protection apply` |
 | Timestamp and signature validation | `SEC-006` | verified | `pdfxi-security::timestamp` | `timestamp sign` / `timestamp verify` |
+| Certificate encryption | `SEC-003` | verified | `pdfxi-security::certificate_encryption` + ECDH-ES | `recipient seal` / `recipient open` |
 | Full screen and presentation mode | `VIEW-012` | verified | `pdfxi-app::presentation` | `present` |
 | Loupe magnifier and gesture navigation | `VIEW-018` | verified | `pdfxi-app::loupe` | `loupe` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
@@ -781,6 +782,28 @@ home|end|escape|a`, `gesture:swipe-left|swipe-right|long-press` and
 `tick:SECONDS`, and reports the outcome, slide/page, auto-advance state and the
 full-screen layout for the page's real size. The OS full-screen window, native
 event capture, timer thread and animation remain the GUI host boundary.
+
+Certificate-addressed file encryption is exposed as:
+
+```text
+pdfxi recipient seal FILE --out ENVELOPE.json --cert CERT.pem [--cert ...]
+    [--cipher aes256-cbc|aes128-cbc] [--permissions print,copy,...]
+    [--cek-hex HEX] [--iv-hex HEX] [--json]
+
+pdfxi recipient open ENVELOPE.json --key KEY.pem --cert CERT.pem --out FILE
+    [--require PERMISSION] [--json]
+```
+
+`seal` generates a random content key and IV (or takes pinned hex for tests),
+encrypts the content with AES-CBC, and wraps the content key for every recipient
+with an ephemeral P-256 ECDH agreement, HKDF-SHA256 and RFC 3394 AES-KW (the
+wrapped value carries the ephemeral public point). `open` repeats the agreement
+with the matching private key, verifies the key commitment, writes the
+plaintext, and can require one granted permission. The container is a portable
+JSON document that stores the cipher, IV, wrapped keys, ciphertext, commitment
+and permission bits. RSA decryption is deliberately not used, so the scoped
+RUSTSEC-2023-0071 ignore remains honest. Certificate-chain trust is the caller's
+decision.
 
 ### Timestamp tokens
 

@@ -2805,16 +2805,73 @@ tests = [
 title = "RC4 and AES encryption handlers"
 
 [[feature]]
-docs = "crates/pdfxi-security/src/crypto/keywrap.rs, docs/evidence/security/T-0133.md"
+docs = [
+    "crates/pdfxi-security/src/crypto/keywrap.rs",
+    "crates/pdfxi-security/src/certificate_encryption.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-cli/src/recipient.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/security/T-0133.md",
+    "docs/evidence/security/T-0358.md",
+]
 domain = "Security"
-evidence = "docs/evidence/security/T-0133.md"
+evidence = "docs/evidence/security/T-0358.md"
 id = "SEC-003"
-notes = "RFC 3394 AES-KW content-key wrapping with authenticated integrity check and typed errors; recipient public-key unwrap is a documented provider boundary."
+notes = """
+T-0133 delivered RFC 3394 AES-KW content-key wrapping with authenticated
+integrity checking and typed errors, inside a complete enveloped-content model:
+AES-CBC content encryption, one wrapped CEK per recipient, a SHA-256 key
+commitment, typed recipient lists/selectors, sender-granted permissions and a
+deterministic DER shape. Its own note recorded that recipient public-key unwrap
+was a documented provider boundary and that the crate never holds a private key.
+
+T-0358 supplies that provider without adding RSA decryption, so the scoped
+RUSTSEC-2023-0071 ignore and its guard test stay valid. EcdhKeyWrapProvider
+seals with an ephemeral P-256 ECDH agreement against the recipient certificate,
+derives a 256-bit KEK with HKDF-SHA256 and wraps the CEK with RFC 3394 AES-KW;
+the wrapped value is a 65-byte SEC1 ephemeral point plus the AES-KW output.
+Unsealing checks that the EC private key matches the certificate, repeats the
+agreement and unwraps. Debug reports only whether a private key is present.
+RecipientEnvelopeKey::new and EnvelopedData::new_parts rebuild a persisted
+envelope and re-check the model invariants, with iv/key_commitment/ciphertext/
+wrapped_key accessors for the opaque persistence bytes.
+
+`pdfxi recipient seal FILE --out ENVELOPE.json --cert CERT.pem [--cert ...]
+[--cipher aes256-cbc|aes128-cbc] [--permissions ...] [--cek-hex] [--iv-hex]
+[--json]` generates a fresh CEK/IV (or takes pinned hex), encrypts the file and
+wraps the CEK for every certificate, writing a portable JSON container with the
+cipher, IV, wrapped keys, ciphertext, commitment and permission bits.
+`pdfxi recipient open ENVELOPE.json --key KEY.pem --cert CERT.pem --out FILE
+[--require PERMISSION] [--json]` finds the entry for the certificate
+fingerprint, rebuilds the envelope, unwraps with ECDH, checks the commitment and
+content, optionally requires one permission and writes the plaintext.
+
+Evidence: a P-256 certificate seals a 29-byte payload to a 32-byte ciphertext
+with a 105-byte wrapped key and permissions print|copy (bits 20); opening with
+the matching key and --require copy recovers the exact bytes. A different
+certificate reports not-address, --require modify reports permission denied, and
+a replaced wrapped key fails unwrap. Unknown ciphers, wrong CEK/IV lengths,
+unknown permissions, missing inputs, malformed certificates and malformed or
+missing containers are typed errors. The library unit test additionally proves
+the provider round trip, wrong-key rejection, tampered-wrapped-key rejection and
+persisted-parts validation.
+
+Gates: pdfxi-security ecdh_key_wrap test 1 passed; CLI recipient_ tests 2
+passed; whole workspace fmt/clippy/tests green.
+
+Scope: real certificate-addressed encryption/decryption on real files is
+user-reachable. Certificate-chain/revocation trust decisions, hardware keystores
+and PDF attachment integration remain host/CA boundaries and are not claimed.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "crypto::keywrap::tests::rfc3394_wrap_vector_128_bit_kek",
     "crypto::keywrap::tests::rfc3394_unwrap_rejects_tampered_ciphertext",
+    "certificate_encryption::tests::ecdh_key_wrap_round_trips_with_a_certificate",
+    "cli::recipient_seals_and_opens_with_ec_certificates",
+    "cli::recipient_rejects_bad_arguments_and_containers",
 ]
 title = "Certificate encryption"
 

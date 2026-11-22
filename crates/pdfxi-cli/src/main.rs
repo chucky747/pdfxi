@@ -198,6 +198,8 @@ mod versions;
 /// `pdfxi flatten`: bake annotation appearances into page content.
 mod flatten;
 mod layers;
+/// `pdfxi recipient`: certificate-addressed encryption of real files.
+mod recipient;
 mod repair;
 /// `pdfxi action sequence`: run Action Wizard steps over real documents.
 mod sequence;
@@ -477,6 +479,12 @@ enum Command {
         /// Timestamp action.
         #[command(subcommand)]
         command: TimestampCommand,
+    },
+    /// Certificate-addressed encryption of real files.
+    Recipient {
+        /// Recipient action.
+        #[command(subcommand)]
+        command: RecipientCommand,
     },
     /// Flatten annotation and widget appearances into page content.
     ///
@@ -1486,6 +1494,57 @@ enum ActionCommand {
         /// Directory for the written PDFs (defaults to each input's folder).
         #[arg(long, value_name = "DIR")]
         out_dir: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi recipient` command group.
+#[derive(Debug, Subcommand)]
+enum RecipientCommand {
+    /// Encrypt a file to one or more recipient certificates.
+    Seal {
+        /// Plaintext file.
+        input: PathBuf,
+        /// Written envelope container (JSON).
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Recipient certificate PEM or DER; repeatable.
+        #[arg(long, required = true, value_name = "PATH")]
+        cert: Vec<PathBuf>,
+        /// Content cipher: `aes256-cbc` or `aes128-cbc`.
+        #[arg(long, default_value = "aes256-cbc")]
+        cipher: String,
+        /// Recipient permissions: `all`, `none`, `read-only` or a comma list.
+        #[arg(long, default_value = "all")]
+        permissions: String,
+        /// Fixed content-encryption key as hex (default: random).
+        #[arg(long, value_name = "HEX")]
+        cek_hex: Option<String>,
+        /// Fixed 16-byte IV as hex (default: random).
+        #[arg(long, value_name = "HEX")]
+        iv_hex: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Decrypt a file with the recipient's private key.
+    Open {
+        /// Envelope container written by `recipient seal`.
+        envelope: PathBuf,
+        /// Unencrypted RSA private key (PKCS#8 or PKCS#1 PEM).
+        #[arg(long, value_name = "PATH")]
+        key: PathBuf,
+        /// Recipient certificate PEM or DER (must match the private key).
+        #[arg(long, value_name = "PATH")]
+        cert: PathBuf,
+        /// Where to write the recovered plaintext.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Require one granted permission (`copy`, `print`, ...).
+        #[arg(long, value_name = "PERMISSION")]
+        require: Option<String>,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -3791,6 +3850,35 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Recipient { command } => match command {
+            RecipientCommand::Seal {
+                input,
+                out,
+                cert,
+                cipher,
+                permissions,
+                cek_hex,
+                iv_hex,
+                json,
+            } => recipient::seal(
+                &input,
+                &out,
+                &cert,
+                &cipher,
+                &permissions,
+                cek_hex.as_deref(),
+                iv_hex.as_deref(),
+                json,
+            ),
+            RecipientCommand::Open {
+                envelope,
+                key,
+                cert,
+                out,
+                require,
+                json,
+            } => recipient::open(&envelope, &key, &cert, &out, require.as_deref(), json),
+        },
         Command::Flatten {
             file,
             out,

@@ -152,9 +152,9 @@ pub mod xmp_scrub;
 
 pub use authorization::{Authorization, AuthorizationPath, Operation};
 pub use certificate_encryption::{
-    AesKwKeyWrapProvider, ContentCipher, EnvelopedData, InMemoryKeyWrapProvider, KeyWrapProvider,
-    OpenedEnvelope, Recipient, RecipientEnvelopeKey, RecipientList, RecipientSelector,
-    build_envelope, open_envelope,
+    AesKwKeyWrapProvider, ContentCipher, EcdhKeyWrapProvider, EnvelopedData,
+    InMemoryKeyWrapProvider, KeyWrapProvider, OpenedEnvelope, Recipient, RecipientEnvelopeKey,
+    RecipientList, RecipientSelector, build_envelope, open_envelope,
 };
 pub use certificate_store::{
     CertificateStore, StoreIdentity, UnavailableCertificateStore, platform_identity_store,

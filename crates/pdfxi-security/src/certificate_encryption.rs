@@ -34,6 +34,12 @@
 
 use std::fmt;
 
+use hkdf::Hkdf;
+use p256::ecdh::diffie_hellman;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::{PublicKey, SecretKey};
+use sha2::Sha256;
+
 use crate::crypto::aes::{decrypt_cbc, encrypt_cbc};
 use crate::crypto::keywrap::{aes_key_unwrap, aes_key_wrap};
 use crate::crypto::sha::sha256;
@@ -293,6 +299,115 @@ impl KeyWrapProvider for InMemoryKeyWrapProvider {
     }
 }
 
+/// A real certificate-addressed key-wrap provider using ephemeral ECDH.
+///
+/// `wrap_key` performs an ephemeral P-256 ECDH agreement with the recipient
+/// certificate's EC public key, derives a 256-bit key-encryption key with
+/// HKDF-SHA256, and wraps the content-encryption key with RFC 3394 AES-KW. The
+/// wrapped value is `ephemeral SEC1 public point || AES-KW ciphertext`, so each
+/// recipient needs only its own certificate to be addressed.
+///
+/// `unsealing` holds the recipient EC private key, checks that it matches the
+/// supplied certificate, repeats the agreement and unwraps the KEK. RSA
+/// decryption is deliberately not used, keeping the scoped
+/// RUSTSEC-2023-0071 ignore honest.
+///
+/// No private key, shared secret, KEK or CEK is stored, logged or returned.
+pub struct EcdhKeyWrapProvider {
+    private: Option<SecretKey>,
+}
+
+/// Length of an uncompressed SEC1 P-256 public point.
+const ECDH_PUBLIC_BYTES: usize = 65;
+
+/// HKDF `info` label binding the derived KEK to this protocol.
+const ECDH_KDF_INFO: &[u8] = b"pdfxi-ecdh-aeskw-v1";
+
+impl EcdhKeyWrapProvider {
+    /// Creates a sender-side provider that wraps to recipients' public keys.
+    pub fn sealing() -> Self {
+        Self { private: None }
+    }
+
+    /// Creates a recipient-side provider holding the recipient private key.
+    pub fn unsealing(private: SecretKey) -> Self {
+        Self {
+            private: Some(private),
+        }
+    }
+
+    /// Resolves a recipient certificate's P-256 public key.
+    fn recipient_public_key(recipient: &Recipient) -> Result<PublicKey> {
+        PublicKey::from_sec1_bytes(recipient.certificate().subject_public_key_info().key_bits())
+            .map_err(|_| SecurityError::CertificateEncryptionInvalidCertificate)
+    }
+
+    /// Derives the AES-KW key-encryption key from the ECDH shared secret.
+    fn derive_kek(shared: &[u8]) -> Result<[u8; 32]> {
+        let hkdf = Hkdf::<Sha256>::new(None, shared);
+        let mut kek = [0u8; 32];
+        hkdf.expand(ECDH_KDF_INFO, &mut kek)
+            .map_err(|_| SecurityError::CertificateEncryptionKeyWrapFailed)?;
+        Ok(kek)
+    }
+}
+
+impl fmt::Debug for EcdhKeyWrapProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EcdhKeyWrapProvider")
+            .field(
+                "private",
+                &format_args!(
+                    "{}",
+                    if self.private.is_some() {
+                        "<set>"
+                    } else {
+                        "<none>"
+                    }
+                ),
+            )
+            .finish()
+    }
+}
+
+impl KeyWrapProvider for EcdhKeyWrapProvider {
+    fn wrap_key(&self, cek: &[u8], recipient: &Recipient) -> Result<Vec<u8>> {
+        let recipient_public = Self::recipient_public_key(recipient)?;
+        let ephemeral = SecretKey::random(&mut rand::rngs::OsRng);
+        let shared = diffie_hellman(ephemeral.to_nonzero_scalar(), recipient_public.as_affine());
+        let kek = Self::derive_kek(shared.raw_secret_bytes())?;
+        let wrapped = aes_key_wrap(&kek, cek)
+            .map_err(|_| SecurityError::CertificateEncryptionKeyWrapFailed)?;
+        let mut out = ephemeral
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        out.extend_from_slice(&wrapped);
+        Ok(out)
+    }
+
+    fn unwrap_key(&self, wrapped: &[u8], recipient: &Recipient) -> Result<Vec<u8>> {
+        let Some(private) = &self.private else {
+            return Err(SecurityError::CertificateEncryptionKeyUnwrapFailed);
+        };
+        let recipient_public = Self::recipient_public_key(recipient)?;
+        let derived = PublicKey::from_secret_scalar(&private.to_nonzero_scalar());
+        if derived != recipient_public {
+            return Err(SecurityError::CertificateEncryptionWrongRecipient);
+        }
+        if wrapped.len() <= ECDH_PUBLIC_BYTES {
+            return Err(SecurityError::CertificateEncryptionKeyUnwrapFailed);
+        }
+        let (ephemeral, wrapped_key) = wrapped.split_at(ECDH_PUBLIC_BYTES);
+        let ephemeral = PublicKey::from_sec1_bytes(ephemeral)
+            .map_err(|_| SecurityError::CertificateEncryptionKeyUnwrapFailed)?;
+        let shared = diffie_hellman(private.to_nonzero_scalar(), ephemeral.as_affine());
+        let kek = Self::derive_kek(shared.raw_secret_bytes())?;
+        aes_key_unwrap(&kek, wrapped_key)
+            .map_err(|_| SecurityError::CertificateEncryptionKeyUnwrapFailed)
+    }
+}
 /// One recipient's wrapped key in an envelope.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RecipientEnvelopeKey {
@@ -302,6 +417,27 @@ pub struct RecipientEnvelopeKey {
 }
 
 impl RecipientEnvelopeKey {
+    /// Rebuilds one recipient entry from persisted bytes.
+    ///
+    /// Returns [`SecurityError::CertificateEncryptionInvalidEnvelope`] for an
+    /// empty label, identifier or wrapped key.
+    pub fn new(
+        label: impl Into<String>,
+        identifier: impl Into<String>,
+        wrapped_key: Vec<u8>,
+    ) -> Result<Self> {
+        let label = label.into();
+        let identifier = identifier.into();
+        if label.is_empty() || identifier.is_empty() || wrapped_key.is_empty() {
+            return Err(SecurityError::CertificateEncryptionInvalidEnvelope);
+        }
+        Ok(Self {
+            label,
+            identifier,
+            wrapped_key,
+        })
+    }
+
     /// Recipient label this wrapped key belongs to.
     pub fn label(&self) -> &str {
         &self.label
@@ -315,6 +451,11 @@ impl RecipientEnvelopeKey {
     /// Length of the wrapped key in bytes (value is redacted from `Debug`).
     pub fn wrapped_len(&self) -> usize {
         self.wrapped_key.len()
+    }
+
+    /// The opaque wrapped key bytes, needed to persist the envelope.
+    pub fn wrapped_key(&self) -> &[u8] {
+        &self.wrapped_key
     }
 }
 
@@ -359,6 +500,11 @@ impl EnvelopedData {
         self.ciphertext.len()
     }
 
+    /// The opaque ciphertext bytes, needed to persist the envelope.
+    pub fn ciphertext(&self) -> &[u8] {
+        &self.ciphertext
+    }
+
     /// Effective permissions granted by the sender to recipients.
     pub const fn permissions(&self) -> &Permissions {
         &self.permissions
@@ -367,6 +513,46 @@ impl EnvelopedData {
     /// Return `true` when the granted permissions allow `permission`.
     pub fn allows(&self, permission: Permission) -> bool {
         self.permissions.allows(permission)
+    }
+
+    /// The content IV, needed to persist and reopen the envelope.
+    pub const fn iv(&self) -> [u8; 16] {
+        self.iv
+    }
+
+    /// The SHA-256 key commitment, needed to persist and reopen the envelope.
+    pub const fn key_commitment(&self) -> [u8; 32] {
+        self.key_commitment
+    }
+
+    /// Rebuilds an envelope from persisted parts.
+    ///
+    /// Every invariant [`build_envelope`] enforces is re-checked here, so a
+    /// tampered or truncated container is a typed error rather than a panic.
+    /// The key commitment is compared against nothing at construction; it is
+    /// still used by [`open_envelope`] to reject a wrong unwrapped key.
+    pub fn new_parts(
+        cipher: ContentCipher,
+        iv: [u8; 16],
+        recipients: Vec<RecipientEnvelopeKey>,
+        ciphertext: Vec<u8>,
+        key_commitment: [u8; 32],
+        permissions: Permissions,
+    ) -> Result<Self> {
+        if recipients.is_empty() || ciphertext.is_empty() {
+            return Err(SecurityError::CertificateEncryptionInvalidEnvelope);
+        }
+        if key_commitment == [0u8; 32] {
+            return Err(SecurityError::CertificateEncryptionInvalidEnvelope);
+        }
+        Ok(Self {
+            cipher,
+            iv,
+            recipients,
+            ciphertext,
+            key_commitment,
+            permissions,
+        })
     }
 
     /// Encode the envelope as a deterministic CMS/PKCS#7-style DER structure.
@@ -721,6 +907,114 @@ mod tests {
         .expect("envelope")
     }
 
+    /// Builds one self-describing certificate whose SPKI carries a real P-256 key.
+    fn ec_certificate(public: &PublicKey) -> Certificate {
+        let point = public.to_encoded_point(false);
+        let subject = name("EC Recipient");
+        let signature_algorithm =
+            encode_sequence(&encode_oid(&[1, 2, 840, 10045, 4, 3, 2]).expect("sig oid"));
+        let mut tbs = Vec::new();
+        tbs.extend_from_slice(&encode_integer(42));
+        tbs.extend_from_slice(&signature_algorithm);
+        tbs.extend_from_slice(&subject);
+        tbs.extend_from_slice(&validity());
+        tbs.extend_from_slice(&subject);
+        // SPKI: id-ecPublicKey with the named curve P-256.
+        let mut ec_algorithm = encode_oid(&[1, 2, 840, 10045, 2, 1]).expect("oid");
+        ec_algorithm.extend_from_slice(&encode_oid(&[1, 2, 840, 10045, 3, 1, 7]).expect("curve"));
+        let mut spki = encode_sequence(&ec_algorithm);
+        spki.extend_from_slice(&bit_string(point.as_bytes()));
+        tbs.extend_from_slice(&encode_sequence(&spki));
+        let tbs = encode_sequence(&tbs);
+        let mut cert = tbs.clone();
+        cert.extend_from_slice(&signature_algorithm);
+        cert.extend_from_slice(&bit_string(&crate::crypto::sha::sha256(&tbs)[..16]));
+        Certificate::parse(&encode_sequence(&cert)).expect("valid EC test certificate")
+    }
+
+    #[test]
+    fn ecdh_key_wrap_round_trips_with_a_certificate() {
+        let private = SecretKey::random(&mut rand::rngs::OsRng);
+        let certificate = ec_certificate(&private.public_key());
+        let recipients = RecipientList::new()
+            .with(Recipient::new("alice", certificate).expect("recipient"))
+            .expect("recipient list");
+        let permissions = Permissions::new(Permission::PRINT, PasswordRole::User);
+        let cek = [7u8; 32];
+        let envelope = build_envelope(
+            b"certificate-addressed bytes",
+            &recipients,
+            permissions,
+            ContentCipher::Aes256Cbc,
+            &cek,
+            [3u8; 16],
+            &EcdhKeyWrapProvider::sealing(),
+        )
+        .expect("seal");
+        assert!(
+            envelope.recipient_keys()[0].wrapped_len() > cek.len(),
+            "wrapped output must include the ephemeral point and AES-KW overhead"
+        );
+        let opened = open_envelope(
+            &envelope,
+            RecipientSelector::Label("alice"),
+            &recipients,
+            &EcdhKeyWrapProvider::unsealing(private.clone()),
+        )
+        .expect("open");
+        assert_eq!(opened.plaintext, b"certificate-addressed bytes");
+
+        // A different private key cannot open the same envelope.
+        let other = SecretKey::random(&mut rand::rngs::OsRng);
+        assert!(matches!(
+            open_envelope(
+                &envelope,
+                RecipientSelector::Label("alice"),
+                &recipients,
+                &EcdhKeyWrapProvider::unsealing(other),
+            ),
+            Err(SecurityError::CertificateEncryptionWrongRecipient)
+        ));
+
+        // A replaced wrapped value is a typed unwrap failure, not a panic.
+        let entry = RecipientEnvelopeKey::new(
+            "alice",
+            recipients.get(0).expect("recipient").identifier(),
+            vec![0u8; 105],
+        )
+        .expect("entry");
+        let tampered = EnvelopedData::new_parts(
+            envelope.cipher(),
+            envelope.iv(),
+            vec![entry],
+            vec![0u8; 32],
+            envelope.key_commitment(),
+            permissions,
+        )
+        .expect("tampered envelope");
+        assert!(matches!(
+            open_envelope(
+                &tampered,
+                RecipientSelector::Label("alice"),
+                &recipients,
+                &EcdhKeyWrapProvider::unsealing(private),
+            ),
+            Err(SecurityError::CertificateEncryptionKeyUnwrapFailed)
+        ));
+
+        // Persisted parts reject empty content and empty recipient lists.
+        assert_eq!(
+            EnvelopedData::new_parts(
+                ContentCipher::Aes256Cbc,
+                [0u8; 16],
+                Vec::new(),
+                vec![1u8],
+                [1u8; 32],
+                permissions,
+            ),
+            Err(SecurityError::CertificateEncryptionInvalidEnvelope)
+        );
+    }
     #[test]
     fn recipient_list_round_trips_by_label_and_index() {
         let list = list(&[("alice", 1), ("bob", 2)]);

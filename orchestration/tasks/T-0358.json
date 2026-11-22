@@ -1,0 +1,23 @@
+{
+  "id": "T-0358",
+  "lane": "security",
+  "title": "Certificate encryption host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0357"],
+  "owns": [
+    "crates/pdfxi-security/src/certificate_encryption.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/Cargo.toml",
+    "crates/pdfxi-cli/src/recipient.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/Cargo.toml",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/security/T-0358.md",
+    "orchestration/feature-updates/T-0358.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-security ecdh_key_wrap and cargo test -p pdfxi-cli recipient_ pass; pdfxi recipient seal encrypts a real file to recipient certificates with ECDH-ES key agreement and a portable container, and recipient open recovers it while enforcing the key commitment and required permissions; SEC-003 moves to verified.",
+  "notes": "Real certificate-addressed encryption. Chain/revocation trust, hardware keystores and PDF attachment integration remain out of scope.",
+  "evidence": "docs/evidence/security/T-0358.md"
+}

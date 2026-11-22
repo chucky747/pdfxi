@@ -33,6 +33,13 @@ cipher = "0.4"
 des = "0.8"
 sha1 = "0.10"
 
+# Ephemeral ECDH key agreement for certificate-addressed key wrap (SEC-003).
+# RustCrypto, MIT OR Apache-2.0. RSA decryption stays out of this crate, so the
+# scoped RUSTSEC-2023-0071 ignore remains honest.
+p256 = { version = "0.13", features = ["ecdh"] }
+hkdf = "0.12"
+rand = "0.8"
+
 # Optional native second reader for the T-0257 sanitize verification test.
 # Kept optional so default builds and tests stay dependency-light.
 pdfium-render = { version = "0.9.5", optional = true }

@@ -2515,6 +2515,264 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// recipient: certificate-addressed encryption (T-0358)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recipient_evidence_fixture() {
+    let dir = TempDir::new();
+    let (key, cert) = write_ec_test_identity(&dir, "PDFXI Recipient Evidence");
+    let target =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/recipient");
+    fs::create_dir_all(&target).expect("evidence dir");
+    fs::copy(&key, target.join("recipient-key.pem")).expect("copy key");
+    fs::copy(&cert, target.join("recipient-cert.pem")).expect("copy cert");
+}
+
+#[test]
+fn recipient_seals_and_opens_with_ec_certificates() {
+    let alice = TempDir::new();
+    let (alice_key, alice_cert) = write_ec_test_identity(&alice, "PDFXI Recipient A");
+    let bob = TempDir::new();
+    let (bob_key, bob_cert) = write_ec_test_identity(&bob, "PDFXI Recipient B");
+    let content = alice.child("secret.bin");
+    fs::write(&content, b"secret payload").expect("write content");
+    let envelope = alice.child("secret.envelope.json");
+    let cek = "11".repeat(32);
+    let iv = "22".repeat(16);
+    let sealed = run(&[
+        "recipient",
+        "seal",
+        content.to_str().expect("content"),
+        "--out",
+        envelope.to_str().expect("envelope"),
+        "--cert",
+        alice_cert.to_str().expect("cert"),
+        "--cek-hex",
+        &cek,
+        "--iv-hex",
+        &iv,
+        "--permissions",
+        "print,copy",
+        "--json",
+    ]);
+    assert!(sealed.status.success(), "stderr: {}", stderr(&sealed));
+    let value: Value = serde_json::from_str(&stdout(&sealed)).expect("seal JSON");
+    assert_eq!(value["cipher"], "aes256-cbc");
+    assert_eq!(value["plaintext_bytes"], 14);
+    assert_eq!(value["ciphertext_bytes"], 16);
+    assert_eq!(value["recipients"].as_array().map(Vec::len), Some(1));
+    assert!(
+        value["recipients"][0]
+            .as_str()
+            .unwrap_or("")
+            .contains("PDFXI Recipient A")
+    );
+    assert_eq!(value["wrapped_lens"][0], 105);
+    assert_eq!(
+        value["permission_names"],
+        serde_json::json!(["print", "copy"])
+    );
+
+    let container: Value =
+        serde_json::from_str(&fs::read_to_string(&envelope).expect("read envelope"))
+            .expect("container JSON");
+    assert_eq!(container["format"], "pdfxi-recipient-envelope");
+    assert_eq!(container["version"], 1);
+    assert_eq!(container["permissions"], 20);
+
+    let plain = alice.child("recovered.bin");
+    let opened = run(&[
+        "recipient",
+        "open",
+        envelope.to_str().expect("envelope"),
+        "--key",
+        alice_key.to_str().expect("key"),
+        "--cert",
+        alice_cert.to_str().expect("cert"),
+        "--out",
+        plain.to_str().expect("plain"),
+        "--require",
+        "copy",
+        "--json",
+    ]);
+    assert!(opened.status.success(), "stderr: {}", stderr(&opened));
+    assert_eq!(fs::read(&plain).expect("read plaintext"), b"secret payload");
+    let value: Value = serde_json::from_str(&stdout(&opened)).expect("open JSON");
+    assert_eq!(value["bytes"], 14);
+    assert_eq!(value["required"], "copy");
+    assert!(
+        value["recipient"]
+            .as_str()
+            .unwrap_or("")
+            .contains("PDFXI Recipient A")
+    );
+    assert_eq!(
+        value["permission_names"],
+        serde_json::json!(["print", "copy"])
+    );
+
+    // A different certificate is not a recipient of this envelope.
+    let not_addressed = run(&[
+        "recipient",
+        "open",
+        envelope.to_str().expect("envelope"),
+        "--key",
+        bob_key.to_str().expect("key"),
+        "--cert",
+        bob_cert.to_str().expect("cert"),
+        "--out",
+        bob.child("out.bin").to_str().expect("out"),
+    ]);
+    assert!(!not_addressed.status.success());
+    assert!(
+        stderr(&not_addressed).contains("not addressed"),
+        "{}",
+        stderr(&not_addressed)
+    );
+
+    // A demanded permission the sender did not grant is denied.
+    let denied = run(&[
+        "recipient",
+        "open",
+        envelope.to_str().expect("envelope"),
+        "--key",
+        alice_key.to_str().expect("key"),
+        "--cert",
+        alice_cert.to_str().expect("cert"),
+        "--out",
+        alice.child("denied.bin").to_str().expect("out"),
+        "--require",
+        "modify",
+    ]);
+    assert!(!denied.status.success());
+    assert!(
+        stderr(&denied).contains("permission denied"),
+        "{}",
+        stderr(&denied)
+    );
+
+    // A replaced wrapped key is rejected by RSA-OAEP, not silently accepted.
+    let tampered_path = alice.child("tampered.json");
+    let mut tampered = container.clone();
+    let wrapped_len = tampered["recipients"][0]["wrapped_key"]
+        .as_str()
+        .expect("wrapped key")
+        .len();
+    tampered["recipients"][0]["wrapped_key"] = Value::String("00".repeat(wrapped_len / 2));
+    fs::write(
+        &tampered_path,
+        serde_json::to_string_pretty(&tampered).expect("serialize"),
+    )
+    .expect("write tampered");
+    let tampered = run(&[
+        "recipient",
+        "open",
+        tampered_path.to_str().expect("tampered"),
+        "--key",
+        alice_key.to_str().expect("key"),
+        "--cert",
+        alice_cert.to_str().expect("cert"),
+        "--out",
+        alice.child("bad.bin").to_str().expect("out"),
+    ]);
+    assert!(!tampered.status.success());
+    assert!(
+        stderr(&tampered).contains("unwrap") || stderr(&tampered).contains("wrong recipient"),
+        "{}",
+        stderr(&tampered)
+    );
+}
+
+#[test]
+fn recipient_rejects_bad_arguments_and_containers() {
+    let dir = TempDir::new();
+    let (key, cert) = write_ec_test_identity(&dir, "PDFXI Recipient C");
+    let content = dir.child("content.bin");
+    fs::write(&content, b"payload").expect("write content");
+    let envelope = dir.child("envelope.json");
+    for (args, needle) in [
+        (vec!["--cipher", "des", "--cek-hex", "11"], "unknown cipher"),
+        (vec!["--cek-hex", "aabb"], "--cek-hex has 2 bytes"),
+        (vec!["--iv-hex", "aabb"], "--iv-hex has 2 bytes"),
+        (vec!["--permissions", "frobnicate"], "unknown permission"),
+    ] {
+        let mut command = vec![
+            "recipient",
+            "seal",
+            content.to_str().expect("content"),
+            "--out",
+            envelope.to_str().expect("out"),
+            "--cert",
+            cert.to_str().expect("cert"),
+        ];
+        command.extend(args.iter().copied());
+        let output = run(&command);
+        assert!(!output.status.success(), "args: {args:?}");
+        let combined = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(combined.contains(needle), "{needle}: {combined}");
+    }
+
+    let missing = dir.child("absent.bin");
+    let output = run(&[
+        "recipient",
+        "seal",
+        missing.to_str().expect("missing"),
+        "--out",
+        envelope.to_str().expect("out"),
+        "--cert",
+        cert.to_str().expect("cert"),
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("read"), "{}", stderr(&output));
+
+    let bad_cert = dir.child("bad-cert.pem");
+    fs::write(&bad_cert, b"not a certificate").expect("write bad cert");
+    let output = run(&[
+        "recipient",
+        "seal",
+        content.to_str().expect("content"),
+        "--out",
+        envelope.to_str().expect("out"),
+        "--cert",
+        bad_cert.to_str().expect("bad cert"),
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("parse"), "{}", stderr(&output));
+
+    let not_json = dir.child("not-json.json");
+    fs::write(&not_json, b"{}").expect("write bad container");
+    let output = run(&[
+        "recipient",
+        "open",
+        not_json.to_str().expect("not json"),
+        "--key",
+        key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--out",
+        dir.child("out.bin").to_str().expect("out"),
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("format"), "{}", stderr(&output));
+
+    let missing_envelope = dir.child("absent.json");
+    let output = run(&[
+        "recipient",
+        "open",
+        missing_envelope.to_str().expect("missing"),
+        "--key",
+        key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--out",
+        dir.child("out.bin").to_str().expect("out"),
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("read"), "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
 // flatten: bake annotation appearances into content (T-0357)
 // ---------------------------------------------------------------------------
 
@@ -14935,6 +15193,69 @@ fn write_test_identity(dir: &TempDir, common_name: &str) -> (PathBuf, PathBuf) {
         .expect("self-signed certificate");
     let key_path = dir.child("signer-key.pem");
     let cert_path = dir.child("signer-cert.pem");
+    fs::write(
+        &key_path,
+        key.to_pkcs8_pem(LineEnding::LF)
+            .expect("encode key")
+            .as_bytes(),
+    )
+    .expect("write key");
+    fs::write(
+        &cert_path,
+        certificate.to_pem(LineEnding::LF).expect("encode cert"),
+    )
+    .expect("write certificate");
+    (key_path, cert_path)
+}
+
+/// Writes one P-256 identity for certificate-addressed encryption tests.
+fn write_ec_test_identity(dir: &TempDir, common_name: &str) -> (PathBuf, PathBuf) {
+    use std::str::FromStr;
+
+    use der::EncodePem;
+    use der::asn1::UtcTime;
+    use der::pem::LineEnding;
+    use p256::ecdsa::{DerSignature, SigningKey};
+    use p256::pkcs8::EncodePrivateKey;
+    use spki::SubjectPublicKeyInfoOwned;
+    use x509_cert::builder::{Builder as _, CertificateBuilder, Profile};
+    use x509_cert::name::Name;
+    use x509_cert::serial_number::SerialNumber;
+    use x509_cert::time::{Time, Validity};
+
+    let mut rng = rand::rngs::OsRng;
+    let key = SigningKey::random(&mut rng);
+    let subject = Name::from_str(&format!("CN={common_name},O=PDFXI")).expect("subject name");
+    let point = key.verifying_key().to_encoded_point(false);
+    let public = p256::PublicKey::from_sec1_bytes(point.as_bytes()).expect("public key");
+    let spki = SubjectPublicKeyInfoOwned::from_key(public).expect("public key info");
+    let builder = CertificateBuilder::new(
+        Profile::Leaf {
+            issuer: subject.clone(),
+            enable_key_agreement: true,
+            enable_key_encipherment: false,
+        },
+        SerialNumber::from(11_u32),
+        Validity {
+            not_before: Time::UtcTime(
+                UtcTime::from_unix_duration(std::time::Duration::from_secs(1_600_000_000))
+                    .expect("notBefore"),
+            ),
+            not_after: Time::UtcTime(
+                UtcTime::from_unix_duration(std::time::Duration::from_secs(2_000_000_000))
+                    .expect("notAfter"),
+            ),
+        },
+        subject,
+        spki,
+        &key,
+    )
+    .expect("certificate builder");
+    let certificate = builder
+        .build::<DerSignature>()
+        .expect("self-signed EC certificate");
+    let key_path = dir.child("ec-key.pem");
+    let cert_path = dir.child("ec-cert.pem");
     fs::write(
         &key_path,
         key.to_pkcs8_pem(LineEnding::LF)
