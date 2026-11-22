@@ -1,0 +1,19 @@
+{
+  "id": "T-0340",
+  "lane": "convert",
+  "title": "Shell association host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0339"],
+  "owns": [
+    "crates/pdfxi-cli/src/shell.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0340.md",
+    "orchestration/feature-updates/T-0340.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli shell_ passes; pdfxi shell registers real per-user .pdf and pdfxi:// keys under an HKCU root, reports status and removes them, refusing HKLM and missing executables; PLAT-005 moves to verified.",
+  "notes": "Hosts pdfxi_core::association as per-user registry installation under HKCU\\Software, with sandbox-root tests and no HKLM writes.",
+  "evidence": "docs/evidence/cli/T-0340.md"
+}

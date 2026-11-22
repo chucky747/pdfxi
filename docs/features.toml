@@ -5000,14 +5000,53 @@ tests = [
 title = "Browser integration"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/association.rs, docs/evidence/core/T-0181.md"
+docs = [
+    "crates/pdfxi-cli/src/shell.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0340.md",
+    "crates/pdfxi-core/src/association.rs",
+]
 domain = "Platform"
-evidence = "docs/evidence/core/T-0181.md"
+evidence = "docs/evidence/cli/T-0340.md"
 id = "PLAT-005"
-notes = "ProgId/scheme validation, command-template placeholders with Windows quoting and trailing-backslash escaping, and a deterministic association descriptor export. Host boundary: no registry writes and no process spawning; the dry-run plan is applied by the host installer."
+notes = '''
+Verified through `pdfxi shell plan [--exe PATH] [--json]`,
+`pdfxi shell register [--root KEY] [--exe PATH] [--json]`,
+`pdfxi shell status [--root KEY] [--exe PATH] [--json]` and
+`pdfxi shell unregister [--root KEY] [--exe PATH] [--json]`.
+
+The descriptor registry is built from pdfxi_core::association: .pdf ->
+PDFXI.pdf and pdfxi -> PDFXI.protocol with the command template "<exe>" "%1".
+plan prints export_descriptors. register writes, with reg.exe, the extension
+default, the ProgID description and shell\open\command, and the protocol key,
+URL Protocol marker and command under the chosen root (default
+HKCU\Software\Classes). status reads those defaults and reports the three
+installed flags; unregister removes the ProgID/protocol keys and clears .pdf only
+when it still points at PDFXI.pdf. The root must start with HKCU\Software\
+(HKLM is refused), the executable must exist, and the root must not contain
+quotes.
+
+Evidence: plan prints the assoc/proto lines and summary; a sandbox root
+HKCU\Software\PDFXI-Test-1639 reports all three flags false before, true after
+register (confirmed by reg query of .pdf and the command), and false again after
+unregister. HKLM\Software\Classes and a missing executable fail with typed
+errors. The real HKCU\Software\Classes root was not modified and the sandbox
+root was deleted; reg query found no PDFXI-Test residue.
+
+Gates: cargo test -p pdfxi-cli shell_ = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: per-user registry installation only under an HKCU\Software\ root; no
+HKLM/MSI, default-app UI automation, icon/thumbnail handlers or handler process
+spawning. unregister does not restore any previous association beyond clearing a
+.pdf default that still names PDFXI.pdf.
+'''
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::shell_plan_exports_descriptor_document",
+    "cli::shell_register_status_and_unregister_round_trip",
+    "cli::shell_rejects_machine_wide_roots_and_missing_executables",
     "association::tests::descriptor_registry_export_is_deterministic_regardless_of_order",
     "association::tests::command_template_render_substitutes_a_quoted_argument",
     "association::tests::quote_argument_escapes_spaces_quotes_and_trailing_backslashes",

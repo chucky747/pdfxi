@@ -11882,6 +11882,156 @@ fn policy_parses_a_plain_preferences_document() {
     assert_eq!(value["autosave_seconds"], 120);
 }
 
+// ---------------------------------------------------------------------------
+// shell: file associations (T-0340)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shell_plan_exports_descriptor_document() {
+    let exe = std::env::current_exe().expect("current test executable");
+    let output = run(&[
+        "shell",
+        "plan",
+        "--exe",
+        exe.to_str().expect("exe"),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let lines = value["lines"].as_array().expect("lines");
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines[0]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("assoc.ext=pdf; progid=PDFXI.pdf; command="),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("proto.scheme=pdfxi; progid=PDFXI.protocol;"),
+        "{lines:?}"
+    );
+    assert!(
+        value["summary"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("associations=1; protocols=1;")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn shell_register_status_and_unregister_round_trip() {
+    let root = format!(
+        "HKCU\\Software\\PDFXI-Test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let exe = std::env::current_exe().expect("current test executable");
+    let registered = run(&[
+        "shell",
+        "register",
+        "--root",
+        &root,
+        "--exe",
+        exe.to_str().expect("exe"),
+        "--json",
+    ]);
+    assert!(
+        registered.status.success(),
+        "stderr: {}",
+        stderr(&registered)
+    );
+    let value: Value = serde_json::from_str(&stdout(&registered)).expect("valid JSON");
+    assert_eq!(value["association_installed"], true);
+    assert_eq!(value["association_command_installed"], true);
+    assert_eq!(value["protocol_installed"], true);
+    assert_eq!(value["extension"], ".pdf");
+    assert_eq!(value["scheme"], "pdfxi");
+
+    let status = run(&[
+        "shell",
+        "status",
+        "--root",
+        &root,
+        "--exe",
+        exe.to_str().expect("exe"),
+        "--json",
+    ]);
+    assert!(status.status.success(), "stderr: {}", stderr(&status));
+    let value: Value = serde_json::from_str(&stdout(&status)).expect("valid JSON");
+    assert_eq!(value["association_installed"], true);
+    assert_eq!(value["protocol_installed"], true);
+
+    let removed = run(&[
+        "shell",
+        "unregister",
+        "--root",
+        &root,
+        "--exe",
+        exe.to_str().expect("exe"),
+        "--json",
+    ]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+    let value: Value = serde_json::from_str(&stdout(&removed)).expect("valid JSON");
+    assert_eq!(value["association_installed"], false);
+    assert_eq!(value["association_command_installed"], false);
+    assert_eq!(value["protocol_installed"], false);
+
+    // Remove the empty sandbox root so the test leaves no registry residue.
+    let _ = Command::new("reg").args(["delete", &root, "/f"]).status();
+}
+
+#[test]
+fn shell_rejects_machine_wide_roots_and_missing_executables() {
+    let exe = std::env::current_exe().expect("current test executable");
+    let machine = run(&[
+        "shell",
+        "register",
+        "--root",
+        "HKLM\\Software\\Classes",
+        "--exe",
+        exe.to_str().expect("exe"),
+    ]);
+    assert!(!machine.status.success());
+    assert!(
+        stderr(&machine).contains("per-user path under HKCU"),
+        "{}",
+        stderr(&machine)
+    );
+
+    let missing = run(&[
+        "shell",
+        "register",
+        "--root",
+        "HKCU\\Software\\PDFXI-Test",
+        "--exe",
+        "definitely-missing.exe",
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("does not exist"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let outside = run(&[
+        "shell",
+        "status",
+        "--root",
+        "HKCU\\Software\\Classes",
+        "--exe",
+        exe.to_str().expect("exe"),
+    ]);
+    assert!(outside.status.success(), "stderr: {}", stderr(&outside));
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

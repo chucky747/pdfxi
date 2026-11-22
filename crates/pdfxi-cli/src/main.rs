@@ -106,6 +106,8 @@ mod scan;
 mod script;
 /// pdfxi separations: derive print plates from real page content.
 mod separations;
+/// pdfxi shell: file associations and the pdfxi:// protocol.
+mod shell;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
 mod toolset;
 /// pdfxi transparency inspect: read blend modes and transparency groups.
@@ -434,6 +436,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Register, inspect or remove per-user file associations and the protocol.
+    Shell {
+        /// Shell action.
+        #[command(subcommand)]
+        command: ShellCommand,
     },
     /// Read, write, merge and enforce deployment preferences.
     Policy {
@@ -2005,6 +2013,56 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `shell` command.
+#[derive(Debug, Subcommand)]
+enum ShellCommand {
+    /// Print the validated descriptor document.
+    Plan {
+        /// Executable to register; defaults to the running binary.
+        #[arg(long, value_name = "PATH")]
+        exe: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write the per-user association and protocol keys.
+    Register {
+        /// Per-user registry root (must be under HKCU\Software\).
+        #[arg(long, default_value = "HKCU\\Software\\Classes", value_name = "KEY")]
+        root: String,
+        /// Executable to register; defaults to the running binary.
+        #[arg(long, value_name = "PATH")]
+        exe: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the per-user association and protocol keys.
+    Unregister {
+        /// Per-user registry root (must be under HKCU\Software\).
+        #[arg(long, default_value = "HKCU\\Software\\Classes", value_name = "KEY")]
+        root: String,
+        /// Executable whose command is reported; defaults to the running binary.
+        #[arg(long, value_name = "PATH")]
+        exe: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report whether the keys are installed.
+    Status {
+        /// Per-user registry root (must be under HKCU\Software\).
+        #[arg(long, default_value = "HKCU\\Software\\Classes", value_name = "KEY")]
+        root: String,
+        /// Executable whose command is reported; defaults to the running binary.
+        #[arg(long, value_name = "PATH")]
+        exe: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `policy` command.
 #[derive(Debug, Subcommand)]
 enum PolicyCommand {
@@ -2952,6 +3010,16 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Shell { command } => match command {
+            ShellCommand::Plan { exe, json } => shell::plan(exe.as_deref(), json),
+            ShellCommand::Register { root, exe, json } => {
+                shell::register(&root, exe.as_deref(), json)
+            }
+            ShellCommand::Unregister { root, exe, json } => {
+                shell::unregister(&root, exe.as_deref(), json)
+            }
+            ShellCommand::Status { root, exe, json } => shell::show(&root, exe.as_deref(), json),
+        },
         Command::Policy { command } => match command {
             PolicyCommand::Show { file, json } => policy::show(&file, json),
             PolicyCommand::Write {

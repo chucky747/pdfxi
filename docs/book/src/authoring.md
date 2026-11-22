@@ -40,6 +40,7 @@ command.
 | Output preview and separations | `PRINT-004` | verified | `pdfxi-app::print::SeparationsPlan` + content scan | `separations [--plate]` |
 | Ink manager and overprint preview | `PRINT-005` | verified | `pdfxi-app::print` + `/ExtGState` scan | `ink` |
 | Deployment preferences and customization | `PLAT-006` | verified | `pdfxi-core::preferences` | `policy show/write/merge/check` |
+| Shell integration and file associations | `PLAT-005` | verified | `pdfxi-core::association` | `shell plan/register/status/unregister` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -569,6 +570,28 @@ enabled, and every path must lie inside an allowed prefix (when the policy
 declares any). Failures are listed and exit non-zero, including in JSON mode.
 `preferences` parses a plain runtime preferences document. No registry, MSI
 transform or policy engine is applied.
+
+### Shell integration and file associations
+
+`PLAT-005` (verified) applies the validated association model from
+`pdfxi_core::association` to real per-user Windows registry keys:
+
+```text
+pdfxi shell plan [--exe PATH] [--json]
+pdfxi shell register [--root KEY] [--exe PATH] [--json]
+pdfxi shell status [--root KEY] [--exe PATH] [--json]
+pdfxi shell unregister [--root KEY] [--exe PATH] [--json]
+```
+
+`plan` prints the deterministic descriptor document (`.pdf` -> `PDFXI.pdf` with
+the quoted command, and `pdfxi://` -> `PDFXI.protocol`). `register` writes the
+extension default, the ProgID description and `shell\open\command`, plus the
+protocol key, its `URL Protocol` marker and command, under the chosen root
+(default `HKCU\Software\Classes`). `status` reports whether each value resolves.
+`unregister` removes the keys, and only clears the extension default when it
+still points at `PDFXI.pdf`. The root must be under `HKCU\Software\`; HKLM is
+never written, and the executable must exist. No process is spawned for the
+handler.
 
 ## Page boxes and page operations
 
