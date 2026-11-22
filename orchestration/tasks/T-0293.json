@@ -1,0 +1,19 @@
+{
+  "id": "T-0293",
+  "lane": "core",
+  "title": "Linearization and object-stream layout hosts",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0292"],
+  "owns": [
+    "crates/pdfxi-cli/src/layout.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0293.md",
+    "orchestration/feature-updates/T-0293.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli linearize passes; pdfxi linearize writes a valid /Linearized file with matching /L and /N and verified page text; pdfxi pack writes /ObjStm plus a /XRef stream and preserves text; STD-003 moves to verified.",
+  "notes": "Wraps Document::save_linearized and Document::save_with_object_streams in CLI hosts that reopen the output, check declared lengths/markers and compare page text with the source.",
+  "evidence": "docs/evidence/cli/T-0293.md"
+}

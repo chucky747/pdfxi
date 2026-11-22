@@ -87,6 +87,8 @@ mod annotate;
 mod compare;
 /// `pdfxi decorate`: stamp headers and footers on pages.
 mod decorate;
+/// `pdfxi linearize` and `pdfxi pack`: choose the on-disk object layout.
+mod layout;
 mod links;
 /// `pdfxi outline`, `pdfxi link` and `pdfxi attach`: edit bookmarks, links
 /// and embedded files (`navigation`).
@@ -391,6 +393,37 @@ enum Command {
         /// New producer (`/Producer`).
         #[arg(long, value_name = "TEXT")]
         producer: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a fully linearized file with hint tables.
+    Linearize {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the linearized document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// PDF version token written in the header.
+        #[arg(long, default_value = "1.7")]
+        version: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pack objects into object streams and write an xref stream.
+    Pack {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the packed document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Leave generated streams uncompressed.
+        #[arg(long)]
+        no_compress: bool,
+        /// Maximum objects per `/ObjStm` (1-65535).
+        #[arg(long, default_value_t = 128)]
+        max_objects: usize,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -1519,6 +1552,19 @@ fn main() -> anyhow::Result<()> {
             producer: producer.as_deref(),
             json,
         }),
+        Command::Linearize {
+            file,
+            out,
+            version,
+            json,
+        } => layout::run_linearize(&file, &out, &version, json),
+        Command::Pack {
+            file,
+            out,
+            no_compress,
+            max_objects,
+            json,
+        } => layout::run_pack(&file, &out, !no_compress, max_objects, json),
         Command::Decorate { command } => match command {
             DecorateCommand::HeaderFooter {
                 file,

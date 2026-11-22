@@ -3064,6 +3064,117 @@ fn annotate_rejects_bad_requests() {
 }
 
 #[test]
+fn linearize_writes_a_valid_and_deterministic_file() {
+    let source = root_fixture("minimal.pdf");
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let linearized = run(&[
+        "linearize",
+        source.to_str().expect("utf-8"),
+        "--out",
+        first.arg(),
+    ]);
+    assert!(
+        linearized.status.success(),
+        "stderr: {}",
+        stderr(&linearized)
+    );
+    let text = stdout(&linearized);
+    assert!(text.contains("declared_length:"), "{text}");
+    assert!(text.contains("pages: 1 (text verified: 1)"), "{text}");
+    assert!(text.contains("first_page_object:"), "{text}");
+    assert!(text.contains("hint: offset"), "{text}");
+
+    let repeated = run(&[
+        "linearize",
+        source.to_str().expect("utf-8"),
+        "--out",
+        second.arg(),
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    let left = fs::read(&first.path).expect("first linearized");
+    let right = fs::read(&second.path).expect("second linearized");
+    assert_eq!(left, right, "linearized output is deterministic");
+
+    let source_text = run(&["text", source.to_str().expect("utf-8")]);
+    let saved_text = run(&["text", first.arg()]);
+    assert!(
+        saved_text.status.success(),
+        "stderr: {}",
+        stderr(&saved_text)
+    );
+    assert_eq!(stdout(&source_text), stdout(&saved_text));
+
+    let info = run(&["info", first.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+}
+
+#[test]
+fn linearize_and_pack_handle_a_hybrid_source() {
+    let source = root_fixture("realworld/microsoft-excel-2019-sample.pdf");
+    let linearized = TempOut::new("pdf");
+    let packed = TempOut::new("pdf");
+    let source_text = run(&["text", source.to_str().expect("utf-8")]);
+    assert!(source_text.status.success());
+
+    let linear = run(&[
+        "linearize",
+        source.to_str().expect("utf-8"),
+        "--out",
+        linearized.arg(),
+        "--json",
+    ]);
+    assert!(linear.status.success(), "stderr: {}", stderr(&linear));
+    let value: Value = serde_json::from_str(&stdout(&linear)).expect("valid JSON");
+    assert_eq!(value["declared_length"], value["bytes"]);
+    assert_eq!(value["page_count"], 2);
+    assert_eq!(value["text_pages_verified"], 2);
+    let linear_text = run(&["text", linearized.arg()]);
+    assert!(
+        linear_text.status.success(),
+        "stderr: {}",
+        stderr(&linear_text)
+    );
+    assert_eq!(stdout(&source_text), stdout(&linear_text));
+
+    let pack = run(&[
+        "pack",
+        source.to_str().expect("utf-8"),
+        "--out",
+        packed.arg(),
+        "--json",
+    ]);
+    assert!(pack.status.success(), "stderr: {}", stderr(&pack));
+    let value: Value = serde_json::from_str(&stdout(&pack)).expect("valid JSON");
+    assert_eq!(value["object_streams"], true);
+    assert_eq!(value["xref_stream"], true);
+    assert_eq!(value["text_pages_verified"], 2);
+    let packed_text = run(&["text", packed.arg()]);
+    assert!(
+        packed_text.status.success(),
+        "stderr: {}",
+        stderr(&packed_text)
+    );
+    assert_eq!(stdout(&source_text), stdout(&packed_text));
+
+    let invalid = run(&[
+        "pack",
+        source.to_str().expect("utf-8"),
+        "--out",
+        packed.arg(),
+        "--max-objects",
+        "0",
+    ]);
+    assert!(!invalid.status.success());
+    assert!(
+        stderr(&invalid).contains("--max-objects"),
+        "{}",
+        stderr(&invalid)
+    );
+}
+
+#[test]
 fn update_appends_a_validated_incremental_revision() {
     let source = root_fixture("minimal.pdf");
     let out = TempOut::new("pdf");

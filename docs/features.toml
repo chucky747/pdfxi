@@ -4120,29 +4120,48 @@ title = "Cross-reference tables and streams"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-core/src/linearize.rs",
-    "crates/pdfxi-core/src/linearization.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0086.md",
+    "crates/pdfxi-cli/src/layout.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0293.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core -p pdfxi-cli EXIT=0 (192 core unit + 6 integration, 3+31 cli); 14 new linearize tests cover the full linearized layout. cargo fmt --all --check EXIT=0; cargo clippy -p pdfxi-core --lib -- -D warnings EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps EXIT=0. Full output in docs/evidence/core/T-0086.md."
+evidence = "docs/evidence/cli/T-0293.md"
 id = "STD-003"
 notes = """
-STD-003 is now fully verified: object-stream/xref-stream writing, linearization
-hint parsing, and complete linearized file writing are all implemented in
-pdfxi-core. The writer emits the first-page section ahead of the rest with a
-/Linearized dictionary, page-offset and shared-object hint tables, a first-page
-classic xref, a main xref with /Prev back to it, and a correct final
-startxref/%%EOF. Read-back via parse_linearization/parse_hint_stream confirms
-hints agree with real offsets, and reparse/re-save/repair are exercised. Every
-document with at least one page is linearized (no small-document fallback).
-Full-workspace clippy/doc remain blocked by in-progress edits in other lanes
-(pdfxi-security, pdfxi-convert, pdfxi-edit); see docs/evidence/core/T-0086.md.
+Verified through two CLI hosts over the existing core writers.
+
+`pdfxi linearize <FILE> --out PATH [--version 1.7] [--json]` calls
+Document::save_linearized, reopens the output, reads the /Linearized dictionary
+and rejects it unless the declared /L equals the written byte count, /N equals
+the page count and the hint range lies inside the file; it then compares every
+page's text with the source and reports first-page object, first-page-section
+end, main xref offset and hint range.
+
+`pdfxi pack <FILE> --out PATH [--no-compress] [--max-objects N] [--json]` calls
+Document::save_with_object_streams with the requested compression and /ObjStm
+member limit (validated 1-65535), reopens the output, requires both an /ObjStm
+and a /XRef stream, and compares every page's text with the source.
+
+Evidence: minimal.pdf linearizes to 1001 bytes with declared_length 1001, one
+verified text page, first_page_object 3, hint at 207/80; the real Excel hybrid
+fixture linearizes to 94030 bytes with declared_length 94030 and two verified
+text pages. Two runs over powerpoint-slides.pdf are byte-identical. Packing
+minimal.pdf gives 595 -> 731 bytes with object_streams and xref_stream true, and
+the Excel fixture 92366 -> 92946; pdfxi info reports 2 pages and pdfxi text
+extracts the same text as the source.
+
+Gates: cargo test -p pdfxi-cli --test cli linearize = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: linearized and object-stream/xref-stream full output are reachable and
+verified for text and page structure; incremental object-stream appends remain a
+core API exercised by unit tests rather than a separate command.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
+    "cli::linearize_writes_a_valid_and_deterministic_file",
+    "cli::linearize_and_pack_handle_a_hybrid_source",
     "linearize::tests::first_page_objects_are_placed_before_the_rest",
     "linearize::tests::declared_length_matches_actual_file_size",
     "linearize::tests::hint_ranges_match_the_emitted_layout",

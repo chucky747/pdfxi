@@ -43,6 +43,8 @@ pdfxi <COMMAND> --help
 | `attach add <FILE> --out PATH --attachment PATH [--name NAME] [--description D] [--mime TYPE]` | Embed a file in the name tree | verified (`EDIT-011`) |
 | `attach remove <FILE> --out PATH --name NAME` | Remove an embedded file | verified (`EDIT-011`) |
 | `update <FILE> --out PATH [--title T] [--author A] [--subject S] [--keywords K] [--producer P]` | Append a validated incremental revision | verified (`STD-010`) |
+| `linearize <FILE> --out PATH [--version 1.7] [--json]` | Write a fully linearized file | verified (`STD-003`) |
+| `pack <FILE> --out PATH [--no-compress] [--max-objects N] [--json]` | Pack objects into object streams and an xref stream | verified (`STD-003`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -111,7 +113,16 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `update` rewrites nothing: it stages the `/Info` change and calls the core
+- `linearize` writes a complete linearized file: a `/Linearized` parameter
+  dictionary, page-offset and shared-object hint tables, a first-page classic
+  xref, and a main xref whose `/Prev` points back at it. The command re-reads
+  the output, checks the declared `/L` against the written bytes and the
+  declared `/N` against the page count, then verifies every page's text against
+  the source. `--version` is the header token.
+- `pack` keeps stream objects standalone and packs the rest into `/ObjStm`
+  streams with a `/Type /XRef` cross-reference stream. `--max-objects` is the
+  `/ObjStm` member limit (1-65535) and `--no-compress` writes uncompressed
+  streams. The output is reopened and page text is compared with the source.- `update` rewrites nothing: it stages the `/Info` change and calls the core
   incremental writer, so every original byte remains an exact prefix and only
   the changed objects plus a new cross-reference section are appended. The
   result is checked with the preservation validator (prefix, `/Prev` chain,
