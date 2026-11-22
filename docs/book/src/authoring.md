@@ -23,6 +23,7 @@ command.
 | Action Wizard create/edit/import/export | `AUTO-001` | verified | `pdfxi-automation::action_document` + real action operations | `action create` / `action run --execute` |
 | Alt text and table editor | `ACCESS-002` | verified | tagged structure `/XI_NodeId` entries | `accessibility alt` / `accessibility table` |
 | Tag tree and reading order editor | `ACCESS-001` | verified | tagged structure `/K` order | `accessibility order` / `accessibility move` |
+| PostScript export (positioned text subset) | `EXPORT-009` | verified | `pdfxi-convert::postscript` + `pdfxi-edit::text_blocks` | `export postscript` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -45,6 +46,18 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+PostScript export is exposed as:
+
+```text
+pdfxi export postscript <FILE.pdf> --out <OUT.ps> [--json]
+```
+
+Every non-empty text run from `pdfxi-edit`'s geometry-aware page model becomes a
+`PsText` at its real page coordinates and font size, with the page media size as
+the PostScript page. The exporter writes deterministic DSC PostScript
+(`%!PS-Adobe-3.0`, bounding box, pages, fonts). Vector art, images and
+annotations are not represented; `--json` lists them as omitted rather than
+pretending to be a complete converter.
 Tagged reading order is edited with:
 
 ```text

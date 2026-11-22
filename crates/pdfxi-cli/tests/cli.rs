@@ -8263,6 +8263,89 @@ fn form_create_and_list_reject_bad_input() {
 }
 
 #[test]
+fn export_postscript_writes_positioned_dsc() {
+    let source = create_text_pdf("PostScript export line one.\nSecond line.");
+    let out = TempOut::new("ps");
+    let exported = run(&[
+        "export",
+        "postscript",
+        source.arg(),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(exported.status.success(), "stderr: {}", stderr(&exported));
+    let value: Value = serde_json::from_str(&stdout(&exported)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["runs"], 2);
+    assert!(
+        value["title"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("pdfxi-cli-path"),
+        "{value}"
+    );
+    assert!(value["bytes"].as_u64().unwrap_or(0) > 0);
+    let omitted: Vec<&str> = value["omitted"]
+        .as_array()
+        .expect("omitted")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(omitted, ["vector art", "images", "annotations"]);
+
+    let bytes = fs::read(&out.path).expect("PostScript output");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.starts_with("%!PS-Adobe-3.0"), "{text}");
+    assert!(text.contains("%%Pages: 1"), "{text}");
+    assert!(text.contains("%%BoundingBox: 0 0 612 792"), "{text}");
+    assert!(text.contains("PostScript export line one."), "{text}");
+    assert!(text.contains("Second line."), "{text}");
+
+    let again = TempOut::new("ps");
+    let repeated = run(&["export", "postscript", source.arg(), "--out", again.arg()]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second PostScript output"),
+        "PostScript export is deterministic"
+    );
+}
+
+#[test]
+fn export_postscript_handles_pages_and_missing_inputs() {
+    let source = root_fixture("realworld/powerpoint-slides.pdf");
+    let out = TempOut::new("ps");
+    let exported = run(&[
+        "export",
+        "postscript",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(exported.status.success(), "stderr: {}", stderr(&exported));
+    let value: Value = serde_json::from_str(&stdout(&exported)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert!(value["runs"].as_u64().unwrap_or(0) > 0);
+    let bytes = fs::read(&out.path).expect("PostScript");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("%%Pages: 3"), "{text}");
+    assert!(text.contains("%%Page: 1 1"), "{text}");
+    assert!(text.contains("%%Page: 3 3"), "{text}");
+
+    let missing = run(&[
+        "export",
+        "postscript",
+        TempPath::new("pdf").arg(),
+        "--out",
+        TempOut::new("ps").arg(),
+    ]);
+    assert!(!missing.status.success());
+    assert!(stderr(&missing).contains("read"), "{}", stderr(&missing));
+}
+
+#[test]
 fn export_conformance_plan_and_profiles_preserve_text() {
     let source = root_fixture("minimal.pdf");
     let plan = run(&[

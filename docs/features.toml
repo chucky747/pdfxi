@@ -2076,14 +2076,43 @@ tests = [
 title = "Export to PDF/A PDF/X and PDF/E"
 
 [[feature]]
-docs = "crates/pdfxi-convert/src/postscript.rs, docs/evidence/convert/T-0163.md"
+docs = [
+    "crates/pdfxi-cli/src/export_postscript.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0324.md",
+]
 domain = "Export"
-evidence = "docs/evidence/convert/T-0163.md"
+evidence = "docs/evidence/cli/T-0324.md"
 id = "EXPORT-009"
-notes = "DSC-compliant PostScript for the text/vector subset with escaping, bounding-box computation and typed geometry errors; full PS interpreter fidelity is not claimed."
+notes = """
+Verified through `pdfxi export postscript <FILE.pdf> --out OUT.ps [--json]`.
+
+The host loads the PDF, reads each page media size from Document::page_frame,
+takes every text run from pdfxi_edit::text_blocks with its page coordinates and
+font size, maps each non-empty run to PsContent::Text (PsText, Helvetica), and
+calls export_postscript_with_report. It verifies the %!PS-Adobe header and
+reports pages, runs, bytes and the omitted content classes (vector art, images,
+annotations).
+
+Evidence: a two-line text PDF reports pages 1, runs 2, bytes 527 and omitted
+[vector art, images, annotations]; the program starts %!PS-Adobe-3.0 and carries
+%%BoundingBox: 0 0 612 792, %%Pages: 1, %%DocumentFonts: Helvetica and both
+source lines. A three-page fixture reports pages 3, runs 9, bytes 1334 and
+contains %%Pages: 3, %%Page: 1 1 and %%Page: 3 3. A missing input fails to read,
+and repeated exports are byte-identical.
+
+Gates: cargo test -p pdfxi-cli --test cli export_postscript = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: positioned text subset only; vector paths, images, annotations,
+transparency and colour are not mapped, no interpreter is bundled, and page
+rotation is not applied to run coordinates.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::export_postscript_writes_positioned_dsc",
+    "cli::export_postscript_handles_pages_and_missing_inputs",
     "postscript::tests::header_has_dsc_version_boundingbox_pages_and_fonts",
     "postscript::tests::postscript_bytes_are_deterministic",
 ]

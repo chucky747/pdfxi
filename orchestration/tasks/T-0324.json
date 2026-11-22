@@ -1,0 +1,19 @@
+{
+  "id": "T-0324",
+  "lane": "convert",
+  "title": "PostScript text-subset export host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0323"],
+  "owns": [
+    "crates/pdfxi-cli/src/export_postscript.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0324.md",
+    "orchestration/feature-updates/T-0324.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli export_postscript passes; pdfxi export postscript maps real page runs to positioned PsText and writes deterministic DSC PostScript; EXPORT-009 moves to verified.",
+  "notes": "Maps pdfxi-edit text blocks to PsDocument pages; reports omitted vector/image/annotation content.",
+  "evidence": "docs/evidence/cli/T-0324.md"
+}

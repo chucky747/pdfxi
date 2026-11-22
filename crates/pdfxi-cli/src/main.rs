@@ -68,6 +68,8 @@ mod a11y_edit;
 mod api;
 /// pdfxi create portfolio: assemble a PDF portfolio from real files.
 mod create_portfolio;
+/// pdfxi export postscript: positioned text subset as DSC PostScript.
+mod export_postscript;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
 mod ocr;
 /// pdfxi create office: convert an Office intake bundle into a PDF.
@@ -1972,6 +1974,21 @@ enum ExportCommand {
         #[arg(long, value_enum, default_value = "structured")]
         format: TaggedOutputFormat,
     },
+    /// Export positioned page text as DSC PostScript.
+    ///
+    /// Text runs keep their page coordinates, font size and page geometry.
+    /// Vector art, images and annotations are not represented and are listed
+    /// as omitted; this is the documented text subset, not a full converter.
+    Postscript {
+        /// Path to the source PDF.
+        input: PathBuf,
+        /// Destination `.ps` file.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Normalize a PDF for a PDF/A, PDF/X or PDF/E target.
     ///
     /// This is subset normalization: it raises the header version when needed,
@@ -3047,6 +3064,9 @@ fn main() -> anyhow::Result<()> {
             } => office_roundtrip::convert_office(&manifest, &out, json),
         },
         Command::Export { command } => match command {
+            ExportCommand::Postscript { input, out, json } => {
+                export_postscript::export_postscript_file(&input, &out, json)
+            }
             ExportCommand::Tagged {
                 input,
                 output,
