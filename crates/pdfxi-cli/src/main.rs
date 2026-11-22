@@ -88,6 +88,8 @@ mod scan;
 mod script;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
 mod toolset;
+/// pdfxi transparency inspect: read blend modes and transparency groups.
+mod transparency;
 /// pdfxi watch: one host-driven poll of a watched folder.
 mod watch;
 
@@ -380,6 +382,16 @@ enum Command {
         /// Integration action.
         #[command(subcommand)]
         command: OfficeCommand,
+    },
+    /// Inspect page transparency groups and graphics-state blend modes.
+    ///
+    /// Reads the real `/Group` and `/ExtGState` dictionaries, validates every
+    /// mode and alpha through `pdfxi-core::transparency`, and prints canonical
+    /// descriptors. Pixel compositing stays a render-backend responsibility.
+    Transparency {
+        /// Inspection action.
+        #[command(subcommand)]
+        command: TransparencyCommand,
     },
     /// Change font size, spacing, scaling or colour of a paragraph.
     ///
@@ -1772,6 +1784,19 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `transparency` command.
+#[derive(Debug, Subcommand)]
+enum TransparencyCommand {
+    /// Inspect page groups and graphics-state blend modes.
+    Inspect {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `script` command.
 #[derive(Debug, Subcommand)]
 enum ScriptCommand {
@@ -2380,6 +2405,9 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Transparency { command } => match command {
+            TransparencyCommand::Inspect { file, json } => transparency::inspect(&file, json),
+        },
         Command::Restyle {
             file,
             out,

@@ -1,0 +1,19 @@
+{
+  "id": "T-0325",
+  "lane": "convert",
+  "title": "Transparency inspection host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0324"],
+  "owns": [
+    "crates/pdfxi-cli/src/transparency.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0325.md",
+    "orchestration/feature-updates/T-0325.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli transparency_inspect passes; pdfxi transparency inspect validates real page groups and ExtGState blend modes through pdfxi-core::transparency; STD-005 moves to verified.",
+  "notes": "Reads /Group and /ExtGState from real pages, parses BlendMode/TransparencyGroup/BlendSpec and prints canonical descriptors.",
+  "evidence": "docs/evidence/cli/T-0325.md"
+}

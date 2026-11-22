@@ -1663,6 +1663,50 @@ fn sample_png() -> Vec<u8> {
     out
 }
 
+/// Build a PDF with one page group and one blend-mode graphics state.
+fn transparency_pdf() -> Vec<u8> {
+    use pdfxi_core::{Dictionary, Object, ObjectId};
+    let source = create_text_pdf("Blend mode content.");
+    let bytes = fs::read(&source.path).expect("read text PDF");
+    let mut document = pdfxi_core::Document::from_bytes(bytes).expect("parse text PDF");
+    let state_number = document.allocate_object_number().expect("allocate state");
+    let state_id = ObjectId::new(state_number, 0);
+    let mut state = Dictionary::new();
+    state.insert("Type".to_owned(), Object::Name("ExtGState".to_owned()));
+    state.insert("BM".to_owned(), Object::Name("Multiply".to_owned()));
+    state.insert("ca".to_owned(), Object::Real(0.5));
+    state.insert("CA".to_owned(), Object::Real(1.0));
+    document
+        .set_object(state_id, Object::Dictionary(state))
+        .expect("write state");
+    let page = document.page(0).expect("page");
+    let mut page_dictionary = document
+        .object(page.id)
+        .expect("page object")
+        .as_dictionary()
+        .cloned()
+        .expect("page dictionary");
+    let mut states = Dictionary::new();
+    states.insert("GS1".to_owned(), Object::Reference(state_id));
+    let mut resources = page_dictionary
+        .get("Resources")
+        .and_then(Object::as_dictionary)
+        .cloned()
+        .unwrap_or_default();
+    resources.insert("ExtGState".to_owned(), Object::Dictionary(states));
+    page_dictionary.insert("Resources".to_owned(), Object::Dictionary(resources));
+    let mut group = Dictionary::new();
+    group.insert("S".to_owned(), Object::Name("Transparency".to_owned()));
+    group.insert("BM".to_owned(), Object::Name("Screen".to_owned()));
+    group.insert("I".to_owned(), Object::Boolean(true));
+    group.insert("K".to_owned(), Object::Boolean(false));
+    page_dictionary.insert("Group".to_owned(), Object::Dictionary(group));
+    document
+        .set_object(page.id, Object::Dictionary(page_dictionary))
+        .expect("write page");
+    document.save().expect("save transparency PDF")
+}
+
 /// Run `create text` over `text` and return the generated PDF path.
 fn create_text_pdf(text: &str) -> TempPath {
     let input = TempPath::new("txt");
@@ -8341,6 +8385,78 @@ fn export_postscript_handles_pages_and_missing_inputs() {
         "--out",
         TempOut::new("ps").arg(),
     ]);
+    assert!(!missing.status.success());
+    assert!(stderr(&missing).contains("read"), "{}", stderr(&missing));
+}
+
+#[test]
+fn transparency_inspect_reads_groups_and_blend_states() {
+    let source = TempPath::new("pdf");
+    source.write(&transparency_pdf());
+    let inspected = run(&["transparency", "inspect", source.arg(), "--json"]);
+    assert!(inspected.status.success(), "stderr: {}", stderr(&inspected));
+    let value: Value = serde_json::from_str(&stdout(&inspected)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["groups"], 1);
+    assert_eq!(value["states"], 1);
+    assert_eq!(value["modes"], serde_json::json!(["Multiply", "Screen"]));
+    let rows = value["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    let group = rows
+        .iter()
+        .find(|row| row["source"] == "group")
+        .expect("group row");
+    assert_eq!(group["mode"], "Screen");
+    assert_eq!(group["isolation"], "Isolated");
+    assert_eq!(group["knockout"], "NonKnockout");
+    assert_eq!(group["descriptor"], "Isolated|NonKnockout|Screen");
+    let state = rows
+        .iter()
+        .find(|row| row["source"] == "ExtGState /GS1")
+        .expect("state row");
+    assert_eq!(state["mode"], "Multiply");
+    assert_eq!(state["source_alpha"], 128);
+    assert_eq!(state["backdrop_alpha"], 256);
+    assert_eq!(state["descriptor"], "Multiply ca=128 CA=256");
+}
+
+#[test]
+fn transparency_inspect_rejects_unknown_modes_and_missing_files() {
+    let source = create_text_pdf("Bogus mode.");
+    let bytes = fs::read(&source.path).expect("read text PDF");
+    let mut document = pdfxi_core::Document::from_bytes(bytes).expect("parse");
+    let page = document.page(0).expect("page");
+    let mut page_dictionary = document
+        .object(page.id)
+        .expect("page object")
+        .as_dictionary()
+        .cloned()
+        .expect("page dictionary");
+    let mut group = pdfxi_core::Dictionary::new();
+    group.insert(
+        "S".to_owned(),
+        pdfxi_core::Object::Name("Transparency".to_owned()),
+    );
+    group.insert(
+        "BM".to_owned(),
+        pdfxi_core::Object::Name("Bogus".to_owned()),
+    );
+    page_dictionary.insert("Group".to_owned(), pdfxi_core::Object::Dictionary(group));
+    document
+        .set_object(page.id, pdfxi_core::Object::Dictionary(page_dictionary))
+        .expect("write page");
+    let path = TempPath::new("pdf");
+    path.write(&document.save().expect("save"));
+    let rejected = run(&["transparency", "inspect", path.arg()]);
+    assert!(!rejected.status.success());
+    assert!(
+        stderr(&rejected).contains("Unknown blend mode")
+            || stderr(&rejected).contains("blend mode"),
+        "{}",
+        stderr(&rejected)
+    );
+
+    let missing = run(&["transparency", "inspect", TempPath::new("pdf").arg()]);
     assert!(!missing.status.success());
     assert!(stderr(&missing).contains("read"), "{}", stderr(&missing));
 }

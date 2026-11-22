@@ -24,6 +24,7 @@ command.
 | Alt text and table editor | `ACCESS-002` | verified | tagged structure `/XI_NodeId` entries | `accessibility alt` / `accessibility table` |
 | Tag tree and reading order editor | `ACCESS-001` | verified | tagged structure `/K` order | `accessibility order` / `accessibility move` |
 | PostScript export (positioned text subset) | `EXPORT-009` | verified | `pdfxi-convert::postscript` + `pdfxi-edit::text_blocks` | `export postscript` |
+| Transparency and blend modes | `STD-005` | verified | `pdfxi-core::transparency` | `transparency inspect` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -46,6 +47,18 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Transparency inspection is exposed as:
+
+```text
+pdfxi transparency inspect <FILE.pdf> [--json]
+```
+
+The command reads each page's real `/Group` and `/ExtGState` dictionaries,
+parses `/BM` (name or first array entry), `/I`, `/K`, `/ca` and `/CA`, and
+validates them through `pdfxi-core::transparency` (`BlendMode`, `BlendSpec`,
+`TransparencyGroup`). It prints canonical descriptors such as
+`Isolated|NonKnockout|Screen` and `Multiply ca=128 CA=256`. Unknown blend modes
+are typed errors. Pixel compositing remains a render-backend responsibility.
 PostScript export is exposed as:
 
 ```text

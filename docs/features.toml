@@ -4918,14 +4918,44 @@ tests = [
 title = "Font embedding and CID fonts"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/transparency.rs, docs/evidence/core/T-0184.md"
+docs = [
+    "crates/pdfxi-cli/src/transparency.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0325.md",
+]
 domain = "Standards"
-evidence = "docs/evidence/core/T-0184.md"
+evidence = "docs/evidence/cli/T-0325.md"
 id = "STD-005"
-notes = "Blend modes, group isolation/knockout, soft-mask backdrop validation, group colour-space resolution, backend requirements and a deterministic back-to-front compositing plan with typed errors. Host boundary: pixel compositing and colour management stay render-backend responsibilities."
+notes = """
+Verified through `pdfxi transparency inspect <FILE.pdf> [--json]`.
+
+The host reads each page dictionary's real /Group dictionary; when /S is
+/Transparency it parses /BM, /I and /K into TransparencyGroup. It resolves
+/Resources /ExtGState, reads every state declaring /BM, /ca or /CA, parses the
+mode, converts alpha to the model's 256-step scale and validates a BlendSpec.
+It prints canonical descriptors (for example Isolated|NonKnockout|Screen and
+Multiply ca=128 CA=256) and a mode summary. Unknown blend modes are typed errors;
+a document without transparency reports zero groups/states.
+
+Evidence: a watermarked PDF reports pages 1, groups 0, states 1, modes [Normal]
+and ExtGState /GS1 Normal ca=38 CA=38. A test PDF with a page group /BM /Screen
+/I true and /ExtGState /GS1 /BM /Multiply /ca 0.5 /CA 1 reports groups 1, states
+1, modes Multiply,Screen and descriptors Isolated|NonKnockout|Screen and
+Multiply ca=128 CA=256. /BM /Bogus fails with a typed unknown-mode error and a
+missing file fails to read.
+
+Gates: cargo test -p pdfxi-cli --test cli transparency_inspect = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: inspection and validation only; no applying/authoring blend modes,
+compositing, colour-space management or flattening. Soft masks and
+colour-managed backdrops are not evaluated.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::transparency_inspect_reads_groups_and_blend_states",
+    "cli::transparency_inspect_rejects_unknown_modes_and_missing_files",
     "transparency::tests::compositing_plan_is_ordered_back_to_front_and_deterministic",
     "transparency::tests::group_space_resolution_inherits_backdrop_and_rejects_mismatch",
     "transparency::tests::soft_masks_round_trip_and_validate_backdrop",
