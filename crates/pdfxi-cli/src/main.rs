@@ -64,6 +64,8 @@ mod action;
 
 // Local line-delimited JSON automation API over stdin/stdout (`api`).
 mod api;
+/// pdfxi create portfolio: assemble a PDF portfolio from real files.
+mod create_portfolio;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
 mod ocr;
 /// pdfxi create office: convert an Office intake bundle into a PDF.
@@ -1657,6 +1659,22 @@ enum CreateCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Assemble a PDF portfolio from a manifest and real files.
+    ///
+    /// The manifest JSON carries `title` and `entries` with the in-portfolio
+    /// `name`, optional `description`/`order`, and the source `file` on disk.
+    /// Entry names must be relative and traversal-free; every embedded stream is
+    /// re-read from the written PDF and compared with its source bytes.
+    Portfolio {
+        /// Portfolio manifest JSON.
+        manifest: PathBuf,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Convert an Office intake bundle into a PDF.
     ///
     /// The bundle JSON carries `kind` (`word`, `excel`, `powerpoint`), `title`
@@ -2696,6 +2714,11 @@ fn main() -> anyhow::Result<()> {
                 language,
                 json,
             } => ocr::create_ocr(&image, &out, &words, dpi, language.as_deref(), json),
+            CreateCommand::Portfolio {
+                manifest,
+                out,
+                json,
+            } => create_portfolio::create_portfolio(&manifest, &out, json),
             CreateCommand::Office {
                 bundle,
                 out,

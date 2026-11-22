@@ -1,0 +1,19 @@
+{
+  "id": "T-0315",
+  "lane": "convert",
+  "title": "PDF Portfolio assembly host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0314"],
+  "owns": [
+    "crates/pdfxi-cli/src/create_portfolio.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0315.md",
+    "orchestration/feature-updates/T-0315.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli create_portfolio passes; pdfxi create portfolio reads a real manifest and files, writes a PDF with /Collection and embedded streams, and every embedded stream round-trips byte-for-byte; CREATE-010 moves to verified.",
+  "notes": "Hosts portfolio_package: manifest JSON -> validated manifest -> package bytes -> reopened /Collection and attachment verification.",
+  "evidence": "docs/evidence/cli/T-0315.md"
+}

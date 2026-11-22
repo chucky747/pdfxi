@@ -14,6 +14,7 @@ command.
 | PNG and JPEG images | `CREATE-003` | verified | `pdfxi-convert::create` | `create image` |
 | PostScript and EPS (bounded subset) | `CREATE-013` | verified | `pdfxi-convert::postscript_ingest` + `postscript_pdf` | `create postscript` |
 | Office intake bundles (Word/Excel/PowerPoint) | `CREATE-006` | verified | `pdfxi-convert::office_contract` + `office_import` | `create office` |
+| PDF Portfolios from real files | `CREATE-010` | verified | `pdfxi-convert::portfolio_package` | `create portfolio` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -36,6 +37,21 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Portfolio assembly is exposed as:
+
+```text
+pdfxi create portfolio <MANIFEST.json> --out <OUTPUT.pdf> [--json]
+```
+
+`MANIFEST.json` names the collection and its files:
+`{"title":"Case file","entries":[{"name":"docs/brief.txt","description":"Case brief","order":0,"file":"brief.txt"}]}`.
+`name` is the in-portfolio path (relative, traversal-free, forward slashes);
+`file` is the source on disk, resolved against the manifest directory when
+relative. Each file is read, the manifest is validated, `build_portfolio_package`
+writes `/Collection` and a sorted `/EmbeddedFiles` name tree, and the output is
+reopened to confirm the collection flag, item count and byte-for-byte embedded
+streams. Empty collections are valid. Use `pdfxi portfolio` to list or extract
+the result.
 Office conversion is exposed as:
 
 ```text

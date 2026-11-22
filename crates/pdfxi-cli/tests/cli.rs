@@ -3751,6 +3751,172 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn create_portfolio_embeds_and_round_trips_files() {
+    let dir = TempDir::new();
+    let brief = dir.path.join("brief.txt");
+    let notes = dir.path.join("notes.txt");
+    fs::write(&brief, b"Case brief body.").expect("write brief");
+    fs::write(&notes, b"Hearing notes.").expect("write notes");
+    let manifest = dir.path.join("manifest.json");
+    fs::write(
+        &manifest,
+        br#"{"title":"Case file","entries":[
+            {"name":"docs/brief.txt","description":"Case brief","order":0,"file":"brief.txt"},
+            {"name":"docs/notes.txt","order":1,"file":"notes.txt"}
+        ]}"#,
+    )
+    .expect("write manifest");
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "create",
+        "portfolio",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["title"], "Case file");
+    assert_eq!(value["entries"], 2);
+    assert_eq!(value["embedded_bytes"], 30);
+    assert_eq!(value["collection"], true);
+    assert_eq!(value["items"], 2);
+    assert_eq!(value["verified_files"], 2);
+    assert_eq!(value["files"][0]["name"], "docs/brief.txt");
+    assert_eq!(value["files"][0]["description"], "Case brief");
+
+    let bytes = fs::read(&out.path).expect("portfolio PDF");
+    let document = pdfxi_core::Document::from_bytes(bytes.clone()).expect("reopen portfolio");
+    assert!(document.is_portfolio().expect("collection"));
+    let items = document.portfolio_items().expect("portfolio items");
+    assert_eq!(items.len(), 2);
+    let brief_item = items
+        .iter()
+        .find(|item| item.path == "docs/brief.txt")
+        .expect("brief item");
+    assert_eq!(
+        document
+            .attachment_bytes(&brief_item.key)
+            .expect("brief bytes"),
+        b"Case brief body."
+    );
+
+    let extract = dir.path.join("out");
+    let listed = run(&[
+        "portfolio",
+        out.arg(),
+        "--extract",
+        extract.to_str().expect("extract path"),
+    ]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    assert_eq!(
+        fs::read(extract.join("docs/brief.txt")).expect("extracted brief"),
+        b"Case brief body."
+    );
+    assert_eq!(
+        fs::read(extract.join("docs/notes.txt")).expect("extracted notes"),
+        b"Hearing notes."
+    );
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&[
+        "create",
+        "portfolio",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        again.arg(),
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second portfolio PDF"),
+        "portfolio assembly is deterministic"
+    );
+}
+
+#[test]
+fn create_portfolio_rejects_bad_manifests() {
+    let dir = TempDir::new();
+    fs::write(dir.path.join("brief.txt"), b"Case brief.").expect("write brief");
+
+    let traversal = dir.path.join("traversal.json");
+    fs::write(
+        &traversal,
+        br#"{"title":"T","entries":[{"name":"../evil.txt","file":"brief.txt"}]}"#,
+    )
+    .expect("write traversal manifest");
+    let refused = run(&[
+        "create",
+        "portfolio",
+        traversal.to_str().expect("manifest path"),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("parent component"),
+        "{}",
+        stderr(&refused)
+    );
+
+    let empty = dir.path.join("empty.json");
+    fs::write(&empty, br#"{"title":"T","entries":[]}"#).expect("write empty manifest");
+    let empty_out = TempOut::new("pdf");
+    let empty_portfolio = run(&[
+        "create",
+        "portfolio",
+        empty.to_str().expect("manifest path"),
+        "--out",
+        empty_out.arg(),
+        "--json",
+    ]);
+    assert!(
+        empty_portfolio.status.success(),
+        "stderr: {}",
+        stderr(&empty_portfolio)
+    );
+    let value: Value = serde_json::from_str(&stdout(&empty_portfolio)).expect("valid JSON");
+    assert_eq!(value["entries"], 0);
+    assert_eq!(value["items"], 0);
+    assert_eq!(value["collection"], true);
+
+    let missing = dir.path.join("missing.json");
+    fs::write(
+        &missing,
+        br#"{"title":"T","entries":[{"name":"docs/a.txt","file":"absent.txt"}]}"#,
+    )
+    .expect("write missing manifest");
+    let no_file = run(&[
+        "create",
+        "portfolio",
+        missing.to_str().expect("manifest path"),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!no_file.status.success());
+    assert!(
+        stderr(&no_file).contains("read portfolio file"),
+        "{}",
+        stderr(&no_file)
+    );
+
+    let malformed = dir.path.join("malformed.json");
+    fs::write(&malformed, b"not json").expect("write malformed manifest");
+    assert!(
+        !run(&[
+            "create",
+            "portfolio",
+            malformed.to_str().expect("manifest path"),
+            "--out",
+            TempOut::new("pdf").arg()
+        ])
+        .status
+        .success()
+    );
+}
+
+#[test]
 fn create_office_converts_pages_and_verifies_text() {
     let bundle = TempPath::new("json");
     bundle.write(
