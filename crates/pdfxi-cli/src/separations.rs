@@ -33,6 +33,26 @@ enum Space {
     Other,
 }
 
+/// Overprint flags declared by one `/ExtGState` entry.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+struct OverprintState {
+    /// `/op`: overprint for non-stroking (fill) operations.
+    fill: bool,
+    /// `/OP`: overprint for stroking operations.
+    stroke: bool,
+    /// `/OPM` overprint mode (0 or 1).
+    mode: u8,
+}
+
+/// The colour spaces and spot alternates declared by one page.
+#[derive(Default)]
+struct PageSpaces {
+    /// Named colour spaces.
+    spaces: BTreeMap<String, Space>,
+    /// Spot ink to alternate process space label.
+    alternates: BTreeMap<String, String>,
+}
+
 /// One plate row.
 #[derive(Serialize)]
 struct PlateRow {
@@ -44,8 +64,26 @@ struct PlateRow {
     process: bool,
     /// Paint operations that image this plate.
     operations: usize,
+    /// Paint operations executed under an overprint graphics state.
+    overprint_operations: usize,
+    /// Alternate process space declared by the spot colour space.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alternate: Option<String>,
     /// One-based pages that image this plate.
     pages: Vec<usize>,
+}
+
+/// One overprint graphics-state row.
+#[derive(Serialize)]
+struct OverprintRow {
+    /// Resource name.
+    name: String,
+    /// `/op` fill overprint.
+    fill: bool,
+    /// `/OP` stroke overprint.
+    stroke: bool,
+    /// `/OPM` mode.
+    mode: u8,
 }
 
 /// JSON shape of `pdfxi separations`.
@@ -61,6 +99,10 @@ struct SeparationsReport {
     device_rgb_operations: usize,
     /// Device-gray paint operations.
     device_gray_operations: usize,
+    /// Spot ink to alternate process space label.
+    alternates: BTreeMap<String, String>,
+    /// Overprint graphics states declared by the document.
+    overprint_states: Vec<OverprintRow>,
     /// Stable plan summary.
     summary: String,
     /// Stable plan descriptor.
@@ -130,30 +172,94 @@ fn page_resources(document: &Document, page: ObjectId) -> anyhow::Result<Option<
     Ok(None)
 }
 
-/// Read the page's colour-space resources.
+/// Read the page's colour-space resources and spot alternates.
 fn colour_spaces(
     document: &Document,
     resources: Option<&Dictionary>,
-) -> anyhow::Result<BTreeMap<String, Space>> {
+) -> anyhow::Result<PageSpaces> {
+    let Some(resources) = resources else {
+        return Ok(PageSpaces::default());
+    };
+    let Some(colours) = resources.get("ColorSpace") else {
+        return Ok(PageSpaces::default());
+    };
+    let Object::Dictionary(colours) = resolve(document, colours)? else {
+        return Ok(PageSpaces::default());
+    };
+    let mut page = PageSpaces::default();
+    for (name, value) in &colours {
+        let resolved = resolve(document, value)?;
+        let space = space_of_resolved(document, &resolved)?;
+        if let Object::Array(items) = &resolved
+            && let Some(alternate) = alternate_label(document, items)
+        {
+            match &space {
+                Space::Separation(ink) => {
+                    page.alternates.insert(ink.clone(), alternate);
+                }
+                Space::DeviceN(inks) => {
+                    for ink in inks {
+                        page.alternates.insert(ink.clone(), alternate.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        page.spaces.insert(name.clone(), space);
+    }
+    Ok(page)
+}
+
+/// Read the alternate process space of a Separation/DeviceN array.
+fn alternate_label(document: &Document, items: &[Object]) -> Option<String> {
+    let value = items.get(2)?;
+    match resolve(document, value).ok()? {
+        Object::Name(name) => Some(name),
+        Object::Array(items) => Some(
+            items
+                .first()
+                .and_then(Object::as_name)
+                .unwrap_or("Array")
+                .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
+/// Read the page's overprint graphics states.
+fn overprint_states(
+    document: &Document,
+    resources: Option<&Dictionary>,
+) -> anyhow::Result<BTreeMap<String, OverprintState>> {
     let Some(resources) = resources else {
         return Ok(BTreeMap::new());
     };
-    let Some(colours) = resources.get("ColorSpace") else {
+    let Some(states) = resources.get("ExtGState") else {
         return Ok(BTreeMap::new());
     };
-    let Object::Dictionary(colours) = resolve(document, colours)? else {
+    let Object::Dictionary(states) = resolve(document, states)? else {
         return Ok(BTreeMap::new());
     };
-    let mut spaces = BTreeMap::new();
-    for (name, value) in &colours {
-        spaces.insert(name.clone(), space_of(document, value)?);
+    let mut out = BTreeMap::new();
+    for (name, value) in &states {
+        let Object::Dictionary(state) = resolve(document, value)? else {
+            continue;
+        };
+        let fill = matches!(state.get("op"), Some(Object::Boolean(true)));
+        let stroke = matches!(state.get("OP"), Some(Object::Boolean(true)));
+        let mode = match state.get("OPM") {
+            Some(Object::Integer(value)) if *value >= 0 => (*value).min(1) as u8,
+            _ => 0,
+        };
+        if fill || stroke {
+            out.insert(name.clone(), OverprintState { fill, stroke, mode });
+        }
     }
-    Ok(spaces)
+    Ok(out)
 }
 
 /// Map a colour-space object to a [`Space`].
-fn space_of(document: &Document, value: &Object) -> anyhow::Result<Space> {
-    let value = resolve(document, value)?;
+fn space_of_resolved(document: &Document, value: &Object) -> anyhow::Result<Space> {
     match value {
         Object::Name(name) => Ok(match name.as_str() {
             "DeviceGray" | "G" => Space::Gray,
@@ -316,13 +422,25 @@ enum Token {
 #[derive(Default)]
 struct Usage {
     operations: usize,
+    overprint: usize,
     pages: BTreeSet<usize>,
+}
+
+/// Record one paint operation on one plate.
+fn record(name: &str, page: usize, overprint: bool, usage: &mut BTreeMap<String, Usage>) {
+    let entry = usage.entry(name.to_owned()).or_default();
+    entry.operations += 1;
+    if overprint {
+        entry.overprint += 1;
+    }
+    entry.pages.insert(page);
 }
 
 /// Add one paint operation for `space`.
 fn paint(
     space: &Space,
     page: usize,
+    overprint: bool,
     usage: &mut BTreeMap<String, Usage>,
     rgb: &mut usize,
     gray: &mut usize,
@@ -330,28 +448,18 @@ fn paint(
     match space {
         Space::Cmyk => {
             for ink in ["Cyan", "Magenta", "Yellow", "Black"] {
-                let entry = usage.entry(ink.to_owned()).or_default();
-                entry.operations += 1;
-                entry.pages.insert(page);
+                record(ink, page, overprint, usage);
             }
         }
         Space::Gray => {
             *gray += 1;
-            let entry = usage.entry("Black".to_owned()).or_default();
-            entry.operations += 1;
-            entry.pages.insert(page);
+            record("Black", page, overprint, usage);
         }
         Space::Rgb => *rgb += 1,
-        Space::Separation(name) => {
-            let entry = usage.entry(name.clone()).or_default();
-            entry.operations += 1;
-            entry.pages.insert(page);
-        }
+        Space::Separation(name) => record(name, page, overprint, usage),
         Space::DeviceN(names) => {
             for name in names {
-                let entry = usage.entry(name.clone()).or_default();
-                entry.operations += 1;
-                entry.pages.insert(page);
+                record(name, page, overprint, usage);
             }
         }
         Space::Other => {}
@@ -372,18 +480,29 @@ fn named_space(spaces: &BTreeMap<String, Space>, name: &str) -> Space {
 }
 
 /// Scan one page's content streams.
+#[allow(clippy::too_many_arguments)]
 fn scan_page(
     document: &Document,
     page_index: usize,
     usage: &mut BTreeMap<String, Usage>,
     rgb: &mut usize,
     gray: &mut usize,
+    alternates: &mut BTreeMap<String, String>,
+    states: &mut BTreeMap<String, OverprintState>,
 ) -> anyhow::Result<()> {
     let page = document
         .page(page_index)
         .map_err(|error| anyhow::anyhow!("read page {}: {error}", page_index + 1))?;
     let resources = page_resources(document, page.id)?;
-    let spaces = colour_spaces(document, resources.as_ref())?;
+    let space_set = colour_spaces(document, resources.as_ref())?;
+    let spaces = space_set.spaces;
+    for (ink, alternate) in space_set.alternates {
+        alternates.entry(ink).or_insert(alternate);
+    }
+    let page_states = overprint_states(document, resources.as_ref())?;
+    for (name, state) in &page_states {
+        states.entry(name.clone()).or_insert(*state);
+    }
     let page_number = page_index + 1;
     for id in &page.contents {
         let Object::Stream { dictionary, data } = document
@@ -396,7 +515,9 @@ fn scan_page(
         let tokens = tokens(&bytes);
         let mut fill = Space::Gray;
         let mut stroke = Space::Gray;
-        let mut stack: Vec<(Space, Space)> = Vec::new();
+        let mut fill_overprint = false;
+        let mut stroke_overprint = false;
+        let mut stack: Vec<(Space, Space, bool, bool)> = Vec::new();
         let mut operands: Vec<&Token> = Vec::new();
         for token in &tokens {
             match token {
@@ -405,11 +526,31 @@ fn scan_page(
                 }
                 Token::Operator(op) => {
                     match op.as_str() {
-                        "q" => stack.push((fill.clone(), stroke.clone())),
+                        "q" => stack.push((
+                            fill.clone(),
+                            stroke.clone(),
+                            fill_overprint,
+                            stroke_overprint,
+                        )),
                         "Q" => {
-                            if let Some((fill_restored, stroke_restored)) = stack.pop() {
+                            if let Some((fill_restored, stroke_restored, fill_op, stroke_op)) =
+                                stack.pop()
+                            {
                                 fill = fill_restored;
                                 stroke = stroke_restored;
+                                fill_overprint = fill_op;
+                                stroke_overprint = stroke_op;
+                            }
+                        }
+                        "gs" => {
+                            if let Some(Token::Name(name)) = operands
+                                .iter()
+                                .rev()
+                                .find(|token| matches!(token, Token::Name(_)))
+                                && let Some(state) = page_states.get(name)
+                            {
+                                fill_overprint = state.fill;
+                                stroke_overprint = state.stroke;
                             }
                         }
                         "cs" | "CS" => {
@@ -432,22 +573,26 @@ fn scan_page(
                             } else {
                                 stroke = Space::Gray;
                             }
-                            paint(&Space::Gray, page_number, usage, rgb, gray);
+                            paint(&Space::Gray, page_number, fill_overprint, usage, rgb, gray);
                         }
                         "rg" | "RG" => {
-                            paint(&Space::Rgb, page_number, usage, rgb, gray);
+                            paint(&Space::Rgb, page_number, fill_overprint, usage, rgb, gray);
                         }
                         "k" | "K" => {
-                            paint(&Space::Cmyk, page_number, usage, rgb, gray);
+                            paint(&Space::Cmyk, page_number, fill_overprint, usage, rgb, gray);
                         }
                         "sc" | "scn" | "SC" | "SCN" => {
-                            let space = if op.starts_with('s') { &fill } else { &stroke };
+                            let (space, overprint) = if op.starts_with('s') {
+                                (&fill, fill_overprint)
+                            } else {
+                                (&stroke, stroke_overprint)
+                            };
                             if matches!(space, Space::Separation(_) | Space::DeviceN(_)) {
-                                paint(space, page_number, usage, rgb, gray);
+                                paint(space, page_number, overprint, usage, rgb, gray);
                             }
                         }
                         "sh" => {
-                            paint(&Space::Rgb, page_number, usage, rgb, gray);
+                            paint(&Space::Rgb, page_number, fill_overprint, usage, rgb, gray);
                         }
                         _ => {}
                     }
@@ -465,10 +610,20 @@ fn report(document: &Document, file: &Path) -> anyhow::Result<SeparationsReport>
         .pages()
         .map_err(|error| anyhow::anyhow!("read page tree: {error}"))?;
     let mut usage: BTreeMap<String, Usage> = BTreeMap::new();
+    let mut alternates: BTreeMap<String, String> = BTreeMap::new();
+    let mut states: BTreeMap<String, OverprintState> = BTreeMap::new();
     let mut rgb = 0;
     let mut gray = 0;
     for index in 0..pages.len() {
-        scan_page(document, index, &mut usage, &mut rgb, &mut gray)?;
+        scan_page(
+            document,
+            index,
+            &mut usage,
+            &mut rgb,
+            &mut gray,
+            &mut alternates,
+            &mut states,
+        )?;
     }
     let process_names = ["Cyan", "Magenta", "Yellow", "Black"];
     let inputs: Vec<SeparationInput> = if usage.is_empty() {
@@ -502,6 +657,8 @@ fn report(document: &Document, file: &Path) -> anyhow::Result<SeparationsReport>
                         name: separation.name.clone(),
                         process: separation.process,
                         operations: entry.map_or(0, |entry| entry.operations),
+                        overprint_operations: entry.map_or(0, |entry| entry.overprint),
+                        alternate: alternates.get(&separation.name).cloned(),
                         pages: entry
                             .map(|entry| entry.pages.iter().copied().collect())
                             .unwrap_or_default(),
@@ -511,12 +668,23 @@ fn report(document: &Document, file: &Path) -> anyhow::Result<SeparationsReport>
         })
         .unwrap_or_default();
     let descriptor = plates_descriptor(&plates);
+    let overprint_states: Vec<OverprintRow> = states
+        .into_iter()
+        .map(|(name, state)| OverprintRow {
+            name,
+            fill: state.fill,
+            stroke: state.stroke,
+            mode: state.mode,
+        })
+        .collect();
     Ok(SeparationsReport {
         file: file.display().to_string(),
         pages: pages.len(),
         plates,
         device_rgb_operations: rgb,
         device_gray_operations: gray,
+        alternates,
+        overprint_states,
         summary: plan.as_ref().map_or_else(
             || "separations: none".to_owned(),
             |plan| plan.summary.clone(),
@@ -557,8 +725,13 @@ pub(crate) fn separations(file: &Path, plate: Option<&str>, json: bool) -> anyho
             return Ok(());
         }
         println!(
-            "plate: {}  process: {}  operations: {}  pages: {:?}",
-            row.name, row.process, row.operations, row.pages
+            "plate: {}  process: {}  operations: {}  overprint: {}  alternate: {}  pages: {:?}",
+            row.name,
+            row.process,
+            row.operations,
+            row.overprint_operations,
+            row.alternate.as_deref().unwrap_or("-"),
+            row.pages
         );
         return Ok(());
     }
@@ -573,12 +746,56 @@ pub(crate) fn separations(file: &Path, plate: Option<&str>, json: bool) -> anyho
     println!("{}", report.summary);
     for row in &report.plates {
         println!(
-            "  {}  {}  {}  {} op(s)  pages {:?}",
+            "  {}  {}  {}  {} op(s)  overprint {}  alternate {}  pages {:?}",
             row.id,
             if row.process { "process" } else { "spot" },
             row.name,
             row.operations,
+            row.overprint_operations,
+            row.alternate.as_deref().unwrap_or("-"),
             row.pages
+        );
+    }
+    for state in &report.overprint_states {
+        println!(
+            "  overprint state {}  fill {}  stroke {}  mode {}",
+            state.name, state.fill, state.stroke, state.mode
+        );
+    }
+    println!("descriptor: {}", report.descriptor);
+    Ok(())
+}
+
+/// `pdfxi ink`: the ink-manager view (alternates and overprint counts).
+pub(crate) fn ink(file: &Path, json: bool) -> anyhow::Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let document = Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let report = report(&document, file)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!(
+        "file: {}  pages: {}  inks: {}",
+        report.file,
+        report.pages,
+        report.plates.len()
+    );
+    for row in &report.plates {
+        println!(
+            "  {}  {}  {} op(s)  overprint {}  alternate {}",
+            row.name,
+            if row.process { "process" } else { "spot" },
+            row.operations,
+            row.overprint_operations,
+            row.alternate.as_deref().unwrap_or("-")
+        );
+    }
+    for state in &report.overprint_states {
+        println!(
+            "  overprint state {}  fill {}  stroke {}  mode {}",
+            state.name, state.fill, state.stroke, state.mode
         );
     }
     println!("descriptor: {}", report.descriptor);

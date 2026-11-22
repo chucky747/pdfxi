@@ -1,0 +1,19 @@
+{
+  "id": "T-0338",
+  "lane": "convert",
+  "title": "Ink manager and overprint-preview host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0337"],
+  "owns": [
+    "crates/pdfxi-cli/src/separations.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0338.md",
+    "orchestration/feature-updates/T-0338.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli ink_ passes; pdfxi ink reports plates, spot alternates, ExtGState overprint states and overprint paint counts from real content; PRINT-005 moves to verified.",
+  "notes": "Extends the separations scan with /ExtGState overprint tracking and /Separation alternates, exposed as the pdfxi ink manager view.",
+  "evidence": "docs/evidence/cli/T-0338.md"
+}

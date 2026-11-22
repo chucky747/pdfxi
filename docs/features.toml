@@ -3575,28 +3575,47 @@ title = "Output preview and separations"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/separations.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0338.md",
     "crates/pdfxi-app/src/print.rs",
-    "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New N-up tests: n_up_row_and_column_orders_are_both_deterministic (3x2 row-major vs column-major, trailing blanks), n_up_rejects_invalid_grids_and_counts. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
+evidence = "docs/evidence/cli/T-0338.md"
 id = "PRINT-005"
 notes = """
-T-0150 adds n_up_imposition to pdfxi-app::print. A bounded NUpLayout (columns x
-rows, each <= 64) and an NUpOrder (RowMajor/ColumnMajor) assign logical pages to
-cells on each sheet; trailing cells are blank. Each placed page carries its
-DestinationCell and a cell_transform whose uniform scale fits the source page
-inside the margin-aware cell and whose translation places it at the cell origin.
-Zero/oversized grids, empty/oversized page counts, and invalid geometry are
-typed errors, and repeated builds are byte-identical.
+Verified through `pdfxi ink <INPUT.pdf> [--json]`.
 
-HOST BACKEND BOUNDARY: the host paints the N-up cells onto the sheet; the
-pre-existing ink-manager/overprint model on this id is unchanged.
+The host reads /Resources /ExtGState entries with /op, /OP and /OPM, tracks gs
+in the content stream so paint operators after a gs count as overprint
+operations on the painted plates, and resolves the alternate process space of
+/Separation and /DeviceN colour spaces. It reports every plate with
+process/spot, paint operations, overprint operations and alternate, plus the
+overprint states and the stable plan descriptor. The separations command gained
+the same additive fields without changing its existing output contract.
+
+Evidence: a real page with q /GS0 gs 0.1 0.2 0.3 0.4 k /CS0 cs 1 scn Q,
+/GS0 << /OP true /op true /OPM 1 >> and /CS0 [/Separation (Spot Orange)
+/DeviceCMYK 5 0 R] reports five plates (Black/Cyan/Magenta/Yellow plus the spot),
+each with 1 overprint operation, the spot alternate DeviceCMYK in the row and in
+the alternates map, and the GS0 state (fill true, stroke true, mode 1). A
+document without overprint states reports zero overprint operations and an empty
+state list while still resolving the alternate.
+
+Gates: cargo test -p pdfxi-cli ink_ = 2 passed; separations still 3 passed;
+whole workspace fmt/clippy/tests green.
+
+Scope: inspection/manager view only; no overprint simulation, ink editing or
+aliasing, ink limits or rendered proof. Overprint comes from explicit
+/ExtGState states selected by gs; implicit inheritance through forms and OPM
+blending are not simulated.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::ink_reports_alternates_and_overprint_counts",
+    "cli::ink_without_overprint_states_reports_zero_counts",
+    "cli::separations_reports_process_and_spot_plates",
     "print::impose_tests::n_up_row_and_column_orders_are_both_deterministic",
     "print::impose_tests::n_up_rejects_invalid_grids_and_counts",
 ]

@@ -433,6 +433,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show the ink-manager view: plates, alternates and overprint counts.
+    Ink {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Derive print plates (process and spot inks) from real page content.
     Separations {
         /// Path to the PDF file.
@@ -2846,6 +2854,7 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Ink { file, json } => separations::ink(&file, json),
         Command::Separations { file, plate, json } => {
             separations::separations(&file, plate.as_deref(), json)
         }

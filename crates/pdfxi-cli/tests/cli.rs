@@ -11541,6 +11541,93 @@ fn separations_reports_no_plates_for_colourless_content() {
     assert_eq!(value["descriptor"], "separations-plan/v1");
 }
 
+// ---------------------------------------------------------------------------
+// ink: alternates and overprint preview (T-0338)
+// ---------------------------------------------------------------------------
+
+/// A one-page PDF that paints CMYK and a spot ink under an overprint state.
+fn t0338_overprint_pdf() -> Vec<u8> {
+    let content = "q /GS0 gs 0.1 0.2 0.3 0.4 k /CS0 cs 1 scn Q";
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+             /Resources << /ColorSpace << /CS0 [/Separation (Spot Orange) /DeviceCMYK 5 0 R] >> \
+             /ExtGState << /GS0 << /OP true /op true /OPM 1 >> >> >> >>"
+                .to_owned(),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ),
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.5 1 0] /N 1 >>".to_owned(),
+        ],
+    )
+}
+
+#[test]
+fn ink_reports_alternates_and_overprint_counts() {
+    let pdf = TempPdf::new(&t0338_overprint_pdf());
+    let output = run(&["ink", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let plates = value["plates"].as_array().expect("plates");
+    assert_eq!(plates.len(), 5);
+    for plate in plates {
+        assert_eq!(
+            plate["overprint_operations"], 1,
+            "plate {} not overprinted: {plate}",
+            plate["name"]
+        );
+    }
+    let spot = plates
+        .iter()
+        .find(|plate| plate["name"] == "Spot Orange")
+        .expect("spot plate");
+    assert_eq!(spot["alternate"], "DeviceCMYK");
+    assert_eq!(value["alternates"]["Spot Orange"], "DeviceCMYK");
+    let states = value["overprint_states"].as_array().expect("states");
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0]["name"], "GS0");
+    assert_eq!(states[0]["fill"].as_bool(), Some(true));
+    assert_eq!(states[0]["stroke"].as_bool(), Some(true));
+    assert_eq!(states[0]["mode"], 1);
+}
+
+#[test]
+fn ink_without_overprint_states_reports_zero_counts() {
+    let pdf = TempPdf::new(&t0337_separations_pdf());
+    let output = run(&["ink", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let plates = value["plates"].as_array().expect("plates");
+    assert!(
+        plates
+            .iter()
+            .all(|plate| plate["overprint_operations"] == 0)
+    );
+    assert!(
+        value["overprint_states"]
+            .as_array()
+            .expect("states")
+            .is_empty()
+    );
+    let spot = plates
+        .iter()
+        .find(|plate| plate["name"] == "Spot Orange")
+        .expect("spot plate");
+    assert_eq!(spot["alternate"], "DeviceCMYK");
+
+    let text = run(&["ink", pdf.arg()]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    assert!(
+        stdout(&text).contains("Spot Orange  spot  1 op(s)  overprint 0  alternate DeviceCMYK"),
+        "{}",
+        stdout(&text)
+    );
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

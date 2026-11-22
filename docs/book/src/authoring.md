@@ -38,6 +38,7 @@ command.
 | Audio and video annotations | `MEDIA-001` | verified | `pdfxi-render::media` | `media list [--extract]` |
 | HTML5 media replacement for Flash | `MEDIA-002` | verified | `pdfxi-render::html5_media` | `media html5` |
 | Output preview and separations | `PRINT-004` | verified | `pdfxi-app::print::SeparationsPlan` + content scan | `separations [--plate]` |
+| Ink manager and overprint preview | `PRINT-005` | verified | `pdfxi-app::print` + `/ExtGState` scan | `ink` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -523,6 +524,21 @@ lists the pages that image each plate, and builds the canonical process-first
 (case-insensitive) and reports its operation count and pages. Device-RGB paint
 operations are reported separately because they have no fixed process plate.
 Nothing is rasterized, separated to files or proofed.
+
+The ink-manager view is:
+
+```text
+pdfxi ink <INPUT.pdf> [--json]
+```
+
+`ink` reports each plate with its process/spot class, paint operations and the
+number executed under an overprint graphics state, resolves each spot's
+alternate process space from the `/Separation` or `/DeviceN` array
+(`/DeviceCMYK` here), and lists the document's `/ExtGState` overprint states
+(`/op`, `/OP`, `/OPM`). Overprint counts come from `gs` selecting a state before
+a paint operator; an overprint preview can therefore tell which plates image
+content with overprint enabled. No overprint simulation or ink editing is
+performed.
 
 ## Page boxes and page operations
 
