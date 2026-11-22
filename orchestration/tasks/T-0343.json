@@ -1,0 +1,20 @@
+{
+  "id": "T-0343",
+  "lane": "convert",
+  "title": "Standard security handler host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0342"],
+  "owns": [
+    "crates/pdfxi-cli/src/protect.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/Cargo.toml",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0343.md",
+    "orchestration/feature-updates/T-0343.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli protect_ passes; pdfxi protect writes a real RC4/AES encrypted PDF that reopens with the password and unprotect restores the plaintext; SEC-002 moves to verified.",
+  "notes": "Hosts pdfxi_security protect_document/open_encrypted/remove_protection with a fail-closed reopen check; no secrets in output.",
+  "evidence": "docs/evidence/cli/T-0343.md"
+}

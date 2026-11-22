@@ -2653,29 +2653,56 @@ docs = [
     "crates/pdfxi-security/src/crypto/md5.rs",
     "crates/pdfxi-security/src/crypto/sha.rs",
     "crates/pdfxi-security/src/standard_handler.rs",
+    "crates/pdfxi-security/src/protect.rs",
+    "crates/pdfxi-security/src/encryption_writer.rs",
+    "crates/pdfxi-cli/src/protect.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/security/T-0036.md",
     "docs/evidence/security/T-0061.md",
+    "docs/evidence/cli/T-0343.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security (CARGO_TARGET_DIR=target/lanes/security): 104 passed, 0 failed, 0 ignored. cargo fmt/clippy (all-targets, -D warnings)/rustdoc (-D warnings) all clean. docs/evidence/security/T-0036.md and docs/evidence/security/T-0061.md"
+evidence = "docs/evidence/cli/T-0343.md"
 id = "SEC-002"
 notes = """
 Dependency-free FIPS 197 AES-128/192/256 with CBC and PKCS#7, RC4 40/128, RFC
 1321 MD5, and FIPS 180-4 SHA-256/384/512 are checked against published
-known-answer vectors and NIST SP 800-38A. The PDF standard security handler now
+known-answer vectors and NIST SP 800-38A. The PDF standard security handler
 covers revisions 2-6, including complete AES-256 (AESV3) revision 5 and 6
 object encryption/decryption with caller-supplied per-stream IVs, the hardened
 Algorithm 2.B hash, consistent /O /U /OE /UE /Perms values, and EncryptMetadata
-handling. Thirteen AES-256-focused regression tests were added by T-0061
-(93 -> 106 total), including an independent .NET AES-256-CBC fixed vector, an
-independent ISO 32000-2 revision 6 known-answer vector for /U /O /OE /UE
-/Perms and Algorithm 2.B (provenance recorded in the evidence), negative tests
-for wrong passwords, tampered /Perms, and malformed keys, and manual Debug
-redaction of dictionary byte fields.
-No unsafe code and no secrets logged. Reviewer sign-off and integrator snapshot
-are external orchestration steps.
+handling.
+
+T-0343 verifies the stack end to end through `pdfxi protect FILE --out PATH
+--password PW [--owner PW] [--method rc4-40|rc4-128|aes-128|aes-256]
+[--permissions all|none|read-only|LIST] [--revision N]
+[--encrypt-metadata BOOL] [--json]` and `pdfxi unprotect FILE --out PATH
+--password PW [--json]`. protect parses the input, refuses an already encrypted
+file, runs protect_document, then reopens the produced bytes with the user
+password and requires the same page count and first-page text length before
+writing (fail closed). unprotect runs remove_protection, re-parses the
+plaintext output with the core reader and refuses output that still declares
+/Encrypt. Permission names map onto ProtectPermissions/Permission and
+inconsistent grants are rejected by the typed validator. Passwords are used
+only for key derivation and never printed, logged or embedded in errors.
+
+Evidence: AES-256 with an owner password and read-only permissions writes a
+1,710-byte PDF that reopens as revision 6, 256-bit with print/accessibility/
+print-high, 1 page and the same 41 first-page characters; `pdfxi text` output is
+identical before protection and after unprotect, whose 1,057-byte output has no
+/Encrypt. rc4-40 round trips at revision 2 / 40 bits. A wrong password, double
+protection, annotate-without-modify, an unknown method and an empty password
+all fail with typed errors.
+
+Scope: standard security handler output only (password-based RC4/AES, revisions
+2-6, the eight standard permission grants). Not a rights management system, no
+certificate identity authentication, and a permission bit is not claimed to be
+enforceable against a malicious reader. Certificate encryption (SEC-003),
+digital IDs (SEC-004), CMS signing (SEC-005) and trust/revocation (SEC-007) stay
+separate rows.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
     "crypto::aes::tests::aes_key_expansion_matches_fips_197_appendix_b",
     "crypto::aes::tests::aes_matches_fips_197_appendix_c_block_vectors",
@@ -2696,6 +2723,9 @@ tests = [
     "standard_handler::tests::encrypt_metadata_false_changes_revision_4_file_key",
     "standard_handler::tests::revision_6_independent_known_answer_vector_authenticates",
     "standard_handler::tests::debug_redacts_dictionary_byte_fields",
+    "cli::protect_and_unprotect_round_trip",
+    "cli::protect_supports_legacy_rc4",
+    "cli::protect_rejects_encrypted_input_and_bad_options",
 ]
 title = "RC4 and AES encryption handlers"
 

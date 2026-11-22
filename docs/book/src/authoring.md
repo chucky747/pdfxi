@@ -43,6 +43,7 @@ command.
 | Shell integration and file associations | `PLAT-005` | verified | `pdfxi-core::association` | `shell plan/register/status/unregister` |
 | Browser integration | `PLAT-004` | verified | `pdfxi-core::browser_handoff` | `handoff open/parse/link` |
 | Electronic signature fields and workflows | `FORMS-010` | verified | `pdfxi-forms::signature` + `signing` | `signature create/plan/verify` |
+| RC4 and AES encryption handlers | `SEC-002` | verified | `pdfxi-security::protect` + `encryption_writer` | `protect` / `unprotect` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -616,6 +617,26 @@ scheme and traversal, and resolves the same plan. `link` builds the HTML
 and unsupported MIME types are typed errors. Nothing is fetched over the network
 by the command.
 
+### Password protection
+
+`SEC-002` (verified) hosts the standard security handler from
+`pdfxi_security::protect` and `encryption_writer`:
+
+```text
+pdfxi protect FILE --out PATH --password PW [--owner PW]
+    [--method rc4-40|rc4-128|aes-128|aes-256] [--permissions all|none|read-only|LIST]
+    [--revision N] [--encrypt-metadata BOOL] [--json]
+pdfxi unprotect FILE --out PATH --password PW [--json]
+```
+
+`protect` writes a revision 2-6 standard-handler dictionary with the chosen
+method and permission grants, then reopens its own output with the user password
+and requires the same page count and first-page text length before the file is
+written. `unprotect` decrypts with the user or owner password and refuses output
+that still declares `/Encrypt`. Permission grants are the eight standard bits
+(`print`, `modify`, `copy`, `annotate`, `fill`, `accessibility`, `assemble`,
+`print-high`); internally inconsistent sets are rejected. Passwords are used
+only for key derivation and never appear in output or errors.
 ### Electronic signature fields
 
 `FORMS-010` (verified) hosts the signature field and byte-range workflow from

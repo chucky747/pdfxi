@@ -12315,6 +12315,214 @@ fn signature_plan_rejects_documents_without_a_placeholder() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// protect: standard security handler (T-0343)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn protect_and_unprotect_round_trip() {
+    let dir = TempDir::new();
+    let out = dir.child("protected.pdf");
+    let plain = create_text_pdf("Protected round trip.");
+    let protected = run(&[
+        "protect",
+        plain.arg(),
+        "--out",
+        out.to_str().expect("out"),
+        "--password",
+        "test-password",
+        "--owner",
+        "owner-password",
+        "--permissions",
+        "read-only",
+        "--json",
+    ]);
+    assert!(protected.status.success(), "stderr: {}", stderr(&protected));
+    let value: Value = serde_json::from_str(&stdout(&protected)).expect("valid JSON");
+    assert_eq!(value["method"], "aes-256");
+    assert_eq!(value["revision"], 6);
+    assert_eq!(value["key_length_bits"], 256);
+    assert_eq!(value["owner_password"], true);
+    assert_eq!(value["pages"], 1);
+    assert!(value["first_page_chars"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(
+        value["permissions"],
+        serde_json::json!(["print", "accessibility", "print-high"])
+    );
+    let encrypted = fs::read(&out).expect("protected file");
+    assert!(
+        encrypted
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt"),
+        "the protected file has no /Encrypt entry"
+    );
+
+    let unprotect_out = dir.child("unprotected.pdf");
+    let unproteced = run(&[
+        "unprotect",
+        out.to_str().expect("out"),
+        "--out",
+        unprotect_out.to_str().expect("out"),
+        "--password",
+        "test-password",
+        "--json",
+    ]);
+    assert!(
+        unproteced.status.success(),
+        "stderr: {}",
+        stderr(&unproteced)
+    );
+    let value: Value = serde_json::from_str(&stdout(&unproteced)).expect("valid JSON");
+    assert_eq!(value["encrypted"], false);
+    assert_eq!(value["pages"], 1);
+    let decrypted = fs::read(&unprotect_out).expect("unprotected file");
+    assert!(
+        !decrypted
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt"),
+        "the unprotect output still has /Encrypt"
+    );
+    let document = pdfxi_core::Document::from_bytes(decrypted).expect("core parses the output");
+    assert_eq!(
+        document.page_text(0).expect("page text"),
+        "Protected round trip.\n"
+    );
+}
+
+#[test]
+fn protect_supports_legacy_rc4() {
+    let dir = TempDir::new();
+    let out = dir.child("rc4.pdf");
+    let plain = create_text_pdf("RC4 round trip.");
+    let protected = run(&[
+        "protect",
+        plain.arg(),
+        "--out",
+        out.to_str().expect("out"),
+        "--password",
+        "test-password",
+        "--method",
+        "rc4-40",
+        "--json",
+    ]);
+    assert!(protected.status.success(), "stderr: {}", stderr(&protected));
+    let value: Value = serde_json::from_str(&stdout(&protected)).expect("valid JSON");
+    assert_eq!(value["method"], "rc4-40");
+    assert_eq!(value["revision"], 2);
+    assert_eq!(value["key_length_bits"], 40);
+    assert_eq!(value["owner_password"], false);
+
+    let round_trip = dir.child("rc4-plain.pdf");
+    let unprotect = run(&[
+        "unprotect",
+        out.to_str().expect("out"),
+        "--out",
+        round_trip.to_str().expect("out"),
+        "--password",
+        "test-password",
+    ]);
+    assert!(unprotect.status.success(), "stderr: {}", stderr(&unprotect));
+    let document =
+        pdfxi_core::Document::from_bytes(fs::read(&round_trip).expect("output")).expect("parses");
+    assert_eq!(
+        document.page_text(0).expect("page text"),
+        "RC4 round trip.\n"
+    );
+}
+
+#[test]
+fn protect_rejects_encrypted_input_and_bad_options() {
+    let dir = TempDir::new();
+    let out = dir.child("protected.pdf");
+    let plain = create_text_pdf("Options.");
+    assert!(
+        run(&[
+            "protect",
+            plain.arg(),
+            "--out",
+            out.to_str().expect("out"),
+            "--password",
+            "test-password",
+        ])
+        .status
+        .success()
+    );
+
+    let already = run(&[
+        "protect",
+        out.to_str().expect("out"),
+        "--out",
+        dir.child("again.pdf").to_str().expect("out"),
+        "--password",
+        "test-password",
+    ]);
+    assert!(!already.status.success());
+    assert!(
+        stderr(&already).contains("already encrypted"),
+        "{}",
+        stderr(&already)
+    );
+
+    let wrong = run(&[
+        "unprotect",
+        out.to_str().expect("out"),
+        "--out",
+        dir.child("wrong.pdf").to_str().expect("out"),
+        "--password",
+        "not-the-password",
+    ]);
+    assert!(!wrong.status.success());
+    assert!(
+        stderr(&wrong).contains("password is incorrect"),
+        "{}",
+        stderr(&wrong)
+    );
+
+    let conflict = run(&[
+        "protect",
+        plain.arg(),
+        "--out",
+        dir.child("conflict.pdf").to_str().expect("out"),
+        "--password",
+        "test-password",
+        "--permissions",
+        "annotate",
+    ]);
+    assert!(!conflict.status.success());
+    assert!(
+        stderr(&conflict).contains("annotation requires modification"),
+        "{}",
+        stderr(&conflict)
+    );
+
+    let method = run(&[
+        "protect",
+        plain.arg(),
+        "--out",
+        dir.child("method.pdf").to_str().expect("out"),
+        "--password",
+        "test-password",
+        "--method",
+        "rot13",
+    ]);
+    assert!(!method.status.success());
+    assert!(
+        stderr(&method).contains("unknown method"),
+        "{}",
+        stderr(&method)
+    );
+
+    let empty = run(&[
+        "protect",
+        plain.arg(),
+        "--out",
+        dir.child("empty.pdf").to_str().expect("out"),
+        "--password",
+        "",
+    ]);
+    assert!(!empty.status.success());
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

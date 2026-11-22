@@ -32,6 +32,9 @@ pdfxi-accessibility = { workspace = true }
 # Typed AcroForm field builders and the standalone form serializer used by the
 # `form` command group. A workspace crate, so no external dependency.
 pdfxi-forms = { workspace = true }
+# Standard security handler: encrypting save and password removal (`protect`,
+# `unprotect`). The crate is dependency-light (thiserror + getrandom).
+pdfxi-security = { workspace = true }
 # Headless application models (home, read-aloud, navigation, print plans) used
 # by the management and accessibility hosts. Default features exclude the GUI
 # stack, so no egui/eframe/winit dependency enters the CLI.

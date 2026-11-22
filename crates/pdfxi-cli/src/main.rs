@@ -100,6 +100,8 @@ mod ops;
 mod plugin;
 /// pdfxi policy: deployment preferences and customization enforcement.
 mod policy;
+/// pdfxi protect/unprotect: standard security handler output.
+mod protect;
 /// pdfxi restyle: change font size, spacing, scaling and colour.
 mod restyle;
 /// pdfxi create scan: assemble scanned PNG pages into a PDF.
@@ -452,6 +454,49 @@ enum Command {
         /// Handoff action.
         #[command(subcommand)]
         command: HandoffCommand,
+    },
+    /// Write a password-protected PDF with the standard security handler.
+    Protect {
+        /// Input PDF.
+        file: PathBuf,
+        /// Output PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// User (open) password.
+        #[arg(long, value_name = "PASSWORD")]
+        password: String,
+        /// Owner (permissions) password.
+        #[arg(long, value_name = "PASSWORD")]
+        owner: Option<String>,
+        /// Method: `rc4-40`, `rc4-128`, `aes-128` or `aes-256`.
+        #[arg(long, default_value = "aes-256")]
+        method: String,
+        /// Permissions: `all`, `none`, `read-only` or a comma list.
+        #[arg(long, default_value = "all")]
+        permissions: String,
+        /// Security handler revision override.
+        #[arg(long, value_name = "N")]
+        revision: Option<u8>,
+        /// Encrypt document metadata.
+        #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+        encrypt_metadata: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove password protection from a PDF.
+    Unprotect {
+        /// Input PDF.
+        file: PathBuf,
+        /// Output PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// User or owner password.
+        #[arg(long, value_name = "PASSWORD")]
+        password: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Register, inspect or remove per-user file associations and the protocol.
     Shell {
@@ -3156,6 +3201,33 @@ fn run_cli() -> anyhow::Result<()> {
                 json,
             } => handoff::link(&file, fragment.as_deref(), json),
         },
+        Command::Protect {
+            file,
+            out,
+            password,
+            owner,
+            method,
+            permissions,
+            revision,
+            encrypt_metadata,
+            json,
+        } => protect::protect(
+            &file,
+            &out,
+            &password,
+            owner.as_deref(),
+            &method,
+            &permissions,
+            revision,
+            encrypt_metadata,
+            json,
+        ),
+        Command::Unprotect {
+            file,
+            out,
+            password,
+            json,
+        } => protect::unprotect(&file, &out, &password, json),
         Command::Shell { command } => match command {
             ShellCommand::Plan { exe, json } => shell::plan(exe.as_deref(), json),
             ShellCommand::Register { root, exe, json } => {
