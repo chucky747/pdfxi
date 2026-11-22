@@ -197,6 +197,8 @@ mod versions;
 // Optional-content layers (`layers`).
 mod layers;
 mod repair;
+/// `pdfxi action sequence`: run Action Wizard steps over real documents.
+mod sequence;
 
 use std::path::{Path, PathBuf};
 
@@ -1427,6 +1429,26 @@ enum ActionCommand {
         /// `--output-dir`. Security and custom-command steps are refused.
         #[arg(long)]
         execute: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run Action Wizard sequence steps over one or more real documents.
+    ///
+    /// Every input is parsed before any job runs. Steps execute in the order
+    /// given; a failing item never stops its siblings. Each succeeded item is
+    /// written to `<stem>.sequence.pdf` (or beneath `--out-dir`) and reparsed.
+    Sequence {
+        /// One or more input PDFs, in execution order.
+        #[arg(long, required = true, num_args = 1.., value_name = "PATH")]
+        input: Vec<PathBuf>,
+        /// Ordered step: `script:SOURCE`, `metadata:KEY=VALUE` or
+        /// `command:strip-metadata|normalize-boxes`.
+        #[arg(long = "step", required = true, value_name = "STEP")]
+        step: Vec<String>,
+        /// Directory for the written PDFs (defaults to each input's folder).
+        #[arg(long, value_name = "DIR")]
+        out_dir: Option<PathBuf>,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -4830,6 +4852,12 @@ fn run_cli() -> anyhow::Result<()> {
                 execute,
                 json,
             } => action::run_action(&file, &name, &input, output_dir.as_deref(), execute, json),
+            ActionCommand::Sequence {
+                input,
+                step,
+                out_dir,
+                json,
+            } => sequence::run_sequence_batch(&input, &step, out_dir.as_deref(), json),
         },
         Command::Droplet {
             action_file,

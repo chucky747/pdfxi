@@ -1,0 +1,19 @@
+{
+  "id": "T-0355",
+  "lane": "automation",
+  "title": "Real document runner for Action Wizard sequences",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0354"],
+  "owns": [
+    "crates/pdfxi-cli/src/sequence.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/automation/T-0355.md",
+    "orchestration/feature-updates/T-0355.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli action_sequence_ passes; pdfxi action sequence executes sandboxed scripts, /Info metadata writes and the documented document commands against real parsed PDFs through SequenceBatchQueue, writes and reparses each output, and isolates failures; AUTO-002 moves to verified.",
+  "notes": "Real SequenceStepRunner for the existing sequence batch queue. Custom plugin commands, interactive wizard editing and network operations remain out of scope.",
+  "evidence": "docs/evidence/automation/T-0355.md"
+}

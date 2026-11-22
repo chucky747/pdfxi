@@ -21,6 +21,7 @@ command.
 | Static form-field recognition | `FORMS-005` | verified | `pdfxi-forms::recognition` | `form recognize` |
 | Font size/spacing/colour restyle | `EDIT-002` | verified | `pdfxi-edit::restyle_run_text` | `restyle` |
 | Action Wizard create/edit/import/export | `AUTO-001` | verified | `pdfxi-automation::action_document` + real action operations | `action create` / `action run --execute` |
+| Batch processing and command sequences | `AUTO-002` | verified | `pdfxi-automation::sequence_batch` + sandboxed scripts | `action sequence` |
 | Alt text and table editor | `ACCESS-002` | verified | tagged structure `/XI_NodeId` entries | `accessibility alt` / `accessibility table` |
 | Tag tree and reading order editor | `ACCESS-001` | verified | tagged structure `/K` order | `accessibility order` / `accessibility move` |
 | PostScript export (positioned text subset) | `EXPORT-009` | verified | `pdfxi-convert::postscript` + `pdfxi-edit::text_blocks` | `export postscript` |
@@ -192,6 +193,23 @@ tab-delimited action file. `action run` without `--execute` is the staging mode
 stamps every page with the step text, and `export` writes the result beneath
 `--output-dir`; security and custom-command steps are refused with a typed
 message. `action list`/`action show` inspect the same files.
+Sequences of Action Wizard steps run over real documents as:
+
+```text
+pdfxi action sequence --input FILE.pdf [--input FILE.pdf ...]
+    --step STEP [--step ...] [--out-dir DIR] [--json]
+```
+
+Each `--step` is executed in order and is one of `script:SOURCE` (deterministic
+sandbox with the sequence budget), `metadata:KEY=VALUE` (`title`, `author`,
+`subject`, `keywords`, `creator`, `producer`, `creation-date`, `mod-date`) or
+`command:strip-metadata` / `command:normalize-boxes`. Every input is parsed
+before any job runs, items run in input order with failures isolated, and each
+succeeded item is written to `<stem>.sequence.pdf` (or beneath `--out-dir`),
+read back and reparsed. The report gives the state, completed steps, failure,
+output path, size and page count per item; the command exits non-zero if any
+item failed.
+
 Text restyling is exposed as:
 
 ```text

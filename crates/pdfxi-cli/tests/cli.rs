@@ -2515,6 +2515,193 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// action sequence: real document execution of wizard steps (T-0355)
+// ---------------------------------------------------------------------------
+
+/// The output path `action sequence` derives for one input.
+fn sequence_output(dir: &TempDir, input: &str) -> PathBuf {
+    let stem = Path::new(input)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "output".to_owned());
+    dir.child(&format!("{stem}.sequence.pdf"))
+}
+
+#[test]
+fn action_sequence_applies_real_document_steps() {
+    let roomy = TempPdf::new(&t0131_roomy_pdf());
+    let pages = TempPdf::new(&pdfxi_testkit::multipage_pdf(3));
+    let out = TempDir::new();
+    let view = run(&[
+        "action",
+        "sequence",
+        "--input",
+        roomy.arg(),
+        pages.arg(),
+        "--step",
+        "metadata:title=Quarterly Report",
+        "--step",
+        "metadata:author=PDFXI Test",
+        "--step",
+        "script:2 + 3;",
+        "--step",
+        "command:normalize-boxes",
+        "--out-dir",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(view.status.success(), "stderr: {}", stderr(&view));
+    let value: Value = serde_json::from_str(&stdout(&view)).expect("sequence JSON");
+    assert_eq!(value["sequence"], "cli-sequence");
+    assert_eq!(value["total"], 2);
+    assert_eq!(value["failed"], 0);
+    let jobs = value["jobs"].as_array().expect("jobs");
+    assert_eq!(jobs[0]["id"], "job-0");
+    assert_eq!(jobs[0]["state"], "succeeded");
+    assert_eq!(jobs[0]["steps_completed"].as_array().map(Vec::len), Some(4));
+    assert_eq!(jobs[1]["state"], "succeeded");
+    assert_eq!(jobs[1]["pages"], 3);
+    let first = sequence_output(&out, roomy.arg());
+    let second = sequence_output(&out, pages.arg());
+    assert!(first.exists(), "the output must be written");
+    assert!(second.exists(), "the output must be written");
+
+    let bytes = fs::read(&first).expect("read the sequence output");
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("output reparses");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    let info = document.info().expect("info").expect("Info dictionary");
+    assert_eq!(info.title.as_deref(), Some("Quarterly Report"));
+    assert_eq!(info.author.as_deref(), Some("PDFXI Test"));
+
+    // Steps are order sensitive: stripping after setting clears the title.
+    let stripped = run(&[
+        "action",
+        "sequence",
+        "--input",
+        roomy.arg(),
+        "--step",
+        "metadata:title=Transient",
+        "--step",
+        "command:strip-metadata",
+        "--out-dir",
+        out.arg(),
+    ]);
+    assert!(stripped.status.success(), "stderr: {}", stderr(&stripped));
+    assert!(stdout(&stripped).contains("out:"));
+    let bytes = fs::read(&first).expect("read the stripped output");
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("output reparses");
+    let info = document.info().expect("info").unwrap_or_default();
+    assert_eq!(info.title, None, "strip-metadata must remove the title");
+}
+
+#[test]
+fn action_sequence_isolates_failures_and_rejects_bad_input() {
+    let roomy = TempPdf::new(&t0131_roomy_pdf());
+    let out = TempDir::new();
+    let failed = run(&[
+        "action",
+        "sequence",
+        "--input",
+        roomy.arg(),
+        "--step",
+        "script:var = ;",
+        "--out-dir",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(!failed.status.success());
+    let value: Value = serde_json::from_str(&stdout(&failed)).expect("sequence JSON");
+    assert_eq!(value["failed"], 1);
+    assert_eq!(value["jobs"][0]["state"], "failed");
+    assert_eq!(value["jobs"][0]["failed_step"], "step-1");
+    assert!(
+        value["jobs"][0]["failure"]
+            .as_str()
+            .unwrap_or("")
+            .contains("parse error"),
+        "failure: {}",
+        value["jobs"][0]["failure"]
+    );
+    assert!(!sequence_output(&out, roomy.arg()).exists());
+
+    for (args, needle) in [
+        (
+            vec!["--input", roomy.arg(), "--step", "swipe:1"],
+            "unknown step",
+        ),
+        (
+            vec!["--input", roomy.arg(), "--step", "metadata:title"],
+            "must be KEY=VALUE",
+        ),
+        (
+            vec!["--input", roomy.arg(), "--step", "script:  "],
+            "empty source",
+        ),
+        (
+            vec!["--input", roomy.arg(), "--step", "command:  "],
+            "empty name",
+        ),
+        (
+            vec!["--input", roomy.arg(), "--step", "metadata:colour=red"],
+            "unknown metadata key",
+        ),
+        (
+            vec!["--input", roomy.arg(), "--step", "command:explode"],
+            "not allowed",
+        ),
+    ] {
+        let output = run(&[&["action", "sequence"], args.as_slice()].concat());
+        assert!(!output.status.success(), "args: {args:?}");
+        let combined = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(combined.contains(needle), "{needle}: {combined}");
+    }
+
+    let missing = TempDir::new().child("absent.pdf");
+    let output = run(&[
+        "action",
+        "sequence",
+        "--input",
+        missing.to_string_lossy().as_ref(),
+        "--step",
+        "metadata:title=X",
+    ]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("not readable"),
+        "{}",
+        stderr(&output)
+    );
+
+    let bad = TempPdf::new(b"not a pdf");
+    let output = run(&[
+        "action",
+        "sequence",
+        "--input",
+        bad.arg(),
+        "--step",
+        "metadata:title=X",
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("parse"), "{}", stderr(&output));
+
+    let output = run(&[
+        "action",
+        "sequence",
+        "--input",
+        roomy.arg(),
+        roomy.arg(),
+        "--step",
+        "metadata:title=X",
+    ]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("more than once"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // loupe: window-free magnifier and gestures (T-0353)
 // ---------------------------------------------------------------------------
 

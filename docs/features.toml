@@ -4380,31 +4380,56 @@ docs = [
     "crates/pdfxi-automation/src/action_wizard.rs",
     "crates/pdfxi-automation/src/lib.rs",
     "crates/pdfxi-cli/src/action.rs",
+    "crates/pdfxi-cli/src/sequence.rs",
+    "crates/pdfxi-cli/src/main.rs",
     "crates/pdfxi-automation/src/document.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/automation/T-0160.md",
+    "docs/evidence/automation/T-0355.md",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation: 198 passed, 0 failed (12 new sequence_batch::tests::* covering FIFO order, state-machine transitions, cancellation before/mid run, failure isolation, idempotence, empty queue and byte-stable reports), 0 doc tests; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0160.md."
+evidence = "docs/evidence/automation/T-0355.md"
 id = "AUTO-002"
 notes = """
-T-0160 adds `pdfxi_automation::sequence_batch`, a FIFO `SequenceBatchQueue`
-whose unit of work is the existing `ActionSequence` (complementing the older
-`Action`-based `BatchQueue`). `enqueue`/`dequeue` provide deterministic first-in
-first-out ordering; duplicate and unknown ids are typed errors. Each
-`SequenceBatchItem` follows a validated state machine
-(queued -> running|failed|cancelled, running -> succeeded|failed|cancelled,
-terminal states accept none). Cooperative cancellation uses the existing
-`CancelToken`: `cancel`/`cancel_all` mark queued items cancelled and mid-run
-cancellation keeps the steps completed before the signal. `run_all` validates
-each sequence, isolates failures to their own item, and is idempotent on
-terminal items. Step effects stay behind the injected `SequenceStepRunner`
-trait with a side-effect-free `RecordingRunner` default, so no I/O or real PDF
-mutation occurs. `SequenceBatchReport::summary` is byte-stable across runs. All
-public items have rustdoc; no new dependency, unsafe, or non-test panic. Prior
-T-0050 CLI batch evidence is retained below.
+T-0160 added pdfxi_automation::sequence_batch, a FIFO SequenceBatchQueue whose
+unit of work is the existing ActionSequence: deterministic enqueue/dequeue,
+typed duplicate/unknown-id errors, a validated item state machine, cooperative
+cancellation, failure isolation, idempotent run_all and a byte-stable summary.
+Step effects stayed behind the injected SequenceStepRunner trait with a
+side-effect-free RecordingRunner, so no real document mutation happened.
+
+T-0355 supplies the real runner and host. `pdfxi action sequence --input PATH
+[--input PATH ...] --step STEP [--step ...] [--out-dir DIR] [--json]` parses
+every input PDF before any job runs (readable file, size limit, real PDF,
+resolvable page tree, readable Info) and executes ordered steps through the real
+queue: `script:SOURCE` runs in the existing deterministic sandbox with the
+sequence budget; `metadata:KEY=VALUE` writes title, author, subject, keywords,
+creator, producer, creation-date or mod-date; `command:strip-metadata` and
+`command:normalize-boxes` mutate the document through pdfxi-core. Metadata steps
+accumulate against a per-document Info mirror because Document::info reads the
+original trailer and cannot see pending set_info writes. Every succeeded item is
+saved to <stem>.sequence.pdf (or --out-dir), read back, reparsed and reported;
+the input is never overwritten. JSON reports per job id, input, state, completed
+step ids, failing step, failure message, output path, bytes and reparsed pages,
+and the command exits non-zero when any item failed.
+
+Evidence: two real PDFs (one page, three pages) run metadata title/author, a
+script and normalize-boxes to succeeded with four steps each, outputs 730/747
+bytes reported as 1 and 3 pages, and the reparsed outputs carry the written Info.
+A later run sets a title then strips metadata, and the output has no title.
+An unknown metadata key fails only that item at step-1 with the typed message and
+writes no output. Missing/duplicate inputs, non-PDFs and malformed step tokens
+are rejected before or during the job as documented.
+
+Gates: CLI action_sequence_ tests 2 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: the sequence/batch model is user-reachable on real documents. Unbounded
+custom plugin commands, interactive Action Wizard editing and network operations
+remain outside this host and are not claimed.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "sequence_batch::tests::enqueue_dequeue_and_insertion_order",
     "sequence_batch::tests::duplicate_ids_and_unknown_ids_are_typed_errors",
@@ -4422,6 +4447,8 @@ tests = [
     "action_run_isolates_one_failing_file",
     "action_run_validates_before_any_job_runs",
     "action_run_json_has_stable_shape",
+    "cli::action_sequence_applies_real_document_steps",
+    "cli::action_sequence_isolates_failures_and_rejects_bad_input",
 ]
 title = "Batch processing and command sequences"
 
