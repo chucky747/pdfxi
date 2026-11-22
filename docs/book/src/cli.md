@@ -24,6 +24,8 @@ pdfxi <COMMAND> --help
 | `droplet <ACTION_FILE> <NAME> <INPUT>... [--json]` | Explorer-friendly `action run` | implemented, staging-only |
 | `portfolio <FILE> [--json] [--extract DIR]` | List or extract a portfolio collection | verified (`VIEW-014`) |
 | `compare <LEFT> <RIGHT> [--json] [--lines] [--fail-on-difference]` | Text compare of two revisions | verified (`VIEW-015`) |
+| `reflow <FILE> [--width N] [--page N] [--json]` | Reading-order text column | verified (`VIEW-013`) |
+| `read-aloud <FILE> [--wpm N] [--page N] [--seek N] [--json]` | Deterministic utterance queue | verified (`VIEW-013`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -51,6 +53,13 @@ Commands are integration-tested by invoking the real binary; see
   character and over-long path components per file instead of aborting.
 - `compare --fail-on-difference` exits `1` after printing the report when the
   documents differ; without it a difference still exits `0`.
+- `reflow --page` is **one-based**; `--width` is characters, `20..=200`
+  (default `80`), and a word longer than the width is kept whole rather than
+  split. Paragraphs break on blank lines; a single newline is a soft break.
+- `read-aloud` performs no speech or audio calls: it prints the queue a backend
+  would speak. Timings are integer milliseconds from `word_ms = 60000 / wpm`
+  (`80..=400`, default `180`), so the same document always yields the same
+  timings. `--seek N` starts at utterance `N` and rebases the clock to `0`.
 
 Exit codes:
 
@@ -78,6 +87,8 @@ pdfxi action run .\staging.act nightly --input .\fixtures\minimal.pdf --json
 pdfxi droplet .\staging.act nightly .\fixtures\minimal.pdf
 pdfxi portfolio .\fixtures\authoring\authoring-portfolio.pdf --extract .\portfolio
 pdfxi compare .\fixtures\realworld\powerpoint-slides.pdf .\revised.pdf --lines
+pdfxi reflow .\fixtures\realworld\powerpoint-slides.pdf --width 40 --page 1
+pdfxi read-aloud .\fixtures\realworld\powerpoint-slides.pdf --wpm 150 --seek 1 --json
 ```
 
 See [Automation](automation.md) for the action-file format and the staging-only

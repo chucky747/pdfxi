@@ -1,0 +1,20 @@
+{
+  "id": "T-0284",
+  "lane": "core",
+  "title": "Reflow and read-aloud hosts through the CLI",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0283"],
+  "owns": [
+    "crates/pdfxi-cli/src/reflow.rs",
+    "crates/pdfxi-cli/src/read_aloud.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0284.md",
+    "orchestration/feature-updates/T-0284.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli passes; pdfxi reflow wraps real page text to a bounded width and pdfxi read-aloud emits a contiguous fixed-point utterance queue with page filter and seek on real fixtures; VIEW-013 moves to verified.",
+  "notes": "Paragraph segmentation, greedy width-bounded wrapping, sentence chunking with slide-bullet boundaries, integer-millisecond cadence derived from --wpm, and seek rebasing. No audio device or speech engine is used.",
+  "evidence": "docs/evidence/cli/T-0284.md"
+}

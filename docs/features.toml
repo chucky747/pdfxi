@@ -350,14 +350,60 @@ tests = [
 title = "Full screen and presentation mode"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/reflow.rs, crates/pdfxi-app/src/read_aloud.rs, docs/evidence/app/T-0179.md"
+docs = [
+    "crates/pdfxi-cli/src/reflow.rs",
+    "crates/pdfxi-cli/src/read_aloud.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0284.md",
+]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0179.md"
+evidence = "docs/evidence/cli/T-0284.md"
 id = "VIEW-013"
-notes = "Paragraph segmentation, reading-order reflow lines and a deterministic utterance queue with fixed-point cadence, pause/resume/seek and typed errors. Host boundary: no TTS engine and no audio device; the host feeds utterances to a speech backend."
+notes = """
+Verified through the CLI host. `pdfxi reflow <FILE> [--width N] [--page N]
+[--json]` segments paragraphs on blank lines (a single newline is a soft break),
+greedily wraps each paragraph at word boundaries to `--width` characters
+(20..=200, default 80), and never splits a word. `--page` is one-based.
+
+`pdfxi read-aloud <FILE> [--wpm N] [--page N] [--seek N] [--json]` emits one
+utterance per sentence with integer-millisecond timing: `word_ms = 60000 / wpm`
+(80..=400, default 180), sentence pause `word_ms / 2`, page pause `word_ms * 2`,
+duration `words * word_ms`. `•` ends a sentence because the shipped slide
+fixtures use it as a bullet marker; `3.14` does not split because a terminator
+must be followed by whitespace or end of text. `--seek N` drops the first N
+utterances and rebases the remaining clock to 0 while keeping original indices;
+a seek past the end is a typed error. No speech engine or audio device is used.
+
+Evidence on fixtures/realworld/powerpoint-slides.pdf: reflow at width 40 gives
+two lines per page and `line_count: 6`; read-aloud at 180 wpm gives six
+utterances over 13983 ms with every `end_ms` equal to the next `start_ms`; seek 2
+keeps index 2 and restarts at 0 with total 9322 ms.
+
+Gates: cargo test -p pdfxi-cli (34 bin unit tests + 8 reflow/read-aloud
+integration tests, whole crate green), cargo clippy -p pdfxi-cli --all-targets
+-D warnings = 0, cargo fmt --all --check = 0.
+
+Scope kept honest: no TTS engine, no audio device and no read-along highlight; the
+CLI prints what a backend would be handed and when, and the desktop models are
+unchanged.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "reflow::tests::paragraphs_split_on_blank_lines_and_keep_soft_breaks_as_spaces",
+    "reflow::tests::wrapping_breaks_on_word_boundaries_and_never_splits_a_word",
+    "reflow::tests::sentences_split_on_terminators_and_slide_bullets",
+    "read_aloud::tests::cadence_is_integer_milliseconds_at_the_default_rate",
+    "read_aloud::tests::utterances_are_ordered_with_monotonic_fixed_point_times",
+    "read_aloud::tests::seek_rebases_the_clock_and_keeps_original_indices",
+    "cli::reflow_wraps_a_real_page_to_the_requested_width",
+    "cli::reflow_json_reports_every_page_and_line",
+    "cli::reflow_rejects_a_width_outside_the_range",
+    "cli::read_aloud_queue_is_ordered_and_fixed_point",
+    "cli::read_aloud_json_times_are_contiguous_and_complete",
+    "cli::read_aloud_seek_rebases_the_remaining_queue",
+    "cli::read_aloud_page_filter_limits_the_queue",
+    "cli::read_aloud_rejects_a_seek_past_the_end",
     "reflow::tests::segment_paragraphs_splits_on_blank_lines_and_keeps_soft_breaks",
     "read_aloud::tests::utterance_queue_is_deterministic_and_carries_reading_order",
     "read_aloud::tests::pause_resume_seek_and_stop_are_deterministic",

@@ -86,6 +86,10 @@ mod compare;
 mod links;
 /// `pdfxi portfolio`: list and extract a PDF portfolio collection.
 mod portfolio;
+/// `pdfxi read-aloud`: build the deterministic utterance queue.
+mod read_aloud;
+/// `pdfxi reflow`: lay page text out as a narrow reading column.
+mod reflow;
 // Optional-content layers (`layers`).
 mod layers;
 mod repair;
@@ -278,6 +282,46 @@ enum Command {
         /// Exit non-zero when the documents are not identical.
         #[arg(long)]
         fail_on_difference: bool,
+    },
+    /// Reflow a page's extracted text into a narrow reading column.
+    ///
+    /// The column width is plain character count: paragraphs are split on blank
+    /// lines and each paragraph is greedily wrapped at word boundaries. A word
+    /// longer than the width is kept whole, so a very long token can exceed it.
+    Reflow {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Column width in characters (20-200).
+        #[arg(long, default_value_t = reflow::default_width())]
+        width: usize,
+        /// One-based page to reflow; every page when omitted.
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build the deterministic utterance queue a speech backend would speak.
+    ///
+    /// No audio device or speech engine is used. Each sentence becomes one
+    /// utterance with integer-millisecond start, duration and trailing pause
+    /// derived from `--wpm`; `--seek` starts at an utterance and rebases the
+    /// clock, which is the scriptable form of seek.
+    ReadAloud {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Speaking rate in words per minute (80-400).
+        #[arg(long, default_value_t = read_aloud::default_wpm())]
+        wpm: u16,
+        /// One-based page to narrate; every page when omitted.
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Zero-based utterance to start from.
+        #[arg(long, default_value_t = 0)]
+        seek: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Manage the virtual PDF printer and capture one printed job.
     ///
@@ -850,6 +894,19 @@ fn main() -> anyhow::Result<()> {
             lines,
             fail_on_difference,
         } => compare::run_compare(&left, &right, json, lines, fail_on_difference),
+        Command::Reflow {
+            file,
+            width,
+            page,
+            json,
+        } => reflow::run_reflow(&file, width, page, json),
+        Command::ReadAloud {
+            file,
+            wpm,
+            page,
+            seek,
+            json,
+        } => read_aloud::run_read_aloud(&file, wpm, page, seek, json),
         Command::Pages { command } => match command {
             PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
             PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),

@@ -2753,6 +2753,172 @@ fn attachments_report_an_embedded_file() {
 }
 
 #[test]
+fn reflow_wraps_a_real_page_to_the_requested_width() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "reflow",
+        source.to_str().expect("utf-8 source"),
+        "--width",
+        "40",
+        "--page",
+        "1",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("page: 1"), "{text}");
+    assert!(text.contains("Lantern"), "{text}");
+    for line in text.lines() {
+        let body = line.trim_start();
+        if body.starts_with("page:") || body.starts_with("lines:") || body.is_empty() {
+            continue;
+        }
+        assert!(
+            body.chars().count() <= 40,
+            "line wider than 40 characters: {line:?}"
+        );
+    }
+    assert!(text.contains("lines: 2"), "{text}");
+}
+
+#[test]
+fn reflow_json_reports_every_page_and_line() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "reflow",
+        source.to_str().expect("utf-8 source"),
+        "--width",
+        "40",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["width"], 40);
+    assert_eq!(value["line_count"], 6);
+    let pages = value["pages"].as_array().expect("pages array");
+    assert_eq!(pages.len(), 3);
+    assert_eq!(pages[0]["page"], 1);
+    assert_eq!(pages[0]["paragraphs"], 1);
+    assert_eq!(pages[2]["page"], 3);
+    assert_eq!(
+        pages[2]["lines"][0],
+        "Meadow Slide•The meadow slide marker is"
+    );
+}
+
+#[test]
+fn reflow_rejects_a_width_outside_the_range() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "reflow",
+        source.to_str().expect("utf-8 source"),
+        "--width",
+        "10",
+    ]);
+    assert!(!output.status.success(), "10 columns must be rejected");
+    assert!(stderr(&output).contains("--width"), "{}", stderr(&output));
+}
+
+#[test]
+fn read_aloud_queue_is_ordered_and_fixed_point() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&["read-aloud", source.to_str().expect("utf-8 source")]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("utterance 0  page 1  0-832 ms  2 words"),
+        "{text}"
+    );
+    assert!(
+        text.contains("The lantern slide marker is the first landscape page."),
+        "{text}"
+    );
+    assert!(
+        text.contains("total: 6 utterance(s), 13983 ms at 180 wpm"),
+        "{text}"
+    );
+}
+
+#[test]
+fn read_aloud_json_times_are_contiguous_and_complete() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "read-aloud",
+        source.to_str().expect("utf-8 source"),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["wpm"], 180);
+    assert_eq!(value["word_ms"], 333);
+    assert_eq!(value["seek"], 0);
+    let utterances = value["utterances"].as_array().expect("utterances array");
+    assert_eq!(utterances.len(), 6);
+    assert_eq!(utterances[0]["start_ms"], 0);
+    for pair in utterances.windows(2) {
+        assert_eq!(
+            pair[0]["end_ms"], pair[1]["start_ms"],
+            "the queue must have no gaps or overlaps"
+        );
+    }
+    assert_eq!(
+        utterances.last().map(|row| &row["end_ms"]),
+        Some(&value["total_duration_ms"])
+    );
+    assert_eq!(utterances[3]["page"], 2);
+}
+
+#[test]
+fn read_aloud_seek_rebases_the_remaining_queue() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "read-aloud",
+        source.to_str().expect("utf-8 source"),
+        "--seek",
+        "2",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["seek"], 2);
+    assert_eq!(value["total_duration_ms"], 9322);
+    let utterances = value["utterances"].as_array().expect("utterances array");
+    assert_eq!(utterances.len(), 4);
+    assert_eq!(utterances[0]["index"], 2);
+    assert_eq!(utterances[0]["start_ms"], 0);
+    assert_eq!(utterances[0]["text"], "Harbor Slide");
+}
+
+#[test]
+fn read_aloud_page_filter_limits_the_queue() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "read-aloud",
+        source.to_str().expect("utf-8 source"),
+        "--page",
+        "2",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let utterances = value["utterances"].as_array().expect("utterances array");
+    assert_eq!(utterances.len(), 2);
+    assert!(utterances.iter().all(|row| row["page"] == 2));
+}
+
+#[test]
+fn read_aloud_rejects_a_seek_past_the_end() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let output = run(&[
+        "read-aloud",
+        source.to_str().expect("utf-8 source"),
+        "--seek",
+        "99",
+    ]);
+    assert!(!output.status.success(), "seek past the end must fail");
+    assert!(stderr(&output).contains("--seek 99"), "{}", stderr(&output));
+}
+
+#[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");
     let file = source.to_str().expect("utf-8 fixture");
