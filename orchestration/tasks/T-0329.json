@@ -1,0 +1,22 @@
+{
+  "id": "T-0329",
+  "lane": "convert",
+  "title": "Home state host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0328"],
+  "owns": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/pdfxi-cli/Cargo.toml",
+    "crates/pdfxi-cli/src/home.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0329.md",
+    "orchestration/feature-updates/T-0329.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli home_ passes; pdfxi home records, favorites and collects real documents in a bounded state file and reloads it; MANAGE-002 moves to verified.",
+  "notes": "Links pdfxi-app (default features) for the headless HomeModel; CLI owns the state file and path/title mapping.",
+  "evidence": "docs/evidence/cli/T-0329.md"
+}

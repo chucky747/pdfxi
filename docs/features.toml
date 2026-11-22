@@ -4287,14 +4287,48 @@ tests = [
 title = "Document properties and XMP metadata"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/home.rs, docs/evidence/app/T-0111.md"
+docs = [
+    "crates/pdfxi-cli/src/home.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0329.md",
+]
 domain = "Document Management"
-evidence = "docs/evidence/app/T-0111.md"
+evidence = "docs/evidence/cli/T-0329.md"
 id = "MANAGE-002"
-notes = "DocumentKey normalizes paths to a bounded identity key. HomeModel provides deduplicating, bounded recents (most-recent-first), favorites, and named collections, plus summary/badge helpers and a bounded, escaped, I/O-free text serialization with deterministic output and typed HomeError. Data is opaque to the model; the host performs all path I/O."
+notes = """
+Verified through `pdfxi home list --state STATE.txt [--json]`,
+`pdfxi home add FILE --state ...`, `pdfxi home favorite FILE [--remove]
+--state ...` and `pdfxi home collection NAME --state ... [--add FILE]
+[--remove FILE] [--delete] [--json]`.
+
+pdfxi-cli now depends on pdfxi-app with default features (no ui), so the
+headless HomeModel is linkable without egui/eframe/winit. add normalizes the
+path through DocumentKey::from_path, records the file stem as title and moves
+the key to the front of recents; favorite toggles by key; collection creates,
+adds/removes a member or deletes. The state file uses HomeModel::serialize (a
+bounded escaped newline format); a missing file starts empty and a malformed
+file is a typed error. JSON reports recents with ordinals, favorites and
+collections.
+
+Evidence: adding ps-src.pdf then restyled.pdf reports recents 2 with restyled
+first; favoriting ps-src reports favorites 1; creating Case files with ps-src
+reports one collection with one member; home list JSON shows the keys, titles,
+ordinals and members. Removing the favorite and deleting the collection reports
+0/0 and the recents persist. A missing document, an empty collection name and a
+garbage state file fail.
+
+Gates: cargo test -p pdfxi-cli --test cli home_ = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: a state file, not a GUI home screen; no document opening, thumbnails or
+metadata beyond the path. Model caps are 50 recents, 200 favorites, 64
+collections and 500 members.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::home_state_tracks_recents_favorites_and_collections",
+    "cli::home_rejects_bad_state_and_missing_documents",
     "home::tests::document_key_normalizes_separators_case_and_trailing_slash",
     "home::tests::recents_are_deduplicated_and_ordered_most_recent_first",
     "home::tests::recents_are_bounded_and_evict_least_recent",

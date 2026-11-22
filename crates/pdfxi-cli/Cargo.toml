@@ -32,6 +32,10 @@ pdfxi-accessibility = { workspace = true }
 # Typed AcroForm field builders and the standalone form serializer used by the
 # `form` command group. A workspace crate, so no external dependency.
 pdfxi-forms = { workspace = true }
+# Headless application models (home, read-aloud, navigation, print plans) used
+# by the management and accessibility hosts. Default features exclude the GUI
+# stack, so no egui/eframe/winit dependency enters the CLI.
+pdfxi-app = { path = "../pdfxi-app", version = "0.1.0" }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.
 pdfxi-render = { workspace = true, optional = true }

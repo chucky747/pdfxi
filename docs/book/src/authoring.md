@@ -28,6 +28,7 @@ command.
 | Cross-file search | `MANAGE-003` | verified | `pdfxi-core` page text + `pdfxi-text` search | `find-files` |
 | PDF Portfolio management | `MANAGE-004` | verified | `pdfxi-convert::portfolio_package` | `portfolio --out` with edit flags |
 | Unicode CJK and RTL analysis | `PLAT-007` | verified | `pdfxi-core::unicode` | `unicode analyze` |
+| Home recents, favorites, collections | `MANAGE-002` | verified | `pdfxi-app::home` | `home list/add/favorite/collection` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -50,6 +51,20 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+The home state is exposed as:
+
+```text
+pdfxi home list --state STATE.txt [--json]
+pdfxi home add FILE --state STATE.txt [--json]
+pdfxi home favorite FILE [--remove] --state STATE.txt [--json]
+pdfxi home collection NAME --state STATE.txt [--add FILE] [--remove FILE]
+    [--delete] [--json]
+```
+
+`HomeModel` keeps bounded, deduplicated recents (most-recent-first), favorites
+and named collections over normalized document keys. The CLI owns the state file
+using the model's escaped newline format; it records paths and display titles,
+and reports or edits the state without opening documents.
 Unicode analysis is exposed as:
 
 ```text

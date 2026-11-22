@@ -8549,6 +8549,161 @@ fn export_postscript_handles_pages_and_missing_inputs() {
 }
 
 #[test]
+fn home_state_tracks_recents_favorites_and_collections() {
+    let dir = TempDir::new();
+    let state = dir.child("home.txt");
+    let first = create_text_pdf("First home document.");
+    let second = create_text_pdf("Second home document.");
+
+    let added = run(&[
+        "home",
+        "add",
+        first.arg(),
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    let added = run(&[
+        "home",
+        "add",
+        second.arg(),
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    let favorite = run(&[
+        "home",
+        "favorite",
+        first.arg(),
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(favorite.status.success(), "stderr: {}", stderr(&favorite));
+    let collection = run(&[
+        "home",
+        "collection",
+        "Case files",
+        "--add",
+        first.arg(),
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(
+        collection.status.success(),
+        "stderr: {}",
+        stderr(&collection)
+    );
+
+    let listed = run(&[
+        "home",
+        "list",
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    let recents = value["recents"].as_array().expect("recents");
+    assert_eq!(recents.len(), 2);
+    assert!(
+        recents[0]["title"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("pdfxi-cli-path"),
+        "{recents:?}"
+    );
+    assert_eq!(value["favorites"].as_array().expect("favorites").len(), 1);
+    let collections = value["collections"].as_array().expect("collections");
+    assert_eq!(collections[0]["name"], "Case files");
+    assert_eq!(
+        collections[0]["members"].as_array().expect("members").len(),
+        1
+    );
+
+    let removed = run(&[
+        "home",
+        "favorite",
+        first.arg(),
+        "--remove",
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+    let deleted = run(&[
+        "home",
+        "collection",
+        "Case files",
+        "--delete",
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(deleted.status.success(), "stderr: {}", stderr(&deleted));
+    let value: Value = serde_json::from_str(&stdout(&deleted)).expect("valid JSON");
+    assert!(value["favorites"].as_array().expect("favorites").is_empty());
+    assert!(
+        value["collections"]
+            .as_array()
+            .expect("collections")
+            .is_empty()
+    );
+
+    let reloaded = run(&[
+        "home",
+        "list",
+        "--state",
+        state.to_str().expect("state"),
+        "--json",
+    ]);
+    assert!(reloaded.status.success(), "stderr: {}", stderr(&reloaded));
+    let value: Value = serde_json::from_str(&stdout(&reloaded)).expect("valid JSON");
+    assert_eq!(value["recents"].as_array().expect("recents").len(), 2);
+}
+
+#[test]
+fn home_rejects_bad_state_and_missing_documents() {
+    let dir = TempDir::new();
+    let state = dir.child("home.txt");
+
+    let missing = run(&[
+        "home",
+        "add",
+        dir.child("absent.pdf").to_str().expect("path"),
+        "--state",
+        state.to_str().expect("state"),
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("does not exist"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let empty_name = run(&[
+        "home",
+        "collection",
+        "",
+        "--state",
+        state.to_str().expect("state"),
+    ]);
+    assert!(!empty_name.status.success());
+
+    fs::write(&state, b"garbage\n").expect("write corrupt state");
+    let corrupt = run(&["home", "list", "--state", state.to_str().expect("state")]);
+    assert!(!corrupt.status.success());
+    assert!(
+        stderr(&corrupt).contains("malformed"),
+        "{}",
+        stderr(&corrupt)
+    );
+}
+
+#[test]
 fn unicode_analyze_reports_scripts_and_fallback() {
     let text = "hello \u{05e9}\u{05dc}\u{05d5}\u{05dd} \u{4e16}\u{754c}";
     let analyzed = run(&[

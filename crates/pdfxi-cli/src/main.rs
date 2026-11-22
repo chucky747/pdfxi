@@ -72,6 +72,8 @@ mod create_portfolio;
 mod export_postscript;
 /// pdfxi find-files: cross-file text search over a folder.
 mod find_files;
+/// pdfxi home: recents, favorites and collections over a state file.
+mod home;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
 mod ocr;
 /// pdfxi create office: convert an Office intake bundle into a PDF.
@@ -386,6 +388,12 @@ enum Command {
         /// Integration action.
         #[command(subcommand)]
         command: OfficeCommand,
+    },
+    /// Manage recent documents, favorites and collections in a state file.
+    Home {
+        /// Home action.
+        #[command(subcommand)]
+        command: HomeCommand,
     },
     /// Analyze scripts, bidi runs and font fallback for PDF text.
     ///
@@ -1842,6 +1850,65 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `home` command.
+#[derive(Debug, Subcommand)]
+enum HomeCommand {
+    /// List recents, favorites and collections.
+    List {
+        /// State file.
+        #[arg(long, value_name = "PATH")]
+        state: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Record a document as recently opened.
+    Add {
+        /// Document path.
+        file: PathBuf,
+        /// State file.
+        #[arg(long, value_name = "PATH")]
+        state: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add or remove a favorite.
+    Favorite {
+        /// Document path.
+        file: PathBuf,
+        /// State file.
+        #[arg(long, value_name = "PATH")]
+        state: PathBuf,
+        /// Remove the favorite instead of adding it.
+        #[arg(long)]
+        remove: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create, edit or delete a collection.
+    Collection {
+        /// Collection name.
+        name: String,
+        /// State file.
+        #[arg(long, value_name = "PATH")]
+        state: PathBuf,
+        /// Add a document to the collection.
+        #[arg(long, value_name = "PATH")]
+        add: Option<PathBuf>,
+        /// Remove a document from the collection.
+        #[arg(long, value_name = "PATH")]
+        remove: Option<PathBuf>,
+        /// Delete the collection.
+        #[arg(long)]
+        delete: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `unicode` command.
 #[derive(Debug, Subcommand)]
 enum UnicodeCommand {
@@ -2482,6 +2549,31 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Home { command } => match command {
+            HomeCommand::List { state, json } => home::list(&state, json),
+            HomeCommand::Add { file, state, json } => home::add(&file, &state, json),
+            HomeCommand::Favorite {
+                file,
+                state,
+                remove,
+                json,
+            } => home::favorite(&file, &state, remove, json),
+            HomeCommand::Collection {
+                name,
+                state,
+                add,
+                remove,
+                delete,
+                json,
+            } => home::collection(
+                &name,
+                &state,
+                add.as_deref(),
+                remove.as_deref(),
+                delete,
+                json,
+            ),
+        },
         Command::Unicode { command } => match command {
             UnicodeCommand::Analyze {
                 file,
