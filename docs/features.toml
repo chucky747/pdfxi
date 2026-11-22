@@ -3874,14 +3874,51 @@ tests = [
 title = "PDF Portfolio management"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/compare.rs, docs/evidence/app/T-0111.md"
+docs = [
+    "crates/pdfxi-cli/src/versions.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0300.md",
+]
 domain = "Document Management"
-evidence = "docs/evidence/app/T-0111.md"
+evidence = "docs/evidence/cli/T-0300.md"
 id = "MANAGE-005"
-notes = "TextSnapshot validates and sorts page-text snapshots. compare_snapshots produces deterministic Added/Removed/Changed hunks with page references and both texts, plus a CompareSummary and stable render_summary. No UI diff widget is required. Implemented in pdfxi-app due to lane permission scope."
+notes = """
+Verified through a new `pdfxi versions` group.
+
+The store is JSON `{version:1,next_id,snapshots:[{id,label,source,pages}]}` with
+one snapshot per revision; it is written through a sibling temp file and renamed,
+refuses an unknown format version, never reuses ids after remove, keeps at most
+256 snapshots and holds text only. `snapshot` opens the PDF with pdfxi-core,
+extracts normalised page text and validates pages/lines/line bytes against
+CompareOptions::default(). `list` prints ids, sources, page/line counts and
+labels. `diff` resolves each side as a snapshot id through --store or as a live
+PDF path, matches pages by index and calls pdfxi_edit::compare::compare_documents,
+reporting added/removed/changed hunks with one-based page, old/new line numbers
+and both texts plus a stable summary. `remove` deletes one id.
+
+Evidence: two create-text PDFs produce snapshots #1 (draft, 1 page, 4 lines) and
+#2 (5 lines); list shows both; diff 1 2 reports changed bravo->BRAVO and added
+extra with summary changed 1/added 1; diff file-vs-1 reports removed 1/changed 1;
+diff 2 vs the same file is identical with zero hunks; remove 1 leaves one
+snapshot; diff 9 reports 'no snapshot 9 ... (known: 2)'; an absent store lists
+zero snapshots. The real 3-page powerpoint-slides fixture snapshots with pages 3
+and self-diffs as identical.
+
+Gates: cargo test -p pdfxi-cli --test cli versions_ = 2 passed; cargo test
+-p pdfxi-cli --bin pdfxi versions = 2 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: snapshots, listing, diffing and removal are reachable on real PDFs with a
+persistent store; history is text-only, pages match by index, and there is no
+merge or restore.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::versions_snapshot_list_diff_and_remove",
+    "cli::versions_snapshot_real_world_document",
+    "versions::tests::store_defaults_and_validates_version",
+    "versions::tests::snapshot_line_count_sums_pages",
     "compare::tests::compare_detects_all_change_kinds_with_page_references",
     "compare::tests::compare_ignores_input_page_order",
     "compare::tests::equal_snapshots_produce_empty_report",

@@ -3381,6 +3381,173 @@ fn form_validate_and_calculate_use_typed_values() {
 }
 
 #[test]
+fn versions_snapshot_list_diff_and_remove() {
+    let left_text = TempPath::new("txt");
+    let right_text = TempPath::new("txt");
+    left_text.write(b"alpha\nbravo\ncharlie\ndelta\n");
+    right_text.write(b"alpha\nBRAVO\ncharlie\ndelta\nextra\n");
+    let left_pdf = TempOut::new("pdf");
+    let right_pdf = TempOut::new("pdf");
+    for (text, pdf) in [(&left_text, &left_pdf), (&right_text, &right_pdf)] {
+        let created = run(&["create", "text", text.arg(), pdf.arg()]);
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+    let store = TempPath::new("json");
+
+    let first = run(&[
+        "versions",
+        "snapshot",
+        left_pdf.arg(),
+        "--store",
+        store.arg(),
+        "--label",
+        "draft",
+        "--json",
+    ]);
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    let value: Value = serde_json::from_str(&stdout(&first)).expect("valid JSON");
+    assert_eq!(value["id"], 1);
+    assert_eq!(value["label"], "draft");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["lines"], 4);
+
+    let second = run(&[
+        "versions",
+        "snapshot",
+        right_pdf.arg(),
+        "--store",
+        store.arg(),
+        "--json",
+    ]);
+    assert!(second.status.success(), "stderr: {}", stderr(&second));
+    let value: Value = serde_json::from_str(&stdout(&second)).expect("valid JSON");
+    assert_eq!(value["id"], 2);
+    assert_eq!(value["lines"], 5);
+
+    let state = fs::read_to_string(&store.path).expect("store bytes");
+    assert!(state.contains("\"version\": 1"), "{state}");
+
+    let listed = run(&["versions", "list", "--store", store.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let rows: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    let rows = rows.as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["id"], 1);
+    assert_eq!(rows[0]["label"], "draft");
+    assert_eq!(rows[1]["id"], 2);
+
+    let diff = run(&[
+        "versions",
+        "diff",
+        "1",
+        "2",
+        "--store",
+        store.arg(),
+        "--json",
+    ]);
+    assert!(diff.status.success(), "stderr: {}", stderr(&diff));
+    let value: Value = serde_json::from_str(&stdout(&diff)).expect("valid JSON");
+    assert_eq!(value["identical"], false);
+    assert_eq!(value["summary"]["changed"], 1);
+    assert_eq!(value["summary"]["added"], 1);
+    assert_eq!(value["left"]["kind"], "snapshot");
+    assert_eq!(value["left"]["id"], 1);
+    assert_eq!(value["hunks"][0]["old_text"], "bravo");
+    assert_eq!(value["hunks"][0]["new_text"], "BRAVO");
+
+    let file_diff = run(&[
+        "versions",
+        "diff",
+        right_pdf.arg(),
+        "1",
+        "--store",
+        store.arg(),
+        "--json",
+    ]);
+    assert!(file_diff.status.success(), "stderr: {}", stderr(&file_diff));
+    let value: Value = serde_json::from_str(&stdout(&file_diff)).expect("valid JSON");
+    assert_eq!(value["left"]["kind"], "file");
+    assert_eq!(value["summary"]["removed"], 1);
+    assert_eq!(value["summary"]["changed"], 1);
+
+    let same = run(&[
+        "versions",
+        "diff",
+        "2",
+        right_pdf.arg(),
+        "--store",
+        store.arg(),
+        "--json",
+    ]);
+    assert!(same.status.success(), "stderr: {}", stderr(&same));
+    let value: Value = serde_json::from_str(&stdout(&same)).expect("valid JSON");
+    assert_eq!(value["identical"], true);
+    assert_eq!(value["summary"]["hunks"], 0);
+
+    let removed = run(&["versions", "remove", "1", "--store", store.arg(), "--json"]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+    let value: Value = serde_json::from_str(&stdout(&removed)).expect("valid JSON");
+    assert_eq!(value["removed"], 1);
+    assert_eq!(value["snapshots"], 1);
+
+    let after = run(&["versions", "list", "--store", store.arg(), "--json"]);
+    let rows: Value = serde_json::from_str(&stdout(&after)).expect("valid JSON");
+    assert_eq!(rows.as_array().expect("rows").len(), 1);
+
+    let unknown = run(&["versions", "diff", "9", "2", "--store", store.arg()]);
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("no snapshot 9"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    let empty = TempPath::new("json");
+    let empty_list = run(&["versions", "list", "--store", empty.arg(), "--json"]);
+    assert!(
+        empty_list.status.success(),
+        "stderr: {}",
+        stderr(&empty_list)
+    );
+    let rows: Value = serde_json::from_str(&stdout(&empty_list)).expect("valid JSON");
+    assert_eq!(rows.as_array().expect("rows").len(), 0);
+}
+
+#[test]
+fn versions_snapshot_real_world_document() {
+    let source = root_fixture("realworld/powerpoint-slides.pdf");
+    let store = TempPath::new("json");
+    let snapshot = run(&[
+        "versions",
+        "snapshot",
+        source.to_str().expect("utf-8"),
+        "--store",
+        store.arg(),
+        "--label",
+        "slides",
+        "--json",
+    ]);
+    assert!(snapshot.status.success(), "stderr: {}", stderr(&snapshot));
+    let value: Value = serde_json::from_str(&stdout(&snapshot)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert!(value["lines"].as_u64().unwrap_or(0) > 0);
+
+    let same = run(&[
+        "versions",
+        "diff",
+        "1",
+        source.to_str().expect("utf-8"),
+        "--store",
+        store.arg(),
+        "--json",
+    ]);
+    assert!(same.status.success(), "stderr: {}", stderr(&same));
+    let value: Value = serde_json::from_str(&stdout(&same)).expect("valid JSON");
+    assert_eq!(value["identical"], true);
+    assert_eq!(value["summary"]["hunks"], 0);
+}
+
+#[test]
 fn compare_hunks_report_line_changes_with_page_numbers() {
     let left_text = TempPath::new("txt");
     let right_text = TempPath::new("txt");

@@ -1,0 +1,19 @@
+{
+  "id": "T-0300",
+  "lane": "core",
+  "title": "Version snapshot store and history diff",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0299"],
+  "owns": [
+    "crates/pdfxi-cli/src/versions.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0300.md",
+    "orchestration/feature-updates/T-0300.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli versions_ and cargo test -p pdfxi-cli --bin pdfxi versions pass; pdfxi versions snapshot/list/diff/remove work on a JSON store of real page-text snapshots; MANAGE-005 moves to verified.",
+  "notes": "Adds a versioned JSON snapshot store (atomic writes, monotonic ids, bounded pages/lines) and diffs ids or live PDFs with pdfxi_edit::compare.",
+  "evidence": "docs/evidence/cli/T-0300.md"
+}

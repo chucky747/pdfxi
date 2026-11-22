@@ -109,6 +109,8 @@ mod read_aloud;
 mod reflow;
 /// `pdfxi update`: append an incremental revision with new information.
 mod update;
+/// `pdfxi versions`: store page-text snapshots and diff revisions.
+mod versions;
 // Optional-content layers (`layers`).
 mod layers;
 mod repair;
@@ -396,6 +398,12 @@ enum Command {
         /// The accessibility operation to perform.
         #[command(subcommand)]
         command: AccessibilityCommand,
+    },
+    /// Store page-text snapshots and diff revisions.
+    Versions {
+        /// The version-history operation to perform.
+        #[command(subcommand)]
+        command: VersionsCommand,
     },
     /// Append an incremental revision with updated document information.
     ///
@@ -1123,6 +1131,58 @@ enum AccessibilityCommand {
     },
 }
 
+/// Operations on the `pdfxi versions` command group.
+#[derive(Debug, Subcommand)]
+enum VersionsCommand {
+    /// Capture the page text of a PDF into the store.
+    Snapshot {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Version store to create or update.
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        /// Optional label for this revision.
+        #[arg(long, default_value = "")]
+        label: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the snapshots in a store.
+    List {
+        /// Version store to read.
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Diff two snapshots, or a snapshot and a PDF file.
+    Diff {
+        /// Left side: a snapshot id or a PDF path.
+        left: String,
+        /// Right side: a snapshot id or a PDF path.
+        right: String,
+        /// Version store used to resolve snapshot ids.
+        #[arg(long, value_name = "PATH")]
+        store: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a snapshot from the store.
+    Remove {
+        /// Snapshot id to remove.
+        id: u64,
+        /// Version store to update.
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Operations on the `pdfxi create` command group.
 #[derive(Debug, Subcommand)]
 enum CreateCommand {
@@ -1788,6 +1848,22 @@ fn main() -> anyhow::Result<()> {
                 lang,
                 json,
             } => accessibility::run_check(&file, title.as_deref(), lang.as_deref(), json),
+        },
+        Command::Versions { command } => match command {
+            VersionsCommand::Snapshot {
+                file,
+                store,
+                label,
+                json,
+            } => versions::run_snapshot(&file, &store, &label, json),
+            VersionsCommand::List { store, json } => versions::run_list(&store, json),
+            VersionsCommand::Diff {
+                left,
+                right,
+                store,
+                json,
+            } => versions::run_diff(&left, &right, store.as_deref(), json),
+            VersionsCommand::Remove { id, store, json } => versions::run_remove(id, &store, json),
         },
         Command::Update {
             file,

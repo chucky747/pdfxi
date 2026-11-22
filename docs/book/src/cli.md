@@ -54,6 +54,10 @@ pdfxi <COMMAND> --help
 | `form actions <FILE> [--json]` | Show accepted and rejected field actions | verified (`FORMS-004`) |
 | `accessibility check <FILE> [--title T] [--lang TAG] [--json]` | Check accessibility metadata and PDF/UA-1 structure | verified (`ACCESS-003`) |
 | `compare <LEFT> <RIGHT> --hunks [--json] [--fail-on-difference]` | Line-hunk version diff with page and line references | verified (`REVIEW-008`) |
+| `versions snapshot <FILE> --store PATH [--label L] [--json]` | Capture page text into a version store | verified (`MANAGE-005`) |
+| `versions list --store PATH [--json]` | List stored snapshots | verified (`MANAGE-005`) |
+| `versions diff <LEFT> <RIGHT> [--store PATH] [--json]` | Diff two snapshots or a snapshot and a PDF | verified (`MANAGE-005`) |
+| `versions remove <ID> --store PATH [--json]` | Remove a stored snapshot | verified (`MANAGE-005`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -122,7 +126,13 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `compare --hunks` uses the `pdfxi_edit::compare` line-hunk model instead of
+- `versions` keeps page-text snapshots in a small JSON store (`{"version":1,
+  "next_id":..., "snapshots":[...]}`) with monotonically increasing ids.
+  `snapshot` extracts normalised page text from a real PDF, `list` shows the
+  stored revisions, `diff` compares two ids or an id and a PDF path with the
+  same bounded line-hunk model as `compare --hunks`, and `remove` deletes a
+  revision without reusing its id. The store contains text only, is written
+  atomically, and refuses an unknown format version.- `compare --hunks` uses the `pdfxi_edit::compare` line-hunk model instead of
   page alignment: pages are matched by index and each `added`, `removed` or
   `changed` line carries its one-based page, old line, new line and both texts.
   Output is deterministic, `--json` exposes a summary (`added`, `removed`,
