@@ -7114,6 +7114,153 @@ fn structure_apply_writes_a_tagged_tree_on_a_real_page() {
 }
 
 #[test]
+fn accessibility_order_and_move_edit_reading_order() {
+    let source = root_fixture("minimal.pdf");
+    let tagged = TempOut::new("pdf");
+    let tree = TempPath::new("json");
+    tree.write(
+        br#"{"nodes":[
+            {"id":1,"role":"Document","page":0,"children":[2,3]},
+            {"id":2,"role":"P","page":0,"bbox":[72,700,400,730],"text":"Paragraph"},
+            {"id":3,"role":"Table","page":0,"children":[4,5]},
+            {"id":4,"role":"TH","page":0,"bbox":[72,650,200,670],"text":"Header"},
+            {"id":5,"role":"TD","page":0,"bbox":[72,620,200,640],"text":"Cell"}
+        ],"roots":[1]}"#,
+    );
+    let applied = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        tagged.arg(),
+        "--tree",
+        tree.arg(),
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+
+    let order = run(&["accessibility", "order", tagged.arg(), "--json"]);
+    assert!(order.status.success(), "stderr: {}", stderr(&order));
+    let value: Value = serde_json::from_str(&stdout(&order)).expect("valid JSON");
+    assert_eq!(value["count"], 5);
+    let ids: Vec<u64> = value["order"]
+        .as_array()
+        .expect("order")
+        .iter()
+        .filter_map(|row| row["node"].as_u64())
+        .collect();
+    assert_eq!(ids, [1, 2, 3, 4, 5]);
+
+    let moved = TempOut::new("pdf");
+    let move_table = run(&[
+        "accessibility",
+        "move",
+        tagged.arg(),
+        "--out",
+        moved.arg(),
+        "--node",
+        "3",
+        "--before",
+        "2",
+        "--json",
+    ]);
+    assert!(
+        move_table.status.success(),
+        "stderr: {}",
+        stderr(&move_table)
+    );
+    let value: Value = serde_json::from_str(&stdout(&move_table)).expect("valid JSON");
+    assert_eq!(value["order"], serde_json::json!([1, 3, 4, 5, 2]));
+    let reordered = run(&["accessibility", "order", moved.arg(), "--json"]);
+    assert!(reordered.status.success(), "stderr: {}", stderr(&reordered));
+    let value: Value = serde_json::from_str(&stdout(&reordered)).expect("valid JSON");
+    let ids: Vec<u64> = value["order"]
+        .as_array()
+        .expect("order")
+        .iter()
+        .filter_map(|row| row["node"].as_u64())
+        .collect();
+    assert_eq!(ids, [1, 3, 4, 5, 2]);
+
+    let end = TempOut::new("pdf");
+    let move_end = run(&[
+        "accessibility",
+        "move",
+        moved.arg(),
+        "--out",
+        end.arg(),
+        "--node",
+        "4",
+        "--json",
+    ]);
+    assert!(move_end.status.success(), "stderr: {}", stderr(&move_end));
+    let value: Value = serde_json::from_str(&stdout(&move_end)).expect("valid JSON");
+    assert_eq!(value["position"], 3);
+    assert_eq!(value["order"], serde_json::json!([1, 3, 5, 4, 2]));
+}
+
+#[test]
+fn accessibility_move_rejects_bad_targets() {
+    let source = root_fixture("minimal.pdf");
+    let tagged = TempOut::new("pdf");
+    let tree = TempPath::new("json");
+    tree.write(
+        br#"{"nodes":[
+            {"id":1,"role":"Document","page":0,"children":[2,3]},
+            {"id":2,"role":"P","page":0,"bbox":[72,700,400,730],"text":"Paragraph"},
+            {"id":3,"role":"Table","page":0,"children":[4]},
+            {"id":4,"role":"TD","page":0,"bbox":[72,600,200,620],"text":"Cell"}
+        ],"roots":[1]}"#,
+    );
+    let applied = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        tagged.arg(),
+        "--tree",
+        tree.arg(),
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+
+    let missing = run(&[
+        "accessibility",
+        "move",
+        tagged.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--node",
+        "99",
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("no structure element"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let not_sibling = run(&[
+        "accessibility",
+        "move",
+        tagged.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--node",
+        "2",
+        "--before",
+        "4",
+    ]);
+    assert!(!not_sibling.status.success());
+    assert!(
+        stderr(&not_sibling).contains("not a sibling"),
+        "{}",
+        stderr(&not_sibling)
+    );
+
+    let untagged = run(&["accessibility", "order", source.to_str().expect("utf-8")]);
+    assert!(!untagged.status.success());
+}
+
+#[test]
 fn accessibility_alt_and_table_edit_tagged_structure() {
     let source = root_fixture("minimal.pdf");
     let tagged = TempOut::new("pdf");

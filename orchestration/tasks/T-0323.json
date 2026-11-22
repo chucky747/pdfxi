@@ -1,0 +1,19 @@
+{
+  "id": "T-0323",
+  "lane": "author",
+  "title": "Tag tree and reading order editor host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0322"],
+  "owns": [
+    "crates/pdfxi-cli/src/a11y_edit.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0323.md",
+    "orchestration/feature-updates/T-0323.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli accessibility_ passes; pdfxi accessibility order prints a real tagged reading order and accessibility move reorders /K and verifies the new order; ACCESS-001 moves to verified.",
+  "notes": "Adds reading-order walk and /K sibling reorder over /XI_NodeId elements, with reopen verification.",
+  "evidence": "docs/evidence/cli/T-0323.md"
+}

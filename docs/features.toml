@@ -3605,14 +3605,46 @@ tests = [
 title = "Droplets hot folders and batch preflight"
 
 [[feature]]
-docs = "crates/pdfxi-accessibility/src/authoring.rs, docs/evidence/author/T-0177.md"
+docs = [
+    "crates/pdfxi-cli/src/a11y_edit.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0323.md",
+]
 domain = "Accessibility"
-evidence = "docs/evidence/author/T-0177.md"
+evidence = "docs/evidence/cli/T-0323.md"
 id = "ACCESS-001"
-notes = "Authoring plan, reading-order export (artifacts and artifact subtrees excluded) and structure round-trip projection now cover alt text, ActualText and expansion. Host boundary: no tag-tree/reading-order editor UI and no PDF byte writer; a host applies the projection through compose_page_content."
+notes = """
+Verified through `pdfxi accessibility order <FILE.pdf> [--json]` and
+`pdfxi accessibility move <FILE.pdf> --out OUT.pdf --node N [--before M]
+[--json]`.
+
+order walks the catalog /StructTreeRoot /K arrays in pre-order and prints one
+(node id, role) row per /XI_NodeId element. move finds the node's owning element
+or the tree root, removes it from the parent /K array, and reinserts it before
+the named sibling, or at the end when --before is omitted. The document is
+saved, reopened and the order is recomputed; the moved node must appear before
+the target.
+
+Evidence: a tagged paragraph + table reports count 5 and order
+[1 document, 2 paragraph, 3 table, 4 tableheader, 5 tabledata]; moving node 3
+before 2 reports position 1 and order [1,3,4,5,2], and re-reading the output
+confirms that order; moving node 4 to the end reports position 3 and order
+[1,3,5,4,2]. Unknown nodes, a non-sibling target and an untagged PDF fail with
+typed errors.
+
+Gates: cargo test -p pdfxi-cli --test cli accessibility_ = 6 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: reorders existing /XI_NodeId structure elements only; no node creation or
+deletion, role changes, marked-content association or GUI tree view.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::accessibility_order_and_move_edit_reading_order",
+    "cli::accessibility_move_rejects_bad_targets",
+    "cli::accessibility_alt_and_table_edit_tagged_structure",
+    "cli::accessibility_alt_and_table_reject_bad_targets",
     "structure::tests::mcid_allocation_is_dense_unique_and_excludes_artifacts_from_parent_tree",
     "structure::tests::nested_lists_and_tables_serialize_with_correct_hierarchy",
 ]

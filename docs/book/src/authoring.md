@@ -22,6 +22,7 @@ command.
 | Font size/spacing/colour restyle | `EDIT-002` | verified | `pdfxi-edit::restyle_run_text` | `restyle` |
 | Action Wizard create/edit/import/export | `AUTO-001` | verified | `pdfxi-automation::action_document` + real action operations | `action create` / `action run --execute` |
 | Alt text and table editor | `ACCESS-002` | verified | tagged structure `/XI_NodeId` entries | `accessibility alt` / `accessibility table` |
+| Tag tree and reading order editor | `ACCESS-001` | verified | tagged structure `/K` order | `accessibility order` / `accessibility move` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -44,6 +45,17 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Tagged reading order is edited with:
+
+```text
+pdfxi accessibility order <FILE.pdf> [--json]
+pdfxi accessibility move <FILE.pdf> --out <OUT.pdf> --node N [--before M] [--json]
+```
+
+`order` prints the pre-order reading order as `(node id, role)` rows.
+`move` removes the node from its parent's `/K` array and reinserts it before the
+named sibling, or at the end when `--before` is omitted; the output is reopened
+and the new order must place the node before its target.
 Tagged alt text and table scopes are edited with:
 
 ```text

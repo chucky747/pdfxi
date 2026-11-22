@@ -1590,6 +1590,31 @@ enum FormCommand {
 /// Operations on the `pdfxi accessibility` command group.
 #[derive(Debug, Subcommand)]
 enum AccessibilityCommand {
+    /// Print the structure-tree reading order.
+    Order {
+        /// Path to the tagged PDF.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move one structure element before a sibling (or to the end).
+    Move {
+        /// Path to the tagged PDF.
+        file: PathBuf,
+        /// Where to write the reordered document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// `/XI_NodeId` of the element to move.
+        #[arg(long, value_name = "N")]
+        node: u64,
+        /// Move before this sibling id; omit to move to the end.
+        #[arg(long, value_name = "N")]
+        before: Option<u64>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Set or clear `/Alt` text on one tagged structure element.
     Alt {
         /// Path to the tagged PDF.
@@ -2642,6 +2667,14 @@ fn main() -> anyhow::Result<()> {
             } => form::run_collect(&file, &responses, json),
         },
         Command::Accessibility { command } => match command {
+            AccessibilityCommand::Order { file, json } => a11y_edit::show_order(&file, json),
+            AccessibilityCommand::Move {
+                file,
+                out,
+                node,
+                before,
+                json,
+            } => a11y_edit::move_node(&file, &out, node, before, json),
             AccessibilityCommand::Alt {
                 file,
                 out,

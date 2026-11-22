@@ -267,3 +267,239 @@ pub(crate) fn set_scope(
     }
     Ok(())
 }
+
+/// Return the structure-tree root id and dictionary.
+fn structure_root(document: &Document) -> anyhow::Result<(ObjectId, Dictionary)> {
+    let root = document.root().context("read catalog")?;
+    let catalog = document
+        .object(root)
+        .context("read catalog object")?
+        .as_dictionary()
+        .cloned()
+        .context("catalog is not a dictionary")?;
+    let tree_id = catalog
+        .get("StructTreeRoot")
+        .and_then(Object::as_reference)
+        .context("the catalog has no /StructTreeRoot reference")?;
+    let tree = document
+        .object(tree_id)
+        .context("read /StructTreeRoot")?
+        .as_dictionary()
+        .cloned()
+        .context("/StructTreeRoot is not a dictionary")?;
+    Ok((tree_id, tree))
+}
+
+/// Recursively append one element and its children in reading order.
+fn walk_order(
+    document: &Document,
+    object: &Object,
+    order: &mut Vec<(u64, String)>,
+    visited: &mut HashSet<ObjectId>,
+) {
+    let Some(dictionary) = object.as_dictionary() else {
+        return;
+    };
+    if let Some(id) = integer(dictionary, "XI_NodeId")
+        && let Ok(id) = u64::try_from(id)
+    {
+        order.push((id, role_name(dictionary)));
+    }
+    if let Some(kids) = dictionary.get("K").and_then(Object::as_array) {
+        for kid in kids {
+            if let Some(reference) = kid.as_reference()
+                && visited.insert(reference)
+                && let Ok(object) = document.object(reference)
+            {
+                walk_order(document, &object, order, visited);
+            }
+        }
+    }
+}
+
+/// Collect the pre-order reading order as `(node id, role)` pairs.
+fn reading_order(document: &Document) -> anyhow::Result<Vec<(u64, String)>> {
+    let (_, tree) = structure_root(document)?;
+    let mut order = Vec::new();
+    let mut visited = HashSet::new();
+    if let Some(kids) = tree.get("K").and_then(Object::as_array) {
+        for kid in kids {
+            if let Some(reference) = kid.as_reference()
+                && visited.insert(reference)
+                && let Ok(object) = document.object(reference)
+            {
+                walk_order(document, &object, &mut order, &mut visited);
+            }
+        }
+    }
+    Ok(order)
+}
+/// Find the dictionary whose `/K` array directly references `child`.
+fn find_owner(
+    document: &Document,
+    child: ObjectId,
+) -> anyhow::Result<Option<(ObjectId, Dictionary)>> {
+    let (tree_id, tree) = structure_root(document)?;
+    if tree
+        .get("K")
+        .and_then(Object::as_array)
+        .is_some_and(|kids| kids.iter().any(|kid| kid.as_reference() == Some(child)))
+    {
+        return Ok(Some((tree_id, tree.clone())));
+    }
+    let mut stack: Vec<ObjectId> = tree
+        .get("K")
+        .and_then(Object::as_array)
+        .map(|kids| kids.iter().filter_map(Object::as_reference).collect())
+        .unwrap_or_default();
+    let mut visited = HashSet::new();
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Ok(object) = document.object(id) else {
+            continue;
+        };
+        let Some(dictionary) = object.as_dictionary() else {
+            continue;
+        };
+        if let Some(kids) = dictionary.get("K").and_then(Object::as_array) {
+            if kids.iter().any(|kid| kid.as_reference() == Some(child)) {
+                return Ok(Some((id, dictionary.clone())));
+            }
+            for kid in kids {
+                if let Some(reference) = kid.as_reference() {
+                    stack.push(reference);
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `pdfxi accessibility order`.
+pub(crate) fn show_order(file: &Path, json: bool) -> anyhow::Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let document = Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let order = reading_order(&document)?;
+    if json {
+        let rows: Vec<serde_json::Value> = order
+            .iter()
+            .map(|(id, role)| serde_json::json!({ "node": id, "role": role }))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "file": file.display().to_string(),
+                "count": rows.len(),
+                "order": rows,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("file: {}", file.display());
+    for (index, (id, role)) in order.iter().enumerate() {
+        println!("{index}\t{id}\t{role}");
+    }
+    println!("nodes: {}", order.len());
+    Ok(())
+}
+
+/// `pdfxi accessibility move`.
+pub(crate) fn move_node(
+    file: &Path,
+    out: &Path,
+    node: u64,
+    before: Option<u64>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let mut document = Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let (node_id, _) = find_element(&document, node)?
+        .with_context(|| format!("no structure element with /XI_NodeId {node}"))?;
+    let before_id = match before {
+        Some(before) => Some(
+            find_element(&document, before)?
+                .with_context(|| format!("no structure element with /XI_NodeId {before}"))?
+                .0,
+        ),
+        None => None,
+    };
+    let (owner_id, mut owner) = find_owner(&document, node_id)?
+        .with_context(|| format!("node {node} has no owning /K array"))?;
+    let mut kids: Vec<Object> = owner
+        .get("K")
+        .and_then(Object::as_array)
+        .map(<[Object]>::to_vec)
+        .context("owner /K is not an array")?;
+    let position = kids
+        .iter()
+        .position(|kid| kid.as_reference() == Some(node_id))
+        .context("owner /K does not contain the node")?;
+    let moved = kids.remove(position);
+    match before_id {
+        Some(before_id) => {
+            let index = kids
+                .iter()
+                .position(|kid| kid.as_reference() == Some(before_id))
+                .with_context(|| format!("node {before:?} is not a sibling"))?;
+            kids.insert(index, moved);
+        }
+        None => kids.push(moved),
+    }
+    owner.insert("K".to_owned(), Object::Array(kids));
+    document
+        .set_object(owner_id, Object::Dictionary(owner))
+        .context("write reordered /K")?;
+    let saved = document
+        .save()
+        .map_err(|error| anyhow::anyhow!("save {}: {error}", out.display()))?;
+    std::fs::write(out, &saved).with_context(|| format!("write {}", out.display()))?;
+
+    let reopened = Document::from_bytes(saved.clone())
+        .map_err(|error| anyhow::anyhow!("reopen {}: {error}", out.display()))?;
+    let order = reading_order(&reopened)?;
+    let node_index = order
+        .iter()
+        .position(|(id, _)| *id == node)
+        .with_context(|| format!("reopened order lost node {node}"))?;
+    if let Some(before) = before {
+        let before_index = order
+            .iter()
+            .position(|(id, _)| *id == before)
+            .with_context(|| format!("reopened order lost node {before}"))?;
+        if node_index >= before_index {
+            bail!("node {node} is not before {before} in the reopened order");
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "file": file.display().to_string(),
+                "out": out.display().to_string(),
+                "node": node,
+                "before": before,
+                "position": node_index,
+                "order": order.iter().map(|(id, _)| *id).collect::<Vec<u64>>(),
+                "bytes": saved.len(),
+            }))?
+        );
+        return Ok(());
+    }
+    println!("out: {}", out.display());
+    println!("node: {node}  before: {before:?}  position: {node_index}");
+    println!(
+        "order: {}",
+        order
+            .iter()
+            .map(|(id, _)| id.to_string())
+            .collect::<Vec<String>>()
+            .join(",")
+    );
+    println!("bytes: {}", saved.len());
+    Ok(())
+}
