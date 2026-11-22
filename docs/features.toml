@@ -5247,14 +5247,49 @@ tests = [
 title = "Windows desktop application"
 
 [[feature]]
-docs = "docs/PLATFORMS.md, .github/workflows/ci.yml, docs/evidence/platform-check.md"
+docs = [
+    "docs/PLATFORMS.md",
+    ".github/workflows/ci.yml",
+    "docs/evidence/platform-check.md",
+    "docs/evidence/platform/T-0354.md",
+    "crates/pdfxi-render/src/win_print.rs",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/Cargo.toml",
+]
 domain = "Platform"
-evidence = "docs/evidence/platform-check.md"
+evidence = "docs/evidence/platform/T-0354.md"
 id = "PLAT-002"
-notes = "Every workspace crate and test target compiles for x86_64-unknown-linux-gnu from the Windows host (CROSS=0), and CI runs Linux and macOS jobs with the windowing dependencies installed. The macOS job is CI-only; platform shell/registry integration stays host-specific and is covered by the PLAT-001/005/006 notes."
+notes = """
+PLAT-002 is the cross-platform build matrix. The previous Windows-hosted
+--target x86_64-unknown-linux-gnu check now fails in ring's build script because
+no Linux C toolchain is on PATH, so T-0354 verifies a native Linux build in the
+installed WSL Ubuntu 24.04 against the same canonical workspace: rustc 1.100.0,
+gcc 13.3.0, `RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=$PWD/target/linux-wsl
+cargo check --workspace --all-targets` finishes in 25.04s with EXIT 0 and no
+warnings. RUSTUP_TOOLCHAIN selects the Linux channel because rust-toolchain.toml
+pins the Windows GNU channel for the canonical host; the source tree is
+unchanged and the repository is not copied.
+
+Portability cleanup: in pdfxi-render/src/win_print.rs the Ordering,
+CancellationToken and PageIndex imports are now #[cfg(windows)] (used only by the
+Windows implementation); in pdfxi-app/src/print.rs the backend_tests super::*,
+PathBuf and AtomicBool imports are gated with the same windows+pdfium condition
+as their only user. In pdfxi-app/Cargo.toml, pdfxi-assistant, pdfxi-convert,
+pdfxi-core, pdfxi-document, pdfxi-edit, pdfxi-forms, pdfxi-security and time are
+used only by the ui shell modules, so they are optional and enabled by ui (and
+pdfium for the convert forwarding); default-feature builds report no unused
+dependencies. cargo check -p pdfxi-app --all-features still passes.
+
+Windows gates after the change: fmt 0, clippy -D warnings 0, workspace tests
+exit 0 with 79 green suites (print test skipped).
+
+macOS remains CI-only (macos-14); no macOS host exists in this workspace and none
+is claimed. Linux-specific shell/registry/installer behaviour stays the
+PLAT-001/005/006 host boundary.
+"""
 priority = "P3"
-status = "model"
-tests = ["cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu"]
+status = "verified"
+tests = ["cargo check --workspace --all-targets"]
 title = "macOS and Linux desktop builds"
 
 [[feature]]

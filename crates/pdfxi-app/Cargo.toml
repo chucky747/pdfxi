@@ -13,11 +13,23 @@ build = "build.rs"
 default = []
 # The native egui/eframe viewer shell. Default builds stay dependency-light;
 # enabling `ui` pulls in the GUI stack (winit, egui, and the raster upload path).
-ui = ["dep:eframe", "dep:egui", "dep:rfd"]
+ui = [
+    "dep:eframe",
+    "dep:egui",
+    "dep:rfd",
+    "dep:pdfxi-assistant",
+    "dep:pdfxi-convert",
+    "dep:pdfxi-document",
+    "dep:pdfxi-edit",
+    "dep:pdfxi-core",
+    "dep:pdfxi-forms",
+    "dep:pdfxi-security",
+    "dep:time",
+]
 # Enables the native PDFium backend inside `pdfxi-render`. This is independent
 # of `ui` so the raster cache can be exercised headlessly, and `ui` keeps working
 # without it by drawing the placeholder canvas.
-pdfium = ["pdfxi-render/pdfium", "pdfxi-convert/pdfium"]
+pdfium = ["pdfxi-render/pdfium", "dep:pdfxi-convert", "pdfxi-convert/pdfium"]
 
 [dependencies]
 # Rendering is a normal (non-optional) dependency: the dependency-light raster
@@ -25,23 +37,23 @@ pdfium = ["pdfxi-render/pdfium", "pdfxi-convert/pdfium"]
 # is pulled in only through the `pdfium` feature above.
 pdfxi-render = { workspace = true }
 pdfxi-text = { workspace = true }
-pdfxi-document = { workspace = true }
-pdfxi-core = { workspace = true }
-pdfxi-security = { workspace = true }
+pdfxi-document = { workspace = true, optional = true }
+pdfxi-core = { workspace = true, optional = true }
+pdfxi-security = { workspace = true, optional = true }
 # Export encoders used by the Export card (A-27). The app's `pdfium` feature
 # forwards `pdfxi-convert/pdfium` for PNG/JPEG export.
-pdfxi-convert = { workspace = true }
-pdfxi-edit = { path = "../pdfxi-edit", version = "0.1.0" }
+pdfxi-convert = { workspace = true, optional = true }
+pdfxi-edit = { path = "../pdfxi-edit", version = "0.1.0", optional = true }
 # AcroForm reading, filling and appearance regeneration (T-0234). The shell
 # calls these entry points and never parses a field dictionary itself.
-pdfxi-forms = { path = "../pdfxi-forms", version = "0.1.0" }
+pdfxi-forms = { path = "../pdfxi-forms", version = "0.1.0", optional = true }
 # OpenCode assistant client (T-0251). The shell calls its T-0251 API only; it
 # never builds a request or route of its own. T-0252 uses discovery, info,
 # provider and model listing; sessions arrive with T-0253.
-pdfxi-assistant = { workspace = true }
+pdfxi-assistant = { workspace = true, optional = true }
 # Calendar formatting and local offsets for annotation dates. MIT OR Apache-2.0.
 # `chrono` was removed after RUSTSEC-2026-0543 (unmaintained).
-time = { version = "0.3", default-features = false, features = [
+time = { version = "0.3", optional = true, default-features = false, features = [
     "std",
     "formatting",
     "macros",

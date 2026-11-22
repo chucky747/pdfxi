@@ -7,20 +7,25 @@ x64 with the GNU toolchain pinned in `rust-toolchain.toml`.
 |---|---|---|---|
 | Windows x86_64 GNU | yes | yes | canonical development host |
 | Windows x86_64 MSVC | CI job | CI job | `.github/workflows/ci.yml` |
-| Linux x86_64 | `cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu` | CI job (`ubuntu-latest`) | windowing crates need GTK/X11/Wayland headers |
+| Linux x86_64 | native check in WSL Ubuntu 24.04 | CI job (`ubuntu-latest`) | `target/linux-wsl`; windowing crates need GTK/X11/Wayland headers |
 | macOS aarch64 | CI job | CI job (`macos-14`) | no local host available in the canonical workspace |
 
-## Local cross-target check
+## Local Linux check
 
-```powershell
-rustup target add x86_64-unknown-linux-gnu
-$env:CARGO_TARGET_DIR='target/cross'
-cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu
+The Windows-hosted `--target x86_64-unknown-linux-gnu` check reaches `ring`'s C
+build script, which needs a Linux C toolchain. The verified local path is a
+native check in the installed WSL Ubuntu environment against the same canonical
+workspace:
+
+```bash
+wsl -d Ubuntu-24.04 -- bash -lc \
+  'cd /mnt/d/Documents/opencode-work && RUSTUP_TOOLCHAIN=stable \
+   CARGO_TARGET_DIR=$PWD/target/linux-wsl cargo check --workspace --all-targets'
 ```
 
-`cargo check` does not link, so no Linux linker is required. The check still
-compiles every crate and test target for the foreign target, which catches
-`cfg`-gated and pointer-width problems that a Windows-only build hides.
+It compiles every crate and test target for Linux and catches `cfg`-gated and
+pointer-width problems that a Windows-only build hides. See
+`evidence/platform/T-0354.md` for the recorded output.
 
 ## Renderer and OCR boundaries
 

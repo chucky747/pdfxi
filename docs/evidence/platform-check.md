@@ -38,3 +38,19 @@ see `docs/PLATFORMS.md`. Platform-specific shell, registry, and single-instance
 behaviour stays a host boundary and is recorded in the PLAT-001/005/006 notes.
 The macOS job is CI-only because no macOS host exists in the canonical
 workspace; it is not claimed as locally executed.
+
+## Native Linux re-check (T-0354)
+
+The Windows-hosted cross-target check above is superseded for `PLAT-002` by a
+native Linux check in WSL Ubuntu 24.04, because `ring`'s build script needs a
+Linux C toolchain. Portability-only unused imports were gated and the `ui`-only
+dependencies of `pdfxi-app` were made optional, so the default-feature check is
+warning-free:
+
+```text
+$ RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=$PWD/target/linux-wsl cargo check --workspace --all-targets
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.04s
+EXIT:0
+```
+
+Full evidence: `docs/evidence/platform/T-0354.md`.

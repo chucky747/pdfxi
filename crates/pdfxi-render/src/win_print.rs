@@ -15,9 +15,13 @@
 #![allow(unsafe_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(windows)]
+use std::sync::atomic::Ordering;
 
-use crate::{CancellationToken, Orientation, PageIndex, PageScaleMode, Renderer};
+#[cfg(windows)]
+use crate::{CancellationToken, PageIndex};
+use crate::{Orientation, PageScaleMode, Renderer};
 
 /// Errors returned by the print backend.
 #[derive(Debug, thiserror::Error)]

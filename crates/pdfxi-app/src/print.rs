@@ -3031,8 +3031,11 @@ pub use pdfxi_render::win_print::{
 
 #[cfg(test)]
 mod backend_tests {
+    #[cfg(all(windows, feature = "pdfium"))]
     use super::*;
+    #[cfg(all(windows, feature = "pdfium"))]
     use std::path::PathBuf;
+    #[cfg(all(windows, feature = "pdfium"))]
     use std::sync::atomic::AtomicBool;
 
     /// Print one page to the Microsoft Print to PDF driver and reopen the file.

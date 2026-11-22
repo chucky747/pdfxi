@@ -1,0 +1,20 @@
+{
+  "id": "T-0354",
+  "lane": "convert",
+  "title": "Linux build verification",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0353"],
+  "owns": [
+    "crates/pdfxi-render/src/win_print.rs",
+    "crates/pdfxi-app/src/print.rs",
+    "crates/pdfxi-app/Cargo.toml",
+    "docs/PLATFORMS.md",
+    "docs/evidence/platform-check.md",
+    "docs/evidence/platform/T-0354.md",
+    "orchestration/feature-updates/T-0354.toml"
+  ],
+  "acceptance": "A native x86_64-unknown-linux-gnu cargo check --workspace --all-targets finishes with exit 0 and no warnings in WSL Ubuntu; pdfxi-app default and all-feature builds pass; PLAT-002 moves to verified.",
+  "notes": "Native Linux check replaces the Windows cross-target path (ring needs a Linux C toolchain). UI-only deps are optional under the ui feature; Windows gates stay clean.",
+  "evidence": "docs/evidence/platform/T-0354.md"
+}
