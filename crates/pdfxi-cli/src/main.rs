@@ -70,6 +70,8 @@ mod create_portfolio;
 mod ocr;
 /// pdfxi create office: convert an Office intake bundle into a PDF.
 mod office;
+/// pdfxi office: plan and execute the Office integration contract.
+mod office_roundtrip;
 /// pdfxi ops: enumerate and resolve scriptable automation operations.
 mod ops;
 /// pdfxi plugin: plan plugin invocations and validate typed outputs.
@@ -347,6 +349,18 @@ enum Command {
         /// Write every attachment into this directory.
         #[arg(long, value_name = "DIR")]
         extract: Option<PathBuf>,
+    },
+    /// Plan or execute the Word/Excel/PowerPoint integration contract.
+    ///
+    /// `plan` validates the envelope and prints the deterministic adapter
+    /// steps; `convert` executes them and re-reads the output. `import-to-pdf`
+    /// turns Office-derived markup into a PDF; `pdf-to-office` turns recovered
+    /// page runs and tables into a DOCX/XLSX/PPTX archive. No Office process or
+    /// COM object is involved.
+    Office {
+        /// Integration action.
+        #[command(subcommand)]
+        command: OfficeCommand,
     },
     /// Browse or extract a PDF portfolio collection.
     ///
@@ -1591,6 +1605,30 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `office` command.
+#[derive(Debug, Subcommand)]
+enum OfficeCommand {
+    /// Validate the envelope and print the deterministic adapter steps.
+    Plan {
+        /// Integration manifest JSON.
+        manifest: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Execute the plan and re-read the written output.
+    Convert {
+        /// Integration manifest JSON.
+        manifest: PathBuf,
+        /// Destination PDF, DOCX, XLSX or PPTX.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Operations on the `pdfxi create` command group.
 #[derive(Debug, Subcommand)]
 enum CreateCommand {
@@ -1675,6 +1713,7 @@ enum CreateCommand {
         #[arg(long)]
         json: bool,
     },
+
     /// Convert an Office intake bundle into a PDF.
     ///
     /// The bundle JSON carries `kind` (`word`, `excel`, `powerpoint`), `title`
@@ -2732,6 +2771,16 @@ fn main() -> anyhow::Result<()> {
                 duplex,
                 json,
             } => scan::create_scan(&scans, &out, dpi, &duplex, json),
+        },
+        Command::Office { command } => match command {
+            OfficeCommand::Plan { manifest, json } => {
+                office_roundtrip::plan_office(&manifest, json)
+            }
+            OfficeCommand::Convert {
+                manifest,
+                out,
+                json,
+            } => office_roundtrip::convert_office(&manifest, &out, json),
         },
         Command::Export { command } => match command {
             ExportCommand::Tagged {

@@ -3751,6 +3751,185 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn office_plan_and_convert_import_to_pdf() {
+    let dir = TempDir::new();
+    let manifest = dir.path.join("import.json");
+    fs::write(
+        &manifest,
+        br#"{"family":"word","flow":"import-to-pdf","name":"Report","markup":"<h1>Report</h1><p>Hello integration.</p>"}"#,
+    )
+    .expect("write manifest");
+
+    let planned = run(&[
+        "office",
+        "plan",
+        manifest.to_str().expect("manifest path"),
+        "--json",
+    ]);
+    assert!(planned.status.success(), "stderr: {}", stderr(&planned));
+    let value: Value = serde_json::from_str(&stdout(&planned)).expect("valid JSON");
+    assert_eq!(value["family"], "Word");
+    assert_eq!(value["flow"], "import-to-pdf");
+    assert_eq!(value["output_name"], "report.pdf");
+    assert_eq!(value["page_count"], 1);
+    assert_eq!(value["block_count"], 2);
+    assert_eq!(value["executed"], false);
+    let steps = value["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0]["adapter"], "office_contract");
+    assert_eq!(steps[1]["adapter"], "office_import");
+    assert_eq!(steps[2]["adapter"], "create_from_text");
+
+    let out = TempOut::new("pdf");
+    let converted = run(&[
+        "office",
+        "convert",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(converted.status.success(), "stderr: {}", stderr(&converted));
+    let value: Value = serde_json::from_str(&stdout(&converted)).expect("valid JSON");
+    assert_eq!(value["executed"], true);
+    assert_eq!(value["verified"], "pdf");
+    assert_eq!(value["pdf_pages"], 1);
+    assert!(value["text_chars"].as_u64().unwrap_or(0) > 0);
+    let bytes = fs::read(&out.path).expect("integration PDF");
+    assert!(bytes.starts_with(b"%PDF-"));
+    let document = pdfxi_core::Document::from_bytes(bytes.clone()).expect("reopen PDF");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    let text = document.page_text(0).expect("page text");
+    assert!(text.contains("Hello integration."), "{text}");
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&[
+        "office",
+        "convert",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        again.arg(),
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second integration PDF"),
+        "import-to-pdf is deterministic"
+    );
+}
+
+#[test]
+fn office_convert_exports_ooxml_and_rejects_mismatches() {
+    let dir = TempDir::new();
+    let manifest = dir.path.join("export.json");
+    fs::write(
+        &manifest,
+        br#"{"family":"excel","flow":"pdf-to-office","name":"Book","pages":[
+            {"width":595,"height":842,"runs":[
+                {"text":"Region","x":40,"y":800,"font_size":11},
+                {"text":"Sales","x":140,"y":800,"font_size":11}
+            ],"tables":[{"name":"Data","rows":[["Region","Sales"],["West","42"]]}]}
+        ]}"#,
+    )
+    .expect("write manifest");
+
+    let out = TempOut::new("xlsx");
+    let converted = run(&[
+        "office",
+        "convert",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(converted.status.success(), "stderr: {}", stderr(&converted));
+    let value: Value = serde_json::from_str(&stdout(&converted)).expect("valid JSON");
+    assert_eq!(value["family"], "Excel");
+    assert_eq!(value["flow"], "pdf-to-office");
+    assert_eq!(value["output_name"], "book.xlsx");
+    assert_eq!(value["executed"], true);
+    assert_eq!(value["verified"], "ooxml");
+    assert_eq!(value["parts"][0], "xl/workbook.xml");
+    let bytes = fs::read(&out.path).expect("exported workbook");
+    assert!(bytes.starts_with(b"PK\x03\x04"));
+    assert!(
+        bytes
+            .windows(b"xl/workbook.xml".len())
+            .any(|window| window == b"xl/workbook.xml")
+    );
+
+    let wrong = run(&[
+        "office",
+        "convert",
+        manifest.to_str().expect("manifest path"),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!wrong.status.success());
+    assert!(
+        stderr(&wrong).contains("must have the .xlsx extension"),
+        "{}",
+        stderr(&wrong)
+    );
+
+    let unknown = dir.path.join("unknown.json");
+    fs::write(
+        &unknown,
+        br#"{"family":"visio","flow":"import-to-pdf","name":"T","markup":"<p>x</p>"}"#,
+    )
+    .expect("write unknown manifest");
+    let bad_family = run(&["office", "plan", unknown.to_str().expect("manifest path")]);
+    assert!(!bad_family.status.success());
+    assert!(
+        stderr(&bad_family).contains("unknown Office family"),
+        "{}",
+        stderr(&bad_family)
+    );
+
+    let missing_markup = dir.path.join("missing-markup.json");
+    fs::write(
+        &missing_markup,
+        br#"{"family":"word","flow":"import-to-pdf","name":"T"}"#,
+    )
+    .expect("write missing markup manifest");
+    let bad_payload = run(&[
+        "office",
+        "plan",
+        missing_markup.to_str().expect("manifest path"),
+    ]);
+    assert!(!bad_payload.status.success());
+    assert!(
+        stderr(&bad_payload).contains("requires a markup string"),
+        "{}",
+        stderr(&bad_payload)
+    );
+
+    let empty_pages = dir.path.join("empty-pages.json");
+    fs::write(
+        &empty_pages,
+        br#"{"family":"word","flow":"pdf-to-office","name":"T","pages":[]}"#,
+    )
+    .expect("write empty pages manifest");
+    assert!(
+        !run(&[
+            "office",
+            "plan",
+            empty_pages.to_str().expect("manifest path")
+        ])
+        .status
+        .success()
+    );
+
+    let malformed = dir.path.join("malformed.json");
+    fs::write(&malformed, b"not json").expect("write malformed manifest");
+    assert!(
+        !run(&["office", "plan", malformed.to_str().expect("manifest path")])
+            .status
+            .success()
+    );
+}
+
+#[test]
 fn create_portfolio_embeds_and_round_trips_files() {
     let dir = TempDir::new();
     let brief = dir.path.join("brief.txt");

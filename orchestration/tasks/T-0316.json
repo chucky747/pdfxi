@@ -1,0 +1,19 @@
+{
+  "id": "T-0316",
+  "lane": "convert",
+  "title": "Office integration plan and execute host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0315"],
+  "owns": [
+    "crates/pdfxi-cli/src/office_roundtrip.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0316.md",
+    "orchestration/feature-updates/T-0316.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli office passes; pdfxi office plan validates a real envelope and prints the adapter steps, and pdfxi office convert writes a PDF or OOXML archive that is re-read and verified; PLAT-003 moves to verified.",
+  "notes": "Hosts office_integration: family/flow manifest -> envelope -> plan -> execute; reopens PDFs and checks OOXML ZIP parts.",
+  "evidence": "docs/evidence/cli/T-0316.md"
+}

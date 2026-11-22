@@ -4410,52 +4410,49 @@ title = "macOS and Linux desktop builds"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/office_integration.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0182.md",
+    "crates/pdfxi-cli/src/office_roundtrip.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0316.md",
 ]
 domain = "Platform"
-evidence = "docs/evidence/convert/T-0182.md"
+evidence = "docs/evidence/cli/T-0316.md"
 id = "PLAT-003"
 notes = """
-Closes PLAT-003 at library level with `pdfxi_convert::office_integration`
-(ADR 0008 local file-level Office equivalent). This builds on the existing
-`office_contract`, `office_import`, `office_export_plan`, `office_export`,
-`extract_model` and `create_from_text` adapters; no new OOXML ZIP reader is
-introduced (the in-process writer in `office_export` is reused unchanged).
+Verified through `pdfxi office plan <MANIFEST.json> [--json]` and `pdfxi office
+convert <MANIFEST.json> --out OUTPUT [--json]`.
 
-Delivered:
-- A validated `IntegrationDescriptor` for the Word/Excel/PowerPoint families:
-  supported kinds, a sorted per-family input extension allowlist, and a
-  `RoundTripCapability` report per family (import-to-PDF and PDF-to-Office both
-  available, naming the concrete adapter chains used by each direction).
-- A deterministic `CompatibilityMatrix` (51 stable rows, 17 constructs x 3
-  families) recording, per construct, whether it survives import, whether it
-  survives export, and whether it is a typed unsupported finding or a typed
-  rejection. Fidelity loss is reported, never silently faked.
-- A single entry point, `plan_office_integration(&OfficeIntegrationEnvelope)`,
-  that validates a caller-supplied envelope and returns a typed
-  `OfficeIntegrationPlan` for `ImportToPdf` or `PdfToOffice`. `execute()`
-  reuses the existing adapters to produce PDF bytes (`create_from_text`) or a
-  validated OOXML archive (`office_export_plan` + `office_export`).
-- Typed rejection of path traversal, unsafe/reserved names, unexpected output
-  extensions, oversized markup/extracted envelopes, unknown families, payload/
-  flow mismatch, and content with no convertible text.
+The manifest declares the family (word/excel/powerpoint or extension), the flow
+(import-to-pdf or pdf-to-office), the output name, and either Office-derived
+markup or extracted pages with runs/tables. plan builds the envelope, calls
+plan_office_integration and prints family, flow, sanitized output name,
+page/block counts, typed unsupported findings and the ordered adapter steps
+without writing. convert executes the plan, enforces the flow's output
+extension, writes the bytes, then re-reads them: a PDF must start with %PDF-,
+parse through pdfxi-core and yield non-empty text; an OOXML archive must start
+with PK and contain the family part (word/document.xml, xl/workbook.xml or
+ppt/presentation.xml).
 
-Verified with 16 new tests: matrix and descriptor determinism, per-family
-round-trip capability, both execution directions producing %PDF/PK bytes for
-all three families, and negative validation/typed-unsupported cases.
+Evidence: a Word import plan lists office_contract validate-envelope,
+office_import map-markup-to-document and create_from_text write-pdf-bytes; the
+converted PDF reports executed true, 963 bytes, verified pdf, 1 page and 27
+text characters, and pdfxi text returns Report and Hello integration. An Excel
+export reports book.xlsx, executed true, 3455 bytes, verified ooxml and
+xl/workbook.xml. A .pdf destination for the Excel plan, an unknown family, a
+missing markup payload, empty pages and malformed JSON fail.
 
-Honest remaining scope is host-only and NOT claimed here: COM add-in, an
-installed Office ribbon, and an external Office/LibreOffice process. There is
-also no host file-drop event, no CLI/UI menu wiring, no OOXML ZIP reader beyond
-what already exists, and no real DOCX/XLSX/PPTX archive parsing. Per
-docs/ASSUMPTIONS.md item 12 the row is `verified` because every library-level
-capability is complete and the listed remainder is host-only integration.
+Gates: cargo test -p pdfxi-cli --test cli office = 4 passed including the two
+create office tests; whole workspace fmt/clippy/tests green.
+
+Scope: file-level integration only; no COM add-in, Office ribbon, external
+Office process, file-drop event or archive reader. Import output is a text-flow
+PDF and loses page boundaries and styling; export accepts only manifest runs and
+tables.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::office_plan_and_convert_import_to_pdf",
+    "cli::office_convert_exports_ooxml_and_rejects_mismatches",
     "office_integration::tests::descriptor_is_deterministic_and_covers_all_families",
     "office_integration::tests::compatibility_matrix_is_deterministic_and_complete",
     "office_integration::tests::matrix_reports_import_export_and_typed_unsupported_constructs",

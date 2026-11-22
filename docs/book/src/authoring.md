@@ -15,6 +15,7 @@ command.
 | PostScript and EPS (bounded subset) | `CREATE-013` | verified | `pdfxi-convert::postscript_ingest` + `postscript_pdf` | `create postscript` |
 | Office intake bundles (Word/Excel/PowerPoint) | `CREATE-006` | verified | `pdfxi-convert::office_contract` + `office_import` | `create office` |
 | PDF Portfolios from real files | `CREATE-010` | verified | `pdfxi-convert::portfolio_package` | `create portfolio` |
+| Office integration round trip | `PLAT-003` | verified | `pdfxi-convert::office_integration` | `office plan` / `office convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -37,6 +38,22 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+The Office integration contract is exposed as:
+
+```text
+pdfxi office plan <MANIFEST.json> [--json]
+pdfxi office convert <MANIFEST.json> --out <OUTPUT> [--json]
+```
+
+For `import-to-pdf`, the manifest is
+`{"family":"word","flow":"import-to-pdf","name":"Report","markup":"<h1>...</h1>"}`
+and the output is a PDF. For `pdf-to-office`, the manifest supplies recovered
+pages with runs and optional tables
+(`{"family":"excel","flow":"pdf-to-office","name":"Book","pages":[{"width":595,"height":842,"runs":[{"text":"Region","x":40,"y":800,"font_size":11}]}]}`)
+and the output is a DOCX/XLSX/PPTX archive matching the family. `plan` prints
+the deterministic adapter steps without writing; `convert` executes them,
+checks the output extension, and re-reads the result (PDF parse and text for
+import, ZIP signature and required OOXML part for export).
 Portfolio assembly is exposed as:
 
 ```text
