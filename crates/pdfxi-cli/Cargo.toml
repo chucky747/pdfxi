@@ -38,14 +38,16 @@ pdfxi-forms = { workspace = true }
 pdfxi-app = { path = "../pdfxi-app", version = "0.1.0" }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.
-pdfxi-render = { workspace = true, optional = true }
+# Backend-agnostic ICC colour management and output intents (`color`). Default
+# features keep the PDFium bindings out; the `pdfium` feature enables them.
+pdfxi-render = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 
 [features]
 default = []
 # Enable the `render` command's PDFium-backed rasterization.
-pdfium = ["dep:pdfxi-render", "pdfxi-render/pdfium"]
+pdfium = ["pdfxi-render/pdfium"]
 
 [dev-dependencies]
 pdfxi-testkit = { workspace = true }

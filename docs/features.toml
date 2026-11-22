@@ -3468,30 +3468,57 @@ title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/color.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0331.md",
     "crates/pdfxi-app/src/print.rs",
-    "crates/pdfxi-app/src/lib.rs",
     "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New booklet tests: booklet_spread_order_includes_blank_padding (4- and 5-page cases incl. blank padding), booklet_rejects_empty_and_oversized_page_counts. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
+evidence = "docs/evidence/cli/T-0331.md"
 id = "PRINT-003"
 notes = """
-T-0150 adds booklet_imposition to pdfxi-app::print. For n source pages the count
-is padded to a multiple of four with blank cells; sheet one's front is
-[last, first] and its back is [second, penultimate], stepping inward on each
-sheet. The plan lists every placed page with its DestinationCell (sheet, side,
-row, column) and a validated PageTransform, sorted by cell for determinism.
-Empty and oversized counts, invalid geometry, and excessive cell budgets return
-typed ImposeError variants.
+Verified through `pdfxi color icc <PROFILE.icc> [--json]`,
+`pdfxi color intents <INPUT.pdf> [--json]` and `pdfxi color convert
+<PROFILE.icc> [--space gray|rgb|cmyk] --values C1,C2,... [--json]`.
 
-HOST BACKEND BOUNDARY: the plan tells a host exactly which source pages to place
-in which half of which sheet side and at what scale/offset; folding, stapling,
-and printing are performed by the host backend. This is independent of the
-pre-existing ICC/output-intent parsing work recorded on this id.
+pdfxi-render is now an unconditional pdfxi-cli dependency with default features
+only; the pdfium feature still gates the native bindings. icc parses a real
+profile and reports size, version, CMM, class, data colour space, PCS, intent,
+tag count, description, white point and plan. intents reads the catalog
+/OutputIntents array, decodes each /DestOutputProfile stream through its /Filter
+and /DecodeParms chain, reports set issues and parses the usable profile.
+convert builds ConversionPlan::from_profile, wraps components in DeviceColor and
+returns PCS XYZ (rgb-matrix-trc), linear luminance (gray-gamma) or the identity;
+needs-backend profiles and Lab/CMYK transforms return typed errors instead of an
+approximation. Components are validated to 0..=1.
+
+Evidence: a synthetic ADBE v2.4 mntr/RGB/XYZ profile with a colourant matrix,
+gamma 2.2 TRCs and 8 tags reports size 382, plan rgb-matrix-trc and white point
+Y=1; the same bytes embedded as a GTS_PDFX /DestOutputProfile stream in a real
+PDF report intents 1, usable true, issues none and the parsed profile facts;
+RGB 0.2,0.5,0.8 converts to XYZ 0.1841,0.1997,0.4587 and gray 0.5 to 0.2176. A
+truncated profile, a PDF without intents, an unknown space, an out-of-range
+component and a CMYK value against a 3-component profile all fail with typed
+messages.
+
+Gates: cargo test -p pdfxi-cli color = 4 cli + 2 unit passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: one analytic path (RGB matrix/TRC to PCS XYZ, gray gamma to linear
+luminance, identity). No CMM/LUT rendering, Lab or CMYK conversion, no rendering
+or rewriting of page content, images or streams. The booklet-imposition model
+recorded by T-0150 on this id is unchanged.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::color_icc_reports_header_tags_and_plan",
+    "cli::color_intents_reads_embedded_profiles_from_real_pdfs",
+    "cli::color_convert_runs_the_analytic_plan",
+    "cli::color_rejects_bad_profiles_and_inputs",
+    "color::tests::spaces_and_components_are_validated",
+    "color::tests::filter_names_cover_the_core_variants",
     "print::impose_tests::booklet_spread_order_includes_blank_padding",
     "print::impose_tests::booklet_rejects_empty_and_oversized_page_counts",
 ]

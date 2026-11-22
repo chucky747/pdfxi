@@ -10365,6 +10365,325 @@ fn read_aloud_rejects_invalid_system_speech_requests() {
     assert!(stderr(&quoted).contains("quote"), "{}", stderr(&quoted));
 }
 
+// ---------------------------------------------------------------------------
+// color: ICC profiles and output intents (T-0331)
+// ---------------------------------------------------------------------------
+
+/// Write a big-endian four-character signature.
+fn t0331_sig(buf: &mut [u8], offset: usize, sig: &[u8; 4]) {
+    buf[offset..offset + 4].copy_from_slice(sig);
+}
+
+/// Write a big-endian `u32`.
+fn t0331_u32(buf: &mut [u8], offset: usize, value: u32) {
+    buf[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+}
+
+/// Write an ICC `s15Fixed16` number.
+fn t0331_fixed(buf: &mut [u8], offset: usize, value: f32) {
+    t0331_u32(buf, offset, (f64::from(value) * 65536.0) as u32);
+}
+
+/// An `XYZType` tag payload.
+fn t0331_xyz(x: f32, y: f32, z: f32) -> Vec<u8> {
+    let mut data = vec![0u8; 20];
+    t0331_sig(&mut data, 0, b"XYZ ");
+    t0331_fixed(&mut data, 8, x);
+    t0331_fixed(&mut data, 12, y);
+    t0331_fixed(&mut data, 16, z);
+    data
+}
+
+/// A single-entry `curv` tag payload.
+fn t0331_gamma(gamma: f32) -> Vec<u8> {
+    let mut data = vec![0u8; 14];
+    t0331_sig(&mut data, 0, b"curv");
+    t0331_u32(&mut data, 8, 1);
+    data[12..14].copy_from_slice(&((f64::from(gamma) * 256.0) as u16).to_be_bytes());
+    data
+}
+
+/// A `textDescriptionType` payload with only the ASCII section.
+fn t0331_desc(text: &str) -> Vec<u8> {
+    let ascii = text.as_bytes();
+    let mut data = vec![0u8; 12 + ascii.len() + 1];
+    t0331_sig(&mut data, 0, b"desc");
+    t0331_u32(&mut data, 8, (ascii.len() + 1) as u32);
+    data[12..12 + ascii.len()].copy_from_slice(ascii);
+    data
+}
+
+/// Assemble a synthetic ICC profile from tag payloads.
+fn t0331_profile(class: &[u8; 4], space: &[u8; 4], tags: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let mut cursor = 128 + 4 + tags.len() * 12;
+    let mut offsets = Vec::with_capacity(tags.len());
+    for (_, data) in tags {
+        offsets.push(cursor);
+        cursor += data.len();
+    }
+    let mut buf = vec![0u8; cursor];
+    t0331_u32(&mut buf, 0, cursor as u32);
+    t0331_sig(&mut buf, 4, b"ADBE");
+    t0331_sig(&mut buf, 8, b"\x02\x40\x00\x00");
+    t0331_sig(&mut buf, 12, class);
+    t0331_sig(&mut buf, 16, space);
+    t0331_sig(&mut buf, 20, b"XYZ ");
+    t0331_sig(&mut buf, 36, b"acsp");
+    t0331_u32(&mut buf, 64, 1);
+    t0331_fixed(&mut buf, 68, 0.9642);
+    t0331_fixed(&mut buf, 72, 1.0);
+    t0331_fixed(&mut buf, 76, 0.8249);
+    t0331_u32(&mut buf, 128, tags.len() as u32);
+    for (index, ((sig, data), offset)) in tags.iter().zip(offsets).enumerate() {
+        let base = 128 + 4 + index * 12;
+        t0331_sig(&mut buf, base, sig);
+        t0331_u32(&mut buf, base + 4, offset as u32);
+        t0331_u32(&mut buf, base + 8, data.len() as u32);
+        buf[offset..offset + data.len()].copy_from_slice(data);
+    }
+    buf
+}
+
+/// A synthetic RGB display profile with a colourant matrix and gamma TRCs.
+fn t0331_rgb_profile() -> Vec<u8> {
+    t0331_profile(
+        b"mntr",
+        b"RGB ",
+        &[
+            (*b"desc", t0331_desc("Synthetic sRGB-like")),
+            (*b"wtpt", t0331_xyz(0.9642, 1.0, 0.8249)),
+            (*b"rXYZ", t0331_xyz(0.4360, 0.2225, 0.0139)),
+            (*b"gXYZ", t0331_xyz(0.3851, 0.7169, 0.0971)),
+            (*b"bXYZ", t0331_xyz(0.1431, 0.0606, 0.7141)),
+            (*b"rTRC", t0331_gamma(2.2)),
+            (*b"gTRC", t0331_gamma(2.2)),
+            (*b"bTRC", t0331_gamma(2.2)),
+        ],
+    )
+}
+
+/// A synthetic gray print profile with one gamma TRC.
+fn t0331_gray_profile() -> Vec<u8> {
+    t0331_profile(
+        b"prtr",
+        b"GRAY",
+        &[
+            (*b"desc", t0331_desc("Synthetic gray gamma 2.2")),
+            (*b"wtpt", t0331_xyz(0.9642, 1.0, 0.8249)),
+            (*b"kTRC", t0331_gamma(2.2)),
+        ],
+    )
+}
+
+/// Assemble a classic-xref PDF from object bodies and one binary stream.
+fn t0331_stream_pdf(bodies: &[Vec<u8>], stream_object: usize, stream: &[u8]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n%PDFXI\n".to_vec();
+    let mut offsets = Vec::with_capacity(bodies.len() + 1);
+    for (index, body) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    offsets.push(out.len());
+    out.extend_from_slice(
+        format!(
+            "{stream_object} 0 obj\n<< /N 3 /Length {} >>\nstream\n",
+            stream.len()
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(stream);
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+    let xref = out.len();
+    let size = offsets.len() + 1;
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    out
+}
+
+/// A one-page PDF with a `GTS_PDFX` output intent carrying `icc`.
+fn t0331_intent_pdf(icc: &[u8]) -> Vec<u8> {
+    let bodies = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OutputIntents [4 0 R] >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+        b"<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (Synthetic RGB) \
+          /Info (Colour host fixture) /RegistryName (http://example.test) \
+          /DestOutputProfile 5 0 R >>"
+            .to_vec(),
+    ];
+    t0331_stream_pdf(&bodies, 5, icc)
+}
+
+#[test]
+fn color_icc_reports_header_tags_and_plan() {
+    let profile = TempPath::new("icc");
+    profile.write(&t0331_rgb_profile());
+    let output = run(&["color", "icc", profile.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let facts = &value["profile"];
+    assert_eq!(facts["version"], "2.4");
+    assert_eq!(facts["cmm"], "ADBE");
+    assert_eq!(facts["device_class"], "display");
+    assert_eq!(facts["colour_space"], "RGB ");
+    assert_eq!(facts["pcs"], "XYZ");
+    assert_eq!(facts["rendering_intent"], "relative-colorimetric");
+    assert_eq!(facts["tags"], 8);
+    assert_eq!(facts["description"], "Synthetic sRGB-like");
+    assert_eq!(facts["plan"], "rgb-matrix-trc");
+    let whitepoint = facts["whitepoint"].as_array().expect("whitepoint");
+    assert!((whitepoint[1].as_f64().expect("y") - 1.0).abs() < 1e-4);
+    assert!(
+        value["file"]
+            .as_str()
+            .is_some_and(|path| path.ends_with(".icc"))
+    );
+}
+
+#[test]
+fn color_intents_reads_embedded_profiles_from_real_pdfs() {
+    let icc = t0331_rgb_profile();
+    let pdf = TempPdf::new(&t0331_intent_pdf(&icc));
+    let output = run(&["color", "intents", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["intents"], 1);
+    assert_eq!(value["usable"], true);
+    assert!(value["issues"].as_array().expect("issues").is_empty());
+    let row = &value["rows"][0];
+    assert_eq!(row["subtype"], "GTS_PDFX");
+    assert_eq!(row["output_condition_identifier"], "Synthetic RGB");
+    assert_eq!(row["info"], "Colour host fixture");
+    assert_eq!(row["registry_name"], "http://example.test");
+    assert_eq!(row["profile_bytes"], icc.len());
+    assert_eq!(row["profile"]["plan"], "rgb-matrix-trc");
+    assert_eq!(row["profile"]["colour_space"], "RGB ");
+
+    let plain = create_text_pdf("No output intents here.");
+    let output = run(&["color", "intents", plain.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["intents"], 0);
+    assert_eq!(value["usable"], false);
+    assert_eq!(value["issues"][0], "missing");
+}
+
+#[test]
+fn color_convert_runs_the_analytic_plan() {
+    let rgb = TempPath::new("icc");
+    rgb.write(&t0331_rgb_profile());
+    let output = run(&[
+        "color",
+        "convert",
+        rgb.arg(),
+        "--space",
+        "rgb",
+        "--values",
+        "0.2,0.5,0.8",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["plan"], "rgb-matrix-trc");
+    assert_eq!(value["output_space"], "PCS-XYZ");
+    assert_eq!(value["input"], serde_json::json!([0.2, 0.5, 0.8]));
+    let converted = value["output"].as_array().expect("output");
+    assert_eq!(converted.len(), 3);
+    for (actual, expected) in converted.iter().zip([0.1841_f64, 0.1997, 0.4587]) {
+        assert!(
+            (actual.as_f64().expect("component") - expected).abs() < 1e-3,
+            "{converted:?}"
+        );
+    }
+
+    let gray = TempPath::new("icc");
+    gray.write(&t0331_gray_profile());
+    let output = run(&[
+        "color",
+        "convert",
+        gray.arg(),
+        "--space",
+        "gray",
+        "--values",
+        "0.5",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert!(
+        value["plan"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("gray-gamma:"),
+        "{value}"
+    );
+    let luminance = value["output"][0].as_f64().expect("luminance");
+    assert!((luminance - 0.5_f64.powf(2.2)).abs() < 1e-3, "{luminance}");
+}
+
+#[test]
+fn color_rejects_bad_profiles_and_inputs() {
+    let rgb = TempPath::new("icc");
+    let bytes = t0331_rgb_profile();
+    rgb.write(&bytes);
+
+    let truncated = TempPath::new("icc");
+    truncated.write(&bytes[..100]);
+    let output = run(&["color", "icc", truncated.arg()]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("truncated"), "{}", stderr(&output));
+
+    let unknown_space = run(&[
+        "color",
+        "convert",
+        rgb.arg(),
+        "--space",
+        "hsl",
+        "--values",
+        "0.1",
+    ]);
+    assert!(!unknown_space.status.success());
+    assert!(
+        stderr(&unknown_space).contains("unknown space"),
+        "{}",
+        stderr(&unknown_space)
+    );
+
+    let out_of_range = run(&["color", "convert", rgb.arg(), "--values", "1.5,0,0"]);
+    assert!(!out_of_range.status.success());
+    assert!(
+        stderr(&out_of_range).contains("outside 0..=1"),
+        "{}",
+        stderr(&out_of_range)
+    );
+
+    let mismatch = run(&[
+        "color",
+        "convert",
+        rgb.arg(),
+        "--space",
+        "cmyk",
+        "--values",
+        "0.1,0.2,0.3,0.4",
+    ]);
+    assert!(!mismatch.status.success());
+    assert!(
+        stderr(&mismatch).contains("expects 3 components"),
+        "{}",
+        stderr(&mismatch)
+    );
+
+    let missing = run(&["color", "icc", TempPath::new("icc").arg()]);
+    assert!(!missing.status.success());
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

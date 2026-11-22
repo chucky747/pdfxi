@@ -66,6 +66,8 @@ mod action;
 /// pdfxi accessibility alt/table: edit tagged structure entries.
 mod a11y_edit;
 mod api;
+/// pdfxi color: ICC profiles, output intents and analytic transforms.
+mod color;
 /// pdfxi create portfolio: assemble a PDF portfolio from real files.
 mod create_portfolio;
 /// pdfxi export postscript: positioned text subset as DSC PostScript.
@@ -388,6 +390,13 @@ enum Command {
         /// Integration action.
         #[command(subcommand)]
         command: OfficeCommand,
+    },
+    /// Inspect ICC profiles and output intents, and convert colours through a
+    /// profile's analytic plan.
+    Color {
+        /// Colour action.
+        #[command(subcommand)]
+        command: ColorCommand,
     },
     /// Manage recent documents, favorites and collections in a state file.
     Home {
@@ -1862,6 +1871,41 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `color` command.
+#[derive(Debug, Subcommand)]
+enum ColorCommand {
+    /// Validate one ICC profile file and report its header, tags and plan.
+    Icc {
+        /// ICC profile file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List `/OutputIntents` and validate the embedded destination profile.
+    Intents {
+        /// PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Convert one colour through a profile's analytic plan.
+    Convert {
+        /// ICC profile file.
+        profile: PathBuf,
+        /// Source space: `gray`, `rgb` or `cmyk`.
+        #[arg(long, default_value = "rgb")]
+        space: String,
+        /// Comma-separated normalised components in 0..=1.
+        #[arg(long, value_name = "C1,C2,...")]
+        values: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `home` command.
 #[derive(Debug, Subcommand)]
 enum HomeCommand {
@@ -2561,6 +2605,16 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Color { command } => match command {
+            ColorCommand::Icc { file, json } => color::icc(&file, json),
+            ColorCommand::Intents { file, json } => color::intents(&file, json),
+            ColorCommand::Convert {
+                profile,
+                space,
+                values,
+                json,
+            } => color::convert(&profile, &space, &values, json),
+        },
         Command::Home { command } => match command {
             HomeCommand::List { state, json } => home::list(&state, json),
             HomeCommand::Add { file, state, json } => home::add(&file, &state, json),

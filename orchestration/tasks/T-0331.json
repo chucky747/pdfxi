@@ -1,0 +1,21 @@
+{
+  "id": "T-0331",
+  "lane": "convert",
+  "title": "ICC colour host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0330"],
+  "owns": [
+    "crates/pdfxi-cli/Cargo.toml",
+    "Cargo.lock",
+    "crates/pdfxi-cli/src/color.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0331.md",
+    "orchestration/feature-updates/T-0331.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli color passes; pdfxi color icc/intents/convert read real ICC bytes and real /OutputIntents with an embedded profile stream, and run the analytic transform; PRINT-003 moves to verified.",
+  "notes": "Makes pdfxi-render an unconditional CLI dependency (default features only) to host ICC parsing, output-intent validation and the analytic conversion plan.",
+  "evidence": "docs/evidence/cli/T-0331.md"
+}

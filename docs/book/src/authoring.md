@@ -30,6 +30,7 @@ command.
 | Unicode CJK and RTL analysis | `PLAT-007` | verified | `pdfxi-core::unicode` | `unicode analyze` |
 | Home recents, favorites, collections | `MANAGE-002` | verified | `pdfxi-app::home` | `home list/add/favorite/collection` |
 | Read aloud with system speech | `ACCESS-005` | verified | `pdfxi-app::read_aloud` + Windows `System.Speech` | `read-aloud --voices` / `read-aloud --speak` |
+| ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -363,6 +364,27 @@ produces the same times. `--voices` lists the installed `System.Speech` voices;
 synthesizer's -10..10 scale. Voice names are validated before they are embedded
 in the synthesizer invocation. No bundled TTS engine is used, and no audio is
 produced unless `--speak` is given.
+
+### ICC profiles and output intents
+
+`PRINT-003` (verified) hosts the colour model in `pdfxi_render::color`:
+
+```text
+pdfxi color icc <PROFILE.icc> [--json]
+pdfxi color intents <INPUT.pdf> [--json]
+pdfxi color convert <PROFILE.icc> [--space gray|rgb|cmyk] --values C1,C2,... [--json]
+```
+
+`color icc` parses a real ICC file and reports its size, version, CMM, device
+class, data colour space, profile connection space, rendering intent, tag count,
+ASCII description, media white point and analytic conversion plan. `color
+intents` reads a PDF's catalog `/OutputIntents` array, decodes each embedded
+`/DestOutputProfile` stream, validates the set (missing, multiple, unsupported
+subtype, missing profile) and reports the parsed profile facts for the usable
+intent. `color convert` runs the analytic matrix/TRC or gray-gamma plan on
+normalised components and returns PCS XYZ or linear luminance. Profiles that
+need a full colour-management module are reported as `needs-backend:<reason>` and
+are never approximated.
 
 ## Page boxes and page operations
 
