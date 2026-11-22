@@ -1,0 +1,15 @@
+{
+  "id": "T-0363",
+  "lane": "orchestrator",
+  "title": "Release package and desktop shortcut (W-5)",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0362", "T-0359"],
+  "owns": [
+    "docs/evidence/platform/T-0363.md",
+    "orchestration/tasks/T-0363.json"
+  ],
+  "acceptance": "scripts/package.ps1 produces the portable zip, manifest and setup; scripts/install.ps1 -DesktopShortcut installs the payload; the desktop and Start Menu shortcuts target the installed viewer; the installed viewer opens a real window and the CLI works; evidence pasted. Tag is cut only after goal-verify --all passes.",
+  "notes": "W-5 release close-out. Packaging scripts are unchanged; this records the build, install, shortcut and launch evidence.",
+  "evidence": "docs/evidence/platform/T-0363.md"
+}
