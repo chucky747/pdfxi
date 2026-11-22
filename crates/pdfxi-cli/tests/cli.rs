@@ -11628,6 +11628,260 @@ fn ink_without_overprint_states_reports_zero_counts() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// policy: deployment preferences (T-0339)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn policy_write_show_and_check_round_trip() {
+    let dir = TempDir::new();
+    let policy = dir.child("policy.txt");
+    let output = run(&[
+        "policy",
+        "write",
+        "--out",
+        policy.to_str().expect("policy"),
+        "--theme",
+        "dark",
+        "--locale",
+        "de-DE",
+        "--channel",
+        "beta",
+        "--toggle",
+        "telemetry=false",
+        "--toggle",
+        "autosave=true",
+        "--allow-path",
+        "/data/corpus",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["theme"], "dark");
+    assert_eq!(value["locale"], "de-DE");
+    assert_eq!(value["channel"], "beta");
+    assert_eq!(value["toggles"]["telemetry"], false);
+    assert_eq!(value["allowed_paths"][0], "/data/corpus");
+    let document = value["document"].as_str().unwrap_or("");
+    assert!(document.contains("base.theme=dark"), "{document}");
+    assert!(document.contains("toggle.telemetry=false"), "{document}");
+
+    let shown = run(&["policy", "show", policy.to_str().expect("policy"), "--json"]);
+    assert!(shown.status.success(), "stderr: {}", stderr(&shown));
+    let value: Value = serde_json::from_str(&stdout(&shown)).expect("valid JSON");
+    assert_eq!(value["channel"], "beta");
+    assert_eq!(value["toggles"]["autosave"], true);
+
+    let allowed = run(&[
+        "policy",
+        "check",
+        policy.to_str().expect("policy"),
+        "--theme",
+        "dark",
+        "--channel",
+        "beta",
+        "--toggle",
+        "autosave",
+        "--path",
+        "/data/corpus/docs/a.pdf",
+    ]);
+    assert!(allowed.status.success(), "stderr: {}", stderr(&allowed));
+    assert!(stdout(&allowed).contains("allowed: true"));
+
+    let refused = run(&[
+        "policy",
+        "check",
+        policy.to_str().expect("policy"),
+        "--theme",
+        "light",
+        "--toggle",
+        "telemetry",
+        "--path",
+        "/etc/passwd",
+        "--json",
+    ]);
+    assert!(!refused.status.success());
+    let value: Value = serde_json::from_str(&stdout(&refused)).expect("valid JSON");
+    assert_eq!(value["allowed"], false);
+    let failures = value["failures"].as_array().expect("failures");
+    assert_eq!(failures.len(), 3);
+    assert!(failures.iter().any(|failure| {
+        failure
+            .as_str()
+            .unwrap_or("")
+            .contains("is not the deployment theme")
+    }));
+    assert!(failures.iter().any(|failure| {
+        failure
+            .as_str()
+            .unwrap_or("")
+            .contains("is not enabled by policy")
+    }));
+    assert!(failures.iter().any(|failure| {
+        failure
+            .as_str()
+            .unwrap_or("")
+            .contains("outside every allowed path")
+    }));
+}
+
+#[test]
+fn policy_merge_uses_overlay_precedence() {
+    let dir = TempDir::new();
+    let base = dir.child("base.txt");
+    let overlay = dir.child("overlay.txt");
+    let merged = dir.child("merged.txt");
+    assert!(
+        run(&[
+            "policy",
+            "write",
+            "--out",
+            base.to_str().expect("base"),
+            "--theme",
+            "dark",
+            "--channel",
+            "beta",
+            "--toggle",
+            "telemetry=false",
+            "--toggle",
+            "autosave=true",
+            "--allow-path",
+            "/data/corpus",
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        run(&[
+            "policy",
+            "write",
+            "--out",
+            overlay.to_str().expect("overlay"),
+            "--theme",
+            "light",
+            "--channel",
+            "stable",
+            "--toggle",
+            "autosave=false",
+            "--toggle",
+            "plugins=true",
+            "--allow-path",
+            "/work",
+            "--allow-path",
+            "/data/corpus",
+        ])
+        .status
+        .success()
+    );
+    let output = run(&[
+        "policy",
+        "merge",
+        base.to_str().expect("base"),
+        overlay.to_str().expect("overlay"),
+        "--out",
+        merged.to_str().expect("merged"),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["theme"], "light");
+    assert_eq!(value["channel"], "stable");
+    assert_eq!(value["toggles"]["telemetry"], false);
+    assert_eq!(value["toggles"]["autosave"], false);
+    assert_eq!(value["toggles"]["plugins"], true);
+    assert_eq!(
+        value["allowed_paths"],
+        serde_json::json!(["/data/corpus", "/work"])
+    );
+
+    let reloaded = run(&["policy", "show", merged.to_str().expect("merged"), "--json"]);
+    assert!(reloaded.status.success(), "stderr: {}", stderr(&reloaded));
+    let value: Value = serde_json::from_str(&stdout(&reloaded)).expect("valid JSON");
+    assert_eq!(value["theme"], "light");
+    assert_eq!(value["allowed_paths"].as_array().expect("paths").len(), 2);
+}
+
+#[test]
+fn policy_rejects_malformed_documents_and_inputs() {
+    let dir = TempDir::new();
+    let bad_toggle = run(&[
+        "policy",
+        "write",
+        "--out",
+        dir.child("p.txt").to_str().expect("path"),
+        "--toggle",
+        "telemetry=yes",
+    ]);
+    assert!(!bad_toggle.status.success());
+    assert!(
+        stderr(&bad_toggle).contains("invalid boolean"),
+        "{}",
+        stderr(&bad_toggle)
+    );
+
+    let relative = run(&[
+        "policy",
+        "write",
+        "--out",
+        dir.child("p.txt").to_str().expect("path"),
+        "--allow-path",
+        "relative/dir",
+    ]);
+    assert!(!relative.status.success());
+
+    let malformed = dir.child("bad.txt");
+    fs::write(&malformed, "base.theme=dark\n").expect("write malformed policy");
+    let output = run(&["policy", "show", malformed.to_str().expect("path")]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("parse policy"),
+        "{}",
+        stderr(&output)
+    );
+
+    let unknown = dir.child("unknown.txt");
+    fs::write(
+        &unknown,
+        "base.theme=dark\nbase.locale=en-US\nbase.recent_count=10\n\
+         base.show_toolbar=true\nbase.default_zoom_percent=100\n\
+         base.autosave_seconds=300\nbase.version=1\nchannel=stable\nsurprise=1\n",
+    )
+    .expect("write unknown key");
+    let output = run(&["policy", "show", unknown.to_str().expect("path")]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("unknown preferences key"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn policy_parses_a_plain_preferences_document() {
+    let dir = TempDir::new();
+    let prefs = dir.child("prefs.txt");
+    fs::write(
+        &prefs,
+        "autosave_seconds=120\ndefault_zoom_percent=125\nlocale=en-GB\n\
+         recent_count=5\nshow_toolbar=false\ntheme=light\nversion=1\n",
+    )
+    .expect("write preferences");
+    let output = run(&[
+        "policy",
+        "preferences",
+        prefs.to_str().expect("path"),
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["theme"], "light");
+    assert_eq!(value["locale"], "en-GB");
+    assert_eq!(value["recent_count"], 5);
+    assert_eq!(value["show_toolbar"], false);
+    assert_eq!(value["default_zoom_percent"], 125);
+    assert_eq!(value["autosave_seconds"], 120);
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

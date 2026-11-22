@@ -96,6 +96,8 @@ mod office_roundtrip;
 mod ops;
 /// pdfxi plugin: plan plugin invocations and validate typed outputs.
 mod plugin;
+/// pdfxi policy: deployment preferences and customization enforcement.
+mod policy;
 /// pdfxi restyle: change font size, spacing, scaling and colour.
 mod restyle;
 /// pdfxi create scan: assemble scanned PNG pages into a PDF.
@@ -432,6 +434,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Read, write, merge and enforce deployment preferences.
+    Policy {
+        /// Policy action.
+        #[command(subcommand)]
+        command: PolicyCommand,
     },
     /// Show the ink-manager view: plates, alternates and overprint counts.
     Ink {
@@ -1997,6 +2005,96 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `policy` command.
+#[derive(Debug, Subcommand)]
+enum PolicyCommand {
+    /// Print a deployment policy document.
+    Show {
+        /// Policy file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a deployment policy document.
+    Write {
+        /// Destination file.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Base theme: `system`, `light` or `dark`.
+        #[arg(long, default_value = "system")]
+        theme: String,
+        /// Base locale tag.
+        #[arg(long, default_value = "en-US")]
+        locale: String,
+        /// Base recent-document count (0-100).
+        #[arg(long, default_value_t = 10)]
+        recent_count: u32,
+        /// Base toolbar visibility.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        show_toolbar: bool,
+        /// Base default zoom percent (25-400).
+        #[arg(long, default_value_t = 100)]
+        zoom: u16,
+        /// Base autosave interval in seconds (0-3600).
+        #[arg(long, default_value_t = 300)]
+        autosave: u32,
+        /// Update channel: `stable`, `beta`, `nightly` or `off`.
+        #[arg(long, default_value = "stable")]
+        channel: String,
+        /// Feature toggle as `NAME=true|false`; repeatable.
+        #[arg(long = "toggle", value_name = "NAME=BOOL")]
+        toggle: Vec<String>,
+        /// Allowed local path prefix; repeatable.
+        #[arg(long = "allow-path", value_name = "PATH")]
+        allow_path: Vec<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Merge an overlay policy over a base policy.
+    Merge {
+        /// Base policy file.
+        base: PathBuf,
+        /// Overlay policy file.
+        overlay: PathBuf,
+        /// Write the merged document here.
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check requested settings against a deployment policy.
+    Check {
+        /// Policy file.
+        file: PathBuf,
+        /// Requested theme.
+        #[arg(long)]
+        theme: Option<String>,
+        /// Requested update channel.
+        #[arg(long)]
+        channel: Option<String>,
+        /// Requested feature toggle; repeatable.
+        #[arg(long = "toggle", value_name = "NAME")]
+        toggle: Vec<String>,
+        /// Requested local path; repeatable.
+        #[arg(long = "path", value_name = "PATH")]
+        path: Vec<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Parse a plain preferences document.
+    Preferences {
+        /// Preferences file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `media` command.
 #[derive(Debug, Subcommand)]
 enum MediaCommand {
@@ -2854,6 +2952,56 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Policy { command } => match command {
+            PolicyCommand::Show { file, json } => policy::show(&file, json),
+            PolicyCommand::Write {
+                out,
+                theme,
+                locale,
+                recent_count,
+                show_toolbar,
+                zoom,
+                autosave,
+                channel,
+                toggle,
+                allow_path,
+                json,
+            } => policy::write(
+                &out,
+                &theme,
+                &locale,
+                recent_count,
+                show_toolbar,
+                zoom,
+                autosave,
+                &channel,
+                &toggle,
+                &allow_path,
+                json,
+            ),
+            PolicyCommand::Merge {
+                base,
+                overlay,
+                out,
+                json,
+            } => policy::merge(&base, &overlay, out.as_deref(), json),
+            PolicyCommand::Check {
+                file,
+                theme,
+                channel,
+                toggle,
+                path,
+                json,
+            } => policy::check(
+                &file,
+                theme.as_deref(),
+                channel.as_deref(),
+                &toggle,
+                &path,
+                json,
+            ),
+            PolicyCommand::Preferences { file, json } => policy::preferences(&file, json),
+        },
         Command::Ink { file, json } => separations::ink(&file, json),
         Command::Separations { file, plate, json } => {
             separations::separations(&file, plate.as_deref(), json)

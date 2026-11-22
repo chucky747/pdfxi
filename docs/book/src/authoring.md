@@ -39,6 +39,7 @@ command.
 | HTML5 media replacement for Flash | `MEDIA-002` | verified | `pdfxi-render::html5_media` | `media html5` |
 | Output preview and separations | `PRINT-004` | verified | `pdfxi-app::print::SeparationsPlan` + content scan | `separations [--plate]` |
 | Ink manager and overprint preview | `PRINT-005` | verified | `pdfxi-app::print` + `/ExtGState` scan | `ink` |
+| Deployment preferences and customization | `PLAT-006` | verified | `pdfxi-core::preferences` | `policy show/write/merge/check` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -539,6 +540,35 @@ alternate process space from the `/Separation` or `/DeviceN` array
 a paint operator; an overprint preview can therefore tell which plates image
 content with overprint enabled. No overprint simulation or ink editing is
 performed.
+
+### Deployment preferences
+
+`PLAT-006` (verified) hosts `pdfxi_core::preferences`, the validated deployment
+customization document:
+
+```text
+pdfxi policy show <FILE> [--json]
+pdfxi policy write --out FILE [--theme system|light|dark] [--locale TAG]
+    [--recent-count N] [--show-toolbar true|false] [--zoom PCT] [--autosave SECS]
+    [--channel stable|beta|nightly|off] [--toggle NAME=true|false ...]
+    [--allow-path PATH ...] [--json]
+pdfxi policy merge BASE OVERLAY [--out FILE] [--json]
+pdfxi policy check FILE [--theme T] [--channel C] [--toggle NAME ...]
+    [--path PATH ...] [--json]
+pdfxi policy preferences <FILE> [--json]
+```
+
+`write` builds and validates a deployment document (base preferences, feature
+toggles, sorted/de-duplicated allowed paths, update channel) and writes its
+deterministic `key=value` form. `show` parses it back. `merge` applies the
+model's override semantics: the overlay's base preferences and channel win,
+toggles are unioned with overlay values taking precedence, and allowed paths are
+unioned. `check` enforces the policy on requested settings: the theme must match
+the deployment theme, the channel must match, every named toggle must be
+enabled, and every path must lie inside an allowed prefix (when the policy
+declares any). Failures are listed and exit non-zero, including in JSON mode.
+`preferences` parses a plain runtime preferences document. No registry, MSI
+transform or policy engine is applied.
 
 ## Page boxes and page operations
 

@@ -5015,14 +5015,53 @@ tests = [
 title = "Shell integration and file associations"
 
 [[feature]]
-docs = "crates/pdfxi-core/src/preferences.rs, docs/evidence/core/T-0181.md"
+docs = [
+    "crates/pdfxi-cli/src/policy.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0339.md",
+    "crates/pdfxi-core/src/preferences.rs",
+]
 domain = "Platform"
-evidence = "docs/evidence/core/T-0181.md"
+evidence = "docs/evidence/cli/T-0339.md"
 id = "PLAT-006"
-notes = "Validated deployment preference set (toggles, allowed paths, update channel) with deterministic merge/override semantics, sorted lossless serialization and typed parse errors. Host boundary: no installer and no registry policy application."
+notes = """
+Verified through `pdfxi policy show <FILE> [--json]`, `policy write --out FILE
+[--theme T] [--locale TAG] [--recent-count N] [--show-toolbar BOOL] [--zoom PCT]
+[--autosave SECS] [--channel C] [--toggle NAME=BOOL ...] [--allow-path PATH ...]
+[--json]`, `policy merge BASE OVERLAY [--out FILE] [--json]`, `policy check FILE
+[--theme T] [--channel C] [--toggle NAME ...] [--path PATH ...] [--json]` and
+`policy preferences <FILE> [--json]`.
+
+write validates through Preferences::new and DeploymentPreferences::new (toggle
+names, rooted allowed paths) and writes the sorted key=value document; show
+parses it back; merge applies the model's override semantics (overlay
+base/channel win, toggles union with overlay precedence, paths union/sort/dedupe);
+check enforces the requested theme, channel, named toggles and path prefixes and
+exits non-zero on any mismatch, including in JSON mode; preferences parses a
+plain runtime preferences document.
+
+Evidence: a dark/de-DE/beta policy with telemetry=false, autosave=true and
+/data/corpus writes the expected document; check with matching settings reports
+allowed true and exit 0, while light/telemetry/etc-passwd reports three typed
+failures and exit 1; merge of a light/stable overlay over the base yields light,
+stable, autosave=false (overlay), telemetry=false (base), plugins=true (overlay)
+and allowed paths [/data/corpus, /work]. Invalid booleans, relative paths,
+missing keys and an unknown key fail with typed errors.
+
+Gates: cargo test -p pdfxi-cli policy_ = 4 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: reads, writes, merges and enforces the validated document only; no
+registry, MSI transform, group policy, GUI settings store or installer access,
+and check never repairs or applies values.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::policy_write_show_and_check_round_trip",
+    "cli::policy_merge_uses_overlay_precedence",
+    "cli::policy_rejects_malformed_documents_and_inputs",
+    "cli::policy_parses_a_plain_preferences_document",
     "preferences::tests::deployment_merge_overrides_deterministically",
     "preferences::tests::deployment_round_trip_is_lossless_and_deterministic",
     "preferences::tests::deployment_validates_toggles_paths_and_channels",

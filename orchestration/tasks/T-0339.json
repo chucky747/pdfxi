@@ -1,0 +1,19 @@
+{
+  "id": "T-0339",
+  "lane": "convert",
+  "title": "Deployment-preferences host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0338"],
+  "owns": [
+    "crates/pdfxi-cli/src/policy.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0339.md",
+    "orchestration/feature-updates/T-0339.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli policy_ passes; pdfxi policy writes, shows, merges and enforces real deployment documents with allowed paths, toggles and channels; PLAT-006 moves to verified.",
+  "notes": "Hosts pdfxi_core::preferences as the deployment-tool boundary: validation, deterministic serialization, merge precedence and policy checks.",
+  "evidence": "docs/evidence/cli/T-0339.md"
+}
