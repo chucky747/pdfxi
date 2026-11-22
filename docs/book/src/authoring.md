@@ -29,6 +29,7 @@ command.
 | PDF Portfolio management | `MANAGE-004` | verified | `pdfxi-convert::portfolio_package` | `portfolio --out` with edit flags |
 | Unicode CJK and RTL analysis | `PLAT-007` | verified | `pdfxi-core::unicode` | `unicode analyze` |
 | Home recents, favorites, collections | `MANAGE-002` | verified | `pdfxi-app::home` | `home list/add/favorite/collection` |
+| Read aloud with system speech | `ACCESS-005` | verified | `pdfxi-app::read_aloud` + Windows `System.Speech` | `read-aloud --voices` / `read-aloud --speak` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -342,6 +343,26 @@ belongs to the accessibility lane.
 `Document::apply_page_plan` with `PagePlan::merge(...)` copies every source into
 a fresh catalog and page tree with deterministic object numbers and remapped
 references. Sources that are encrypted or use xref streams are rejected.
+
+### Read a document aloud
+
+`ACCESS-005` (verified) hosts the deterministic utterance plan from
+`pdfxi_app::read_aloud` and the Windows system synthesizer:
+
+```text
+pdfxi read-aloud <INPUT.pdf> [--wpm 180] [--page N] [--seek N]
+    [--voice NAME] [--speak] [--json]
+pdfxi read-aloud --voices [--json]
+```
+
+The plan splits real page text into sentences and assigns integer-millisecond
+start, duration and pause values from `--wpm`, so the same document always
+produces the same times. `--voices` lists the installed `System.Speech` voices;
+`--speak` hands the planned sentences to the system synthesizer with the chosen
+`--voice` (default: the system voice) and a rate mapped from `--wpm` onto the
+synthesizer's -10..10 scale. Voice names are validated before they are embedded
+in the synthesizer invocation. No bundled TTS engine is used, and no audio is
+produced unless `--speak` is given.
 
 ## Page boxes and page operations
 

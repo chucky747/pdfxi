@@ -21,6 +21,9 @@
 
 use std::path::Path;
 
+use std::io::Write;
+use std::process::{Command, Stdio};
+
 use anyhow::{Context, bail};
 use pdfxi_core::Document;
 use serde::Serialize;
@@ -68,6 +71,8 @@ struct ReadAloudReport {
     seek: usize,
     /// End time of the last emitted utterance.
     total_duration_ms: u64,
+    /// Whether the system synthesizer was asked to speak.
+    spoken: bool,
     /// Ordered utterances.
     utterances: Vec<UtteranceRow>,
 }
@@ -136,14 +141,153 @@ fn rebase(rows: &mut [UtteranceRow]) {
     }
 }
 
+/// Everything the `read-aloud` command was asked to do.
+///
+/// A request carries the plan inputs plus the optional system-speech actions so
+/// the entry point keeps a small, documented signature.
+pub(crate) struct ReadAloudRequest<'a> {
+    /// Source PDF; omitted only for `--voices`.
+    pub(crate) file: Option<&'a Path>,
+    /// Speaking rate in words per minute.
+    pub(crate) wpm: u16,
+    /// One-based page filter.
+    pub(crate) page: Option<usize>,
+    /// Zero-based utterance to start from.
+    pub(crate) seek: usize,
+    /// Installed voice name, or `default`.
+    pub(crate) voice: &'a str,
+    /// Speak the planned utterances through the system synthesizer.
+    pub(crate) speak: bool,
+    /// List installed system voices instead of planning a document.
+    pub(crate) voices: bool,
+    /// Emit JSON.
+    pub(crate) json: bool,
+}
+
+/// Map a words-per-minute rate onto the `System.Speech` -10..=10 scale.
+fn speech_rate(wpm: u16) -> i32 {
+    ((i32::from(wpm) - 180) / 20).clamp(-10, 10)
+}
+
+/// Reject a voice name that cannot be embedded in a PowerShell single-quoted
+/// literal. Names come from [`list_voices`]; this keeps a hand-typed value from
+/// becoming script injection.
+fn validate_voice_name(name: &str) -> anyhow::Result<()> {
+    if name == "default" {
+        return Ok(());
+    }
+    if name.trim().is_empty() {
+        bail!("--voice must not be empty; use `default` for the system voice");
+    }
+    if name.chars().any(|ch| ch.is_control() || ch == '\'') {
+        bail!("--voice {name:?} contains a control character or quote");
+    }
+    Ok(())
+}
+
+/// Run a PowerShell script and return its standard output.
+fn run_powershell(script: &str, stdin: Option<&str>) -> anyhow::Result<String> {
+    let mut child = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("start powershell.exe")?;
+    if let Some(text) = stdin {
+        let mut pipe = child.stdin.take().context("open powershell stdin")?;
+        pipe.write_all(text.as_bytes())
+            .context("write powershell stdin")?;
+    }
+    let output = child.wait_with_output().context("wait for powershell")?;
+    if !output.status.success() {
+        bail!(
+            "system speech failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// List the installed Windows speech voices.
+pub(crate) fn list_voices(json: bool) -> anyhow::Result<()> {
+    if !cfg!(windows) {
+        bail!("system speech is only available on Windows");
+    }
+    let output = run_powershell(
+        "Add-Type -AssemblyName System.Speech; \
+         (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | \
+         ForEach-Object { $_.VoiceInfo.Name }",
+        None,
+    )?;
+    let voices: Vec<String> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "voices": voices }))?
+        );
+        return Ok(());
+    }
+    for voice in &voices {
+        println!("{voice}");
+    }
+    println!("voices: {}", voices.len());
+    Ok(())
+}
+
+/// Speak every planned utterance through the Windows system synthesizer.
+fn speak(utterances: &[UtteranceRow], wpm: u16, voice: &str) -> anyhow::Result<()> {
+    if !cfg!(windows) {
+        bail!("system speech is only available on Windows");
+    }
+    validate_voice_name(voice)?;
+    let text = utterances
+        .iter()
+        .map(|row| row.text.as_str())
+        .collect::<Vec<&str>>()
+        .join(" ");
+    let select = if voice == "default" {
+        String::new()
+    } else {
+        format!("$s.SelectVoice('{voice}'); ")
+    };
+    let script = format!(
+        "Add-Type -AssemblyName System.Speech; \
+         $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+         $s.Rate = {rate}; {select}\
+         $text = [Console]::In.ReadToEnd(); \
+         $s.Speak($text);",
+        rate = speech_rate(wpm)
+    );
+    run_powershell(&script, Some(&text))?;
+    Ok(())
+}
+
 /// Print the utterance queue for the selected pages.
-pub(crate) fn run_read_aloud(
-    file: &Path,
-    wpm: u16,
-    page: Option<usize>,
-    seek: usize,
-    json: bool,
-) -> anyhow::Result<()> {
+pub(crate) fn run_read_aloud(request: &ReadAloudRequest<'_>) -> anyhow::Result<()> {
+    if request.voices {
+        return list_voices(request.json);
+    }
+    let file = request.file.context("pass a PDF file or --voices")?;
+    let ReadAloudRequest {
+        wpm,
+        page,
+        seek,
+        voice,
+        speak: speak_text,
+        json,
+        ..
+    } = *request;
+    validate_voice_name(voice)?;
     if !(MIN_WPM..=MAX_WPM).contains(&wpm) {
         bail!("--wpm must be between {MIN_WPM} and {MAX_WPM}");
     }
@@ -170,8 +314,13 @@ pub(crate) fn run_read_aloud(
         word_ms,
         seek,
         total_duration_ms,
+        spoken: speak_text,
         utterances,
     };
+
+    if speak_text {
+        speak(&report.utterances, wpm, voice)?;
+    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -189,6 +338,9 @@ pub(crate) fn run_read_aloud(
             report.total_duration_ms,
             report.wpm
         );
+        if report.spoken {
+            println!("spoken: yes (system speech)");
+        }
     }
     Ok(())
 }
@@ -235,6 +387,24 @@ mod tests {
         // The last sentence of page 1 carries the page pause.
         assert_eq!(rows[2].pause_ms, 166 + 666);
         assert_eq!(rows[4].pause_ms, 166);
+    }
+
+    #[test]
+    fn speech_rate_maps_wpm_onto_the_system_scale() {
+        assert_eq!(speech_rate(180), 0);
+        assert_eq!(speech_rate(400), 10, "fast rates saturate at +10");
+        assert_eq!(speech_rate(80), -5);
+        assert_eq!(speech_rate(0), -9);
+    }
+
+    #[test]
+    fn voice_names_reject_script_injection() {
+        assert!(validate_voice_name("default").is_ok());
+        assert!(validate_voice_name("Microsoft Zira Desktop").is_ok());
+        assert!(validate_voice_name("").is_err());
+        assert!(validate_voice_name("   ").is_err());
+        assert!(validate_voice_name("Bad'Voice").is_err());
+        assert!(validate_voice_name("Line\nBreak").is_err());
     }
 
     #[test]

@@ -10300,6 +10300,71 @@ fn read_aloud_rejects_a_seek_past_the_end() {
     assert!(stderr(&output).contains("--seek 99"), "{}", stderr(&output));
 }
 
+#[cfg(windows)]
+#[test]
+fn read_aloud_lists_installed_system_voices() {
+    let output = run(&["read-aloud", "--voices", "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    let voices = value["voices"].as_array().expect("voices array");
+    assert!(
+        !voices.is_empty(),
+        "System.Speech reported no installed voice: {value}"
+    );
+    assert!(
+        voices
+            .iter()
+            .all(|voice| { voice.as_str().is_some_and(|name| !name.trim().is_empty()) })
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn read_aloud_speaks_the_plan_through_system_speech() {
+    let pdf = create_text_pdf("Read aloud works.");
+    let output = run(&[
+        "read-aloud",
+        pdf.arg(),
+        "--wpm",
+        "400",
+        "--speak",
+        "--voice",
+        "default",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["spoken"].as_bool(), Some(true));
+    assert_eq!(
+        value["utterances"].as_array().map(|rows| rows.len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn read_aloud_rejects_invalid_system_speech_requests() {
+    let pdf = create_text_pdf("Speech request.");
+    let no_file = run(&["read-aloud"]);
+    assert!(!no_file.status.success());
+    assert!(
+        stderr(&no_file).contains("pass a PDF file"),
+        "{}",
+        stderr(&no_file)
+    );
+
+    let conflict = run(&["read-aloud", pdf.arg(), "--voices"]);
+    assert!(!conflict.status.success());
+    assert!(
+        stderr(&conflict).contains("cannot be used with"),
+        "{}",
+        stderr(&conflict)
+    );
+
+    let quoted = run(&["read-aloud", pdf.arg(), "--voice", "Bad'Voice"]);
+    assert!(!quoted.status.success());
+    assert!(stderr(&quoted).contains("quote"), "{}", stderr(&quoted));
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

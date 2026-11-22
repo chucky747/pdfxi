@@ -1,0 +1,19 @@
+{
+  "id": "T-0330",
+  "lane": "convert",
+  "title": "System speech host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0329"],
+  "owns": [
+    "crates/pdfxi-cli/src/read_aloud.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0330.md",
+    "orchestration/feature-updates/T-0330.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli read_aloud passes; pdfxi read-aloud --voices lists installed Windows voices and --speak synthesizes a real document through System.Speech; ACCESS-005 moves to verified.",
+  "notes": "Extends the existing deterministic read-aloud plan with voice enumeration and real Windows System.Speech synthesis; voice names are validated and text is passed on stdin.",
+  "evidence": "docs/evidence/cli/T-0330.md"
+}

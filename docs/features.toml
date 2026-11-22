@@ -3791,14 +3791,52 @@ tests = [
 title = "Reflow high contrast and keyboard navigation"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/read_aloud.rs, docs/evidence/app/T-0112.md"
+docs = [
+    "crates/pdfxi-cli/src/read_aloud.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0330.md",
+]
 domain = "Accessibility"
-evidence = "docs/evidence/app/T-0112.md"
+evidence = "docs/evidence/cli/T-0330.md"
 id = "ACCESS-005"
-notes = "Deterministic chunking and playback state behind a SpeechSink boundary; system speech is host-implemented."
+notes = """
+Verified through `pdfxi read-aloud FILE.pdf [--wpm 180] [--page N] [--seek N]
+[--voice NAME] [--speak] [--json]` and `pdfxi read-aloud --voices [--json]`.
+
+--voices enumerates SpeechSynthesizer.GetInstalledVoices() through Windows
+System.Speech (real run reports Microsoft David Desktop and Microsoft Zira
+Desktop). --speak joins the planned sentences and calls Speak with --voice
+(default: system voice) and Rate = clamp((wpm - 180) / 20, -10, 10); text is
+passed on stdin. Voice names are rejected when empty, control-bearing or
+containing a quote, so a hand-typed value cannot inject PowerShell. The plan is
+unchanged: integer-millisecond start/duration/pause from --wpm, --seek rebases
+the clock, --page filters; --json gains spoken.
+
+Evidence: --voices --json lists two real voices; a real generated PDF spoken at
+400 wpm with Microsoft Zira Desktop exits 0 in 1.9 s with spoken: yes; the JSON
+form reports spoken true, wpm 400 and one 525 ms utterance. --voices with a file,
+a missing file and a quote in --voice fail with typed errors.
+
+Gates: cargo test -p pdfxi-cli read_aloud = 8 cli + 5 unit passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: Windows System.Speech only; no pitch/volume/SSML, word highlighting or
+mid-speech cancellation. Playback state stays in the SpeechSink model for a GUI
+host; no bundled TTS engine and no audio output unless --speak is passed.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::read_aloud_lists_installed_system_voices",
+    "cli::read_aloud_speaks_the_plan_through_system_speech",
+    "cli::read_aloud_rejects_invalid_system_speech_requests",
+    "cli::read_aloud_queue_is_ordered_and_fixed_point",
+    "cli::read_aloud_json_times_are_contiguous_and_complete",
+    "read_aloud::tests::speech_rate_maps_wpm_onto_the_system_scale",
+    "read_aloud::tests::voice_names_reject_script_injection",
+    "read_aloud::tests::cadence_is_integer_milliseconds_at_the_default_rate",
+    "read_aloud::tests::utterances_are_ordered_with_monotonic_fixed_point_times",
+    "read_aloud::tests::seek_rebases_the_clock_and_keeps_original_indices",
     "read_aloud::tests::sentence_chunking_produces_ordered_sentences",
     "read_aloud::tests::play_pause_and_resume_transition_correctly",
 ]

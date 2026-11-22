@@ -555,15 +555,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Build the deterministic utterance queue a speech backend would speak.
+    /// Build a deterministic utterance queue and optionally speak it.
     ///
-    /// No audio device or speech engine is used. Each sentence becomes one
+    /// The plan itself uses no audio device: each sentence becomes one
     /// utterance with integer-millisecond start, duration and trailing pause
     /// derived from `--wpm`; `--seek` starts at an utterance and rebases the
-    /// clock, which is the scriptable form of seek.
+    /// clock. `--voices` lists the installed Windows voices. `--speak` hands
+    /// the planned text to the Windows `System.Speech` synthesizer with the
+    /// selected `--voice` and a rate mapped from `--wpm`.
     ReadAloud {
-        /// Path to the PDF file.
-        file: PathBuf,
+        /// Path to the PDF file; omit with `--voices`.
+        #[arg(conflicts_with = "voices")]
+        file: Option<PathBuf>,
         /// Speaking rate in words per minute (80-400).
         #[arg(long, default_value_t = read_aloud::default_wpm())]
         wpm: u16,
@@ -573,6 +576,15 @@ enum Command {
         /// Zero-based utterance to start from.
         #[arg(long, default_value_t = 0)]
         seek: usize,
+        /// Installed voice name; `default` uses the system default.
+        #[arg(long, default_value = "default")]
+        voice: String,
+        /// Speak the plan through the Windows system synthesizer.
+        #[arg(long)]
+        speak: bool,
+        /// List the installed Windows speech voices instead of a document.
+        #[arg(long)]
+        voices: bool,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -2676,8 +2688,20 @@ fn main() -> anyhow::Result<()> {
             wpm,
             page,
             seek,
+            voice,
+            speak,
+            voices,
             json,
-        } => read_aloud::run_read_aloud(&file, wpm, page, seek, json),
+        } => read_aloud::run_read_aloud(&read_aloud::ReadAloudRequest {
+            file: file.as_deref(),
+            wpm,
+            page,
+            seek,
+            voice: &voice,
+            speak,
+            voices,
+            json,
+        }),
         Command::Optimize {
             file,
             out,
