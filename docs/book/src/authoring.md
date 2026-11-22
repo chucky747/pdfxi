@@ -32,6 +32,7 @@ command.
 | Read aloud with system speech | `ACCESS-005` | verified | `pdfxi-app::read_aloud` + Windows `System.Speech` | `read-aloud --voices` / `read-aloud --speak` |
 | Reflow, high contrast, keyboard navigation | `ACCESS-004` | verified | `pdfxi-app::nav` | `accessibility nav` / `accessibility layout` |
 | Screen reader tree and accesskit roles | `ACCESS-006` | verified | `pdfxi-app::a11y` | `accessibility tree` |
+| Geospatial viewports and coordinate mapping | `MEDIA-004` | verified | `pdfxi-render::geospatial` | `geo info` / `geo to-pdf` / `geo to-geo` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -416,6 +417,26 @@ aloud).
 `layout` computes deterministic reflow metrics from the page's real media box
 and the requested viewport: content box, scale, line height, approximate
 characters per line and lines per viewport page.
+
+### Geospatial viewports
+
+`MEDIA-004` (verified) hosts the geospatial model in
+`pdfxi_render::geospatial`:
+
+```text
+pdfxi geo info <INPUT.pdf> [--page N] [--json]
+pdfxi geo to-geo <INPUT.pdf> --x X --y Y [--viewport N] [--json]
+pdfxi geo to-pdf <INPUT.pdf> --lon DEG --lat DEG [--viewport N] [--json]
+```
+
+`geo info` reads the page's real `/VP` array, each viewport's `/BBox`,
+`/Measure` (`/Subtype`, `/GPTS`, `/LPTS`, `/XStep`, `/YStep`, `/Units`) and the
+`/GCS` coordinate system (name, type, EPSG), validates them through
+`GeospatialDocument`, and reports the viewports plus the stable plan descriptor.
+`to-geo` and `to-pdf` map a point affinely for a geographic coordinate system;
+points outside the selected viewport (or outside every `/GPTS` bound) are
+rejected. Web-Mercator and unknown projections are reported as unsupported
+rather than approximated, and no map imagery is decoded or rendered.
 
 ## Page boxes and page operations
 

@@ -76,6 +76,8 @@ mod create_portfolio;
 mod export_postscript;
 /// pdfxi find-files: cross-file text search over a folder.
 mod find_files;
+/// pdfxi geo: geospatial viewports and coordinate mapping.
+mod geo;
 /// pdfxi home: recents, favorites and collections over a state file.
 mod home;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
@@ -399,6 +401,12 @@ enum Command {
         /// Colour action.
         #[command(subcommand)]
         command: ColorCommand,
+    },
+    /// Read geospatial viewports and map PDF/geo coordinates.
+    Geo {
+        /// Geospatial action.
+        #[command(subcommand)]
+        command: GeoCommand,
     },
     /// Manage recent documents, favorites and collections in a state file.
     Home {
@@ -1934,6 +1942,62 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `geo` command.
+#[derive(Debug, Subcommand)]
+enum GeoCommand {
+    /// Report the page's geospatial viewports and plan.
+    Info {
+        /// PDF file.
+        file: PathBuf,
+        /// One-based page.
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Map a PDF-space point to longitude/latitude.
+    ToGeo {
+        /// PDF file.
+        file: PathBuf,
+        /// One-based page.
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// PDF x coordinate.
+        #[arg(long, value_name = "X", allow_hyphen_values = true)]
+        x: f64,
+        /// PDF y coordinate.
+        #[arg(long, value_name = "Y", allow_hyphen_values = true)]
+        y: f64,
+        /// Zero-based viewport; the first by default.
+        #[arg(long, value_name = "N")]
+        viewport: Option<usize>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Map longitude/latitude to a PDF-space point.
+    ToPdf {
+        /// PDF file.
+        file: PathBuf,
+        /// One-based page.
+        #[arg(long, value_name = "N")]
+        page: Option<usize>,
+        /// Longitude in degrees.
+        #[arg(long, value_name = "DEG", allow_hyphen_values = true)]
+        lon: f64,
+        /// Latitude in degrees.
+        #[arg(long, value_name = "DEG", allow_hyphen_values = true)]
+        lat: f64,
+        /// Zero-based viewport; the containing viewport by default.
+        #[arg(long, value_name = "N")]
+        viewport: Option<usize>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `color` command.
 #[derive(Debug, Subcommand)]
 enum ColorCommand {
@@ -2668,6 +2732,25 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Geo { command } => match command {
+            GeoCommand::Info { file, page, json } => geo::info(&file, page, json),
+            GeoCommand::ToGeo {
+                file,
+                page,
+                x,
+                y,
+                viewport,
+                json,
+            } => geo::to_geo(&file, page, x, y, viewport, json),
+            GeoCommand::ToPdf {
+                file,
+                page,
+                lon,
+                lat,
+                viewport,
+                json,
+            } => geo::to_pdf(&file, page, lon, lat, viewport, json),
+        },
         Command::Color { command } => match command {
             ColorCommand::Icc { file, json } => color::icc(&file, json),
             ColorCommand::Intents { file, json } => color::intents(&file, json),

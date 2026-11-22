@@ -10872,6 +10872,129 @@ fn accessibility_layout_uses_real_page_geometry() {
     assert!(stderr(&page).contains("outside 1..=1"), "{}", stderr(&page));
 }
 
+// ---------------------------------------------------------------------------
+// geo: geospatial viewports (T-0333)
+// ---------------------------------------------------------------------------
+
+/// A one-page PDF with one real `/VP` geospatial viewport.
+fn t0333_geo_pdf() -> Vec<u8> {
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /VP [4 0 R] >>".to_owned(),
+            "<< /BBox [0 0 612 792] /Measure 5 0 R >>".to_owned(),
+            "<< /Subtype /GEO /GPTS [-10 40 -5 45] /XStep 1 /YStep 1 /Units (degree) \
+              /GCS << /Type /GEOGCS /EPSG 4326 >> >>"
+                .to_owned(),
+        ],
+    )
+}
+
+#[test]
+fn geo_info_reports_real_viewports_and_plan() {
+    let pdf = TempPdf::new(&t0333_geo_pdf());
+    let output = run(&["geo", "info", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["page"], 1);
+    assert_eq!(value["gcs"], "EPSG:4326");
+    assert_eq!(value["epsg"], 4326);
+    assert_eq!(value["projection"], "geographic");
+    assert_eq!(value["supported"], true);
+    let viewports = value["viewports"].as_array().expect("viewports");
+    assert_eq!(viewports.len(), 1);
+    assert_eq!(
+        viewports[0]["pdf"],
+        serde_json::json!([0.0, 0.0, 612.0, 792.0])
+    );
+    assert_eq!(
+        viewports[0]["gpts"],
+        serde_json::json!([-10.0, 40.0, -5.0, 45.0])
+    );
+    assert_eq!(viewports[0]["unit"], "degree");
+    assert!(
+        value["plan"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("geospatial-plan/v1|supported=1")
+    );
+    assert!(value["lpts"].is_null());
+}
+
+#[test]
+fn geo_maps_between_pdf_and_geographic_space() {
+    let pdf = TempPdf::new(&t0333_geo_pdf());
+    let to_geo = run(&[
+        "geo",
+        "to-geo",
+        pdf.arg(),
+        "--x",
+        "306",
+        "--y",
+        "396",
+        "--json",
+    ]);
+    assert!(to_geo.status.success(), "stderr: {}", stderr(&to_geo));
+    let value: Value = serde_json::from_str(&stdout(&to_geo)).expect("valid JSON");
+    assert_eq!(value["direction"], "pdf-to-geo");
+    assert_eq!(value["viewport"], 0);
+    let output = value["output"].as_array().expect("output");
+    assert!((output[0].as_f64().expect("lon") - -7.5).abs() < 1e-9);
+    assert!((output[1].as_f64().expect("lat") - 42.5).abs() < 1e-9);
+
+    let to_pdf = run(&[
+        "geo",
+        "to-pdf",
+        pdf.arg(),
+        "--lon",
+        "-7.5",
+        "--lat",
+        "42.5",
+        "--json",
+    ]);
+    assert!(to_pdf.status.success(), "stderr: {}", stderr(&to_pdf));
+    let value: Value = serde_json::from_str(&stdout(&to_pdf)).expect("valid JSON");
+    assert_eq!(value["direction"], "geo-to-pdf");
+    let output = value["output"].as_array().expect("output");
+    assert!((output[0].as_f64().expect("x") - 306.0).abs() < 1e-6);
+    assert!((output[1].as_f64().expect("y") - 396.0).abs() < 1e-6);
+}
+
+#[test]
+fn geo_rejects_absent_bounds_and_outside_points() {
+    let plain = create_text_pdf("No geospatial viewports.");
+    let absent = run(&["geo", "info", plain.arg()]);
+    assert!(!absent.status.success());
+    assert!(
+        stderr(&absent).contains("no /VP viewports"),
+        "{}",
+        stderr(&absent)
+    );
+
+    let pdf = TempPdf::new(&t0333_geo_pdf());
+    let outside = run(&["geo", "to-geo", pdf.arg(), "--x", "700", "--y", "396"]);
+    assert!(!outside.status.success());
+    assert!(
+        stderr(&outside).contains("outside the selected viewport"),
+        "{}",
+        stderr(&outside)
+    );
+
+    let no_viewport = run(&["geo", "to-pdf", pdf.arg(), "--lon", "10", "--lat", "10"]);
+    assert!(!no_viewport.status.success());
+    assert!(
+        stderr(&no_viewport).contains("no viewport contains"),
+        "{}",
+        stderr(&no_viewport)
+    );
+
+    let page = run(&["geo", "info", pdf.arg(), "--page", "2"]);
+    assert!(!page.status.success());
+    assert!(stderr(&page).contains("outside 1..=1"), "{}", stderr(&page));
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

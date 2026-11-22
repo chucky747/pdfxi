@@ -1,0 +1,19 @@
+{
+  "id": "T-0333",
+  "lane": "convert",
+  "title": "Geospatial host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0332"],
+  "owns": [
+    "crates/pdfxi-cli/src/geo.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0333.md",
+    "orchestration/feature-updates/T-0333.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli geo passes; pdfxi geo info reads a real /VP viewport, measure and GCS and both coordinate mappings round-trip; MEDIA-004 moves to verified.",
+  "notes": "Hosts pdfxi_render::geospatial over real page /VP dictionaries with affine geographic mapping and typed unsupported-projecture errors.",
+  "evidence": "docs/evidence/cli/T-0333.md"
+}

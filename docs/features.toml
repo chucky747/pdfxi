@@ -4711,26 +4711,48 @@ title = "U3D and PRC 3D viewing"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/geo.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0333.md",
     "crates/pdfxi-render/src/geospatial.rs",
-    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0169.md: 3 new geospatial::tests pass (LPTS out-of-bounds typed rejection, deterministic viewport_for_geo with no-match error, byte-stable plan descriptor reporting unsupported projections); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0333.md"
 id = "MEDIA-004"
 notes = """
-Geospatial model is complete at library level: /VP viewports with /GPTS bounds,
-per-viewport /Measure scale and units, /LPTS and /GCS, with finite/bounded
-validation. Deterministic affine PDF<->geo and LPTS->geo mapping (LPTS points
-outside the declared rectangle are now a typed error), deterministic
-viewport_for_geo selection with a typed no-match error, and a byte-stable plan
-descriptor. WebMercator and unrecognised projections return typed
-UnsupportedProjection and appear explicitly in the descriptor; unknown units are
-preserved. Host boundary: real datum/projection math is native backend work, so
-this is verified for the model/deterministic-affine-mapping only (ADR 0008).
+Verified through `pdfxi geo info <INPUT.pdf> [--page N] [--json]`,
+`pdfxi geo to-geo <INPUT.pdf> --x X --y Y [--viewport N] [--json]` and
+`pdfxi geo to-pdf <INPUT.pdf> --lon DEG --lat DEG [--viewport N] [--json]`.
+
+info reads the page /VP array, each /BBox (falling back to the media box), the
+/Measure dictionary (/Subtype, /GPTS, /LPTS, /XStep, /YStep, /Units) and the
+/GCS (/Type, /EPSG), parses GeospatialDocument and reports viewports plus the
+stable plan descriptor. to-geo maps a PDF point inside the selected viewport to
+lon/lat; to-pdf locates the containing viewport by /GPTS or uses --viewport and
+maps back. Unsupported projections are reported and mapping returns a typed
+error rather than extrapolating.
+
+Evidence: a real one-page fixture with /BBox [0 0 612 792] and
+/GPTS [-10 40 -5 45] under EPSG:4326 reports gcs EPSG:4326, projection
+geographic, supported true, unit degree and the plan descriptor; (306, 396)
+maps to (-7.5, 42.5) and back to (306.000, 396.000); a plain PDF without /VP, a
+point outside the viewport, geo coordinates outside every viewport and an
+out-of-range page fail with typed errors.
+
+Gates: cargo test -p pdfxi-cli geo = 3 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: read and map only; no map imagery, tile rendering, reprojection of
+content streams, measure-tool UI or document rewriting. Only affine geographic
+viewports map; Web-Mercator and unknown projections stay unsupported with the
+plan notes preserved.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::geo_info_reports_real_viewports_and_plan",
+    "cli::geo_maps_between_pdf_and_geographic_space",
+    "cli::geo_rejects_absent_bounds_and_outside_points",
     "geospatial::tests::local_point_outside_lpts_is_rejected",
     "geospatial::tests::viewport_for_geo_selects_deterministically_and_reports_no_match",
     "geospatial::tests::plan_descriptor_is_byte_stable_and_reports_unsupported",
