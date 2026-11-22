@@ -3948,33 +3948,49 @@ title = "Local JSON API for automation"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-automation/src/toolset.rs",
-    "crates/pdfxi-automation/src/api.rs",
-    "crates/pdfxi-automation/src/action.rs",
-    "crates/pdfxi-cli/src/api.rs",
-    "docs/evidence/automation/T-0105.md",
+    "crates/pdfxi-cli/src/toolset.rs",
+    "crates/pdfxi-cli/src/action.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0310.md",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation -p pdfxi-cli: 4 toolset tests plus api::tests::alias_rejection_covers_unknown_dangerous_and_wrapped_operations, api::tests::toolset_parse_validate_list_and_run and CLI integration api_rejects_dangerous_aliased_operations pass. Toolset serialization round-trips byte-for-byte; validate/list/show/run share the AUTO-006 dispatcher. Full output in docs/evidence/automation/T-0105.md."
+evidence = "docs/evidence/cli/T-0310.md"
 id = "AUTO-007"
 notes = """
-A toolset is a versioned JSON document mapping a friendly alias to an action
-file, an action name, and optional string parameter defaults. Aliases are
-listed in sorted order and toolset JSON serializes canonically. Validation
-rejects empty names/toolsets/aliases/file/action values, empty default keys,
-unsupported versions, malformed shapes, and aliases in DANGEROUS_ALIASES
-(case-insensitive, '-'/'_' equivalent: exec, shell, cmd, powershell, bash,
-delete, format, security, custom-command, ...). Running an alias also rejects
-target actions containing a Security or CustomCommand step
-(dangerous_operation) so a friendly name cannot launder an unchecked
-operation. Defaults are applied to steps that lack that parameter key;
-existing values win. Honest scope: aliases select saved actions and stage
-them through the same no-mutation executor; no shell/process execution and no
-WASM plugin host (AUTO-008 remains out of scope).
+Verified through `pdfxi toolset list|validate|show|run`.
+
+list reports the toolset name and every alias in sorted order with its action
+file, action name and sorted defaults. validate reparses and calls
+Toolset::validate, rejecting dangerous aliases (shell, cmd, delete, ...). show
+prints one alias or fails with the available alias list. run resolves a relative
+action file against the toolset directory (rejecting .. and root components),
+loads the action, requires the named action, refuses any Security or
+CustomCommand step (mirroring the API), applies defaults only to steps that lack
+the key, and delegates to the same staging executor and report shape as action
+run. DANGEROUS_KINDS/DANGEROUS_ALIASES are now re-exported from
+pdfxi-automation.
+
+Evidence: a maintenance toolset with daily (nightly, defaults target=daily.pdf)
+and danger (unsafe) lists 2 tools with the default rendered; validate reports
+valid true; show prints alias/file/action/defaults. Running daily with
+fixtures/minimal.pdf and an output dir succeeds; the save step artifact is
+target/tmp/tools/out/daily.pdf, proving the default supplied the export target.
+The danger alias fails with 'aliases a dangerous operation', an escape alias
+fails with 'escapes the toolset directory', an unknown alias reports the
+available list, malformed JSON fails, and a shell alias is rejected at
+validation. Missing input files and a missing --input are rejected.
+
+Gates: cargo test -p pdfxi-cli --test cli toolset_ = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: run uses the staging executor, so no PDF is written; dangerous step kinds
+remain blocked and filesystem effects stay the executor's responsibility.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::toolset_lists_validates_and_shows_tools",
+    "cli::toolset_run_applies_defaults_and_rejects_dangerous_actions",
     "toolset::tests::parse_validate_and_serialize_are_deterministic",
     "toolset::tests::defaults_are_sorted_and_preserved",
     "toolset::tests::dangerous_aliases_are_rejected_case_insensitively",

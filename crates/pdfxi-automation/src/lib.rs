@@ -153,7 +153,10 @@ pub use sequence_batch::{
     BatchReportEntry, RecordingRunner, SequenceBatchError, SequenceBatchItem, SequenceBatchQueue,
     SequenceBatchReport, SequenceBatchState, SequenceStepRunner,
 };
-pub use toolset::{TOOLSET_VERSION, Tool, Toolset, ToolsetError};
+pub use toolset::{
+    DANGEROUS_ALIASES, DANGEROUS_KINDS, TOOLSET_VERSION, Tool, Toolset, ToolsetError,
+    is_dangerous_alias,
+};
 pub use watched::{
     FileOutcome, FileOutcomeState, FolderConverter, FolderPlan, PassthroughConverter, PollReport,
     ProcessedMarkers, WATCHED_MAX_DEPTH, WATCHED_MAX_FILE_BYTES, WATCHED_MAX_FILES, WatchedFolder,

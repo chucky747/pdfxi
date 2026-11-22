@@ -1,0 +1,21 @@
+{
+  "id": "T-0310",
+  "lane": "automation",
+  "title": "Toolset CLI host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0309"],
+  "owns": [
+    "crates/pdfxi-cli/src/toolset.rs",
+    "crates/pdfxi-cli/src/action.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "crates/pdfxi-automation/src/lib.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0310.md",
+    "orchestration/feature-updates/T-0310.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli toolset_ passes; pdfxi toolset list/validate/show/run work on real toolset and action files, apply defaults, reject dangerous actions and path escapes; AUTO-007 moves to verified.",
+  "notes": "Adds the CLI toolset group, a defaults-aware action runner helper, and exports DANGEROUS_KINDS/DANGEROUS_ALIASES from pdfxi-automation.",
+  "evidence": "docs/evidence/cli/T-0310.md"
+}

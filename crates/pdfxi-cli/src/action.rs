@@ -510,6 +510,51 @@ pub fn run_action(
     Ok(())
 }
 
+/// Runs a named action with parameter defaults applied to steps that lack them.
+///
+/// Shared by `pdfxi toolset run`; the caller has already checked the action for
+/// dangerous step kinds.
+pub fn run_action_with_defaults(
+    file: &Path,
+    name: &str,
+    defaults: &[(String, String)],
+    inputs: &[PathBuf],
+    output_dir: Option<&Path>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let library = load_library(file)?;
+    let mut action = library
+        .get(name)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no action named '{name}' in '{}'; available actions: {}",
+                file.display(),
+                available_names(&library)
+            )
+        })?
+        .clone();
+    action
+        .validate()
+        .with_context(|| format!("action '{name}' in '{}' failed validation", file.display()))?;
+    action.apply_defaults(defaults);
+
+    let report = build_run_report(&action, inputs, output_dir)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report.output)?);
+    } else {
+        for job in &report.output.jobs {
+            println!(
+                "{}\t{}\t{}\t{}",
+                job.id, job.input, job.state, job.outcome.summary
+            );
+        }
+    }
+    if report.failed > 0 {
+        bail!("{} of {} job(s) failed", report.failed, report.total);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

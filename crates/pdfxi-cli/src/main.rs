@@ -66,6 +66,8 @@ mod action;
 mod api;
 /// pdfxi ops: enumerate and resolve scriptable automation operations.
 mod ops;
+/// pdfxi toolset: parse, inspect and run named tool aliases.
+mod toolset;
 /// pdfxi watch: one host-driven poll of a watched folder.
 mod watch;
 
@@ -717,6 +719,12 @@ enum Command {
         #[command(subcommand)]
         command: OpsCommand,
     },
+    /// Manage named toolsets that map aliases to saved actions.
+    Toolset {
+        /// The toolset operation to perform.
+        #[command(subcommand)]
+        command: ToolsetCommand,
+    },
     /// Poll a watched folder once through a deterministic schedule.
     ///
     /// Advances host ticks through `PollSchedule`, polls when due, writes
@@ -752,6 +760,53 @@ enum Command {
         /// Number of host ticks to advance (default: 1).
         #[arg(long, default_value_t = 1)]
         ticks: u64,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi toolset` command group.
+#[derive(Debug, Subcommand)]
+enum ToolsetCommand {
+    /// List the aliases and defaults in a toolset file.
+    List {
+        /// Path to the toolset JSON file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a toolset file.
+    Validate {
+        /// Path to the toolset JSON file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one alias and its parameter defaults.
+    Show {
+        /// Path to the toolset JSON file.
+        file: PathBuf,
+        /// Alias to display.
+        alias: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run one alias over input files with its defaults applied.
+    Run {
+        /// Path to the toolset JSON file.
+        file: PathBuf,
+        /// Alias to run.
+        alias: String,
+        /// Input file; repeat for each job.
+        #[arg(long = "input", value_name = "PATH", required = true)]
+        inputs: Vec<PathBuf>,
+        /// Directory that staged export targets resolve against.
+        #[arg(long, value_name = "DIR")]
+        output_dir: Option<PathBuf>,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -2588,6 +2643,18 @@ fn main() -> anyhow::Result<()> {
             ticks,
             json,
         ),
+        Command::Toolset { command } => match command {
+            ToolsetCommand::List { file, json } => toolset::run_list(&file, json),
+            ToolsetCommand::Validate { file, json } => toolset::run_validate(&file, json),
+            ToolsetCommand::Show { file, alias, json } => toolset::run_show(&file, &alias, json),
+            ToolsetCommand::Run {
+                file,
+                alias,
+                inputs,
+                output_dir,
+                json,
+            } => toolset::run_tool(&file, &alias, &inputs, output_dir.as_deref(), json),
+        },
     }
 }
 

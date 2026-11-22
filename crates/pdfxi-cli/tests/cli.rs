@@ -3751,6 +3751,216 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn toolset_lists_validates_and_shows_tools() {
+    let dir = TempDir::new();
+    fs::write(
+        dir.child("actions.txt"),
+        b"ACTION\tnightly\tNightly staging\nSTEP\tload\timport\nSTEP\tsave\texport\n\nACTION\tweekly\tWeekly\nSTEP\tload\timport\n",
+    )
+    .expect("write actions");
+    fs::write(
+        dir.child("tools.json"),
+        br#"{
+  "version": 1,
+  "name": "maintenance",
+  "tools": {
+    "daily": { "file": "actions.txt", "action": "nightly", "defaults": { "target": "daily.pdf" } },
+    "weekly": { "file": "actions.txt", "action": "weekly" }
+  }
+}"#,
+    )
+    .expect("write toolset");
+    let file = dir.child("tools.json");
+    let file_arg = file.to_str().expect("utf-8");
+
+    let listed = run(&["toolset", "list", file_arg, "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    assert_eq!(value["name"], "maintenance");
+    assert_eq!(value["count"], 2);
+    let tools = value["tools"].as_array().expect("tools");
+    let aliases: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool["alias"].as_str())
+        .collect();
+    assert_eq!(aliases, ["daily", "weekly"]);
+    assert_eq!(tools[0]["action"], "nightly");
+    assert_eq!(tools[0]["defaults"]["target"], "daily.pdf");
+    assert_eq!(tools[1]["defaults"], serde_json::json!({}));
+
+    let text = run(&["toolset", "list", file_arg]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    assert!(stdout(&text).contains("tools: 2"), "{}", stdout(&text));
+    assert!(
+        stdout(&text).contains("defaults: target=daily.pdf"),
+        "{}",
+        stdout(&text)
+    );
+
+    let validated = run(&["toolset", "validate", file_arg, "--json"]);
+    assert!(validated.status.success(), "stderr: {}", stderr(&validated));
+    let value: Value = serde_json::from_str(&stdout(&validated)).expect("valid JSON");
+    assert_eq!(value["valid"], true);
+    assert_eq!(value["tools"], 2);
+
+    let shown = run(&["toolset", "show", file_arg, "daily", "--json"]);
+    assert!(shown.status.success(), "stderr: {}", stderr(&shown));
+    let value: Value = serde_json::from_str(&stdout(&shown)).expect("valid JSON");
+    assert_eq!(value["alias"], "daily");
+    assert_eq!(value["file"], "actions.txt");
+    assert_eq!(value["action"], "nightly");
+    assert_eq!(value["defaults"]["target"], "daily.pdf");
+
+    let unknown = run(&["toolset", "show", file_arg, "nope"]);
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("available tools: daily, weekly"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    fs::write(dir.child("broken.json"), b"not json").expect("write broken");
+    let broken = run(&[
+        "toolset",
+        "validate",
+        dir.child("broken.json").to_str().expect("utf-8"),
+    ]);
+    assert!(!broken.status.success());
+
+    fs::write(
+        dir.child("dangerous.json"),
+        br#"{"version":1,"name":"bad","tools":{"shell":{"file":"actions.txt","action":"nightly"}}}"#,
+    )
+    .expect("write dangerous");
+    let dangerous = run(&[
+        "toolset",
+        "validate",
+        dir.child("dangerous.json").to_str().expect("utf-8"),
+    ]);
+    assert!(!dangerous.status.success());
+    assert!(
+        stderr(&dangerous).contains("dangerous"),
+        "{}",
+        stderr(&dangerous)
+    );
+}
+
+#[test]
+fn toolset_run_applies_defaults_and_rejects_dangerous_actions() {
+    let dir = TempDir::new();
+    fs::write(
+        dir.child("actions.txt"),
+        b"ACTION\tnightly\tNightly staging\nSTEP\tload\timport\nSTEP\tsave\texport\n\nACTION\tunsafe\tUnsafe\nSTEP\tsec\tsecurity\nPARAM\tpassword\tsecret\n",
+    )
+    .expect("write actions");
+    fs::write(
+        dir.child("tools.json"),
+        br#"{
+  "version": 1,
+  "name": "maintenance",
+  "tools": {
+    "daily": { "file": "actions.txt", "action": "nightly", "defaults": { "target": "daily.pdf" } },
+    "danger": { "file": "actions.txt", "action": "unsafe" },
+    "escape": { "file": "../outside.txt", "action": "nightly" }
+  }
+}"#,
+    )
+    .expect("write toolset");
+    let file = dir.child("tools.json");
+    let file_arg = file.to_str().expect("utf-8");
+    let out = TempDir::new();
+    let input = root_fixture("minimal.pdf");
+
+    let run_json = run(&[
+        "toolset",
+        "run",
+        file_arg,
+        "daily",
+        "--input",
+        input.to_str().expect("utf-8"),
+        "--output-dir",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(run_json.status.success(), "stderr: {}", stderr(&run_json));
+    let value: Value = serde_json::from_str(&stdout(&run_json)).expect("valid JSON");
+    assert_eq!(value["action"], "nightly");
+    let jobs = value["jobs"].as_array().expect("jobs");
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0]["state"], "succeeded");
+    let steps = jobs[0]["outcome"]["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 2);
+    let save = steps
+        .iter()
+        .find(|step| step["step_id"] == "save")
+        .expect("save step");
+    assert_eq!(save["artifact_kind"], "path");
+    let artifact = save["artifact"].as_str().unwrap_or("");
+    assert!(
+        artifact.ends_with("daily.pdf"),
+        "the tool default supplies the export target: {artifact}"
+    );
+
+    let run_text = run(&[
+        "toolset",
+        "run",
+        file_arg,
+        "daily",
+        "--input",
+        input.to_str().expect("utf-8"),
+    ]);
+    assert!(run_text.status.success(), "stderr: {}", stderr(&run_text));
+    assert!(
+        stdout(&run_text).contains("succeeded"),
+        "{}",
+        stdout(&run_text)
+    );
+
+    let danger = run(&[
+        "toolset",
+        "run",
+        file_arg,
+        "danger",
+        "--input",
+        input.to_str().expect("utf-8"),
+    ]);
+    assert!(!danger.status.success());
+    assert!(
+        stderr(&danger).contains("dangerous operation"),
+        "{}",
+        stderr(&danger)
+    );
+
+    let escaped = run(&[
+        "toolset",
+        "run",
+        file_arg,
+        "escape",
+        "--input",
+        input.to_str().expect("utf-8"),
+    ]);
+    assert!(!escaped.status.success());
+    assert!(
+        stderr(&escaped).contains("escapes the toolset directory"),
+        "{}",
+        stderr(&escaped)
+    );
+
+    let missing_input = run(&[
+        "toolset",
+        "run",
+        file_arg,
+        "daily",
+        "--input",
+        TempPath::new("pdf").arg(),
+    ]);
+    assert!(!missing_input.status.success());
+
+    let no_inputs = run(&["toolset", "run", file_arg, "daily"]);
+    assert!(!no_inputs.status.success(), "--input is required");
+}
+
+#[test]
 fn watch_processes_files_and_persists_markers() {
     let watched = TempDir::new();
     let out = TempDir::new();
