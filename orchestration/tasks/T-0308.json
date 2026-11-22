@@ -1,0 +1,19 @@
+{
+  "id": "T-0308",
+  "lane": "automation",
+  "title": "Scriptable-operation registry host",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0307"],
+  "owns": [
+    "crates/pdfxi-cli/src/ops.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0308.md",
+    "orchestration/feature-updates/T-0308.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli ops_ passes; pdfxi ops list enumerates every default operation with typed parameters and pdfxi ops resolve produces deterministic typed call plans and rejects invalid arguments; AUTO-005 moves to verified.",
+  "notes": "CLI adapter over pdfxi_automation::OperationRegistry: deterministic listing and validated call-plan resolution.",
+  "evidence": "docs/evidence/cli/T-0308.md"
+}

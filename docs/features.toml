@@ -3797,37 +3797,48 @@ title = "Sandboxed Acrobat-compatible JavaScript subset"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-automation/src/operation_registry.rs",
-    "crates/pdfxi-automation/src/lib.rs",
-    "crates/pdfxi-automation/src/api.rs",
-    "crates/pdfxi-cli/src/main.rs",
-    "crates/pdfxi-cli/src/action.rs",
-    "docs/evidence/automation/T-0160.md",
+    "crates/pdfxi-cli/src/ops.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0308.md",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation: 198 passed, 0 failed (12 new operation_registry::tests::* covering sorted enumeration, typed descriptors, unknown operation, missing/bad/unknown/duplicate parameters, empty inputs, deterministic typed call plans and negative integers), 0 doc tests; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0160.md."
+evidence = "docs/evidence/cli/T-0308.md"
 id = "AUTO-005"
 notes = """
-T-0160 adds `pdfxi_automation::operation_registry`, the library-level model for
-scripting every operation. `OperationRegistry::with_defaults` registers one
-`OperationDescriptor` per `SUPPORTED_COMMANDS` entry, each with typed
-`ParamDescriptor`s (`ParamType::{String,Bool,Integer,Path}`). Enumeration via
-`names`/`operations` is deterministic alphabetical order. `resolve(&[String])`
-parses `name=value` arguments, rejects empty input, unknown operations,
-malformed/unknown/duplicate parameters, missing required parameters, and
-invalid bool/integer values with typed `ResolveError`s, then produces a typed
-`CallPlan` whose `arguments()` iterate in alphabetical key order and whose
-`summary()` is byte-stable. Resolution performs no execution, filesystem,
-network, or process access. All public items have rustdoc; no new dependency,
-unsafe, or non-test panic. Honest remaining scope is outside this row's library
-boundary: the CLI crate was NOT edited — this registry is the model a CLI
-adapter can consume; exposing every descriptor through `pdfxi-cli` argument
-parsing remains a separate CLI task. Prior T-0050 CLI action/droplet evidence is
-retained below.
+Verified through `pdfxi ops list [--json]` and `pdfxi ops resolve <NAME>
+[NAME=VALUE ...] [--json]`.
+
+list builds OperationRegistry::with_defaults and prints every operation in
+deterministic alphabetical order with its parameters (optional marked ? and
+stable string/bool/integer/path types). JSON carries operations and count.
+resolve prepends the operation name and calls registry.resolve, which validates
+the operation, parameter names, required values, duplicates and typed values;
+output is alphabetical by parameter with value/type and the plan's stable
+summary. Resolution never executes an action, opens a file or touches the
+network.
+
+Evidence: list reports 10 operations in sorted order (commands, dry-run,
+list-actions, list-toolsets, run-batch, run-toolset, show-action, show-toolset,
+validate-toolset, version), with run-batch as
+action:string,input?:path,overwrite?:bool. resolve run-batch
+action=batch.act input=in.pdf overwrite=true reports typed string/path/bool rows
+and summary run-batch\taction=batch.act\tinput=in.pdf\toverwrite=true. A
+no-argument version resolves to an empty plan. Missing required values, unknown
+operations, unknown parameters, duplicates, malformed arguments and invalid
+integer/bool values are typed errors.
+
+Gates: cargo test -p pdfxi-cli --test cli ops_ = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: exposes the registry contract, not a generic executor; execution stays
+with action/droplet/api. Path values are validated as strings by the model and
+file safety remains the executing command's responsibility.
 """
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
+    "cli::ops_list_enumerates_every_default_operation",
+    "cli::ops_resolve_builds_typed_plans_and_rejects_bad_arguments",
     "operation_registry::tests::enumeration_is_sorted_and_deterministic",
     "operation_registry::tests::descriptors_carry_typed_parameters",
     "operation_registry::tests::unknown_operation_is_typed",

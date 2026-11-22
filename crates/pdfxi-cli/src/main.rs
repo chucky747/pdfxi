@@ -64,6 +64,8 @@ mod action;
 
 // Local line-delimited JSON automation API over stdin/stdout (`api`).
 mod api;
+/// pdfxi ops: enumerate and resolve scriptable automation operations.
+mod ops;
 
 // PDF creation (`create`) and accessible-text export (`export`) built on
 // pdfxi-convert and the accessibility tree builder.
@@ -706,6 +708,34 @@ enum Command {
         /// Read and answer one request, then exit instead of looping to EOF.
         #[arg(long)]
         once: bool,
+    },
+    /// Enumerate and resolve scriptable automation operations.
+    Ops {
+        /// The registry operation to perform.
+        #[command(subcommand)]
+        command: OpsCommand,
+    },
+}
+
+/// Operations on the `pdfxi ops` command group.
+#[derive(Debug, Subcommand)]
+enum OpsCommand {
+    /// List every scriptable operation and its typed parameters.
+    List {
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve `name=value` arguments into a validated call plan.
+    Resolve {
+        /// Operation name, for example `run-batch`.
+        name: String,
+        /// Typed argument `name=value`; repeat for each parameter.
+        #[arg(value_name = "NAME=VALUE")]
+        assignments: Vec<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -2484,6 +2514,14 @@ fn main() -> anyhow::Result<()> {
             json,
         } => repair::run_repair(&input, &output, json),
         Command::Api { once } => api::run_api(once),
+        Command::Ops { command } => match command {
+            OpsCommand::List { json } => ops::run_list(json),
+            OpsCommand::Resolve {
+                name,
+                assignments,
+                json,
+            } => ops::run_resolve(&name, &assignments, json),
+        },
     }
 }
 

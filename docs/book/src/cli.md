@@ -33,6 +33,8 @@ pdfxi <COMMAND> --help
 | `decorate watermark <FILE> --out PATH --text TEXT [--opacity F] [--rotation D] [--tile] [--json]` | Stamp a text watermark | verified (`EDIT-009`) |
 | `decorate bates <FILE> --out PATH [--prefix TEXT] [--start N] [--digits N] [--increment N] [--corner C] [--json]` | Stamp sequential Bates numbers | verified (`EDIT-010`) |
 | `api [--once]` | Local JSON request/response API over stdio | verified (`AUTO-006`) |
+| `ops list [--json]` | List scriptable operations and typed parameters | verified (`AUTO-005`) |
+| `ops resolve <NAME> [NAME=VALUE ...] [--json]` | Resolve a validated typed call plan | verified (`AUTO-005`) |
 | `annotate add <FILE> --out PATH --kind free-text\|callout\|cloud\|pencil\|stamp\|file-attachment [--rect x0,y0,x1,y1] [--text T] [--ink STROKES] [--stamp-name N] [--attachment PATH] [--json]` | Add a drawing annotation | verified (`REVIEW-002`, `REVIEW-003`) |
 | `annotate list <FILE> [--page N] [--json]` | List one page's annotations | verified (`REVIEW-002`) |
 | `outline list <FILE> [--json]` | List the bookmark tree | verified (`EDIT-011`) |
@@ -133,7 +135,11 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `measure` validates the supplied page points against the page's media box and
+- `ops` is the CLI adapter for `pdfxi_automation::OperationRegistry`. `list`
+  prints every default operation with `name`, optional `?` and type markers;
+  `resolve` turns `name=value` arguments into a typed, alphabetically ordered
+  call plan, rejecting unknown operations/parameters, missing required values,
+  duplicates and invalid booleans/integers. Resolution never executes anything.- `measure` validates the supplied page points against the page's media box and
   reports a distance for two points or polygon area and perimeter for three or
   more. Units convert through `MeasureScale` (`pt`, `in`, `mm`, `cm`, `ft`, or a
   scan DPI in inches); area uses the square of the linear factor. Every result

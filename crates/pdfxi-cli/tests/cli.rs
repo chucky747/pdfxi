@@ -3540,6 +3540,178 @@ fn font_add_text_handles_an_authoring_page_and_alignment() {
 }
 
 #[test]
+fn ops_list_enumerates_every_default_operation() {
+    let listed = run(&["ops", "list", "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    assert_eq!(value["count"], 10);
+    let operations = value["operations"].as_array().expect("operations");
+    let names: Vec<&str> = operations
+        .iter()
+        .filter_map(|operation| operation["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "commands",
+            "dry-run",
+            "list-actions",
+            "list-toolsets",
+            "run-batch",
+            "run-toolset",
+            "show-action",
+            "show-toolset",
+            "validate-toolset",
+            "version"
+        ]
+    );
+    let batch = operations
+        .iter()
+        .find(|operation| operation["name"] == "run-batch")
+        .expect("run-batch");
+    let params = batch["params"].as_array().expect("params");
+    assert_eq!(params.len(), 3);
+    assert_eq!(params[0]["name"], "action");
+    assert_eq!(params[0]["ty"], "string");
+    assert_eq!(params[0]["required"], true);
+    assert_eq!(params[1]["name"], "input");
+    assert_eq!(params[1]["ty"], "path");
+    assert_eq!(params[1]["required"], false);
+    assert_eq!(params[2]["name"], "overwrite");
+    assert_eq!(params[2]["ty"], "bool");
+    let version = operations
+        .iter()
+        .find(|operation| operation["name"] == "version")
+        .expect("version");
+    assert_eq!(version["params"].as_array().expect("params").len(), 0);
+
+    let repeated = run(&["ops", "list", "--json"]);
+    assert_eq!(
+        stdout(&listed),
+        stdout(&repeated),
+        "listing is deterministic"
+    );
+
+    let text = run(&["ops", "list"]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    let printed = stdout(&text);
+    assert!(printed.contains("operations: 10"), "{printed}");
+    assert!(
+        printed.contains("run-batch\taction:string,input?:path,overwrite?:bool"),
+        "{printed}"
+    );
+}
+
+#[test]
+fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
+    let resolved = run(&[
+        "ops",
+        "resolve",
+        "run-batch",
+        "action=batch.act",
+        "input=in.pdf",
+        "overwrite=true",
+        "--json",
+    ]);
+    assert!(resolved.status.success(), "stderr: {}", stderr(&resolved));
+    let value: Value = serde_json::from_str(&stdout(&resolved)).expect("valid JSON");
+    assert_eq!(value["operation"], "run-batch");
+    let arguments = value["arguments"].as_array().expect("arguments");
+    assert_eq!(arguments.len(), 3);
+    assert_eq!(arguments[0]["name"], "action");
+    assert_eq!(arguments[0]["ty"], "string");
+    assert_eq!(arguments[0]["value"], "batch.act");
+    assert_eq!(arguments[1]["name"], "input");
+    assert_eq!(arguments[1]["ty"], "path");
+    assert_eq!(arguments[2]["name"], "overwrite");
+    assert_eq!(arguments[2]["ty"], "bool");
+    assert_eq!(arguments[2]["value"], "true");
+    assert_eq!(
+        value["summary"],
+        "run-batch\taction=batch.act\tinput=in.pdf\toverwrite=true"
+    );
+
+    let version = run(&["ops", "resolve", "version", "--json"]);
+    assert!(version.status.success(), "stderr: {}", stderr(&version));
+    let value: Value = serde_json::from_str(&stdout(&version)).expect("valid JSON");
+    assert_eq!(value["operation"], "version");
+    assert_eq!(value["arguments"].as_array().expect("arguments").len(), 0);
+    assert_eq!(value["summary"], "version");
+
+    let toolset = run(&["ops", "resolve", "run-toolset", "name=demo", "limit=3"]);
+    assert!(toolset.status.success(), "stderr: {}", stderr(&toolset));
+    assert!(
+        stdout(&toolset).contains("limit\tinteger\t3"),
+        "{}",
+        stdout(&toolset)
+    );
+
+    let missing = run(&["ops", "resolve", "run-batch", "input=x"]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("requires parameter 'action'"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let unknown = run(&["ops", "resolve", "nope"]);
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("unknown operation 'nope'"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    let unknown_param = run(&["ops", "resolve", "run-batch", "action=a", "colour=red"]);
+    assert!(!unknown_param.status.success());
+    assert!(
+        stderr(&unknown_param).contains("has no parameter 'colour'"),
+        "{}",
+        stderr(&unknown_param)
+    );
+
+    let duplicate = run(&["ops", "resolve", "run-batch", "action=a", "action=b"]);
+    assert!(!duplicate.status.success());
+    assert!(
+        stderr(&duplicate).contains("supplied more than once"),
+        "{}",
+        stderr(&duplicate)
+    );
+
+    let malformed = run(&["ops", "resolve", "run-batch", "action"]);
+    assert!(!malformed.status.success());
+    assert!(
+        stderr(&malformed).contains("malformed"),
+        "{}",
+        stderr(&malformed)
+    );
+
+    let bad_integer = run(&["ops", "resolve", "run-toolset", "name=t", "limit=abc"]);
+    assert!(!bad_integer.status.success());
+    assert!(
+        stderr(&bad_integer).contains("expects an integer"),
+        "{}",
+        stderr(&bad_integer)
+    );
+
+    let bad_bool = run(&["ops", "resolve", "run-batch", "action=a", "overwrite=maybe"]);
+    assert!(!bad_bool.status.success());
+    assert!(
+        stderr(&bad_bool).contains("expects true or false"),
+        "{}",
+        stderr(&bad_bool)
+    );
+
+    let empty_name = run(&["ops", "resolve", ""]);
+    assert!(!empty_name.status.success());
+    assert!(
+        stderr(&empty_name).contains("must not be empty"),
+        "{}",
+        stderr(&empty_name)
+    );
+}
+
+#[test]
 fn measure_distance_area_and_perimeter_on_real_pages() {
     let page = root_fixture("minimal.pdf");
     let distance = run(&[
