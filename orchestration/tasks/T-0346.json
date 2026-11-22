@@ -1,0 +1,19 @@
+{
+  "id": "T-0346",
+  "lane": "convert",
+  "title": "Print-production host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0345"],
+  "owns": [
+    "crates/pdfxi-cli/src/production.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0346.md",
+    "orchestration/feature-updates/T-0346.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli production_ passes; pdfxi production plan/apply resolve the real ProductionPlan, write an explicit BleedBox and painted marks, and reject invalid options; PRINT-008 moves to verified.",
+  "notes": "Hosts pdfxi_app::print ProductionPlan (marks, bleed, separations, output intent) on real documents; droplet/watch/preflight remain the automation hosts.",
+  "evidence": "docs/evidence/cli/T-0346.md"
+}

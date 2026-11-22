@@ -134,6 +134,7 @@ mod export;
 // (`marks`) added for T-0131. Both use the core application API.
 mod marks;
 mod preflight;
+mod production;
 // Virtual PDF printer control: install/status/remove the "PDFXI PDF" queue and
 // capture one finished job (`printer`).
 mod printer;
@@ -186,7 +187,7 @@ mod repair;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use pdfxi_core::Document;
 use pdfxi_text::{SearchIndex, SearchOptions, TextPage, TextSpan};
 use serde::Serialize;
@@ -988,6 +989,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Plan or apply print-production marks, bleed, separations and intent.
+    Production {
+        /// Production action.
+        #[command(subcommand)]
+        command: ProductionCommand,
     },
     /// Apply printer marks to every page of a PDF.
     ///
@@ -2079,6 +2086,48 @@ enum StructureCommand {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+}
+
+/// Options shared by the `production` actions.
+#[derive(Debug, Args)]
+struct ProductionArgs {
+    /// Source PDF.
+    input: PathBuf,
+    /// Bleed as one value or `T,R,B,L` in points.
+    #[arg(long, default_value = "0")]
+    bleed: String,
+    /// Printer marks: `crop`, `registration`, `colour-bars`, `page-info`, `all` or `none`.
+    #[arg(long, default_value = "none")]
+    marks: String,
+    /// Separation as `NAME:process` or `NAME:spot` (repeatable).
+    #[arg(long = "separation", value_name = "NAME:KIND")]
+    separations: Vec<String>,
+    /// Output intent as `SUBTYPE|NAME|REGISTRY|INTENT`.
+    #[arg(long, value_name = "SPEC")]
+    intent: Option<String>,
+    /// Emit machine-readable JSON with stable field names.
+    #[arg(long)]
+    json: bool,
+}
+
+/// Actions of the `production` command.
+#[derive(Debug, Subcommand)]
+enum ProductionCommand {
+    /// Resolve the production plan without writing a document.
+    Plan {
+        /// Production options.
+        #[command(flatten)]
+        options: ProductionArgs,
+    },
+    /// Apply the resolved bleed box and printer marks, then write a new PDF.
+    Apply {
+        /// Production options.
+        #[command(flatten)]
+        options: ProductionArgs,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
     },
 }
 
@@ -4335,6 +4384,25 @@ fn run_cli() -> anyhow::Result<()> {
             output,
             json,
         } => preflight::run_preflight(&profile, &input, fix, output.as_deref(), json),
+        Command::Production { command } => match command {
+            ProductionCommand::Plan { options } => production::plan(
+                &options.input,
+                &options.bleed,
+                &options.marks,
+                &options.separations,
+                options.intent.as_deref(),
+                options.json,
+            ),
+            ProductionCommand::Apply { options, out } => production::apply(
+                &options.input,
+                &out,
+                &options.bleed,
+                &options.marks,
+                &options.separations,
+                options.intent.as_deref(),
+                options.json,
+            ),
+        },
         Command::Marks {
             input,
             output,

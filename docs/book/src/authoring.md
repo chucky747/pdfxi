@@ -40,6 +40,7 @@ command.
 | Output preview and separations | `PRINT-004` | verified | `pdfxi-app::print::SeparationsPlan` + content scan | `separations [--plate]` |
 | Ink manager and overprint preview | `PRINT-005` | verified | `pdfxi-app::print` + `/ExtGState` scan | `ink` |
 | PDF/A, PDF/X, PDF/E and PDF/VT validation | `PRINT-002` | verified | `pdfxi-standards` + `pdfxi-convert::preflight` | `preflight <profile>` |
+| Droplets, hot folders and batch preflight | `PRINT-008` | verified | `pdfxi-app::print` + automation | `production plan/apply`, `droplet`, `watch` |
 | Deployment preferences and customization | `PLAT-006` | verified | `pdfxi-core::preferences` | `policy show/write/merge/check` |
 | Shell integration and file associations | `PLAT-005` | verified | `pdfxi-core::association` | `shell plan/register/status/unregister` |
 | Browser integration | `PLAT-004` | verified | `pdfxi-core::browser_handoff` | `handoff open/parse/link` |
@@ -642,6 +643,26 @@ the signer subject and SHA-256 certificate fingerprint, and the `/ByteRange`.
 It exits non-zero unless the signature is fully valid. Certificate trust is
 reported as `null` (not evaluated), never as trusted. Key material and
 passwords are never printed.
+### Print production
+
+`PRINT-008` (verified) hosts the print-production planner from
+`pdfxi_app::print`. Droplets, hot folders and batch preflight keep their own
+commands (`pdfxi droplet`, `pdfxi watch`, `pdfxi preflight`).
+
+```text
+pdfxi production plan INPUT [--bleed V|T,R,B,L] [--marks LIST]
+    [--separation NAME:process|NAME:spot ...]
+    [--intent SUBTYPE|NAME|REGISTRY|INTENT] [--json]
+pdfxi production apply INPUT --out PATH [same options] [--json]
+```
+
+`plan` resolves `ProductionPlan` from the page's TrimBox and MediaBox and reports
+the mark count, bleed rectangle, canonical separations and output-intent
+decision. `apply` rebuilds the plan per page, writes an explicit `/BleedBox`,
+paints the selected printer marks (`crop`, `registration`, `colour-bars`,
+`page-info`), then saves and reparses before writing. `--bleed` is capped at
+72 pt; with no `--separation` the four process inks are planned. A page with no
+room for the requested marks is a typed error.
 ### Conformance validation
 
 `PRINT-002` (verified) hosts the `pdfxi-standards` profiles through

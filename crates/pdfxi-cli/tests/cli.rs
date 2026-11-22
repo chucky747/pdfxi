@@ -2515,6 +2515,158 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// production: print-production planning and application (T-0346)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn production_plans_and_applies_bleed_marks_and_intent() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+
+    let planned = run(&["production", "plan", pdf.arg(), "--json"]);
+    assert!(planned.status.success(), "stderr: {}", stderr(&planned));
+    let value: Value = serde_json::from_str(&stdout(&planned)).expect("plan JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["trim"]["width"], 552.0);
+    assert_eq!(value["trim"]["height"], 732.0);
+    assert_eq!(value["sheet"]["width"], 612.0);
+    assert_eq!(value["marks"], 0);
+    assert_eq!(value["bleed"]["x"], 0.0);
+    assert_eq!(value["bleed"]["width"], 552.0);
+    assert_eq!(
+        value["separations"].as_array().expect("separations").len(),
+        4
+    );
+    assert!(
+        value["output_intent"]
+            .as_str()
+            .unwrap_or("")
+            .contains("none declared")
+    );
+    assert_eq!(value["reparsed"], false);
+    assert_eq!(value["out"], Value::Null);
+
+    let out = TempOut::new("pdf");
+    let applied = run(&[
+        "production",
+        "apply",
+        pdf.arg(),
+        "--out",
+        out.arg(),
+        "--bleed",
+        "3",
+        "--marks",
+        "all",
+        "--separation",
+        "Cyan:process",
+        "--separation",
+        "PANTONE 185 C:spot",
+        "--intent",
+        "pdfx|Coated FOGRA39|http://www.color.org|relativecolorimetric",
+        "--json",
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+    let value: Value = serde_json::from_str(&stdout(&applied)).expect("apply JSON");
+    assert_eq!(value["reparsed"], true);
+    assert_eq!(value["out"], out.arg());
+    assert_eq!(value["bleed"]["x"], -3.0);
+    assert_eq!(value["bleed"]["width"], 558.0);
+    assert!(value["marks"].as_u64().unwrap_or(0) > 0);
+    let separations = value["separations"].as_array().expect("separations");
+    assert_eq!(separations.len(), 2);
+    assert_eq!(separations[0], "Cyan(process)");
+    assert_eq!(separations[1], "PANTONE 185 C(spot)");
+    assert!(
+        value["output_intent"]
+            .as_str()
+            .unwrap_or("")
+            .contains("PDF/X Coated FOGRA39")
+    );
+
+    let bytes = fs::read(&out.path).expect("production output");
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("output reparses");
+    assert_eq!(document.page_count().expect("page count"), 1);
+    let boxes = document.page_boxes(0).expect("page boxes");
+    assert!(boxes.is_explicit(pdfxi_core::BoxKind::Bleed));
+    let bleed = boxes.rectangle(pdfxi_core::BoxKind::Bleed);
+    assert_eq!(bleed.left, 27.0);
+    assert_eq!(bleed.bottom, 27.0);
+    assert_eq!(bleed.right, 585.0);
+    assert_eq!(bleed.top, 765.0);
+    let text = String::from_utf8_lossy(&fs::read(&out.path).expect("output")).into_owned();
+    assert!(text.contains("PdfxiMarks"), "printer marks are painted");
+}
+
+#[test]
+fn production_rejects_bad_options_and_tight_sheets() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+    let out = TempOut::new("pdf");
+    let cases = [
+        (
+            vec!["production", "plan", pdf.arg(), "--bleed=-1"],
+            "finite and non-negative",
+        ),
+        (
+            vec!["production", "plan", pdf.arg(), "--bleed", "100"],
+            "0..=72",
+        ),
+        (
+            vec!["production", "plan", pdf.arg(), "--marks", "sparkle"],
+            "unknown mark family",
+        ),
+        (
+            vec!["production", "plan", pdf.arg(), "--separation", "Cyan"],
+            "NAME:process or NAME:spot",
+        ),
+        (
+            vec![
+                "production",
+                "plan",
+                pdf.arg(),
+                "--intent",
+                "pdfx|Name|Registry|sepia",
+            ],
+            "unsupported rendering intent",
+        ),
+        (
+            vec![
+                "production",
+                "plan",
+                pdf.arg(),
+                "--intent",
+                "bogus|Name|Registry|perceptual",
+            ],
+            "unknown output-intent subtype",
+        ),
+    ];
+    for (args, needle) in cases {
+        let output = run(&args);
+        assert!(!output.status.success(), "args: {args:?}");
+        assert!(
+            stderr(&output).contains(needle),
+            "{needle}: {}",
+            stderr(&output)
+        );
+    }
+
+    let tight = create_text_pdf("No bleed room.");
+    let failure = run(&[
+        "production",
+        "apply",
+        tight.arg(),
+        "--out",
+        out.arg(),
+        "--marks",
+        "crop",
+    ]);
+    assert!(!failure.status.success());
+    assert!(
+        stderr(&failure).contains("does not fit"),
+        "{}",
+        stderr(&failure)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // repair (EDIT-015)
 // ---------------------------------------------------------------------------
 

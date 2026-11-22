@@ -3790,34 +3790,61 @@ title = "Page boxes bleed crop and printer marks"
 docs = [
     "crates/pdfxi-app/src/print.rs",
     "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-cli/src/production.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/app/T-0150.md",
+    "docs/evidence/cli/T-0346.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New production tests: marks_placement_is_deterministic_and_bounded, bleed_bounds_expand_trim_and_validate_inputs, separations_plan_is_order_independent_and_validated, output_intent_reports_missing_single_and_multiple_intents, production_plan_combines_every_print_production_option. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
+evidence = "docs/evidence/cli/T-0346.md"
 id = "PRINT-008"
 notes = """
-T-0150 adds the print-production planners to pdfxi-app::print. MarksPlan places
-crop/registration/color-bar/page-info rectangles deterministically around a
-centred trim box and rejects marks that fall outside the sheet. BleedBounds
-validates per-edge bleed against a bounded maximum and expands the trim box.
-SeparationsPlan canonicalises inks (process first by name, then spots by name),
-assigns stable ids, and rejects empty/duplicate/oversized inputs.
-OutputIntentReport validates zero or one intent, normalises the ICC rendering
-intent name, reports missing/PDF-X warnings, and rejects ambiguity.
-ProductionPlan composes all four and is deterministic.
+The droplet runner, hot-folder poller and byte-level preflight already exist as
+`pdfxi droplet`, `pdfxi watch` and `pdfxi preflight`. This task hosts the
+print-production planner from pdfxi_app::print and applies it to real bytes.
 
-HOST BACKEND BOUNDARY: the host paints the marks, applies the bleed box, consumes
-the separation plates, and validates the output profile with a real CMM. The
-pre-existing droplet/hot-folder work on this id is unchanged.
+`pdfxi production plan INPUT [--bleed V|T,R,B,L] [--marks LIST]
+[--separation NAME:KIND ...] [--intent SUBTYPE|NAME|REGISTRY|INTENT] [--json]`
+reads page 1's TrimBox and MediaBox, builds
+ProductionPlan::build(trim, sheet, options) and reports the resolved mark count,
+bleed rectangle, canonical separations (process first), output-intent summary
+and warnings. `pdfxi production apply INPUT --out PATH [same options]` rebuilds
+the plan per page (mixed sizes work), writes the resolved /BleedBox through
+Document::set_page_boxes, paints the requested printer-mark families with the
+core API, saves, reparses and only then writes the output. --bleed accepts one
+value or T,R,B,L and is capped at 72 pt; --marks accepts crop, registration,
+colour-bars, page-info, all or none; --separation is NAME:process|NAME:spot and
+defaults to the four process inks; --intent is at most one pdfx/pdfa/iccbased
+intent with a bounded name/registry and supported rendering intent.
+
+Evidence: a 612x792 sheet with a 552x732 trim plans default CMYK and no marks;
+apply with 3 pt bleed, all four mark families, Cyan process + PANTONE 185 C spot
+and a PDF/X Coated FOGRA39 intent writes a 1,920-byte one-page PDF (reparsed)
+with 14 resolved marks, bleed [-3,-3,558,738], canonical separations, and an
+explicit /BleedBox [27 27 585 765]. The output contains the painted PdfxiMarks
+form. Bleed 100, negative bleed, an unknown mark family, a separation without a
+kind, an unsupported rendering intent, an unknown intent subtype and crop marks
+on a page with no margin all fail with typed errors.
+
+Gates: CLI production_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: plan resolution and application only (explicit /BleedBox, painted core
+printer marks, canonical separations, output-intent decision). No raster proof,
+real CMM ICC validation, trapping, imposition or plate output; those remain
+separate rows. The painted marks are the core printer marks; the planner's
+rectangle list is reported as the resolved plan.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "print::impose_tests::marks_placement_is_deterministic_and_bounded",
     "print::impose_tests::bleed_bounds_expand_trim_and_validate_inputs",
     "print::impose_tests::separations_plan_is_order_independent_and_validated",
     "print::impose_tests::output_intent_reports_missing_single_and_multiple_intents",
     "print::impose_tests::production_plan_combines_every_print_production_option",
+    "cli::production_plans_and_applies_bleed_marks_and_intent",
+    "cli::production_rejects_bad_options_and_tight_sheets",
 ]
 title = "Droplets hot folders and batch preflight"
 
