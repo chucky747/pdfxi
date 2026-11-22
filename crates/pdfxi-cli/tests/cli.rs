@@ -2255,6 +2255,91 @@ fn t0131_roomy_pdf() -> Vec<u8> {
     )
 }
 
+/// A PDF/VT-1-shaped fixture: PDF 1.6, XMP, a GTS_PDFX intent, print boxes,
+/// a catalog `/DPartRoot` and a `/DPart` association on the page.
+fn t0131_pdf_vt() -> Vec<u8> {
+    let content = "BT (Hi) Tj ET";
+    let xmp = "<?xpacket begin=\"\" id=\"W5M0\"?><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>\
+               <?xpacket end=\"w\"?>";
+    t0131_pdf(
+        "1.6",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R /OutputIntents [6 0 R] \
+             /DPartRoot 8 0 R >>"
+                .to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /CropBox [10 10 602 782] /BleedBox [20 20 592 772] /TrimBox [30 30 582 762] \
+             /Contents 4 0 R /DPart 8 0 R >>"
+                .to_owned(),
+            format!(
+                "<< /Length {} >>\nstream\n{}\nendstream",
+                content.len(),
+                content
+            ),
+            format!(
+                "<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{}\nendstream",
+                xmp.len(),
+                xmp
+            ),
+            "<< /Type /OutputIntent /S /GTS_PDFX /DestOutputProfile 7 0 R >>".to_owned(),
+            "<< /Length 0 /N 3 >>\nstream\n\nendstream".to_owned(),
+            "<< /Type /DPart /RecordLevel 0 /DParts [] >>".to_owned(),
+        ],
+    )
+}
+
+#[test]
+fn preflight_validates_pdf_vt_1_document_parts() {
+    let plain = create_text_pdf("No document parts.");
+    let missing = run(&["preflight", "PDF/VT-1", plain.arg(), "--json"]);
+    assert_eq!(
+        missing.status.code(),
+        Some(2),
+        "stderr: {}",
+        stderr(&missing)
+    );
+    let value: Value = serde_json::from_str(&stdout(&missing)).expect("preflight JSON");
+    let codes: Vec<&str> = value["before"]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        codes.contains(&"PDFVT1.DPART_ROOT_MISSING"),
+        "codes: {codes:?}"
+    );
+    assert!(
+        codes.contains(&"PDFVT1.DPART_PAGE_UNASSIGNED"),
+        "codes: {codes:?}"
+    );
+
+    let vt = TempPdf::new(&t0131_pdf_vt());
+    let valid = run(&["preflight", "PDF/VT-1", vt.arg(), "--json"]);
+    let value: Value = serde_json::from_str(&stdout(&valid)).expect("preflight JSON");
+    let codes: Vec<&str> = value["before"]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        !codes.iter().any(|code| code.starts_with("PDFVT1.DPART")),
+        "document parts must satisfy the profile: {codes:?}"
+    );
+    assert_eq!(value["conforming"], true, "codes: {codes:?}");
+    assert_eq!(valid.status.code(), Some(0), "stderr: {}", stderr(&valid));
+
+    let unsupported = run(&["preflight", "PDF/VT-2", plain.arg()]);
+    assert!(!unsupported.status.success());
+    assert!(
+        stderr(&unsupported).contains("unsupported preflight profile"),
+        "{}",
+        stderr(&unsupported)
+    );
+}
+
 #[test]
 fn preflight_pass_exits_zero_and_reports_no_errors() {
     let pdf = TempPdf::new(&t0131_conforming_pdf());

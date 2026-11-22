@@ -107,6 +107,8 @@ pub struct CatalogInfo {
     pub has_struct_tree_root: bool,
     /// Whether the catalog has an `/AcroForm` dictionary.
     pub has_acro_form: bool,
+    /// Whether the catalog has a `/DPartRoot` entry (PDF/VT document parts).
+    pub has_dpart_root: bool,
     /// Catalog or document-level entries that are present and that a target
     /// profile may prohibit, for example `/EmbeddedFiles` or `/JavaScript`.
     ///
@@ -153,6 +155,8 @@ pub struct PageInfo {
     pub number: usize,
     /// The page boxes that are present.
     pub boxes: PageBoxes,
+    /// Whether the page carries a `/DPart` association (PDF/VT).
+    pub has_dpart: bool,
 }
 
 /// The font type of a font resource.
@@ -474,10 +478,12 @@ mod tests {
         input.pages.push(PageInfo {
             number: 1,
             boxes: PageBoxes::all_present(),
+            has_dpart: false,
         });
         input.pages.push(PageInfo {
             number: 2,
             boxes: PageBoxes::all_present(),
+            has_dpart: false,
         });
         assert!(input.has_complete_page_data());
         input

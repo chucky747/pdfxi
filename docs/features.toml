@@ -3524,32 +3524,67 @@ title = "Preflight profiles checks and fixups"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "crates/pdfxi-standards/src/standard.rs",
+    "crates/pdfxi-standards/src/input.rs",
+    "crates/pdfxi-standards/src/profile_request.rs",
+    "crates/pdfxi-standards/src/fixup.rs",
+    "crates/pdfxi-convert/src/preflight.rs",
+    "crates/pdfxi-cli/src/preflight.rs",
     "crates/pdfxi-app/src/print.rs",
-    "crates/pdfxi-app/src/lib.rs",
+    "docs/book/src/authoring.md",
+    "docs/book/src/standards.md",
     "docs/evidence/app/T-0150.md",
+    "docs/evidence/cli/T-0345.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New duplex/paper-source tests: duplex_plan_maps_pages_to_sheets_and_sides, duplex_and_paper_source_inputs_are_validated, geometry_helpers_sanitize_negative_and_non_finite_inputs. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
+evidence = "docs/evidence/cli/T-0345.md"
 id = "PRINT-002"
 notes = """
-T-0150 adds the missing app-level duplex/paper-source plan to pdfxi-app::print.
-PaperSource (Auto/Tray(1..=255)/ManualFeed/Envelope) is validated with a typed
-UnsupportedOption for tray zero. DuplexPlan::build maps already-expanded logical
-pages onto physical sheets: Duplex::None gives one front-only sheet per page;
-LongEdge and ShortEdge pair pages on front/back and record the binding edge.
-It rejects empty/oversized counts with EmptyPageSet/TooManyPages and exposes a
-deterministic sheet_count, sides_used, and summary.
+The app-level duplex/paper-source plan and the print-production planners from
+T-0150 are unchanged. This task completes the validation half of the row.
 
-HOST BACKEND BOUNDARY: this is a pure collation plan; the platform driver must
-perform the physical two-sided feed and tray selection. The pre-existing
-pdfxi-standards profile-validation work on this id is unchanged.
+`Standard::PdfVt1` (`PDF/VT-1`, minimum PDF 1.6, `StandardFamily::PdfVt`) and
+`PdfVt1Profile` run the decidable PDF/X-4 checks (version, encryption,
+GTS_PDFX output intent, XMP, embedded fonts, print boxes, annotations,
+forbidden entries, ICC header) and add PDF/VT document-part rules:
+PDFVT1.DPART_ROOT_MISSING when the catalog has no /DPartRoot and
+PDFVT1.DPART_PAGE_UNASSIGNED when the number of pages carrying /DPart differs
+from the page count. PreflightInput gains catalog.has_dpart_root and
+page.has_dpart; ConformanceProfile::PdfVt1 resolves the label; the fixup
+helpers treat PDF/VT-1 like PDF/X-4; pdfxi_convert::preflight reads /DPartRoot
+and each page's /DPart.
+
+Host: the existing `pdfxi preflight <PROFILE> <FILE> [--json] [--fix]
+[--output PATH]` now accepts PDF/A-1b/2b/3b, PDF/X-1a/4, PDF/E-1, PDF/UA-1 and
+PDF/VT-1, exits 0 for a pass and 2 for error-severity findings unchanged.
+
+Evidence: a plain 1.6 PDF reports 6 PDF/VT-1 errors including
+DPART_PAGE_UNASSIGNED and DPART_ROOT_MISSING (exit 2); a 1.6 PDF with XMP, a
+GTS_PDFX intent, all page boxes, /DPartRoot and a page /DPart is conforming and
+passes (exit 0), also passes PDF/X-4, and is correctly rejected by PDF/A-2b
+(GTS_PDFA1 missing, version 1.6 < 1.7). PDF/VT-2 is a typed unsupported-profile
+error. pdfxi-standards tests: 118 passed. Bounded table tests pin every
+PDFVT1.* code, and the standard/family lists assert 8 standards and 5 families.
+
+Scope: PDF/VT-1 is validated as PDF/X-4 plus /DPartRoot presence and a /DPart
+association on every page. DPart record levels, DPart metadata, the DPart tree
+shape and multi-file PDF/VT-2 packaging are not checked. This remains a
+deterministic subset preflight, not a certification.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "print::impose_tests::duplex_plan_maps_pages_to_sheets_and_sides",
     "print::impose_tests::duplex_and_paper_source_inputs_are_validated",
     "print::impose_tests::geometry_helpers_sanitize_negative_and_non_finite_inputs",
+    "document_profile::tests::pdf_vt1_requires_document_parts_and_page_associations",
+    "document_profile::tests::conforming_input_is_conforming_for_every_profile",
+    "document_profile::tests::nonconforming_input_fails_every_profile",
+    "document_profile::tests::finding_codes_are_stable_per_profile",
+    "standard::tests::all_lists_are_unique_and_stable",
+    "profile_request::tests::pdf_vt_1_resolves_to_its_profile",
+    "cli::preflight_validates_pdf_vt_1_document_parts",
 ]
 title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 

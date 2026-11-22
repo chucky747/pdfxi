@@ -39,6 +39,7 @@ command.
 | HTML5 media replacement for Flash | `MEDIA-002` | verified | `pdfxi-render::html5_media` | `media html5` |
 | Output preview and separations | `PRINT-004` | verified | `pdfxi-app::print::SeparationsPlan` + content scan | `separations [--plate]` |
 | Ink manager and overprint preview | `PRINT-005` | verified | `pdfxi-app::print` + `/ExtGState` scan | `ink` |
+| PDF/A, PDF/X, PDF/E and PDF/VT validation | `PRINT-002` | verified | `pdfxi-standards` + `pdfxi-convert::preflight` | `preflight <profile>` |
 | Deployment preferences and customization | `PLAT-006` | verified | `pdfxi-core::preferences` | `policy show/write/merge/check` |
 | Shell integration and file associations | `PLAT-005` | verified | `pdfxi-core::association` | `shell plan/register/status/unregister` |
 | Browser integration | `PLAT-004` | verified | `pdfxi-core::browser_handoff` | `handoff open/parse/link` |
@@ -641,6 +642,28 @@ the signer subject and SHA-256 certificate fingerprint, and the `/ByteRange`.
 It exits non-zero unless the signature is fully valid. Certificate trust is
 reported as `null` (not evaluated), never as trusted. Key material and
 passwords are never printed.
+### Conformance validation
+
+`PRINT-002` (verified) hosts the `pdfxi-standards` profiles through
+`pdfxi preflight <PROFILE> <FILE> [--json] [--fix] [--output PATH]`:
+
+| Profile | Family |
+|---|---|
+| `PDF/A-1b`, `PDF/A-2b`, `PDF/A-3b` | archival |
+| `PDF/X-1a`, `PDF/X-4` | print exchange |
+| `PDF/E-1` | engineering exchange |
+| `PDF/UA-1` | accessibility |
+| `PDF/VT-1` | variable-data print exchange |
+
+The command derives a `PreflightInput` snapshot from the real document (version,
+catalog entries, output intents, page boxes, encryption, `/DPartRoot` and
+per-page `/DPart`), runs the resolved profile, prints stable finding codes, and
+exits 0 when no error-severity finding fires or 2 when the check fails. PDF/VT-1
+is checked as PDF/X-4 plus the document-part requirements: a catalog
+`/DPartRoot` (`PDFVT1.DPART_ROOT_MISSING`) and a `/DPart` association on every
+page (`PDFVT1.DPART_PAGE_UNASSIGNED`). A passing verdict is a deterministic
+subset preflight, not a conformance certification; reported-only constraints
+list what the profile did not inspect.
 ### Password protection
 
 `SEC-002` (verified) hosts the standard security handler from

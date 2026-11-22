@@ -17,8 +17,8 @@
 use crate::finding::PreflightFinding;
 use crate::fixup::{Fixup, suggested_fixups};
 use crate::{
-    PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfX1aProfile,
-    PdfX4Profile, PreflightInput, PreflightProfile, PreflightReport, Standard,
+    PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfVt1Profile,
+    PdfX1aProfile, PdfX4Profile, PreflightInput, PreflightProfile, PreflightReport, Standard,
 };
 use std::fmt;
 
@@ -136,6 +136,8 @@ pub enum ConformanceProfile {
     PdfX4,
     /// ISO 14289-1.
     PdfUa1,
+    /// ISO 16612-2 (PDF/VT-1).
+    PdfVt1,
 }
 
 impl ConformanceProfile {
@@ -149,6 +151,7 @@ impl ConformanceProfile {
             Standard::PdfX1a => Ok(Self::PdfX1a),
             Standard::PdfX4 => Ok(Self::PdfX4),
             Standard::PdfUa1 => Ok(Self::PdfUa1),
+            Standard::PdfVt1 => Ok(Self::PdfVt1),
         }
     }
 
@@ -168,6 +171,7 @@ impl ConformanceProfile {
             Self::PdfX1a => Standard::PdfX1a,
             Self::PdfX4 => Standard::PdfX4,
             Self::PdfUa1 => Standard::PdfUa1,
+            Self::PdfVt1 => Standard::PdfVt1,
         }
     }
 
@@ -182,6 +186,7 @@ impl ConformanceProfile {
             Self::PdfX1a => PdfX1aProfile::new().check(input),
             Self::PdfX4 => PdfX4Profile::new().check(input),
             Self::PdfUa1 => PdfUa1Profile::new().check(input),
+            Self::PdfVt1 => PdfVt1Profile::new().check(input),
         }
     }
 
@@ -196,6 +201,7 @@ impl ConformanceProfile {
             Self::PdfX1a => PdfX1aProfile::new().report(input),
             Self::PdfX4 => PdfX4Profile::new().report(input),
             Self::PdfUa1 => PdfUa1Profile::new().report(input),
+            Self::PdfVt1 => PdfVt1Profile::new().report(input),
         }
     }
 
@@ -209,6 +215,13 @@ impl ConformanceProfile {
     }
 }
 
+#[test]
+fn pdf_vt_1_resolves_to_its_profile() {
+    let profile = ConformanceProfile::from_label("PDF/VT-1").expect("known label");
+    assert_eq!(profile, ConformanceProfile::PdfVt1);
+    assert_eq!(profile.standard(), Standard::PdfVt1);
+    assert!(ConformanceProfile::from_label("PDF/VT-2").is_err());
+}
 #[cfg(test)]
 mod tests {
     use super::*;

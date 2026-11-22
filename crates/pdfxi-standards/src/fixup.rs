@@ -287,7 +287,12 @@ pub struct FixupOutcome {
 pub fn profile_uses_output_intents(standard: Standard) -> bool {
     matches!(
         standard,
-        Standard::PdfA1b | Standard::PdfA2b | Standard::PdfA3b | Standard::PdfX1a | Standard::PdfX4
+        Standard::PdfA1b
+            | Standard::PdfA2b
+            | Standard::PdfA3b
+            | Standard::PdfX1a
+            | Standard::PdfX4
+            | Standard::PdfVt1
     )
 }
 
@@ -296,7 +301,7 @@ pub fn profile_uses_output_intents(standard: Standard) -> bool {
 pub fn required_output_subtype(standard: Standard) -> Option<&'static str> {
     match standard {
         Standard::PdfA1b | Standard::PdfA2b | Standard::PdfA3b => Some("GTS_PDFA1"),
-        Standard::PdfX1a | Standard::PdfX4 => Some("GTS_PDFX"),
+        Standard::PdfX1a | Standard::PdfX4 | Standard::PdfVt1 => Some("GTS_PDFX"),
         Standard::PdfE1 | Standard::PdfUa1 => None,
     }
 }
@@ -456,8 +461,8 @@ mod tests {
     use super::*;
     use crate::input::{CatalogInfo, FontInfo, FontType};
     use crate::{
-        PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfX1aProfile,
-        PdfX4Profile, PreflightFinding, PreflightProfile, Severity,
+        PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfVt1Profile,
+        PdfX1aProfile, PdfX4Profile, PreflightFinding, PreflightProfile, Severity,
     };
 
     fn input_with_problems(standard: Standard) -> PreflightInput {
@@ -905,6 +910,7 @@ mod tests {
             Standard::PdfX4 => PdfX4Profile::new().check(&input),
             Standard::PdfE1 => PdfE1Profile::new().check(&input),
             Standard::PdfUa1 => PdfUa1Profile::new().check(&input),
+            Standard::PdfVt1 => PdfVt1Profile::new().check(&input),
         };
         findings
             .iter()
@@ -988,6 +994,7 @@ mod t0127_tests {
             pages: vec![PageInfo {
                 number: 1,
                 boxes: PageBoxes::all_present(),
+                has_dpart: false,
             }],
             fonts: vec![FontInfo {
                 name: "/F1".to_owned(),

@@ -31,6 +31,9 @@ Representative rules, all covered by tests:
   encryption is prohibited. PDF/A-3b allows embedded files where PDF/A-2b does
   not.
 - PDF/X reports a missing output intent.
+- PDF/VT-1 runs the same decidable PDF/X-4 checks and additionally requires a
+  catalog `/DPartRoot` and a `/DPart` association on every page
+  (`PDFVT1.DPART_ROOT_MISSING`, `PDFVT1.DPART_PAGE_UNASSIGNED`).
 - Header and version mismatches are reported with deterministic severity and
   order.
 - A clean input passes all named profiles.
@@ -47,15 +50,22 @@ Representative rules, all covered by tests:
 | Tagged PDF and PDF/A/X/UA conformance | `STD-006`–`STD-009` | in-progress |
 | Incremental update and preservation | `STD-010` | in-progress |
 | Preflight profiles, checks, fixups | `PRINT-001` | in-progress |
-| PDF/A, PDF/X, PDF/E, PDF/VT validation | `PRINT-002` | in-progress |
+| PDF/A, PDF/X, PDF/E, PDF/VT validation | `PRINT-002` | verified (`pdfxi preflight <profile> <file>`) |
 | ICC colour management, separations, ink manager, trapping | `PRINT-003`–`PRINT-006` | planned |
 | Page boxes, bleed, crop, printer marks | `PRINT-007` | in-progress |
 | Droplets, hot folders, batch preflight | `PRINT-008` | planned |
 
 `PRINT-001` adds PDF/A-3b and PDF/E-1 profiles and ordered annotation and
-forbidden-entry rules. ICC validation, a byte-level fixup adapter, a veraPDF CI
-oracle, and UI/CLI exposure remain. Evidence for the standards work is in
+forbidden-entry rules. ICC validation, a byte-level fixup adapter, and a
+veraPDF CI oracle remain. Evidence for the standards work is in
 `../../evidence/convert/T-0079.md`.
+
+`PRINT-002` is hosted by `pdfxi preflight <PROFILE> <FILE>`: the command builds a
+`PreflightInput` snapshot from real bytes (`pdfxi_convert::preflight`), resolves
+the profile label through `ConformanceProfile`, and exits 0 for a pass or 2 for
+error-severity findings. Profiles are PDF/A-1b/2b/3b, PDF/X-1a/4, PDF/E-1,
+PDF/UA-1, and PDF/VT-1. The verdict is a subset preflight, never a conformance
+certification. Evidence is in `../../evidence/cli/T-0345.md`.
 
 ## Design rules
 

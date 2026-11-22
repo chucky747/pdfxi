@@ -1,0 +1,25 @@
+{
+  "id": "T-0345",
+  "lane": "convert",
+  "title": "Conformance validation with PDF/VT-1",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0344"],
+  "owns": [
+    "crates/pdfxi-standards/src/standard.rs",
+    "crates/pdfxi-standards/src/input.rs",
+    "crates/pdfxi-standards/src/document_profile.rs",
+    "crates/pdfxi-standards/src/profile_request.rs",
+    "crates/pdfxi-standards/src/fixup.rs",
+    "crates/pdfxi-standards/src/lib.rs",
+    "crates/pdfxi-convert/src/preflight.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/book/src/standards.md",
+    "docs/evidence/cli/T-0345.md",
+    "orchestration/feature-updates/T-0345.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-standards and cargo test -p pdfxi-cli preflight_validates_pdf_vt_1_document_parts pass; pdfxi preflight PDF/VT-1 validates real bytes, including DPartRoot and per-page DPart; PRINT-002 moves to verified.",
+  "notes": "Adds the PDF/VT-1 standard and profile plus DPart fact extraction, completing the profile families named by PRINT-002 behind the existing preflight host.",
+  "evidence": "docs/evidence/cli/T-0345.md"
+}

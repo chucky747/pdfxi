@@ -24,7 +24,8 @@
 //! Fixups only edit a cloned snapshot and add *placeholders* (XMP skeleton,
 //! output intent without an ICC stream, version bump); a producer must supply
 //! real data and an independent validator (for example veraPDF in CI) before
-//! claiming PDF/A, PDF/X, PDF/E, or PDF/UA conformance. A passing report means
+//! claiming PDF/A, PDF/X, PDF/E, PDF/UA, or PDF/VT-1 conformance. A passing
+//! report means
 //! "no decidable rule in this subset fired", not "certified conforming".
 
 use crate::Severity;
@@ -193,6 +194,23 @@ const PDFUA1_RULES: Rules = Rules {
     validate_output_intent_icc: false,
 };
 
+const PDFVT1_RULES: Rules = Rules {
+    standard: Standard::PdfVt1,
+    prefix: "PDFVT1",
+    min_version: PdfVersion::new(1, 6),
+    required_output_subtype: Some("GTS_PDFX"),
+    xmp_required: true,
+    forbid_transparency: false,
+    forbidden_image_filters: &[],
+    forbidden_colour_spaces: &[],
+    require_print_boxes: true,
+    check_accessibility: false,
+    require_annotation_appearance: true,
+    forbidden_annotation_subtypes: &["/Popup", "/Sound", "/Movie", "/3D", "/FileAttachment"],
+    forbidden_catalog_entries: &["/EmbeddedFiles", "/JavaScript", "/AA"],
+    validate_output_intent_icc: true,
+};
+
 /// Returns the catalog entries the profile for `standard` forbids.
 ///
 /// The per-standard [`Rules`] constants above are the single source of truth
@@ -209,6 +227,7 @@ pub(crate) fn forbidden_catalog_entries_for(standard: Standard) -> &'static [&'s
         Standard::PdfX4 => PDFX4_RULES.forbidden_catalog_entries,
         Standard::PdfE1 => PDFE1_RULES.forbidden_catalog_entries,
         Standard::PdfUa1 => PDFUA1_RULES.forbidden_catalog_entries,
+        Standard::PdfVt1 => PDFVT1_RULES.forbidden_catalog_entries,
     }
 }
 
@@ -227,6 +246,7 @@ pub(crate) fn forbids_transparency(standard: Standard) -> bool {
         Standard::PdfX4 => PDFX4_RULES.forbid_transparency,
         Standard::PdfE1 => PDFE1_RULES.forbid_transparency,
         Standard::PdfUa1 => PDFUA1_RULES.forbid_transparency,
+        Standard::PdfVt1 => PDFVT1_RULES.forbid_transparency,
     }
 }
 
@@ -824,6 +844,67 @@ impl PreflightProfile for PdfUa1Profile {
     }
 }
 
+/// Preflight profile for ISO 16612-2 (PDF/VT-1).
+///
+/// PDF/VT-1 is PDF/X-4 plus a document-part hierarchy. The profile runs the
+/// same decidable PDF/X-4 checks (PDF 1.6+, `GTS_PDFX` output intent, XMP,
+/// embedded fonts, print boxes) and additionally requires a catalog
+/// `/DPartRoot` and a `/DPart` association on every page. DPart record levels,
+/// metadata streams, and multi-file PDF/VT-2 packaging remain reported-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PdfVt1Profile;
+
+impl PdfVt1Profile {
+    /// Creates a PDF/VT-1 profile.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for PdfVt1Profile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PreflightProfile for PdfVt1Profile {
+    type Input = PreflightInput;
+
+    fn standard(&self) -> Standard {
+        Standard::PdfVt1
+    }
+
+    fn check(&self, input: &PreflightInput) -> Vec<PreflightFinding> {
+        let mut findings = run_checks(input, &PDFVT1_RULES);
+        if !input.catalog.has_dpart_root {
+            push(
+                &mut findings,
+                &PDFVT1_RULES,
+                "DPART_ROOT_MISSING",
+                Severity::Error,
+                "PDF/VT-1 requires a /DPartRoot entry in the catalog".to_owned(),
+                Some("Catalog /DPartRoot".to_owned()),
+            );
+        }
+        let associated = input.pages.iter().filter(|page| page.has_dpart).count();
+        if associated != input.page_count {
+            push(
+                &mut findings,
+                &PDFVT1_RULES,
+                "DPART_PAGE_UNASSIGNED",
+                Severity::Error,
+                format!(
+                    "{} of {} page(s) carry a /DPart association; every page must belong to one document part",
+                    associated, input.page_count
+                ),
+                Some("Page /DPart".to_owned()),
+            );
+        }
+        findings
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,13 +913,14 @@ mod tests {
         PageInfo, TransparencyUsage,
     };
 
-    fn profiles() -> [(&'static str, Standard); 5] {
+    fn profiles() -> [(&'static str, Standard); 6] {
         [
             ("PDFA1B", Standard::PdfA1b),
             ("PDFA2B", Standard::PdfA2b),
             ("PDFX1A", Standard::PdfX1a),
             ("PDFX4", Standard::PdfX4),
             ("PDFUA1", Standard::PdfUa1),
+            ("PDFVT1", Standard::PdfVt1),
         ]
     }
 
@@ -849,6 +931,7 @@ mod tests {
             "PDFX1A" => PdfX1aProfile::new().check(input),
             "PDFX4" => PdfX4Profile::new().check(input),
             "PDFUA1" => PdfUa1Profile::new().check(input),
+            "PDFVT1" => PdfVt1Profile::new().check(input),
             other => panic!("unknown profile prefix {other}"),
         }
     }
@@ -860,6 +943,7 @@ mod tests {
             "PDFX1A" => PdfX1aProfile::new().report(input),
             "PDFX4" => PdfX4Profile::new().report(input),
             "PDFUA1" => PdfUa1Profile::new().report(input),
+            "PDFVT1" => PdfVt1Profile::new().report(input),
             other => panic!("unknown profile prefix {other}"),
         }
     }
@@ -870,7 +954,7 @@ mod tests {
             Standard::PdfA2b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
             Standard::PdfA3b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
             Standard::PdfX1a => (PdfVersion::new(1, 3), "GTS_PDFX"),
-            Standard::PdfX4 => (PdfVersion::new(1, 6), "GTS_PDFX"),
+            Standard::PdfX4 | Standard::PdfVt1 => (PdfVersion::new(1, 6), "GTS_PDFX"),
             Standard::PdfE1 | Standard::PdfUa1 => (PdfVersion::new(1, 7), "GTS_PDFA1"),
         };
         let mut catalog = CatalogInfo {
@@ -886,6 +970,9 @@ mod tests {
                 .output_intents
                 .push(OutputIntent::new(subtype, true));
         }
+        if standard == Standard::PdfVt1 {
+            catalog.has_dpart_root = true;
+        }
         PreflightInput {
             version,
             is_encrypted: false,
@@ -894,6 +981,7 @@ mod tests {
             pages: vec![PageInfo {
                 number: 1,
                 boxes: PageBoxes::all_present(),
+                has_dpart: standard == Standard::PdfVt1,
             }],
             fonts: vec![FontInfo {
                 name: "/F1".to_owned(),
@@ -944,10 +1032,43 @@ mod tests {
             uses_transparency: true,
             locations: vec!["page 1".to_owned(), "page 2".to_owned()],
         };
+        input.catalog.has_dpart_root = false;
+        for page in &mut input.pages {
+            page.has_dpart = false;
+        }
         if let Some(page) = input.pages.first_mut() {
             page.boxes = PageBoxes::default();
         }
         input
+    }
+
+    #[test]
+    fn pdf_vt1_requires_document_parts_and_page_associations() {
+        let mut input = conforming_input(Standard::PdfVt1);
+        let report = PdfVt1Profile::new().report(&input);
+        assert!(
+            report.is_conforming(),
+            "PDF/VT-1 rejected a conforming input: {:?}",
+            report.findings()
+        );
+        assert_eq!(PdfVt1Profile::new().standard().label(), "PDF/VT-1");
+
+        input.catalog.has_dpart_root = false;
+        let findings = PdfVt1Profile::new().check(&input);
+        let observed = codes(&findings);
+        assert!(
+            observed.contains(&"PDFVT1.DPART_ROOT_MISSING"),
+            "{observed:?}"
+        );
+
+        input.catalog.has_dpart_root = true;
+        input.pages[0].has_dpart = false;
+        let findings = PdfVt1Profile::new().check(&input);
+        let observed = codes(&findings);
+        assert!(
+            observed.contains(&"PDFVT1.DPART_PAGE_UNASSIGNED"),
+            "{observed:?}"
+        );
     }
 
     fn codes(findings: &[PreflightFinding]) -> Vec<&str> {
@@ -1040,6 +1161,21 @@ mod tests {
                     "PDFX4.PAGE_NO_MEDIABOX",
                     "PDFX4.PAGE_NO_TRIMBOX",
                     "PDFX4.VERSION_TOO_LOW",
+                ],
+            ),
+            (
+                "PDFVT1",
+                &[
+                    "PDFVT1.DPART_PAGE_UNASSIGNED",
+                    "PDFVT1.DPART_ROOT_MISSING",
+                    "PDFVT1.ENCRYPTED",
+                    "PDFVT1.FONT_NOT_EMBEDDED",
+                    "PDFVT1.NO_OUTPUT_INTENT",
+                    "PDFVT1.NO_XMP_METADATA",
+                    "PDFVT1.PAGE_NO_BLEEDBOX",
+                    "PDFVT1.PAGE_NO_MEDIABOX",
+                    "PDFVT1.PAGE_NO_TRIMBOX",
+                    "PDFVT1.VERSION_TOO_LOW",
                 ],
             ),
             (
@@ -1450,6 +1586,7 @@ mod t0093_tests {
             pages: vec![PageInfo {
                 number: 1,
                 boxes: PageBoxes::all_present(),
+                has_dpart: standard == Standard::PdfVt1,
             }],
             fonts: vec![FontInfo {
                 name: "/F1".to_owned(),
@@ -1722,6 +1859,7 @@ mod t0127_tests {
             pages: vec![PageInfo {
                 number: 1,
                 boxes: PageBoxes::all_present(),
+                has_dpart: standard == Standard::PdfVt1,
             }],
             fonts: vec![FontInfo {
                 name: "/F1".to_owned(),
@@ -1861,7 +1999,7 @@ mod t0178_tests {
             Standard::PdfA1b => (PdfVersion::new(1, 4), "GTS_PDFA1"),
             Standard::PdfA2b | Standard::PdfA3b => (PdfVersion::new(1, 7), "GTS_PDFA1"),
             Standard::PdfX1a => (PdfVersion::new(1, 3), "GTS_PDFX"),
-            Standard::PdfX4 => (PdfVersion::new(1, 6), "GTS_PDFX"),
+            Standard::PdfX4 | Standard::PdfVt1 => (PdfVersion::new(1, 6), "GTS_PDFX"),
             Standard::PdfE1 | Standard::PdfUa1 => (PdfVersion::new(1, 7), "GTS_PDFA1"),
         };
         let mut catalog = CatalogInfo {
@@ -1877,6 +2015,9 @@ mod t0178_tests {
                 .output_intents
                 .push(OutputIntent::new(subtype, true));
         }
+        if standard == Standard::PdfVt1 {
+            catalog.has_dpart_root = true;
+        }
         PreflightInput {
             version,
             catalog,
@@ -1884,6 +2025,7 @@ mod t0178_tests {
             pages: vec![PageInfo {
                 number: 1,
                 boxes: PageBoxes::all_present(),
+                has_dpart: standard == Standard::PdfVt1,
             }],
             fonts: vec![FontInfo {
                 name: "/F1".to_owned(),
@@ -1911,6 +2053,7 @@ mod t0178_tests {
             Standard::PdfX4 => PdfX4Profile::new().check(input),
             Standard::PdfE1 => PdfE1Profile::new().check(input),
             Standard::PdfUa1 => PdfUa1Profile::new().check(input),
+            Standard::PdfVt1 => PdfVt1Profile::new().check(input),
         }
     }
 

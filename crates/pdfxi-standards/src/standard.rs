@@ -28,6 +28,8 @@ pub enum Standard {
     PdfE1,
     /// ISO 14289-1 (PDF 1.7), universal accessibility.
     PdfUa1,
+    /// ISO 16612-2 (PDF 1.6), variable-data print exchange (PDF/VT-1).
+    PdfVt1,
 }
 
 impl Standard {
@@ -40,6 +42,7 @@ impl Standard {
         Self::PdfX4,
         Self::PdfE1,
         Self::PdfUa1,
+        Self::PdfVt1,
     ];
 
     /// Returns every supported standard in a stable order.
@@ -59,6 +62,7 @@ impl Standard {
             Self::PdfX4 => "PDF/X-4",
             Self::PdfE1 => "PDF/E-1",
             Self::PdfUa1 => "PDF/UA-1",
+            Self::PdfVt1 => "PDF/VT-1",
         }
     }
 
@@ -82,6 +86,7 @@ impl Standard {
             Self::PdfX1a | Self::PdfX4 => StandardFamily::PdfX,
             Self::PdfE1 => StandardFamily::PdfE,
             Self::PdfUa1 => StandardFamily::PdfUa,
+            Self::PdfVt1 => StandardFamily::PdfVt,
         }
     }
 
@@ -99,6 +104,7 @@ impl Standard {
             Self::PdfX4 => "1.6",
             Self::PdfE1 => "1.6",
             Self::PdfUa1 => "1.7",
+            Self::PdfVt1 => "1.6",
         }
     }
 }
@@ -123,11 +129,14 @@ pub enum StandardFamily {
     PdfE,
     /// PDF/UA, universal accessibility.
     PdfUa,
+    /// PDF/VT, variable-data print exchange.
+    PdfVt,
 }
 
 impl StandardFamily {
     /// Every family, in a stable order.
-    pub const ALL: &'static [Self] = &[Self::PdfA, Self::PdfX, Self::PdfE, Self::PdfUa];
+    pub const ALL: &'static [Self] =
+        &[Self::PdfA, Self::PdfX, Self::PdfE, Self::PdfUa, Self::PdfVt];
 
     /// Returns every family in a stable order.
     #[must_use]
@@ -143,6 +152,7 @@ impl StandardFamily {
             Self::PdfX => "PDF/X",
             Self::PdfE => "PDF/E",
             Self::PdfUa => "PDF/UA",
+            Self::PdfVt => "PDF/VT",
         }
     }
 }
@@ -193,6 +203,7 @@ mod tests {
         assert_eq!(Standard::PdfX4.family(), StandardFamily::PdfX);
         assert_eq!(Standard::PdfE1.family(), StandardFamily::PdfE);
         assert_eq!(Standard::PdfUa1.family(), StandardFamily::PdfUa);
+        assert_eq!(Standard::PdfVt1.family(), StandardFamily::PdfVt);
 
         assert_eq!(Standard::PdfA1b.minimum_pdf_version(), "1.4");
         assert_eq!(Standard::PdfA2b.minimum_pdf_version(), "1.7");
@@ -201,12 +212,13 @@ mod tests {
         assert_eq!(Standard::PdfX4.minimum_pdf_version(), "1.6");
         assert_eq!(Standard::PdfE1.minimum_pdf_version(), "1.6");
         assert_eq!(Standard::PdfUa1.minimum_pdf_version(), "1.7");
+        assert_eq!(Standard::PdfVt1.minimum_pdf_version(), "1.6");
     }
 
     #[test]
     fn all_lists_are_unique_and_stable() {
-        assert_eq!(Standard::all().len(), 7);
-        assert_eq!(StandardFamily::all().len(), 4);
+        assert_eq!(Standard::all().len(), 8);
+        assert_eq!(StandardFamily::all().len(), 5);
         assert_eq!(Standard::all(), Standard::ALL);
         assert_eq!(StandardFamily::all(), StandardFamily::ALL);
         assert_eq!(StandardFamily::PdfA.to_string(), "PDF/A");

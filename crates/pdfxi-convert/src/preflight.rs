@@ -300,6 +300,7 @@ fn read_catalog(doc: &Document) -> Result<CatalogInfo, BytePreflightError> {
     info.has_lang = dict.contains_key("Lang");
     info.has_struct_tree_root = dict.contains_key("StructTreeRoot");
     info.has_acro_form = dict.contains_key("AcroForm");
+    info.has_dpart_root = dict.contains_key("DPartRoot");
 
     // These are the catalog/document entries forbidden by at least one of the
     // supported profiles. A profile only flags the entries it forbids, so
@@ -357,6 +358,23 @@ pub fn build_preflight_input(doc: &Document) -> Result<PreflightInput, BytePrefl
                 index,
                 reason: error.to_string(),
             })?;
+        let page = doc
+            .page(index)
+            .map_err(|error| BytePreflightError::PageBoxes {
+                index,
+                reason: error.to_string(),
+            })?;
+        let has_dpart = match doc.object(page.id) {
+            Ok(object) => object
+                .as_dictionary()
+                .is_some_and(|dictionary| dictionary.contains_key("DPart")),
+            Err(error) => {
+                return Err(BytePreflightError::PageBoxes {
+                    index,
+                    reason: error.to_string(),
+                });
+            }
+        };
         pages.push(PageInfo {
             number: index + 1,
             boxes: StandardsPageBoxes {
@@ -366,6 +384,7 @@ pub fn build_preflight_input(doc: &Document) -> Result<PreflightInput, BytePrefl
                 has_trim_box: boxes.is_explicit(BoxKind::Trim),
                 has_art_box: boxes.is_explicit(BoxKind::Art),
             },
+            has_dpart,
         });
     }
     Ok(PreflightInput {

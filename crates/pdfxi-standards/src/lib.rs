@@ -3,7 +3,7 @@
 //! This crate provides the standards contracts for the convert lane:
 //!
 //! - [`Standard`] identifies PDF/A-1b, PDF/A-2b, PDF/X-1a, PDF/X-4, PDF/E-1,
-//!   and PDF/UA-1 with canonical labels and minimum PDF versions.
+//!   PDF/UA-1, and PDF/VT-1 with canonical labels and minimum PDF versions.
 //! - [`Severity`] and [`PreflightFinding`] describe actionable check results.
 //! - [`PreflightProfile`] defines a deterministic checker over an associated
 //!   input type; its provided methods sort findings into a canonical order and
@@ -11,11 +11,13 @@
 //! - [`PreflightInput`] is a dependency-free snapshot of the document facts the
 //!   real profiles need. A caller adapts `pdfxi-core` data into it.
 //! - [`PdfA1bProfile`], [`PdfA2bProfile`], [`PdfA3bProfile`], [`PdfX1aProfile`],
-//!   [`PdfX4Profile`], [`PdfE1Profile`], and [`PdfUa1Profile`] run real,
-//!   deterministic preflight checks over that snapshot with stable codes such
-//!   as `PDFA1B.NO_OUTPUT_INTENT`. Rules cover version and catalog facts, font
-//!   embedding, colour spaces, image filters, transparency, XMP, output
-//!   intents, annotations, encryption, and forbidden entries.
+//!   [`PdfX4Profile`], [`PdfE1Profile`], [`PdfUa1Profile`], and
+//!   [`PdfVt1Profile`] run real, deterministic preflight checks over that
+//!   snapshot with stable codes such as `PDFA1B.NO_OUTPUT_INTENT`. Rules cover
+//!   version and catalog facts, font embedding, colour spaces, image filters,
+//!   transparency, XMP, output intents, annotations, encryption, forbidden
+//!   entries, and (for PDF/VT-1) the `/DPartRoot` and per-page `/DPart`
+//!   document-part hierarchy.
 //! - [`apply_fixups`], [`FixupPolicy`], and [`FixupReport`] apply only explicitly
 //!   enabled, safe mechanical fixes to a cloned snapshot and audit every change.
 //!   [`suggested_fixups`] derives a conservative fixup list from a report.
@@ -70,8 +72,8 @@ mod standard;
 pub mod structure;
 
 pub use document_profile::{
-    PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfX1aProfile,
-    PdfX4Profile,
+    PdfA1bProfile, PdfA2bProfile, PdfA3bProfile, PdfE1Profile, PdfUa1Profile, PdfVt1Profile,
+    PdfX1aProfile, PdfX4Profile,
 };
 pub use finding::{PreflightFinding, Severity, filter_by_severity, sort_findings};
 pub use fixup::{
