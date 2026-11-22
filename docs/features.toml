@@ -4685,25 +4685,46 @@ title = "HTML5 media replacement for Flash"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/media3d.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0334.md",
     "crates/pdfxi-render/src/three_d.rs",
-    "docs/evidence/render/T-0169.md",
 ]
 domain = "Multimedia and 3D"
-evidence = "docs/evidence/render/T-0169.md: 2 new three_d::tests pass (byte-stable plan descriptor reflecting activation policy, unknown format preserved in descriptor); 175 crate tests pass, TEST_EXIT=0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0334.md"
 id = "MEDIA-003"
 notes = """
-3D annotation plan is complete at library level: bounded /3D stream reference,
-named views with deterministic default/named/indexed selection, activation event
-(PV/PI/PO/PC) and state (L/F/U) with typed errors, animation flag, and a
-ThreeDPlan with explicit backend requirements and a byte-stable descriptor.
-Unknown formats stay ThreeDFormat::Unknown and appear prefixed in the descriptor
-rather than being claimed. Host boundary: no U3D/PRC geometry is decoded or
-displayed and no 3D graphics context is opened by this crate; a native 3D backend
-must do that, so this is verified for the data/plan model only (ADR 0008).
+Verified through `pdfxi media3d <INPUT.pdf> [--extract PAYLOAD.u3d|.prc]
+[--json]`.
+
+The host scans every page /Annots for /Subtype /3D, reads the /3DD stream
+reference and /Subtype (U3D/PRC), the /3DV view dictionaries (/XN name, /IN
+default), and the /3DA activation event (/A), state (/D) and /AN animation,
+validating them through ThreeDAnnotation and printing the active view, backend
+requirements and plan descriptor. --extract writes the fully decoded /3DD
+payload.
+
+Evidence: a real one-page fixture with /3DD 5 0 R, /3DV [6 0 R 7 0 R]
+(Overview default, Close-up) and /3DA << /A /PI /D /L /AN true >> reports
+format u3d, payload 27 bytes, views [Overview, Close-up], active Overview,
+activation PI/L, animate true, requirements decoder:u3d/animation/
+view-activation and the three-d-plan descriptor; --extract writes 27 bytes
+starting with U3D. A PDF without /3D annotations fails with a typed error.
+
+Gates: cargo test -p pdfxi-cli media3d = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: inspection, planning and payload extraction only; no U3D/PRC geometry
+decoding, scene rasterization, animation, interactive view switching or
+annotation writing. A native 3D backend realises the plan; the extracted
+payload opens in an external viewer today.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::media3d_reports_views_activation_and_plan",
+    "cli::media3d_extracts_the_decoded_payload",
+    "cli::media3d_rejects_documents_without_3d_annotations",
     "three_d::tests::plan_descriptor_is_byte_stable_and_reflects_activation_policy",
     "three_d::tests::unknown_format_descriptor_preserves_the_name",
 ]

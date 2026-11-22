@@ -80,6 +80,8 @@ mod find_files;
 mod geo;
 /// pdfxi home: recents, favorites and collections over a state file.
 mod home;
+/// pdfxi media3d: read /3D annotations and extract payloads.
+mod media3d;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
 mod ocr;
 /// pdfxi create office: convert an Office intake bundle into a PDF.
@@ -407,6 +409,17 @@ enum Command {
         /// Geospatial action.
         #[command(subcommand)]
         command: GeoCommand,
+    },
+    /// Inspect `/3D` annotations and optionally extract the U3D/PRC payload.
+    Media3d {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Write the decoded `/3DD` payload to this file.
+        #[arg(long, value_name = "PATH")]
+        extract: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Manage recent documents, favorites and collections in a state file.
     Home {
@@ -2732,6 +2745,11 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Media3d {
+            file,
+            extract,
+            json,
+        } => media3d::info(&file, extract.as_deref(), json),
         Command::Geo { command } => match command {
             GeoCommand::Info { file, page, json } => geo::info(&file, page, json),
             GeoCommand::ToGeo {

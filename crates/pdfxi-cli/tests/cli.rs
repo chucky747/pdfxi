@@ -10995,6 +10995,125 @@ fn geo_rejects_absent_bounds_and_outside_points() {
     assert!(stderr(&page).contains("outside 1..=1"), "{}", stderr(&page));
 }
 
+// ---------------------------------------------------------------------------
+// media3d: 3D annotations (T-0334)
+// ---------------------------------------------------------------------------
+
+/// A one-page PDF with a `/3D` annotation, two views and a payload stream.
+fn t0334_three_d_pdf() -> (Vec<u8>, Vec<u8>) {
+    let payload = b"U3D\0fake-payload-0123456789".to_vec();
+    let bodies: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /3D /Rect [72 72 300 300] /3DD 5 0 R /3DV [6 0 R 7 0 R] \
+          /3DA << /A /PI /D /L /AN true >> >>"
+            .to_vec(),
+    ];
+    let tail: Vec<Vec<u8>> = vec![
+        b"<< /Type /3DView /XN (Overview) /IN true >>".to_vec(),
+        b"<< /Type /3DView /XN (Close-up) >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n%PDFXI\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, body) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    offsets.push(out.len());
+    out.extend_from_slice(
+        format!(
+            "5 0 obj\n<< /Type /3D /Subtype /U3D /Length {} >>\nstream\n",
+            payload.len()
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(&payload);
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+    for (index, body) in tail.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", index + 6).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    let size = offsets.len() + 1;
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    (out, payload)
+}
+
+#[test]
+fn media3d_reports_views_activation_and_plan() {
+    let (pdf, payload) = t0334_three_d_pdf();
+    let file = TempPdf::new(&pdf);
+    let output = run(&["media3d", file.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["annotations"], 1);
+    let row = &value["rows"][0];
+    assert_eq!(row["page"], 1);
+    assert_eq!(row["annotation"], 4);
+    assert_eq!(row["format"], "u3d");
+    assert_eq!(row["payload_bytes"], payload.len());
+    assert_eq!(row["views"], serde_json::json!(["Overview", "Close-up"]));
+    assert_eq!(row["active_view"], "Overview");
+    assert_eq!(row["activation_event"], "PI");
+    assert_eq!(row["activation_state"], "L");
+    assert_eq!(row["animate"], true);
+    let requirements = row["requirements"].as_array().expect("requirements");
+    assert!(requirements.iter().any(|req| req == "decoder:u3d"));
+    assert!(requirements.iter().any(|req| req == "animation"));
+    assert!(
+        row["plan"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("three-d-plan/v1|stream=object:5:0|format=u3d")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn media3d_extracts_the_decoded_payload() {
+    let (pdf, payload) = t0334_three_d_pdf();
+    let file = TempPdf::new(&pdf);
+    let dir = TempDir::new();
+    let out = dir.child("payload.u3d");
+    let output = run(&[
+        "media3d",
+        file.arg(),
+        "--extract",
+        out.to_str().expect("extract path"),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("extracted:"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(fs::read(&out).expect("payload written"), payload);
+}
+
+#[test]
+fn media3d_rejects_documents_without_3d_annotations() {
+    let plain = create_text_pdf("No 3D annotations.");
+    let output = run(&["media3d", plain.arg()]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("no /3D annotations"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

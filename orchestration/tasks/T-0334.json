@@ -1,0 +1,19 @@
+{
+  "id": "T-0334",
+  "lane": "convert",
+  "title": "3D annotation host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0333"],
+  "owns": [
+    "crates/pdfxi-cli/src/media3d.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0334.md",
+    "orchestration/feature-updates/T-0334.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli media3d passes; pdfxi media3d reads real /3D annotations, views and activation, reports the plan and extracts the decoded payload; MEDIA-003 moves to verified.",
+  "notes": "Hosts pdfxi_render::three_d over real page /Annots with /3DD stream extraction; geometry decoding stays a native backend responsibility.",
+  "evidence": "docs/evidence/cli/T-0334.md"
+}

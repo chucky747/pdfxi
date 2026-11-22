@@ -33,6 +33,7 @@ command.
 | Reflow, high contrast, keyboard navigation | `ACCESS-004` | verified | `pdfxi-app::nav` | `accessibility nav` / `accessibility layout` |
 | Screen reader tree and accesskit roles | `ACCESS-006` | verified | `pdfxi-app::a11y` | `accessibility tree` |
 | Geospatial viewports and coordinate mapping | `MEDIA-004` | verified | `pdfxi-render::geospatial` | `geo info` / `geo to-pdf` / `geo to-geo` |
+| U3D/PRC 3D annotations | `MEDIA-003` | verified | `pdfxi-render::three_d` | `media3d` / `--extract` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -437,6 +438,23 @@ pdfxi geo to-pdf <INPUT.pdf> --lon DEG --lat DEG [--viewport N] [--json]
 points outside the selected viewport (or outside every `/GPTS` bound) are
 rejected. Web-Mercator and unknown projections are reported as unsupported
 rather than approximated, and no map imagery is decoded or rendered.
+
+### 3D annotations
+
+`MEDIA-003` (verified) hosts the 3D model in `pdfxi_render::three_d`:
+
+```text
+pdfxi media3d <INPUT.pdf> [--extract PAYLOAD.u3d|.prc] [--json]
+```
+
+The command scans every page's `/Annots` for `/Subtype /3D`, reads the `/3DD`
+stream reference and its `/Subtype` (`U3D` or `PRC`), the `/3DV` view
+dictionaries with their `/XN` names and `/IN` default flag, and the `/3DA`
+activation event (`PV`/`PI`/`PO`/`PC`), state (`L`/`F`/`U`) and `/AN` animation
+flag. It then validates them through `ThreeDAnnotation`, prints the active view,
+the backend requirements (decoder, animation, view activation) and the stable
+plan descriptor, and with `--extract` writes the decoded payload for an external
+3D viewer. The geometry itself is never decoded.
 
 ## Page boxes and page operations
 
