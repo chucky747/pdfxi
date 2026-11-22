@@ -1,0 +1,19 @@
+{
+  "id": "T-0285",
+  "lane": "core",
+  "title": "Optimize and report through pdfxi optimize",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0284"],
+  "owns": [
+    "crates/pdfxi-cli/src/optimize.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0285.md",
+    "orchestration/feature-updates/T-0285.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli passes; pdfxi optimize writes a standalone optimized file that reopens with identical page text, reports deterministic counters, removes metadata on request and refuses to overwrite its input; EDIT-014 moves to verified.",
+  "notes": "CLI host for Document::optimize: --out required and self-overwrite refused, --remove-metadata/--remove-optional/--no-compress flags, signed size change, object/stream/removal counters, warnings, and stable JSON.",
+  "evidence": "docs/evidence/cli/T-0285.md"
+}

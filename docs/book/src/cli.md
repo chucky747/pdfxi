@@ -26,6 +26,7 @@ pdfxi <COMMAND> --help
 | `compare <LEFT> <RIGHT> [--json] [--lines] [--fail-on-difference]` | Text compare of two revisions | verified (`VIEW-015`) |
 | `reflow <FILE> [--width N] [--page N] [--json]` | Reading-order text column | verified (`VIEW-013`) |
 | `read-aloud <FILE> [--wpm N] [--page N] [--seek N] [--json]` | Deterministic utterance queue | verified (`VIEW-013`) |
+| `optimize <FILE> --out PATH [--remove-metadata] [--remove-optional] [--no-compress] [--json]` | Compact the object graph and report | verified (`EDIT-014`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -60,6 +61,11 @@ Commands are integration-tested by invoking the real binary; see
   would speak. Timings are integer milliseconds from `word_ms = 60000 / wpm`
   (`80..=400`, default `180`), so the same document always yields the same
   timings. `--seek N` starts at utterance `N` and rebases the clock to `0`.
+- `optimize` never modifies its input: `--out` is required and self-overwrite is
+  refused. Compression is per stream and only applied when it strictly shrinks
+  that stream, so a file can still end up marginally larger after renumbering;
+  the report prints the real signed size change. The report is byte-identical
+  across runs on the same input.
 
 Exit codes:
 
@@ -89,6 +95,7 @@ pdfxi portfolio .\fixtures\authoring\authoring-portfolio.pdf --extract .\portfol
 pdfxi compare .\fixtures\realworld\powerpoint-slides.pdf .\revised.pdf --lines
 pdfxi reflow .\fixtures\realworld\powerpoint-slides.pdf --width 40 --page 1
 pdfxi read-aloud .\fixtures\realworld\powerpoint-slides.pdf --wpm 150 --seek 1 --json
+pdfxi optimize .\fixtures\realworld\powerpoint-slides.pdf --out .\optimized.pdf
 ```
 
 See [Automation](automation.md) for the action-file format and the staging-only

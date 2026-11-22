@@ -2753,6 +2753,165 @@ fn attachments_report_an_embedded_file() {
 }
 
 #[test]
+fn optimize_rewrites_a_real_document_and_preserves_text() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "optimize",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("bytes: 119341 -> 118516 (-0.7%)"), "{text}");
+    assert!(text.contains("objects: 68 -> 65"), "{text}");
+    assert!(text.contains("streams compressed: 1"), "{text}");
+    assert!(text.contains("deduplicated: 2"), "{text}");
+
+    assert_eq!(page_texts(&source), page_texts(&out.path));
+    let reopened = pdfxi_core::Document::from_bytes(fs::read(&out.path).expect("read output"))
+        .expect("optimized file parses");
+    assert_eq!(reopened.page_count().expect("page count"), 3);
+}
+
+#[test]
+fn optimize_json_report_is_deterministic_and_consistent() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let first = run(&[
+        "optimize",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    let first_json = stdout(&first);
+    let value: Value = serde_json::from_str(&first_json).expect("valid JSON");
+    let before = fs::metadata(&source).expect("source metadata").len() as u64;
+    assert_eq!(value["bytes_before"], before);
+    assert_eq!(
+        value["bytes_after"],
+        fs::metadata(&out.path).expect("out metadata").len()
+    );
+    assert_eq!(
+        value["saved_bytes"].as_i64(),
+        value["bytes_after"]
+            .as_i64()
+            .map(|after| after - before as i64)
+    );
+    assert!(value["objects_after"].as_u64() <= value["objects_before"].as_u64());
+    assert!(
+        !value["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .is_empty()
+    );
+
+    let second = run(&[
+        "optimize",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(second.status.success(), "stderr: {}", stderr(&second));
+    assert_eq!(
+        first_json,
+        stdout(&second),
+        "the optimizer report must be byte-identical across runs"
+    );
+}
+
+#[test]
+fn optimize_remove_metadata_clears_info_and_xmp() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let source_document = pdfxi_core::Document::from_bytes(fs::read(&source).expect("read source"))
+        .expect("source parses");
+    assert!(
+        source_document.info().expect("source info").is_some()
+            || source_document
+                .xmp_metadata()
+                .expect("source xmp")
+                .is_some(),
+        "the fixture must carry metadata for this test to mean anything"
+    );
+
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "optimize",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--remove-metadata",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let document = pdfxi_core::Document::from_bytes(fs::read(&out.path).expect("read output"))
+        .expect("optimized file parses");
+    assert!(document.info().expect("output info").is_none());
+    assert!(document.xmp_metadata().expect("output xmp").is_none());
+    assert_eq!(document.page_count().expect("page count"), 3);
+}
+
+#[test]
+fn optimize_no_compress_still_writes_a_readable_file() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "optimize",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--no-compress",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["streams_compressed"], 0);
+    assert_eq!(page_texts(&source), page_texts(&out.path));
+}
+
+#[test]
+fn optimize_refuses_to_overwrite_the_input() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let before = fs::read(&source).expect("read source");
+    let output = run(&[
+        "optimize",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        source.to_str().expect("utf-8 source"),
+    ]);
+    assert!(!output.status.success(), "overwriting the input must fail");
+    assert!(
+        stderr(&output).contains("refusing to overwrite"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fs::read(&source).expect("re-read source"),
+        before,
+        "the input must be untouched"
+    );
+}
+
+#[test]
+fn optimize_rejects_a_missing_input() {
+    let output = run(&[
+        "optimize",
+        "target/tmp/definitely-missing.pdf",
+        "--out",
+        "target/tmp/unused.pdf",
+    ]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("read target/tmp/definitely-missing.pdf"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn reflow_wraps_a_real_page_to_the_requested_width() {
     let source = real_fixture("powerpoint-slides.pdf");
     let output = run(&[

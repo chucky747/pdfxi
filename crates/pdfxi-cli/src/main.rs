@@ -84,6 +84,8 @@ mod pages;
 /// `pdfxi compare`: side-by-side revision compare of two PDFs.
 mod compare;
 mod links;
+/// `pdfxi optimize`: rewrite a document with the core optimizer.
+mod optimize;
 /// `pdfxi portfolio`: list and extract a PDF portfolio collection.
 mod portfolio;
 /// `pdfxi read-aloud`: build the deterministic utterance queue.
@@ -319,6 +321,30 @@ enum Command {
         /// Zero-based utterance to start from.
         #[arg(long, default_value_t = 0)]
         seek: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rewrite a document with the optimizer and report what changed.
+    ///
+    /// Compacts the object graph, drops unreachable objects, Flate-compresses
+    /// streams only when that strictly helps, and writes a fresh standalone PDF.
+    /// The input is never modified: `--out` is required and must differ from it.
+    Optimize {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the optimized document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Remove the trailer `/Info` entry and the catalog `/Metadata` stream.
+        #[arg(long)]
+        remove_metadata: bool,
+        /// Remove optional `/Thumb` and `/PieceInfo` entries.
+        #[arg(long)]
+        remove_optional: bool,
+        /// Keep streams uncompressed (compression is on by default).
+        #[arg(long)]
+        no_compress: bool,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -907,6 +933,21 @@ fn main() -> anyhow::Result<()> {
             seek,
             json,
         } => read_aloud::run_read_aloud(&file, wpm, page, seek, json),
+        Command::Optimize {
+            file,
+            out,
+            remove_metadata,
+            remove_optional,
+            no_compress,
+            json,
+        } => optimize::run_optimize(
+            &file,
+            &out,
+            remove_metadata,
+            remove_optional,
+            !no_compress,
+            json,
+        ),
         Command::Pages { command } => match command {
             PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
             PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),

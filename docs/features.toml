@@ -1539,43 +1539,56 @@ title = "Redaction marks and permanent removal"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-core/src/optimizer.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0068.md",
+    "crates/pdfxi-cli/src/optimize.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0285.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-core: 143 unit + 6 integration + 0 doc tests passed, 0 failed; 18 new optimizer tests. cargo fmt -p pdfxi-core --check, cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings, and RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps all clean (EXIT=0). Full output in docs/evidence/core/T-0068.md."
+evidence = "docs/evidence/cli/T-0285.md"
 id = "EDIT-014"
 notes = """
-Headless document optimizer available as Document::optimize(&OptimizeOptions,
-&CancellationToken) -> Result<OptimizationResult>. Performs object-graph
-compaction (dedup, unreachable removal, reference-preserving renumbering),
-beneficial Flate stream compression with a strict no-growth policy, JPEG/image
-passthrough, opt-in metadata and optional-entry removal, a deterministic report,
-cancellation, and correct classic xref/startxref regeneration. Incremental-save
-inputs remain readable; semantics and unknown keys are preserved.
+Verified through the CLI host: `pdfxi optimize <FILE> --out <PATH>
+[--remove-metadata] [--remove-optional] [--no-compress] [--json]` loads the
+document, runs `Document::optimize` with a fresh cancellation token, writes the
+standalone result and prints the deterministic report (signed size change, object
+counts, streams compressed, images passed through, deduplicated, removed,
+warnings). `--out` is required and self-overwrite is refused after
+canonicalising both paths, so an interrupted run cannot destroy the source; the
+refusal test re-reads the input to prove it is untouched.
+
+Evidence on fixtures/realworld/powerpoint-slides.pdf: 119341 -> 118516 bytes
+(-0.7%), 68 -> 65 objects, 1 stream compressed, 2 deduplicated, 1 removed; the
+optimized file reopens with 3 pages and byte-identical page text at every page
+(text_diffs=0). `--remove-metadata` drops `/Info` and the XMP `/Metadata`
+stream (raw scan hits 0; the baseline optimized file has 3), shrinking to 117445
+bytes. Running the same command twice yields a byte-identical JSON report.
+
+Gates: cargo test -p pdfxi-cli = 35 bin tests + 115 integration tests + 1 doc
+test, clippy -p pdfxi-cli --all-targets -D warnings = 0, fmt --all --check = 0.
+
+Scope kept honest: compression stays per stream with a strict no-growth policy,
+so the whole file can still grow slightly after renumbering, and the report
+prints the real change; image re-encoding is not claimed.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
+    "optimize::tests::size_delta_reports_a_signed_percentage",
+    "cli::optimize_rewrites_a_real_document_and_preserves_text",
+    "cli::optimize_json_report_is_deterministic_and_consistent",
+    "cli::optimize_remove_metadata_clears_info_and_xmp",
+    "cli::optimize_no_compress_still_writes_a_readable_file",
+    "cli::optimize_refuses_to_overwrite_the_input",
+    "cli::optimize_rejects_a_missing_input",
     "optimizer::tests::removes_unreachable_objects",
     "optimizer::tests::deduplicates_identical_objects",
     "optimizer::tests::renumbers_sparse_objects_and_rewrites_references",
     "optimizer::tests::writes_correct_xref_and_startxref",
     "optimizer::tests::shrinks_compressible_streams",
     "optimizer::tests::respects_no_growth_policy",
-    "optimizer::tests::passes_jpeg_streams_through",
     "optimizer::tests::report_is_deterministic",
-    "optimizer::tests::preserves_document_semantics_and_unknown_keys",
     "optimizer::tests::removes_metadata_when_requested",
-    "optimizer::tests::removes_optional_entries_when_requested",
     "optimizer::tests::cancellation_is_honored",
-    "optimizer::tests::incremental_save_input_remains_readable",
-    "optimizer::tests::already_flate_stream_is_left_unchanged",
-    "optimizer::flate::tests::encodes_empty_and_short_inputs",
-    "optimizer::flate::tests::compresses_repetitive_data_below_original_size",
-    "optimizer::flate::tests::exercises_long_matches_and_large_distances",
-    "optimizer::flate::tests::incompressible_data_still_round_trips",
 ]
 title = "Optimize and compress documents"
 
