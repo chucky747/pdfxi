@@ -2515,6 +2515,113 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// prepress: trapping presets and flattening policy (T-0350)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prepress_plans_a_real_document() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+    let defaults = run(&["prepress", "plan", pdf.arg(), "--json"]);
+    assert!(defaults.status.success(), "stderr: {}", stderr(&defaults));
+    let value: Value = serde_json::from_str(&stdout(&defaults)).expect("prepress JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["page_width"], 612.0);
+    assert_eq!(value["page_height"], 792.0);
+    assert_eq!(value["preset"], "Default");
+    assert_eq!(value["trap_width_pt"], 0.25);
+    assert_eq!(value["black_width_pt"], 1.0);
+    assert_eq!(value["black_color"], "auto");
+    assert_eq!(value["join"], "miter");
+    assert_eq!(value["sliding"], "none");
+    assert_eq!(value["flatten_dpi"], 300);
+    assert_eq!(value["balance"], "balanced");
+    assert_eq!(value["overprint"], "preserve");
+    assert_eq!(value["max_depth"], 8);
+    assert_eq!(value["policy_bits"], 64);
+    assert_eq!(value["needs_backend_prepress"], false);
+    assert_eq!(value["warnings"].as_array().expect("warnings").len(), 0);
+
+    let custom = run(&[
+        "prepress",
+        "plan",
+        pdf.arg(),
+        "--preset",
+        "Press",
+        "--trap-width",
+        "0.5",
+        "--black-width",
+        "2",
+        "--black-color",
+        "0,0,0,1",
+        "--join",
+        "round",
+        "--sliding",
+        "2.5",
+        "--dpi",
+        "600",
+        "--balance",
+        "raster",
+        "--overprint",
+        "simulate",
+        "--max-depth",
+        "4",
+        "--json",
+    ]);
+    assert!(custom.status.success(), "stderr: {}", stderr(&custom));
+    let value: Value = serde_json::from_str(&stdout(&custom)).expect("prepress JSON");
+    assert_eq!(value["preset"], "Press");
+    assert_eq!(value["trap_width_pt"], 0.5);
+    assert_eq!(value["black_width_pt"], 2.0);
+    assert_eq!(value["black_color"], "cmyk(0,0,0,1)");
+    assert_eq!(value["join"], "round");
+    assert_eq!(value["sliding"], "limited(2.5)");
+    assert_eq!(value["flatten_dpi"], 600);
+    assert_eq!(value["balance"], "prefer-raster");
+    assert_eq!(value["overprint"], "simulate");
+    assert_eq!(value["max_depth"], 4);
+    assert!(value["policy_bits"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(value["needs_backend_prepress"], true);
+    assert_eq!(value["warnings"].as_array().expect("warnings").len(), 4);
+
+    let text = run(&["prepress", "plan", pdf.arg()]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    let text = stdout(&text);
+    assert!(text.contains("needs-backend-prepress: false"), "{text}");
+}
+
+#[test]
+fn prepress_rejects_bad_options() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+    let cases = [
+        (vec!["--dpi", "10"], "flattening policy"),
+        (vec!["--trap-width", "0"], "trapping preset"),
+        (vec!["--join", "star"], "--join"),
+        (vec!["--black-color", "2,0,0,0"], "trapping preset"),
+        (vec!["--preset", "   "], "trapping preset"),
+        (vec!["--max-depth", "0"], "flattening policy"),
+        (vec!["--sliding=-1"], "trapping preset"),
+        (vec!["--balance", "nonsense"], "--balance"),
+        (vec!["--overprint", "nonsense"], "--overprint"),
+    ];
+    for (args, needle) in cases {
+        let mut command = vec!["prepress", "plan", pdf.arg()];
+        command.extend(args.iter().copied());
+        let output = run(&command);
+        assert!(!output.status.success(), "args: {args:?}");
+        assert!(
+            stderr(&output).contains(needle),
+            "{needle}: {}",
+            stderr(&output)
+        );
+    }
+
+    let bad = TempPdf::new(b"not a pdf");
+    let output = run(&["prepress", "plan", bad.arg()]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("parse"), "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
 // production: print-production planning and application (T-0346)
 // ---------------------------------------------------------------------------
 

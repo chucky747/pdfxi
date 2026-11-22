@@ -1,0 +1,19 @@
+{
+  "id": "T-0350",
+  "lane": "convert",
+  "title": "Prepress planning host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0349"],
+  "owns": [
+    "crates/pdfxi-cli/src/prepress.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0350.md",
+    "orchestration/feature-updates/T-0350.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli prepress_ passes; pdfxi prepress plan resolves a real TrappingPreset/FlattenPolicy/TrapPlan against a document, reports backend requirements and rejects invalid options; PRINT-006 moves to verified.",
+  "notes": "Hosts pdfxi_render::trapping. Planning only: painting traps and rasterizing transparency remain the native backend boundary documented by the model.",
+  "evidence": "docs/evidence/cli/T-0350.md"
+}

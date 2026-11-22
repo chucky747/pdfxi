@@ -3842,28 +3842,55 @@ title = "Ink manager and overprint preview"
 docs = [
     "crates/pdfxi-app/src/print.rs",
     "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-render/src/trapping.rs",
+    "crates/pdfxi-cli/src/prepress.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/app/T-0150.md",
+    "docs/evidence/cli/T-0350.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New scaling tests: fit_math_is_deterministic_for_actual_fit_and_custom (actual/fit/fit-width/fit-height/custom), fit_rejects_invalid_geometry_and_scale. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
+evidence = "docs/evidence/cli/T-0350.md"
 id = "PRINT-006"
 notes = """
-T-0150 adds resolve_fit and FitMode to pdfxi-app::print. FitMode covers Actual,
-Fit, FitWidth, FitHeight, and Custom(percent) (and converts from the renderer's
-PageScaleMode). resolve_fit returns a centred FitTransform with the uniform
-scale, rendered size, and offsets, plus a fits(target) query. It rejects
-non-finite source/target geometry, non-finite/non-positive custom percentages,
-and non-finite results with typed ImposeError variants.
+T-0150 adds resolve_fit and FitMode to pdfxi-app::print (Actual, Fit, FitWidth,
+FitHeight, Custom), returning a centred FitTransform with uniform scale,
+rendered size and offsets; invalid geometry and custom percentages are typed
+errors. The pre-existing trapping/flattening planner on this id is unchanged.
 
-HOST BACKEND BOUNDARY: this is pure scaling math used by the imposition planners;
-rasterising at the resolved scale is done by the host. The pre-existing
-trapping/flattening planner on this id is unchanged.
+T-0350 hosts that planner. `pdfxi prepress plan FILE [--preset NAME]
+[--trap-width PT] [--black-width PT] [--black-color auto|knockout|c,m,y,k]
+[--join miter|round|bevel] [--sliding none|auto|PT] [--dpi N]
+[--balance vector|balanced|raster] [--overprint preserve|simulate|knockout]
+[--max-depth N] [--json]` parses the document, requires at least one page and
+reports the page count and first-page media geometry with TrappingPreset::new,
+FlattenPolicy::with_max_depth and TrapPlan::build. The report includes
+needs_backend_prepress, the stable policy_bits and every warning.
+
+Evidence: defaults on a real 612x792 page report trap 0.25 pt, black 1 pt auto,
+miter, no sliding, 300 dpi, balanced, preserve, depth 8, bits 64, no backend
+need and zero warnings. A custom run with CMYK black, round joins, limited
+sliding 2.5 pt, 600 dpi, prefer-raster and simulated overprint reports bits 425,
+needs_backend_prepress true and four warnings (CMYK transform, sliding geometry,
+overprint compositing, rasterizer). DPI 10, trap width 0, empty preset, an
+out-of-range CMYK component, negative sliding, depth 0, an unknown join style
+and a non-PDF are typed errors.
+
+Gates: CLI prepress_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: preset/policy validation and plan resolution against a real document.
+The module's backend boundary still applies: no trap painting, sliding-trap
+geometry, CMYK transform for a custom trap colour, overprint compositing or
+transparency rasterization. The host reports those requirements instead of
+approximating them.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "print::impose_tests::fit_math_is_deterministic_for_actual_fit_and_custom",
     "print::impose_tests::fit_rejects_invalid_geometry_and_scale",
+    "cli::prepress_plans_a_real_document",
+    "cli::prepress_rejects_bad_options",
 ]
 title = "Trapping presets and transparency flattening"
 

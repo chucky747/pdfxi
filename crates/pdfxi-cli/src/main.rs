@@ -138,6 +138,8 @@ mod export;
 // (`marks`) added for T-0131. Both use the core application API.
 mod marks;
 mod preflight;
+/// pdfxi prepress: trapping presets and flattening policy.
+mod prepress;
 mod production;
 /// pdfxi trust: offline chain and revocation evaluation.
 mod trust;
@@ -1013,6 +1015,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Plan trapping presets and transparency flattening for a document.
+    Prepress {
+        /// Prepress action.
+        #[command(subcommand)]
+        command: PrepressCommand,
     },
     /// Plan or apply print-production marks, bleed, separations and intent.
     Production {
@@ -2107,6 +2115,49 @@ enum StructureCommand {
         /// JSON tree description with `lang`, `nodes` and `roots`.
         #[arg(long, value_name = "PATH")]
         tree: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Actions of the `prepress` command.
+#[derive(Debug, Subcommand)]
+enum PrepressCommand {
+    /// Resolve a trapping preset and flattening policy against a real page.
+    Plan {
+        /// Source PDF.
+        input: PathBuf,
+        /// Trapping preset name.
+        #[arg(long, default_value = "Default")]
+        preset: String,
+        /// Default trap width in points.
+        #[arg(long, default_value_t = pdfxi_render::trapping::DEFAULT_TRAP_WIDTH_PT)]
+        trap_width: f32,
+        /// Black trap width in points.
+        #[arg(long, default_value_t = pdfxi_render::trapping::DEFAULT_BLACK_WIDTH_PT)]
+        black_width: f32,
+        /// Black trap colour: `auto`, `knockout` or `c,m,y,k`.
+        #[arg(long, default_value = "auto")]
+        black_color: String,
+        /// Trap join style: `miter`, `round` or `bevel`.
+        #[arg(long, default_value = "miter")]
+        join: String,
+        /// Sliding traps: `none`, `auto` or a maximum distance in points.
+        #[arg(long, default_value = "none")]
+        sliding: String,
+        /// Flattening resolution in DPI.
+        #[arg(long, default_value_t = pdfxi_render::trapping::DEFAULT_FLATTEN_DPI)]
+        dpi: u32,
+        /// Vector/raster balance: `vector`, `balanced` or `raster`.
+        #[arg(long, default_value = "balanced")]
+        balance: String,
+        /// Overprint policy: `preserve`, `simulate` or `knockout`.
+        #[arg(long, default_value = "preserve")]
+        overprint: String,
+        /// Maximum transparency-group depth.
+        #[arg(long, default_value_t = pdfxi_render::trapping::DEFAULT_FLATTEN_DEPTH)]
+        max_depth: u8,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -4678,6 +4729,35 @@ fn run_cli() -> anyhow::Result<()> {
             output,
             json,
         } => preflight::run_preflight(&profile, &input, fix, output.as_deref(), json),
+        Command::Prepress { command } => match command {
+            PrepressCommand::Plan {
+                input,
+                preset,
+                trap_width,
+                black_width,
+                black_color,
+                join,
+                sliding,
+                dpi,
+                balance,
+                overprint,
+                max_depth,
+                json,
+            } => prepress::plan(
+                &input,
+                &preset,
+                trap_width,
+                black_width,
+                &black_color,
+                &join,
+                &sliding,
+                dpi,
+                &balance,
+                &overprint,
+                max_depth,
+                json,
+            ),
+        },
         Command::Production { command } => match command {
             ProductionCommand::Plan { options } => production::plan(
                 &options.input,

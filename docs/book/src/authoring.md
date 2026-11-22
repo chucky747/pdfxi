@@ -41,6 +41,7 @@ command.
 | Ink manager and overprint preview | `PRINT-005` | verified | `pdfxi-app::print` + `/ExtGState` scan | `ink` |
 | PDF/A, PDF/X, PDF/E and PDF/VT validation | `PRINT-002` | verified | `pdfxi-standards` + `pdfxi-convert::preflight` | `preflight <profile>` |
 | Droplets, hot folders and batch preflight | `PRINT-008` | verified | `pdfxi-app::print` + automation | `production plan/apply`, `droplet`, `watch` |
+| Trapping presets and transparency flattening | `PRINT-006` | verified | `pdfxi-render::trapping` | `prepress plan` |
 | Deployment preferences and customization | `PLAT-006` | verified | `pdfxi-core::preferences` | `policy show/write/merge/check` |
 | Shell integration and file associations | `PLAT-005` | verified | `pdfxi-core::association` | `shell plan/register/status/unregister` |
 | Browser integration | `PLAT-004` | verified | `pdfxi-core::browser_handoff` | `handoff open/parse/link` |
@@ -646,6 +647,25 @@ the signer subject and SHA-256 certificate fingerprint, and the `/ByteRange`.
 It exits non-zero unless the signature is fully valid. Certificate trust is
 reported as `null` (not evaluated), never as trusted. Key material and
 passwords are never printed.
+### Prepress planning
+
+`PRINT-006` (verified) hosts the trapping and flattening model from
+`pdfxi_render::trapping`:
+
+```text
+pdfxi prepress plan FILE [--preset NAME] [--trap-width PT] [--black-width PT]
+    [--black-color auto|knockout|c,m,y,k] [--join miter|round|bevel]
+    [--sliding none|auto|PT] [--dpi N] [--balance vector|balanced|raster]
+    [--overprint preserve|simulate|knockout] [--max-depth N] [--json]
+```
+
+The command validates a `TrappingPreset` and `FlattenPolicy` against a real
+page, builds a deterministic `TrapPlan`, and reports the resolved values plus
+`needs-backend-prepress` and the exact backend requirements (CMYK trap colour
+transform, sliding-trap geometry, overprint compositing, rasterization). It does
+not paint traps or flatten transparency: that is the native prepress backend
+boundary documented by the model.
+
 ### Print production
 
 `PRINT-008` (verified) hosts the print-production planner from
