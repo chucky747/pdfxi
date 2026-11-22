@@ -1,0 +1,22 @@
+{
+  "id": "T-0282",
+  "lane": "core",
+  "title": "List and extract a portfolio collection through pdfxi portfolio",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0280"],
+  "owns": [
+    "crates/pdfxi-core/src/links.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/portfolio.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "crates/pdfxi-testkit/src/lib.rs",
+    "fixtures/authoring/authoring-portfolio.pdf",
+    "docs/evidence/cli/T-0282.md",
+    "orchestration/feature-updates/T-0282.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core --lib links and cargo test -p pdfxi-cli pass; pdfxi portfolio lists folder paths, media types, sizes and descriptions from a real portfolio and --extract writes the exact embedded bytes into recreated folders while refusing traversal; VIEW-014 moves to verified.",
+  "notes": "Reads /Collection presence and every /Names /EmbeddedFiles entry with its /UF folder path, embedded-stream /Subtype and /Params /ModDate, then lists the collection rows and extracts the bytes with per-component path validation.",
+  "evidence": "docs/evidence/cli/T-0282.md"
+}

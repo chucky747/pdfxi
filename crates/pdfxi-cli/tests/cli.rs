@@ -2735,6 +2735,111 @@ fn attachments_report_an_embedded_file() {
 }
 
 #[test]
+fn portfolio_lists_folder_paths_and_stream_metadata() {
+    let pdf = TempPdf::new(&pdfxi_testkit::portfolio_pdf());
+    let output = run(&["portfolio", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("collection: yes"), "{text}");
+    assert!(text.contains("files: 3"), "{text}");
+    assert!(
+        text.contains("  brief.txt  size: 11  type: text/plain  description: Quarterly brief"),
+        "{text}"
+    );
+    assert!(
+        text.contains("    q1.pdf  size: 20  type: application/pdf"),
+        "q1.pdf is two folders deep: {text}"
+    );
+    assert!(text.contains("notes.txt  size: 22"), "{text}");
+}
+
+#[test]
+fn portfolio_json_is_stable_and_reports_the_collection() {
+    let pdf = TempPdf::new(&pdfxi_testkit::portfolio_pdf());
+    let output = run(&["portfolio", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["collection"], true);
+    assert_eq!(value["count"], 3);
+    let files = value["files"].as_array().expect("files array");
+    assert_eq!(files.len(), 3);
+    assert_eq!(files[0]["path"], "Reports/brief.txt");
+    assert_eq!(files[0]["name"], "brief.txt");
+    assert_eq!(files[0]["mime"], "text/plain");
+    assert_eq!(files[0]["modified"], "D:20260101120000Z");
+    assert_eq!(files[0]["size"], 11);
+    assert_eq!(files[1]["path"], "Reports/2026/q1.pdf");
+    assert_eq!(files[2]["path"], "notes.txt");
+}
+
+#[test]
+fn portfolio_extract_recreates_folders_and_writes_exact_bytes() {
+    let pdf = TempPdf::new(&pdfxi_testkit::portfolio_pdf());
+    let directory = std::env::temp_dir().join(format!(
+        "pdfxi-portfolio-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    let target = directory.to_string_lossy().into_owned();
+    let output = run(&["portfolio", pdf.arg(), "--extract", &target]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("extracted: 3 files"), "{text}");
+
+    let brief = fs::read(directory.join("Reports").join("brief.txt")).expect("brief written");
+    assert_eq!(brief, b"hello brief");
+    let q1 = fs::read(directory.join("Reports").join("2026").join("q1.pdf")).expect("q1 written");
+    assert_eq!(q1, b"%PDF-1.4\nq1 payload\n");
+    let notes = fs::read(directory.join("notes.txt")).expect("notes written");
+    assert_eq!(notes, b"notes without a folder");
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn portfolio_extract_refuses_a_path_that_escapes_the_directory() {
+    let pdf = TempPdf::new(&pdfxi_testkit::hostile_portfolio_pdf());
+    let parent = std::env::temp_dir().join(format!(
+        "pdfxi-hostile-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let target_dir = parent.join("out");
+    let _ = fs::remove_dir_all(&parent);
+    fs::create_dir_all(&target_dir).expect("create target");
+    let target = target_dir.to_string_lossy().into_owned();
+    let output = run(&["portfolio", pdf.arg(), "--extract", &target]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("refused: refused relative component"),
+        "{text}"
+    );
+    assert!(text.contains("extracted: 0 files"), "{text}");
+    assert!(
+        !parent.join("escape.txt").exists(),
+        "the traversal path must not be written outside the target directory"
+    );
+    let _ = fs::remove_dir_all(&parent);
+}
+
+#[test]
+fn a_plain_pdf_is_not_a_portfolio() {
+    let pdf = TempPdf::new(&pdfxi_testkit::annotated_pdf());
+    let output = run(&["portfolio", pdf.arg()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("collection: no"), "{text}");
+    assert!(text.contains("files: 1"), "{text}");
+}
+
+#[test]
 fn links_json_has_stable_fields() {
     let pdf = TempPdf::new(&pdfxi_testkit::annotated_pdf());
     let output = run(&["links", pdf.arg(), "--json"]);

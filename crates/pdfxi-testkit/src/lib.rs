@@ -13,8 +13,8 @@
 //!
 //! Object numbers are assigned deterministically:
 //!
-//! - object `1` Ã¢â‚¬â€ the document catalog;
-//! - object `2` Ã¢â‚¬â€ the page tree root (`/Pages`);
+//! - object `1` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the document catalog;
+//! - object `2` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the page tree root (`/Pages`);
 //! - for page `i` (zero-based): object `3 + 2*i` is the `/Page` and object
 //!   `4 + 2*i` is its content stream;
 //! - the final object, `3 + 2*n` where `n` is the page count, is the shared
@@ -289,6 +289,96 @@ pub fn layered_pdf() -> Vec<u8> {
         "<< /Type /OCG /Name (Background) >>".to_owned(),
         "<< /Type /OCG /Name (Watermark) >>".to_owned(),
         "<< /Type /OCG /Name (Notes) >>".to_owned(),
+    ];
+    let mut out = String::from("%PDF-1.7\n%PDFXI\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
+    }
+    let xref = out.len();
+    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    out.push_str("0000000000 65535 f \n");
+    for offset in &offsets {
+        out.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    out.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    out.into_bytes()
+}
+/// Build a one-page PDF portfolio with nested folders and three files.
+///
+/// The catalog declares `/Collection` and a `/Names /EmbeddedFiles` tree with:
+///
+/// - `Reports/brief.txt` (`/UF` with a folder, description, text MIME, date),
+/// - `Reports/2026/q1.pdf` (two folder levels, PDF MIME),
+/// - `notes.txt` (no folder).
+///
+/// Each embedded file carries a distinct payload so extraction can be verified
+/// byte for byte.
+pub fn portfolio_pdf() -> Vec<u8> {
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Collection << /View /D /Sort << /S /D >> >> /Names << /EmbeddedFiles << /Names [(brief.txt) 4 0 R (q1.pdf) 6 0 R (notes.txt) 8 0 R] >> >> >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+        "<< /Type /Filespec /F (brief.txt) /UF (Reports/brief.txt) /Desc (Quarterly brief) /EF << /F 5 0 R >> >>".to_owned(),
+    ];
+    let brief = "hello brief";
+    objects.push(format!(
+        "<< /Type /EmbeddedFile /Subtype /text#2Fplain /Length {} /Params << /ModDate (D:20260101120000Z) /Size {} >> >>\nstream\n{brief}\nendstream",
+        brief.len(),
+        brief.len()
+    ));
+    objects.push(
+        "<< /Type /Filespec /F (q1.pdf) /UF (Reports/2026/q1.pdf) /EF << /F 7 0 R >> >>".to_owned(),
+    );
+    let q1 = "%PDF-1.4\nq1 payload\n";
+    objects.push(format!(
+        "<< /Type /EmbeddedFile /Subtype /application#2Fpdf /Length {} >>\nstream\n{q1}\nendstream",
+        q1.len()
+    ));
+    objects.push("<< /Type /Filespec /F (notes.txt) /EF << /F 9 0 R >> >>".to_owned());
+    let notes = "notes without a folder";
+    objects.push(format!(
+        "<< /Type /EmbeddedFile /Subtype /text#2Fplain /Length {} >>\nstream\n{notes}\nendstream",
+        notes.len()
+    ));
+    let mut out = String::from("%PDF-1.7\n%PDFXI\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, body));
+    }
+    let xref = out.len();
+    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    out.push_str("0000000000 65535 f \n");
+    for offset in &offsets {
+        out.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    out.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    out.into_bytes()
+}
+
+/// Build a one-page portfolio whose `/UF` path tries to escape the extract directory.
+///
+/// The entry key is `escape.txt` and `/UF` is `../escape.txt`, so a host that
+/// joins the path blindly writes outside its target directory.
+pub fn hostile_portfolio_pdf() -> Vec<u8> {
+    let payload = "escape attempt";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /Collection << /View /D >> /Names << /EmbeddedFiles << /Names [(escape.txt) 4 0 R] >> >> >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+        "<< /Type /Filespec /F (escape.txt) /UF (../escape.txt) /EF << /F 5 0 R >> >>".to_owned(),
+        format!(
+            "<< /Type /EmbeddedFile /Subtype /text#2Fplain /Length {} >>\nstream\n{payload}\nendstream",
+            payload.len()
+        ),
     ];
     let mut out = String::from("%PDF-1.7\n%PDFXI\n");
     let mut offsets = Vec::with_capacity(objects.len());

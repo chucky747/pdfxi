@@ -366,49 +366,56 @@ title = "Reflow and read aloud"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-app/src/portfolio.rs",
-    "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0173.md",
+    "crates/pdfxi-core/src/links.rs",
+    "crates/pdfxi-cli/src/portfolio.rs",
+    "docs/evidence/cli/T-0282.md",
 ]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0173.md: 5 new portfolio::tests plus the 9 prior portfolio tests all pass; cargo test -p pdfxi-app 381/0 and --features ui 444/0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0282.md"
 id = "VIEW-014"
 notes = """
-Verified for the portfolio metadata/tree model only (ADR 0008). The existing
-path validation, deterministic nested tree, first-wins duplicate report and
-bounded summary validation are now complete at model level. T-0173 closes the
-remaining single-component invariant hole: `PortfolioPath::validate_component`
-now rejects an embedded `/` with `PortfolioPathError::InvalidCharacter`. Folder
-paths are split on `/` before component validation, so this specifically stops
-an entry *name* like `a/b` from rendering the same display path as a genuinely
-nested `folder=a, name=b` file, which previously suppressed the real file as a
-false duplicate. New tests cover that alias rejection, direct component/`join`
-slash validation, triple-duplicate reporting (each duplicate points to the
-first valid index), duplicates after a rejected first entry, and depth/length
-boundaries. Add/remove/rename/move plan invariants remain covered by the
-complementary MANAGE-004 (`portfolio_manage`) row.
+Verified through the CLI host. `Document::is_portfolio` reports the catalog's
+`/Collection`; `Document::portfolio_items` returns every `/Names /EmbeddedFiles`
+entry with its name-tree key, `/UF` folder path, file name, `/Desc`, stream
+length, embedded-stream `/Subtype` and `/Params /ModDate` (with the file
+specification's `/ModDate` as fallback). The description/size code is shared with
+`attachments()`.
 
-Remaining scope is the host boundary and is deliberately not claimed: no tree
-view widget, no embedded-file byte extraction, no filesystem/network I/O. The
-host parses the collection summary and draws `PortfolioTree::rows()`.
+`pdfxi portfolio <file> [--json] [--extract <dir>]` prints the collection with
+folder depth indentation, stable JSON fields, and extracts the exact decoded
+bytes into recreated folders. Every `/UF` component is validated (no `..`,
+absolute, drive, `:` alternate stream, backslash, control characters, empty or
+over-long components) and the joined path is checked for containment, so a
+hostile path is reported per file and never written. A plain PDF reports
+`collection: no` and still lists its name-tree attachments.
+
+Evidence on the checked-in fixture `fixtures/authoring/authoring-portfolio.pdf`:
+listing shows `Reports/brief.txt` (text/plain, 11 bytes, "Quarterly brief"),
+`Reports/2026/q1.pdf` (application/pdf, 20 bytes) and `notes.txt` (22 bytes);
+`--extract` writes `Reports/brief.txt`, `Reports/2026/q1.pdf` and
+`notes.txt` with payloads `hello brief`, `%PDF-1.4` + `q1 payload` and
+`notes without a folder`.
+
+Gates: cargo test -p pdfxi-core --lib links (passed), cargo test -p pdfxi-cli
+--test cli portfolio (5 passed), cargo clippy -p pdfxi-cli -p pdfxi-core
+-p pdfxi-testkit --all-targets -D warnings (0).
+
+Scope kept honest: the GUI portfolio tree widget is still not drawn; the
+reachable host is the CLI, matching the VIEW-009 `attachments --extract` pattern.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
-    "portfolio::tests::empty_portfolio_produces_a_root_only_tree",
-    "portfolio::tests::tree_construction_nests_folders",
-    "portfolio::tests::sorting_is_folders_first_and_case_insensitive",
-    "portfolio::tests::traversal_folder_is_reported_and_skipped",
-    "portfolio::tests::duplicate_full_paths_are_reported_and_first_wins",
-    "portfolio::tests::malformed_entries_are_reported_and_skipped",
-    "portfolio::tests::build_is_deterministic_regardless_of_input_order",
-    "portfolio::tests::path_validation_rejects_absolute_drive_backslash_and_dotdot",
-    "portfolio::tests::too_many_entries_is_a_global_typed_error",
-    "portfolio::tests::entry_name_with_slash_is_rejected_and_cannot_alias_a_folder_path",
-    "portfolio::tests::component_validation_rejects_embedded_slash",
-    "portfolio::tests::triple_duplicate_reports_each_with_first_index",
-    "portfolio::tests::duplicate_after_a_rejected_first_entry_points_to_first_valid",
-    "portfolio::tests::path_depth_and_length_boundaries_are_enforced",
+    "links::tests::portfolio_items_report_folder_paths_mime_and_stream_metadata",
+    "links::tests::a_document_without_a_collection_is_not_a_portfolio_and_lists_attachments",
+    "portfolio::tests::nested_portfolio_paths_become_relative_paths",
+    "portfolio::tests::hostile_portfolio_paths_are_refused",
+    "portfolio::tests::containment_guard_accepts_children_and_rejects_siblings",
+    "cli::portfolio_lists_folder_paths_and_stream_metadata",
+    "cli::portfolio_json_is_stable_and_reports_the_collection",
+    "cli::portfolio_extract_recreates_folders_and_writes_exact_bytes",
+    "cli::portfolio_extract_refuses_a_path_that_escapes_the_directory",
+    "cli::a_plain_pdf_is_not_a_portfolio",
 ]
 title = "PDF Portfolio browsing"
 

@@ -101,7 +101,7 @@ pub use linearize::{
     HintStream, LinearizationOptions, LinearizedLayout, PageHint, SharedObjectHint,
     parse_hint_stream, write_linearized_document, write_linearized_document_with_layout,
 };
-pub use links::{Attachment, LinkAnnotation, LinkTarget};
+pub use links::{Attachment, LinkAnnotation, LinkTarget, PortfolioItem};
 pub use metadata::{
     DocumentInfo, PdfDate, XmpMetadata, decode_text_string, encode_text_string, parse_pdf_date,
     parse_xmp,

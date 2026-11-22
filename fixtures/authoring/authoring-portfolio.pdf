@@ -1,0 +1,57 @@
+%PDF-1.7
+%PDFXI
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Collection << /View /D /Sort << /S /D >> >> /Names << /EmbeddedFiles << /Names [(brief.txt) 4 0 R (q1.pdf) 6 0 R (notes.txt) 8 0 R] >> >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+endobj
+4 0 obj
+<< /Type /Filespec /F (brief.txt) /UF (Reports/brief.txt) /Desc (Quarterly brief) /EF << /F 5 0 R >> >>
+endobj
+5 0 obj
+<< /Type /EmbeddedFile /Subtype /text#2Fplain /Length 11 /Params << /ModDate (D:20260101120000Z) /Size 11 >> >>
+stream
+hello brief
+endstream
+endobj
+6 0 obj
+<< /Type /Filespec /F (q1.pdf) /UF (Reports/2026/q1.pdf) /EF << /F 7 0 R >> >>
+endobj
+7 0 obj
+<< /Type /EmbeddedFile /Subtype /application#2Fpdf /Length 20 >>
+stream
+%PDF-1.4
+q1 payload
+
+endstream
+endobj
+8 0 obj
+<< /Type /Filespec /F (notes.txt) /EF << /F 9 0 R >> >>
+endobj
+9 0 obj
+<< /Type /EmbeddedFile /Subtype /text#2Fplain /Length 22 >>
+stream
+notes without a folder
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000016 00000 n 
+0000000204 00000 n 
+0000000261 00000 n 
+0000000332 00000 n 
+0000000451 00000 n 
+0000000607 00000 n 
+0000000701 00000 n 
+0000000819 00000 n 
+0000000890 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+1005
+%%EOF

@@ -3,7 +3,7 @@
   "lane": "core",
   "title": "Read optional-content layers and default visibility through pdfxi layers",
   "priority": "P1",
-  "status": "queued",
+  "status": "verified",
   "depends_on": ["T-0279"],
   "owns": [
     "crates/pdfxi-core/src/layers.rs",
@@ -19,3 +19,4 @@
   "notes": "Parses /OCProperties, /OCGs, the default configuration /OFF, /ON, /BaseState and nested /Order, and exposes a typed Layer list with visible and depth; the CLI prints text with indentation or stable JSON.",
   "evidence": "docs/evidence/cli/T-0280.md"
 }
+

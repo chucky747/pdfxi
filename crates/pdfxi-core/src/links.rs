@@ -66,6 +66,34 @@ pub struct Attachment {
     pub page: Option<usize>,
 }
 
+/// One file in a PDF portfolio collection.
+///
+/// A portfolio is a normal PDF whose catalog carries a `/Collection` dictionary
+/// and whose `/Names /EmbeddedFiles` name tree holds the collection files. The
+/// `/UF` value of each file specification may contain `/`-separated folders, so
+/// the same entry can describe `Reports/2026/q1.pdf`.
+///
+/// Only metadata is exposed here; [`Document::attachment_bytes`] returns the
+/// stream for an entry by its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortfolioItem {
+    /// Name-tree key of the entry, accepted by [`Document::attachment_bytes`].
+    pub key: String,
+    /// `/UF` path of the file, with `/` separating folders from the file name.
+    pub path: String,
+    /// File name shown to the user (the last component of [`Self::path`]).
+    pub name: String,
+    /// Optional `/Desc` description.
+    pub description: Option<String>,
+    /// Embedded stream length in bytes, when readable.
+    pub size: Option<u64>,
+    /// `/Subtype` media type of the embedded file stream, when present.
+    pub mime: Option<String>,
+    /// `/Params /ModDate` of the embedded file, or the file specification's
+    /// `/ModDate`, exactly as stored, when present.
+    pub modified: Option<String>,
+}
+
 /// Reader over one document's bytes and parsed structure.
 struct Reader<'a> {
     data: &'a [u8],
@@ -332,6 +360,81 @@ impl Document {
         }
         Ok(attachments)
     }
+
+    /// Whether the document catalog declares a `/Collection` dictionary.
+    ///
+    /// Acrobat writes `/Collection` for portfolio documents. The dictionary is
+    /// not required for listing: [`Self::portfolio_items`] reports the embedded
+    /// files of any document, so a plain PDF with attachments lists them too.
+    pub fn is_portfolio(&self) -> Result<bool> {
+        let structure = self.supported_structure()?;
+        let reader = Reader {
+            data: self.bytes(),
+            structure,
+        };
+        match reader.resolve(&Object::Reference(structure.root_id), 0)? {
+            Object::Dictionary(catalog) => Ok(catalog.contains_key("Collection")),
+            _ => Ok(false),
+        }
+    }
+
+    /// Every `/Names /EmbeddedFiles` entry as a portfolio item.
+    ///
+    /// `/UF` supplies the folder path and file name; when only `/F` exists it is
+    /// used instead, and the name-tree key is the last fallback. Malformed name
+    /// trees yield an empty list rather than an error, matching
+    /// [`Self::attachments`]. Annotations and streams are not read here.
+    pub fn portfolio_items(&self) -> Result<Vec<PortfolioItem>> {
+        let structure = self.supported_structure()?;
+        let reader = Reader {
+            data: self.bytes(),
+            structure,
+        };
+        let catalog = reader.resolve(&Object::Reference(structure.root_id), 0)?;
+        let Object::Dictionary(catalog) = catalog else {
+            return Ok(Vec::new());
+        };
+        let Some(tree) = catalog.get("Names") else {
+            return Ok(Vec::new());
+        };
+        let Some(tree) = reader.dictionary(tree, 0)? else {
+            return Ok(Vec::new());
+        };
+        let Some(files) = tree.get("EmbeddedFiles") else {
+            return Ok(Vec::new());
+        };
+        let mut entries = Vec::new();
+        reader.walk_name_tree(files, &mut entries, 0)?;
+        let mut items = Vec::with_capacity(entries.len());
+        for (key, spec) in entries {
+            let path = file_name(&spec).unwrap_or_else(|| key.clone());
+            let name = path
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&key)
+                .to_owned();
+            let stream = embedded_stream(&reader, &spec)?;
+            items.push(PortfolioItem {
+                key,
+                path,
+                name,
+                description: spec_description(&spec),
+                size: stream
+                    .as_ref()
+                    .and_then(|stream| match stream.get("Length") {
+                        Some(Object::Integer(length)) if *length >= 0 => Some(*length as u64),
+                        _ => None,
+                    }),
+                mime: stream.as_ref().and_then(stream_mime),
+                modified: stream
+                    .as_ref()
+                    .and_then(stream_modified)
+                    .or_else(|| spec_modified(&spec)),
+            });
+        }
+        Ok(items)
+    }
 }
 
 /// Build an [`Attachment`] from a file-specification dictionary.
@@ -340,34 +443,79 @@ fn attachment_from_spec(
     fallback_name: &str,
     spec: &Dictionary,
 ) -> Result<Attachment> {
-    let description = spec.get("Desc").and_then(|value| match value {
-        Object::String(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
-        _ => None,
-    });
-    let size = match spec.get("EF") {
-        Some(embedded) => match reader.dictionary(embedded, 0)? {
-            Some(embedded_files) => match embedded_files.get("F") {
-                Some(Object::Reference(id)) => {
-                    let stream = load_object(reader.data, &reader.structure.xref, *id)?;
-                    match stream {
-                        Object::Stream { dictionary, .. } => match dictionary.get("Length") {
-                            Some(Object::Integer(length)) if *length >= 0 => Some(*length as u64),
-                            _ => None,
-                        },
-                        _ => None,
-                    }
-                }
-                _ => None,
-            },
-            None => None,
-        },
-        None => None,
-    };
     Ok(Attachment {
         name: file_name(spec).unwrap_or_else(|| fallback_name.to_owned()),
-        description,
-        size,
+        description: spec_description(spec),
+        size: embedded_size(reader, spec)?,
         page: None,
+    })
+}
+
+/// Text of a file specification's `/Desc` entry, when present.
+fn spec_description(spec: &Dictionary) -> Option<String> {
+    spec.get("Desc").and_then(|value| match value {
+        Object::String(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        _ => None,
+    })
+}
+
+/// Text of a file specification's own `/ModDate`, when present.
+///
+/// The embedded stream's `/Params /ModDate` is authoritative; this is the
+/// fallback for writers that only date the file specification.
+fn spec_modified(spec: &Dictionary) -> Option<String> {
+    spec.get("ModDate").and_then(|value| match value {
+        Object::String(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        _ => None,
+    })
+}
+
+/// Dictionary of the embedded file stream a file specification points at.
+fn embedded_stream(reader: &Reader<'_>, spec: &Dictionary) -> Result<Option<Dictionary>> {
+    let Some(embedded) = spec.get("EF") else {
+        return Ok(None);
+    };
+    let Some(embedded_files) = reader.dictionary(embedded, 0)? else {
+        return Ok(None);
+    };
+    let Some(Object::Reference(id)) = embedded_files.get("F") else {
+        return Ok(None);
+    };
+    let stream = load_object(reader.data, &reader.structure.xref, *id)?;
+    Ok(match stream {
+        Object::Stream { dictionary, .. } => Some(dictionary),
+        _ => None,
+    })
+}
+
+/// Declared length of the embedded stream a file specification points at.
+fn embedded_size(reader: &Reader<'_>, spec: &Dictionary) -> Result<Option<u64>> {
+    let Some(stream) = embedded_stream(reader, spec)? else {
+        return Ok(None);
+    };
+    Ok(match stream.get("Length") {
+        Some(Object::Integer(length)) if *length >= 0 => Some(*length as u64),
+        _ => None,
+    })
+}
+
+/// `/Subtype` media type declared by an embedded file stream.
+fn stream_mime(stream: &Dictionary) -> Option<String> {
+    stream
+        .get("Subtype")
+        .and_then(Object::as_name)
+        .map(str::to_owned)
+}
+
+/// `/Params /ModDate` of an embedded file stream, exactly as stored.
+fn stream_modified(stream: &Dictionary) -> Option<String> {
+    let params = stream.get("Params")?;
+    let Object::Dictionary(params) = params else {
+        return None;
+    };
+    params.get("ModDate").and_then(|value| match value {
+        Object::String(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        _ => None,
     })
 }
 
@@ -549,6 +697,49 @@ mod tests {
             "<< /Type /EmbeddedFile /Length 5 >>\nstream\nhello\nendstream".to_owned(),
             "<< /Type /Annot /Subtype /Link /Rect [10 170 100 200] /Dest (here) >>".to_owned(),
         ])
+    }
+
+    #[test]
+    fn portfolio_items_report_folder_paths_mime_and_stream_metadata() {
+        let pdf = assemble(&[
+            "<< /Type /Catalog /Pages 2 0 R /Collection << /View /D >> /Names << /EmbeddedFiles << /Names [(brief.txt) 4 0 R (q1.pdf) 6 0 R] >> >> >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+            "<< /Type /Filespec /F (brief.txt) /UF (Reports/brief.txt) /Desc (Quarterly brief) /EF << /F 5 0 R >> >>".to_owned(),
+            "<< /Type /EmbeddedFile /Subtype /text#2Fplain /Length 5 /Params << /ModDate (D:20260101120000Z) /Size 5 >> >>\nstream\nhello\nendstream".to_owned(),
+            "<< /Type /Filespec /F (q1.pdf) /UF (Reports/2026/q1.pdf) /EF << /F 7 0 R >> >>".to_owned(),
+            "<< /Type /EmbeddedFile /Subtype /application#2Fpdf /Length 5 >>\nstream\nworld\nendstream".to_owned(),
+        ]);
+        let document = Document::from_bytes(pdf).expect("portfolio parses");
+        assert!(document.is_portfolio().expect("read collection"));
+        let items = document.portfolio_items().expect("read portfolio items");
+        assert_eq!(items.len(), 2);
+
+        assert_eq!(items[0].key, "brief.txt");
+        assert_eq!(items[0].path, "Reports/brief.txt");
+        assert_eq!(items[0].name, "brief.txt");
+        assert_eq!(items[0].description.as_deref(), Some("Quarterly brief"));
+        assert_eq!(items[0].size, Some(5));
+        assert_eq!(items[0].mime.as_deref(), Some("text/plain"));
+        assert_eq!(items[0].modified.as_deref(), Some("D:20260101120000Z"));
+
+        assert_eq!(items[1].key, "q1.pdf");
+        assert_eq!(items[1].path, "Reports/2026/q1.pdf");
+        assert_eq!(items[1].name, "q1.pdf");
+        assert_eq!(items[1].description, None);
+        assert_eq!(items[1].mime.as_deref(), Some("application/pdf"));
+        assert_eq!(items[1].modified, None);
+    }
+
+    #[test]
+    fn a_document_without_a_collection_is_not_a_portfolio_and_lists_attachments() {
+        let document = Document::from_bytes(annotated_pdf()).expect("fixture parses");
+        assert!(!document.is_portfolio().expect("read collection"));
+        let items = document.portfolio_items().expect("read portfolio items");
+        assert_eq!(items.len(), 1, "name-tree attachment still lists");
+        assert_eq!(items[0].key, "notes.txt");
+        assert_eq!(items[0].path, "notes.txt");
+        assert_eq!(items[0].name, "notes.txt");
     }
 
     #[test]

@@ -82,6 +82,8 @@ mod printer;
 mod pages;
 // Link annotations and embedded-file attachments (`links`, `attachments`).
 mod links;
+/// `pdfxi portfolio`: list and extract a PDF portfolio collection.
+mod portfolio;
 // Optional-content layers (`layers`).
 mod layers;
 mod repair;
@@ -233,6 +235,23 @@ enum Command {
         #[arg(long)]
         json: bool,
         /// Write every attachment into this directory.
+        #[arg(long, value_name = "DIR")]
+        extract: Option<PathBuf>,
+    },
+    /// Browse or extract a PDF portfolio collection.
+    ///
+    /// A portfolio is a PDF whose `/Collection` dictionary and
+    /// `/Names /EmbeddedFiles` tree describe a folder of documents. Listing
+    /// prints one row per file with its `/UF` folder path, media type and
+    /// description; `--extract` writes the embedded bytes into a directory,
+    /// recreating the folders and refusing every path that escapes it.
+    Portfolio {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+        /// Write every portfolio file into this directory.
         #[arg(long, value_name = "DIR")]
         extract: Option<PathBuf>,
     },
@@ -795,6 +814,11 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Portfolio {
+            file,
+            json,
+            extract,
+        } => portfolio::run_portfolio(&file, json, extract.as_deref()),
         Command::Pages { command } => match command {
             PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
             PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),
