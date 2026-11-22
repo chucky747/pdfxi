@@ -54,3 +54,12 @@ pdfium = ["pdfxi-render/pdfium"]
 
 [dev-dependencies]
 pdfxi-testkit = { workspace = true }
+# Test-only identity generation for the real CMS/RSA signature round trip.
+# These are already in the workspace lock graph through `pdfxi-security`; no
+# new external dependency or licence is introduced.
+der = "0.7"
+rand = "0.8"
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = "0.10"
+spki = "0.7"
+x509-cert = { version = "0.2", features = ["builder", "pem"] }

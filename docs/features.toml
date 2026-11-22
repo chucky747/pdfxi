@@ -2796,21 +2796,50 @@ title = "Digital IDs and certificate management"
 docs = [
     "crates/pdfxi-security/src/cms.rs",
     "crates/pdfxi-security/src/der.rs",
+    "crates/pdfxi-security/src/pdf_signature.rs",
+    "crates/pdfxi-cli/src/sign.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/hardening/T-0241.md",
+    "docs/evidence/cli/T-0344.md",
 ]
 domain = "Security"
-evidence = "docs/evidence/hardening/T-0241.md"
+evidence = "docs/evidence/cli/T-0344.md"
 id = "SEC-005"
 notes = """
 Real CMS/PKCS#7 signature over the PDF byte range: SignedData v1, SHA-256
 digest, sha256WithRSAEncryption, contentType/signingTime/messageDigest signed
-attributes, self-signed 2048-bit test identity, /adbe.pkcs7.detached, invisible
-signature widget registered in /Annots and /AcroForm. Verification checks the
-RSA signature and the content digest, reports coverage and appended bytes, and
-returns chain trust as None. No GUI caller yet: the E-signed badge and request
-flow are the T-0245 shell task, so this row stays `library`.
+attributes, /adbe.pkcs7.detached, invisible signature widget registered in
+/Annots and /AcroForm. Verification checks the RSA signature and the content
+digest, reports coverage and appended bytes, and returns chain trust as None.
+
+T-0344 adds the missing caller. `pdfxi sign create FILE --out PATH (--key
+KEY.pem --cert CERT.pem [--chain CHAIN.pem] | --pfx ID.p12) [--password PW]
+[--page N] [--field NAME] [--reason TEXT] [--location TEXT] [--time UNIX]
+[--reserve BYTES] [--json]` loads a PEM or PKCS#12 identity, signs an
+incremental revision and verifies its own output before writing; a signature
+that fails the full badge is never persisted. `pdfxi sign verify FILE [--json]`
+reports status, signature validity, byte match, whole-file coverage, appended
+bytes, signer subject and SHA-256 fingerprint, digest, /SubFilter and
+/ByteRange, exits non-zero unless fully valid, and never reports certificate
+trust as true when the trust store was not evaluated (chain_trusted is null).
+Key material and passwords are never printed or included in errors.
+
+Evidence: an 18,357-byte signed PDF reports field Signature1, page 1, sha256,
+1,354 CMS bytes, byte-range [0, 1286, 17672, 685] and fully-valid true, and
+verify reports status valid with fingerprint e4ee42ac..., chain-trusted
+not-evaluated. Flipping one covered byte reports status tampered /
+bytes_match false and exits 1; appending bytes reports valid with
+covers_entire_file false and exits 1; an unsigned PDF is a typed error. Missing
+identity, pfx/PEM conflict, page 0 and page 9 all fail with typed errors.
+
+Scope: detached CMS signatures and their structural/cryptographic
+verification. No certificate trust, revocation or timestamp evaluation
+(SEC-006/SEC-007), no certification-signature permission enforcement, no
+long-term validation and no visible appearance beyond the standard invisible
+widget.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
     "pdf_signature::tests::signs_a_real_pdf_and_verifies_the_cms",
     "pdf_signature::tests::a_flipped_byte_inside_the_signed_range_is_reported_as_tampering",
@@ -2820,6 +2849,8 @@ tests = [
     "pdf_signature::tests::pem_loading_rejects_bad_and_undersized_keys",
     "pdf_signature::tests::a_pdf_without_a_signature_is_a_typed_error",
     "pdf_signature::tests::reserved_space_that_is_too_small_is_a_typed_error",
+    "cli::sign_creates_a_cms_signature_and_verifies_it",
+    "cli::sign_rejects_bad_identity_options_and_unsigned_input",
 ]
 title = "Sign and certify documents"
 

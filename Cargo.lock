@@ -2904,6 +2904,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "der",
  "pdfxi-accessibility",
  "pdfxi-app",
  "pdfxi-automation",
@@ -2915,8 +2916,13 @@ dependencies = [
  "pdfxi-security",
  "pdfxi-testkit",
  "pdfxi-text",
+ "rand 0.8.8",
+ "rsa",
  "serde",
  "serde_json",
+ "sha2",
+ "spki",
+ "x509-cert",
 ]
 
 [[package]]

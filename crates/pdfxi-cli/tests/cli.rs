@@ -12523,6 +12523,258 @@ fn protect_rejects_encrypted_input_and_bad_options() {
     assert!(!empty.status.success());
 }
 
+// ---------------------------------------------------------------------------
+// sign: real CMS/RSA signatures (T-0344)
+// ---------------------------------------------------------------------------
+
+/// Write a fresh self-signed RSA identity as PEM key + certificate.
+fn write_test_identity(dir: &TempDir, common_name: &str) -> (PathBuf, PathBuf) {
+    use std::str::FromStr;
+
+    use der::EncodePem;
+    use der::asn1::UtcTime;
+    use der::pem::LineEnding;
+    use rsa::pkcs1v15::Signature as RsaRawSignature;
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::pkcs8::EncodePrivateKey;
+    use rsa::signature::Keypair;
+    use sha2::Sha256;
+    use spki::SubjectPublicKeyInfoOwned;
+    use x509_cert::builder::{Builder as _, CertificateBuilder, Profile};
+    use x509_cert::name::Name;
+    use x509_cert::serial_number::SerialNumber;
+    use x509_cert::time::{Time, Validity};
+
+    let mut rng = rand::rngs::OsRng;
+    let key = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("generate test RSA key");
+    let signer = SigningKey::<Sha256>::new(key.clone());
+    let subject = Name::from_str(&format!("CN={common_name},O=PDFXI")).expect("subject name");
+    let spki =
+        SubjectPublicKeyInfoOwned::from_key(signer.verifying_key()).expect("public key info");
+    let builder = CertificateBuilder::new(
+        Profile::Leaf {
+            issuer: subject.clone(),
+            enable_key_agreement: false,
+            enable_key_encipherment: false,
+        },
+        SerialNumber::from(7_u32),
+        Validity {
+            not_before: Time::UtcTime(
+                UtcTime::from_unix_duration(std::time::Duration::from_secs(1_600_000_000))
+                    .expect("notBefore"),
+            ),
+            not_after: Time::UtcTime(
+                UtcTime::from_unix_duration(std::time::Duration::from_secs(2_000_000_000))
+                    .expect("notAfter"),
+            ),
+        },
+        subject,
+        spki,
+        &signer,
+    )
+    .expect("certificate builder");
+    let certificate = builder
+        .build::<RsaRawSignature>()
+        .expect("self-signed certificate");
+    let key_path = dir.child("signer-key.pem");
+    let cert_path = dir.child("signer-cert.pem");
+    fs::write(
+        &key_path,
+        key.to_pkcs8_pem(LineEnding::LF)
+            .expect("encode key")
+            .as_bytes(),
+    )
+    .expect("write key");
+    fs::write(
+        &cert_path,
+        certificate.to_pem(LineEnding::LF).expect("encode cert"),
+    )
+    .expect("write certificate");
+    (key_path, cert_path)
+}
+
+#[test]
+fn sign_creates_a_cms_signature_and_verifies_it() {
+    let dir = TempDir::new();
+    let (key, cert) = write_test_identity(&dir, "PDFXI CLI Signer");
+    let plain = create_text_pdf("Signed content.");
+    let signed = dir.child("signed.pdf");
+    let created = run(&[
+        "sign",
+        "create",
+        plain.arg(),
+        "--out",
+        signed.to_str().expect("out"),
+        "--key",
+        key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--reason",
+        "Approval",
+        "--time",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["field"], "Signature1");
+    assert_eq!(value["page"], 1);
+    assert_eq!(value["digest"], "sha256");
+    assert_eq!(value["signing_time"], 1_700_000_000_u64);
+    assert_eq!(value["fully_valid"], true);
+    assert!(
+        value["signer"]
+            .as_str()
+            .unwrap_or("")
+            .contains("PDFXI CLI Signer")
+    );
+    assert!(value["cms_bytes"].as_u64().unwrap_or(0) > 0);
+    assert!(value["contents_reservation"].as_u64().unwrap_or(0) >= 4096);
+    let range = value["byte_range"].as_array().expect("byte range");
+    assert_eq!(range.len(), 4);
+    assert_eq!(range[0], 0);
+    let bytes = fs::read(&signed).expect("signed file");
+    assert_eq!(bytes.len(), value["bytes"].as_u64().unwrap_or(0) as usize);
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("core parses the signed PDF");
+    assert_eq!(document.page_count().expect("page count"), 1);
+
+    let verified = run(&["sign", "verify", signed.to_str().expect("out"), "--json"]);
+    assert!(verified.status.success(), "stderr: {}", stderr(&verified));
+    let value: Value = serde_json::from_str(&stdout(&verified)).expect("valid JSON");
+    assert_eq!(value["status"], "valid");
+    assert_eq!(value["fully_valid"], true);
+    assert_eq!(value["signature_valid"], true);
+    assert_eq!(value["bytes_match"], true);
+    assert_eq!(value["covers_entire_file"], true);
+    assert_eq!(value["appended_after_signature"], false);
+    assert_eq!(value["sub_filter"], "adbe.pkcs7.detached");
+    assert_eq!(value["fingerprint_sha256"].as_str().unwrap_or("").len(), 64);
+    assert_eq!(value["chain_trusted"], Value::Null);
+    assert_eq!(value["signing_time"], 1_700_000_000_u64);
+
+    // Tampering with a covered byte must be reported, never accepted.
+    let mut tampered = fs::read(&signed).expect("signed file");
+    let position = tampered
+        .windows(b"Signed content.".len())
+        .position(|window| window == b"Signed content.")
+        .expect("text present in the signed file");
+    tampered[position] = b'X';
+    let tampered_path = dir.child("tampered.pdf");
+    fs::write(&tampered_path, &tampered).expect("write tampered file");
+    let rejected = run(&["sign", "verify", tampered_path.to_str().expect("out")]);
+    assert!(!rejected.status.success());
+    assert!(
+        stderr(&rejected).contains("not fully valid"),
+        "{}",
+        stderr(&rejected)
+    );
+
+    // Appending bytes leaves the signature valid for what it covers but not
+    // for the whole file.
+    let mut appended = fs::read(&signed).expect("signed file");
+    appended.extend_from_slice(b"\n% appended after signing\n");
+    let appended_path = dir.child("appended.pdf");
+    fs::write(&appended_path, &appended).expect("write appended file");
+    let covered = run(&[
+        "sign",
+        "verify",
+        appended_path.to_str().expect("out"),
+        "--json",
+    ]);
+    assert!(!covered.status.success());
+    let value: Value = serde_json::from_str(&stdout(&covered)).expect("valid JSON");
+    assert_eq!(value["status"], "valid");
+    assert_eq!(value["appended_after_signature"], true);
+    assert_eq!(value["covers_entire_file"], false);
+    assert_eq!(value["fully_valid"], false);
+}
+
+#[test]
+fn sign_rejects_bad_identity_options_and_unsigned_input() {
+    let dir = TempDir::new();
+    let (key, cert) = write_test_identity(&dir, "Options Signer");
+    let plain = create_text_pdf("No signature yet.");
+    let out = dir.child("out.pdf");
+    let out = out.to_str().expect("out");
+
+    let missing = run(&["sign", "create", plain.arg(), "--out", out]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("--key/--cert or with --pfx"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let conflict = run(&[
+        "sign",
+        "create",
+        plain.arg(),
+        "--out",
+        out,
+        "--key",
+        key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+        "--pfx",
+        cert.to_str().expect("cert"),
+    ]);
+    assert!(!conflict.status.success());
+    assert!(
+        stderr(&conflict).contains("--pfx cannot be combined"),
+        "{}",
+        stderr(&conflict)
+    );
+
+    for (page, needle) in [("0", "one-based"), ("9", "outside")] {
+        let page_error = run(&[
+            "sign",
+            "create",
+            plain.arg(),
+            "--out",
+            out,
+            "--key",
+            key.to_str().expect("key"),
+            "--cert",
+            cert.to_str().expect("cert"),
+            "--page",
+            page,
+        ]);
+        assert!(!page_error.status.success());
+        assert!(
+            stderr(&page_error).contains(needle),
+            "{needle}: {}",
+            stderr(&page_error)
+        );
+    }
+
+    let unsigned = run(&["sign", "verify", plain.arg()]);
+    assert!(!unsigned.status.success());
+    assert!(
+        stderr(&unsigned).to_lowercase().contains("signature"),
+        "{}",
+        stderr(&unsigned)
+    );
+
+    let garbage_key = dir.child("garbage-key.pem");
+    fs::write(&garbage_key, b"not a pem document").expect("write garbage key");
+    let bad = run(&[
+        "sign",
+        "create",
+        plain.arg(),
+        "--out",
+        out,
+        "--key",
+        garbage_key.to_str().expect("key"),
+        "--cert",
+        cert.to_str().expect("cert"),
+    ]);
+    assert!(!bad.status.success());
+    assert!(
+        stderr(&bad).contains("load PEM identity"),
+        "{}",
+        stderr(&bad)
+    );
+}
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

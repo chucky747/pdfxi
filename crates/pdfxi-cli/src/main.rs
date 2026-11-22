@@ -112,6 +112,8 @@ mod script;
 mod separations;
 /// pdfxi shell: file associations and the pdfxi:// protocol.
 mod shell;
+/// pdfxi sign: real CMS/RSA signatures over a PDF byte range.
+mod sign;
 /// pdfxi signature: signature fields, byte-range planning and verification.
 mod signature;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
@@ -442,6 +444,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Sign a PDF with a real CMS/RSA signature, or verify one.
+    Sign {
+        /// Signature action.
+        #[command(subcommand)]
+        command: SignCommand,
     },
     /// Create signature fields and plan or verify the signer byte range.
     Signature {
@@ -2074,6 +2082,68 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `sign` command.
+///
+/// `Create` carries the whole identity and output description while `Verify`
+/// carries one path, so the variants differ in size. The value is constructed
+/// once from the command line and never stored in a collection.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Subcommand)]
+enum SignCommand {
+    /// Sign a PDF with a CMS/RSA signature and write the signed file.
+    Create {
+        /// Input PDF.
+        file: PathBuf,
+        /// Signed output PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// PEM private key.
+        #[arg(long, value_name = "PATH", requires = "cert")]
+        key: Option<PathBuf>,
+        /// PEM signer certificate.
+        #[arg(long, value_name = "PATH", requires = "key")]
+        cert: Option<PathBuf>,
+        /// Extra PEM certificates appended to the chain.
+        #[arg(long, value_name = "PATH", requires_all = ["key", "cert"])]
+        chain: Option<PathBuf>,
+        /// Password-protected PKCS#12 identity.
+        #[arg(long, value_name = "PATH")]
+        pfx: Option<PathBuf>,
+        /// PKCS#12 password (empty when omitted).
+        #[arg(long, value_name = "PASSWORD", default_value = "")]
+        password: String,
+        /// One-based page for the invisible widget.
+        #[arg(long, default_value_t = 1)]
+        page: usize,
+        /// Signature field name.
+        #[arg(long, default_value = "Signature1")]
+        field: String,
+        /// Signing reason stored in `/Reason`.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Signing location stored in `/Location`.
+        #[arg(long)]
+        location: Option<String>,
+        /// Signing time in Unix seconds (default: current time).
+        #[arg(long, value_name = "UNIX")]
+        time: Option<u64>,
+        /// `/Contents` reservation in bytes.
+        #[arg(long, default_value_t = pdfxi_security::DEFAULT_CONTENTS_RESERVATION)]
+        reserve: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify the last signature in a PDF.
+    Verify {
+        /// Signed PDF.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `signature` command.
 #[derive(Debug, Subcommand)]
 enum SignatureCommand {
@@ -3160,6 +3230,40 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Sign { command } => match command {
+            SignCommand::Create {
+                file,
+                out,
+                key,
+                cert,
+                chain,
+                pfx,
+                password,
+                page,
+                field,
+                reason,
+                location,
+                time,
+                reserve,
+                json,
+            } => sign::create(
+                &file,
+                &out,
+                key.as_deref(),
+                cert.as_deref(),
+                chain.as_deref(),
+                pfx.as_deref(),
+                &password,
+                page,
+                &field,
+                reason.as_deref(),
+                location.as_deref(),
+                time,
+                reserve,
+                json,
+            ),
+            SignCommand::Verify { file, json } => sign::verify(&file, json),
+        },
         Command::Signature { command } => match command {
             SignatureCommand::Create {
                 out,

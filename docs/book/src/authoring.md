@@ -44,6 +44,7 @@ command.
 | Browser integration | `PLAT-004` | verified | `pdfxi-core::browser_handoff` | `handoff open/parse/link` |
 | Electronic signature fields and workflows | `FORMS-010` | verified | `pdfxi-forms::signature` + `signing` | `signature create/plan/verify` |
 | RC4 and AES encryption handlers | `SEC-002` | verified | `pdfxi-security::protect` + `encryption_writer` | `protect` / `unprotect` |
+| Sign and certify documents | `SEC-005` | verified | `pdfxi-security::pdf_signature` | `sign create` / `sign verify` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -617,6 +618,29 @@ scheme and traversal, and resolves the same plan. `link` builds the HTML
 and unsupported MIME types are typed errors. Nothing is fetched over the network
 by the command.
 
+### Signing with a real certificate
+
+`SEC-005` (verified) hosts the CMS/RSA signature from
+`pdfxi_security::pdf_signature`. It is distinct from `pdfxi signature`, which
+only creates a `/Sig` field and plans a placeholder byte range without
+cryptography:
+
+```text
+pdfxi sign create FILE --out PATH (--key KEY.pem --cert CERT.pem [--chain CHAIN.pem] | --pfx ID.p12)
+    [--password PW] [--page N] [--field NAME] [--reason TEXT] [--location TEXT]
+    [--time UNIX] [--reserve BYTES] [--json]
+pdfxi sign verify FILE [--json]
+```
+
+`create` loads a PEM key and certificate chain, or a password-protected PKCS#12
+identity, signs an incremental revision with a CMS `SignedData` blob
+(`adbe.pkcs7.detached`, SHA-256, PKCS#1 v1.5 RSA) and verifies its own output
+before writing it. `verify` reports the cryptographic status, whether the
+covered bytes match the digest, whether the signature covers the whole file,
+the signer subject and SHA-256 certificate fingerprint, and the `/ByteRange`.
+It exits non-zero unless the signature is fully valid. Certificate trust is
+reported as `null` (not evaluated), never as trusted. Key material and
+passwords are never printed.
 ### Password protection
 
 `SEC-002` (verified) hosts the standard security handler from

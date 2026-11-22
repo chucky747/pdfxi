@@ -1,0 +1,20 @@
+{
+  "id": "T-0344",
+  "lane": "convert",
+  "title": "CMS signature host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0343"],
+  "owns": [
+    "crates/pdfxi-cli/src/sign.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/Cargo.toml",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0344.md",
+    "orchestration/feature-updates/T-0344.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli sign_ passes; pdfxi sign create writes a real CMS/RSA signed PDF that verify accepts fully, tampering and appended bytes exit non-zero; SEC-005 moves to verified.",
+  "notes": "Hosts pdfxi_security pdf_signature with PEM/PKCS#12 identities and a fail-closed self-verification before writing; no secrets in output.",
+  "evidence": "docs/evidence/cli/T-0344.md"
+}
