@@ -993,6 +993,300 @@ fn action_run_json_has_stable_shape() {
 }
 
 #[test]
+fn action_create_writes_a_valid_action_that_executes() {
+    let file = TempPath::new("act");
+    let created = run(&[
+        "action",
+        "create",
+        file.arg(),
+        "--name",
+        "nightly",
+        "--description",
+        "Nightly stamp",
+        "--step",
+        "load:import",
+        "--step",
+        "stamp:watermark",
+        "--param",
+        "stamp:text=DRAFT",
+        "--step",
+        "save:export",
+        "--param",
+        "save:target=final.pdf",
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["name"], "nightly");
+    assert_eq!(value["steps"], serde_json::json!(["load", "stamp", "save"]));
+
+    let shown = run(&["action", "show", file.arg(), "nightly"]);
+    assert!(shown.status.success(), "stderr: {}", stderr(&shown));
+    let text = stdout(&shown);
+    assert!(text.contains("stamp watermark"), "{text}");
+    assert!(text.contains("text=DRAFT"), "{text}");
+
+    let source = create_text_pdf("Created action source.");
+    let out = TempDir::new();
+    let executed = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        source.arg(),
+        "--output-dir",
+        out.arg(),
+        "--execute",
+        "--json",
+    ]);
+    assert!(executed.status.success(), "stderr: {}", stderr(&executed));
+    let exported = out.child("final.pdf");
+    assert!(exported.exists(), "created action must export");
+    let document = pdfxi_core::Document::from_bytes(fs::read(&exported).expect("read export"))
+        .expect("parse export");
+    let text = document.page_text(0).expect("page text");
+    assert!(text.contains("Created action source."), "{text}");
+    assert!(text.contains("DRAFT"), "{text}");
+}
+
+#[test]
+fn action_create_rejects_bad_inputs() {
+    let file = TempPath::new("act");
+    let bad_param = run(&[
+        "action",
+        "create",
+        file.arg(),
+        "--name",
+        "bad",
+        "--step",
+        "load:import",
+        "--param",
+        "nope:text=x",
+    ]);
+    assert!(!bad_param.status.success());
+    assert!(
+        stderr(&bad_param).contains("unknown step"),
+        "{}",
+        stderr(&bad_param)
+    );
+
+    let bad_step = run(&[
+        "action",
+        "create",
+        file.arg(),
+        "--name",
+        "bad",
+        "--step",
+        "load",
+    ]);
+    assert!(!bad_step.status.success());
+    assert!(
+        stderr(&bad_step).contains("ID:KIND"),
+        "{}",
+        stderr(&bad_step)
+    );
+
+    let unknown_kind = run(&[
+        "action",
+        "create",
+        file.arg(),
+        "--name",
+        "bad",
+        "--step",
+        "load:frobnicate",
+    ]);
+    assert!(!unknown_kind.status.success());
+
+    let empty = run(&["action", "create", file.arg(), "--name", "bad"]);
+    assert!(!empty.status.success());
+
+    let good = run(&[
+        "action",
+        "create",
+        file.arg(),
+        "--name",
+        "good",
+        "--step",
+        "load:import",
+    ]);
+    assert!(good.status.success(), "stderr: {}", stderr(&good));
+    let existing = run(&[
+        "action",
+        "create",
+        file.arg(),
+        "--name",
+        "other",
+        "--step",
+        "load:import",
+    ]);
+    assert!(!existing.status.success());
+    assert!(
+        stderr(&existing).contains("already exists"),
+        "{}",
+        stderr(&existing)
+    );
+    let forced = run(&[
+        "action",
+        "create",
+        file.arg(),
+        "--name",
+        "other",
+        "--step",
+        "load:import",
+        "--force",
+    ]);
+    assert!(forced.status.success(), "stderr: {}", stderr(&forced));
+}
+
+#[test]
+fn action_run_execute_applies_watermark_and_writes_export() {
+    let file = TempActionFile::new(&staging_action("nightly", "Stamp and export"));
+    let source = create_text_pdf("Action source paragraph.");
+    let out = TempDir::new();
+    let result = run(&[
+        "action",
+        "run",
+        file.arg(),
+        "nightly",
+        "--input",
+        source.arg(),
+        "--output-dir",
+        out.arg(),
+        "--execute",
+        "--json",
+    ]);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    let value: Value = serde_json::from_str(&stdout(&result)).expect("valid JSON");
+    assert_eq!(value["jobs"][0]["state"], "succeeded");
+    let steps = value["jobs"][0]["outcome"]["steps"]
+        .as_array()
+        .expect("steps");
+    assert!(
+        steps[0]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("imported"),
+        "{steps:?}"
+    );
+    assert_eq!(steps[1]["message"], "watermarked every page with 'DRAFT'");
+    assert!(
+        steps[2]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("exported")
+    );
+
+    let exported = out.child("out.pdf");
+    assert!(exported.exists(), "export must write the output");
+    let bytes = fs::read(&exported).expect("read export");
+    assert!(bytes.starts_with(b"%PDF-"));
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("parse export");
+    assert_eq!(document.page_count().expect("pages"), 1);
+    let text = document.page_text(0).expect("page text");
+    assert!(text.contains("Action source paragraph."), "{text}");
+    assert!(text.contains("DRAFT"), "{text}");
+}
+
+#[test]
+fn action_run_execute_refuses_unsupported_steps_and_inputs() {
+    let out = TempDir::new();
+    let source = create_text_pdf("Action refusal source.");
+
+    let security = TempActionFile::new(
+        "ACTION\tsecure\tSecurity\n\
+         STEP\tload\timport\n\
+         STEP\tlock\tsecurity\n\
+         PARAM\tpassword\ts3cret\n\
+         PARAM\tpermissions\tprint\n\
+         STEP\tsave\texport\n\
+         PARAM\ttarget\tout.pdf\n",
+    );
+    let refused = run(&[
+        "action",
+        "run",
+        security.arg(),
+        "secure",
+        "--input",
+        source.arg(),
+        "--output-dir",
+        out.arg(),
+        "--execute",
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("1 of 1 job(s) failed"),
+        "{}",
+        stderr(&refused)
+    );
+
+    let convert = TempActionFile::new(
+        "ACTION\tto-docx\tConvert\n\
+         STEP\tload\timport\n\
+         STEP\tconvert\tconvert\n\
+         PARAM\tformat\tdocx\n\
+         STEP\tsave\texport\n\
+         PARAM\ttarget\tout.pdf\n",
+    );
+    let unsupported = run(&[
+        "action",
+        "run",
+        convert.arg(),
+        "to-docx",
+        "--input",
+        source.arg(),
+        "--output-dir",
+        out.arg(),
+        "--execute",
+        "--json",
+    ]);
+    assert!(!unsupported.status.success());
+    assert!(
+        stdout(&unsupported).contains("not supported by --execute"),
+        "{}",
+        stdout(&unsupported)
+    );
+
+    let custom = TempActionFile::new(
+        "ACTION\tcustom\tCustom\n\
+         STEP\tload\timport\n\
+         STEP\trun\tcustom-command\n\
+         PARAM\tcommand\tnope\n",
+    );
+    let refused_command = run(&[
+        "action",
+        "run",
+        custom.arg(),
+        "custom",
+        "--input",
+        source.arg(),
+        "--execute",
+    ]);
+    assert!(!refused_command.status.success());
+
+    let not_pdf = TempPath::new("txt");
+    not_pdf.write(b"not a pdf");
+    let bad_input = run(&[
+        "action",
+        "run",
+        security.arg(),
+        "secure",
+        "--input",
+        not_pdf.arg(),
+        "--output-dir",
+        out.arg(),
+        "--execute",
+        "--json",
+    ]);
+    assert!(!bad_input.status.success());
+    assert!(
+        stdout(&bad_input).contains("not a PDF"),
+        "{}",
+        stdout(&bad_input)
+    );
+}
+
+#[test]
 fn action_run_output_dir_resolves_export_target_without_writing() {
     let file = TempActionFile::new(&staging_action("nightly", "Stage every night"));
     let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());

@@ -20,6 +20,7 @@ command.
 | Watched-folder conversion | `CREATE-014` | verified | `pdfxi-automation::watched` + `pdfxi-convert` adapters | `watch` |
 | Static form-field recognition | `FORMS-005` | verified | `pdfxi-forms::recognition` | `form recognize` |
 | Font size/spacing/colour restyle | `EDIT-002` | verified | `pdfxi-edit::restyle_run_text` | `restyle` |
+| Action Wizard create/edit/import/export | `AUTO-001` | verified | `pdfxi-automation::action_document` + real action operations | `action create` / `action run --execute` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -42,6 +43,22 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Actions are created and executed as:
+
+```text
+pdfxi action create <FILE.act> --name NAME --step ID:KIND [--step ...]
+    [--param ID:KEY=VALUE ...] [--description TEXT] [--force] [--json]
+
+pdfxi action run <FILE.act> NAME --input FILE.pdf [--output-dir DIR]
+    [--execute] [--json]
+```
+
+`action create` validates the step ids/kinds and parameters, then writes the
+tab-delimited action file. `action run` without `--execute` is the staging mode
+(no bytes written). With `--execute`, `import` requires a real PDF, `watermark`
+stamps every page with the step text, and `export` writes the result beneath
+`--output-dir`; security and custom-command steps are refused with a typed
+message. `action list`/`action show` inspect the same files.
 Text restyling is exposed as:
 
 ```text

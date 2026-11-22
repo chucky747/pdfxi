@@ -1,22 +1,26 @@
-//! Action-file commands: `list`, `show`, `run`, and the `droplet` entry point.
+//! Action-file commands: `create`, `list`, `show`, `run`, and the `droplet` entry
+//! point.
 //!
-//! ## A staging-only executor (no PDF mutation yet)
+//! ## Staging and real execution
 //!
 //! [`EchoOperations`] implements `pdfxi_automation::DocumentOperations` as a
-//! deliberately side-effect-free adapter. The `import` step copies the staged
-//! input bytes into memory and the other steps pass the current artifact along
-//! while recording a short, deterministic message. Export resolves the target
-//! path against `--output-dir` but writes nothing.
+//! side-effect-free adapter. The `import` step copies the staged input bytes into
+//! memory and the other steps pass the current artifact along while recording a
+//! short, deterministic message. Export resolves the target path against
+//! `--output-dir` but writes nothing. This is the default for `action run` and
+//! `droplet`, so scripts and tests can assert outcomes without touching content.
 //!
-//! This is intentional at this milestone. Saving, watermarking, encrypting, and
-//! converting real PDFs are owned by other lanes and are not yet exposed to the
-//! CLI; wiring them in here would couple automation to in-flight parsers and
-//! writers and make runs depend on document content. Staging keeps `action run`
-//! deterministic, safe on hostile inputs, and easy to script or assert against,
-//! while still exercising the full `DocumentExecutor` / `BatchQueue` pipeline
-//! (validation, ordering, failure isolation, cancellation, per-step results).
-//! Replacing `EchoOperations` with a real `DocumentOperations` implementation
-//! later requires no change to the commands or their output shapes.
+//! `action run --execute` selects [`RealOperations`] instead: import validates
+//! that the input parses as a PDF, a watermark step stamps real page content,
+//! and an export step writes the artifact beneath `--output-dir`. Security and
+//! custom-command steps are refused with a typed message rather than silently
+//! staged, because their writers remain separate features. Both modes use the
+//! same `DocumentExecutor` / `BatchQueue` pipeline (validation, ordering,
+//! failure isolation, cancellation, per-step results) and output shapes.
+//!
+//! `action create` writes one validated tab-delimited action file from
+//! `--step ID:KIND` and `--param ID:KEY=VALUE` flags, so the create/edit path is
+//! reachable without hand-writing the format.
 //!
 //! ## Explorer drop handlers
 //!
@@ -37,8 +41,8 @@
 
 use anyhow::{Context, bail};
 use pdfxi_automation::{
-    Action, ActionLibrary, Artifact, BatchJob, BatchQueue, DocumentExecutor, DocumentOperations,
-    JobState, OperationError, OperationOutcome,
+    Action, ActionLibrary, ActionStep, Artifact, BatchJob, BatchQueue, DocumentExecutor,
+    DocumentOperations, JobState, OperationError, OperationOutcome, StepKind,
 };
 use serde::Serialize;
 use std::path::{Component, Path, PathBuf};
@@ -211,6 +215,194 @@ impl DocumentOperations for EchoOperations {
             input,
             format!("custom command '{name}' staged (no execution)"),
         ))
+    }
+}
+
+/// Applies real in-process document operations for `action run --execute`.
+///
+/// Import validates that the input parses as a PDF, convert keeps PDF bytes,
+/// watermark stamps real page content, and export writes the artifact beneath
+/// the output directory. Security and custom commands are refused rather than
+/// silently staged; those paths stay with their dedicated commands.
+#[derive(Debug)]
+pub struct RealOperations {
+    output_dir: Option<PathBuf>,
+}
+
+impl RealOperations {
+    /// Creates a real adapter that resolves relative exports against `output_dir`.
+    pub fn new(output_dir: Option<PathBuf>) -> Self {
+        Self { output_dir }
+    }
+}
+
+/// Return an artifact's bytes, reading a path artifact from disk.
+fn artifact_bytes(input: &Artifact) -> Result<Vec<u8>, OperationError> {
+    match input {
+        Artifact::Bytes(bytes) => Ok(bytes.clone()),
+        Artifact::Path(path) => std::fs::read(path)
+            .map_err(|error| OperationError::new(format!("read '{path}': {error}"))),
+        Artifact::Empty => Err(OperationError::new(
+            "the step has no document artifact to operate on",
+        )),
+    }
+}
+
+impl DocumentOperations for RealOperations {
+    fn import(&self, input: &Artifact) -> Result<OperationOutcome, OperationError> {
+        let display = input
+            .as_path()
+            .ok_or_else(|| OperationError::new("import step requires a path artifact"))?;
+        let path = Path::new(display);
+        if path.is_dir() {
+            return Err(OperationError::new(format!(
+                "import failed for '{display}': input is a directory"
+            )));
+        }
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            OperationError::new(format!("import failed for '{display}': {error}"))
+        })?;
+        check_input_size(metadata.len(), display)?;
+        let bytes = std::fs::read(path).map_err(|error| {
+            OperationError::new(format!("import failed for '{display}': {error}"))
+        })?;
+        pdfxi_core::Document::from_bytes(bytes.clone()).map_err(|error| {
+            OperationError::new(format!("import failed for '{display}': not a PDF: {error}"))
+        })?;
+        let length = bytes.len();
+        Ok(OperationOutcome::bytes(
+            bytes,
+            format!("imported '{display}' ({length} bytes)"),
+        ))
+    }
+
+    fn convert(&self, input: &Artifact, format: &str) -> Result<OperationOutcome, OperationError> {
+        if matches!(format.trim().to_ascii_lowercase().as_str(), "pdf" | "copy") {
+            Ok(passthrough(input, "kept PDF bytes".to_owned()))
+        } else {
+            Err(OperationError::new(format!(
+                "convert to '{format}' is not supported by --execute; use the create/export commands"
+            )))
+        }
+    }
+
+    fn watermark(&self, input: &Artifact, text: &str) -> Result<OperationOutcome, OperationError> {
+        if text.trim().is_empty() {
+            return Err(OperationError::new("watermark text must not be empty"));
+        }
+        let bytes = artifact_bytes(input)?;
+        let document = pdfxi_core::Document::from_bytes(bytes).map_err(|error| {
+            OperationError::new(format!("watermark input is not a PDF: {error}"))
+        })?;
+        let stamped = crate::decorate::apply_default_watermark(&document, text)
+            .map_err(|error| OperationError::new(format!("watermark failed: {error}")))?;
+        Ok(OperationOutcome::bytes(
+            stamped,
+            format!("watermarked every page with '{text}'"),
+        ))
+    }
+
+    fn apply_security(
+        &self,
+        _input: &Artifact,
+        _password: &str,
+        _permissions: &str,
+    ) -> Result<OperationOutcome, OperationError> {
+        Err(OperationError::new(
+            "security steps are not supported by --execute; use the pdfxi security commands",
+        ))
+    }
+
+    fn export(&self, input: &Artifact, target: &str) -> Result<OperationOutcome, OperationError> {
+        let resolved = resolve_export_target(self.output_dir.as_deref(), target)?;
+        let bytes = artifact_bytes(input)?;
+        let path = Path::new(&resolved);
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                OperationError::new(format!("create '{}': {error}", parent.display()))
+            })?;
+        }
+        std::fs::write(path, &bytes)
+            .map_err(|error| OperationError::new(format!("write '{resolved}': {error}")))?;
+        Ok(OperationOutcome::path(
+            resolved.clone(),
+            format!("exported {} bytes to '{resolved}'", bytes.len()),
+        ))
+    }
+
+    fn run_command(
+        &self,
+        _input: &Artifact,
+        name: &str,
+        _arguments: &[String],
+    ) -> Result<OperationOutcome, OperationError> {
+        Err(OperationError::new(format!(
+            "custom command '{name}' is not supported by --execute"
+        )))
+    }
+}
+
+/// Selects the staging or real document adapter.
+enum Operations {
+    /// Records outcomes without writing or mutating content.
+    Stage(EchoOperations),
+    /// Applies real in-process PDF operations.
+    Real(RealOperations),
+}
+
+impl DocumentOperations for Operations {
+    fn import(&self, input: &Artifact) -> Result<OperationOutcome, OperationError> {
+        match self {
+            Self::Stage(operations) => operations.import(input),
+            Self::Real(operations) => operations.import(input),
+        }
+    }
+
+    fn convert(&self, input: &Artifact, format: &str) -> Result<OperationOutcome, OperationError> {
+        match self {
+            Self::Stage(operations) => operations.convert(input, format),
+            Self::Real(operations) => operations.convert(input, format),
+        }
+    }
+
+    fn watermark(&self, input: &Artifact, text: &str) -> Result<OperationOutcome, OperationError> {
+        match self {
+            Self::Stage(operations) => operations.watermark(input, text),
+            Self::Real(operations) => operations.watermark(input, text),
+        }
+    }
+
+    fn apply_security(
+        &self,
+        input: &Artifact,
+        password: &str,
+        permissions: &str,
+    ) -> Result<OperationOutcome, OperationError> {
+        match self {
+            Self::Stage(operations) => operations.apply_security(input, password, permissions),
+            Self::Real(operations) => operations.apply_security(input, password, permissions),
+        }
+    }
+
+    fn export(&self, input: &Artifact, target: &str) -> Result<OperationOutcome, OperationError> {
+        match self {
+            Self::Stage(operations) => operations.export(input, target),
+            Self::Real(operations) => operations.export(input, target),
+        }
+    }
+
+    fn run_command(
+        &self,
+        input: &Artifact,
+        name: &str,
+        arguments: &[String],
+    ) -> Result<OperationOutcome, OperationError> {
+        match self {
+            Self::Stage(operations) => operations.run_command(input, name, arguments),
+            Self::Real(operations) => operations.run_command(input, name, arguments),
+        }
     }
 }
 
@@ -410,6 +602,7 @@ fn build_run_report(
     action: &Action,
     inputs: &[PathBuf],
     output_dir: Option<&Path>,
+    execute: bool,
 ) -> anyhow::Result<RunReport> {
     if inputs.is_empty() {
         bail!("at least one --input path is required; no jobs were run");
@@ -423,7 +616,11 @@ fn build_run_report(
         }
     }
 
-    let operations = EchoOperations::new(output_dir.map(Path::to_path_buf));
+    let operations = if execute {
+        Operations::Real(RealOperations::new(output_dir.map(Path::to_path_buf)))
+    } else {
+        Operations::Stage(EchoOperations::new(output_dir.map(Path::to_path_buf)))
+    };
     let executor = DocumentExecutor::new(operations);
     let mut queue = BatchQueue::new();
     for (index, input) in inputs.iter().enumerate() {
@@ -460,7 +657,7 @@ pub fn run_loaded_action_json(
     inputs: &[PathBuf],
     output_dir: Option<&Path>,
 ) -> anyhow::Result<String> {
-    let report = build_run_report(action, inputs, output_dir)?;
+    let report = build_run_report(action, inputs, output_dir, false)?;
     Ok(serde_json::to_string(&report.output)?)
 }
 
@@ -478,6 +675,7 @@ pub fn run_action(
     name: &str,
     inputs: &[PathBuf],
     output_dir: Option<&Path>,
+    execute: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let library = load_library(file)?;
@@ -492,7 +690,7 @@ pub fn run_action(
         .validate()
         .with_context(|| format!("action '{name}' in '{}' failed validation", file.display()))?;
 
-    let report = build_run_report(action, inputs, output_dir)?;
+    let report = build_run_report(action, inputs, output_dir, execute)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report.output)?);
     } else {
@@ -506,6 +704,112 @@ pub fn run_action(
 
     if report.failed > 0 {
         bail!("{} of {} job(s) failed", report.failed, report.total);
+    }
+    Ok(())
+}
+
+/// JSON shape of `pdfxi action create`.
+#[derive(Debug, Serialize)]
+struct CreateActionReport {
+    /// Written action file.
+    file: String,
+    /// Action name.
+    name: String,
+    /// Description.
+    description: String,
+    /// Step ids in order.
+    steps: Vec<String>,
+    /// Bytes written.
+    bytes: usize,
+}
+
+/// `pdfxi action create`: write one validated tab-delimited action file.
+///
+/// `steps` entries use `ID:KIND`; `params` entries use `ID:KEY=VALUE`. The
+/// action is validated before anything is written.
+pub(crate) fn create_action(
+    file: &Path,
+    name: &str,
+    description: &str,
+    steps: &[String],
+    params: &[String],
+    force: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    if steps.is_empty() {
+        bail!("pass at least one --step ID:KIND");
+    }
+    if file.exists() && !force {
+        bail!(
+            "{} already exists; pass --force to overwrite it",
+            file.display()
+        );
+    }
+    let mut by_step: std::collections::BTreeMap<String, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for text in params {
+        let (id, assignment) = text
+            .split_once(':')
+            .with_context(|| format!("parameter {text:?} must be ID:KEY=VALUE"))?;
+        let (key, value) = assignment
+            .split_once('=')
+            .with_context(|| format!("parameter {text:?} must be ID:KEY=VALUE"))?;
+        if key.is_empty() {
+            bail!("parameter {text:?} has an empty key");
+        }
+        by_step
+            .entry(id.to_owned())
+            .or_default()
+            .push((key.to_owned(), value.to_owned()));
+    }
+    let mut action = Action::new(name, description);
+    for text in steps {
+        let (id, kind) = text
+            .split_once(':')
+            .with_context(|| format!("step {text:?} must be ID:KIND"))?;
+        if id.is_empty() {
+            bail!("step {text:?} has an empty id");
+        }
+        let kind: StepKind = kind
+            .parse()
+            .with_context(|| format!("step {text:?} has an unknown kind"))?;
+        let mut step = ActionStep::new(id, kind);
+        if let Some(values) = by_step.remove(id) {
+            for (key, value) in values {
+                step.add_parameter(key, value);
+            }
+        }
+        action.add_step(step)?;
+    }
+    if let Some((id, _)) = by_step.into_iter().next() {
+        bail!("parameter names an unknown step {id:?}");
+    }
+    action
+        .validate()
+        .map_err(|error| anyhow::anyhow!("action validation failed: {error}"))?;
+    let text = action.to_text();
+    let bytes = text.len();
+    if let Some(parent) = file.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create directory {}", parent.display()))?;
+    }
+    std::fs::write(file, text).with_context(|| format!("write {}", file.display()))?;
+
+    let report = CreateActionReport {
+        file: file.display().to_string(),
+        name: action.name().to_owned(),
+        description: action.description().to_owned(),
+        steps: action.steps().map(|step| step.id().to_owned()).collect(),
+        bytes,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("file: {}", report.file);
+        println!("action: {}  steps: {}", report.name, report.steps.len());
+        println!("bytes: {}", report.bytes);
     }
     Ok(())
 }
@@ -538,7 +842,7 @@ pub fn run_action_with_defaults(
         .with_context(|| format!("action '{name}' in '{}' failed validation", file.display()))?;
     action.apply_defaults(defaults);
 
-    let report = build_run_report(&action, inputs, output_dir)?;
+    let report = build_run_report(&action, inputs, output_dir, false)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report.output)?);
     } else {

@@ -1006,6 +1006,32 @@ enum ActionCommand {
         /// Path to the action file.
         file: PathBuf,
     },
+    /// Create one validated action file from flags.
+    ///
+    /// Steps use `ID:KIND` (`import`, `convert`, `watermark`, `security`,
+    /// `export`, `custom-command`); parameters use `ID:KEY=VALUE`.
+    Create {
+        /// Action file to write.
+        file: PathBuf,
+        /// Action name.
+        #[arg(long)]
+        name: String,
+        /// Action description.
+        #[arg(long, default_value = "")]
+        description: String,
+        /// Step as `ID:KIND`; repeat in execution order.
+        #[arg(long = "step", value_name = "ID:KIND", required = true)]
+        step: Vec<String>,
+        /// Parameter as `ID:KEY=VALUE`; repeat for each value.
+        #[arg(long = "param", value_name = "ID:KEY=VALUE")]
+        param: Vec<String>,
+        /// Overwrite an existing file.
+        #[arg(long)]
+        force: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show the steps and parameters of one named action.
     Show {
         /// Path to the action file.
@@ -1032,6 +1058,14 @@ enum ActionCommand {
         /// written: the resolved path is only recorded in the outcome.
         #[arg(long, value_name = "DIR")]
         output_dir: Option<PathBuf>,
+        /// Apply real in-process PDF operations and write export targets.
+        ///
+        /// Without this flag the command only stages inputs and records the
+        /// resolved export path. With it, import validates PDF bytes, watermark
+        /// stamps real page content, and export writes the result beneath
+        /// `--output-dir`. Security and custom-command steps are refused.
+        #[arg(long)]
+        execute: bool,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -2950,6 +2984,15 @@ fn main() -> anyhow::Result<()> {
             }),
         },
         Command::Action { command } => match command {
+            ActionCommand::Create {
+                file,
+                name,
+                description,
+                step,
+                param,
+                force,
+                json,
+            } => action::create_action(&file, &name, &description, &step, &param, force, json),
             ActionCommand::List { file } => action::list_actions(&file),
             ActionCommand::Show { file, name } => action::show_action(&file, &name),
             ActionCommand::Run {
@@ -2957,15 +3000,16 @@ fn main() -> anyhow::Result<()> {
                 name,
                 input,
                 output_dir,
+                execute,
                 json,
-            } => action::run_action(&file, &name, &input, output_dir.as_deref(), json),
+            } => action::run_action(&file, &name, &input, output_dir.as_deref(), execute, json),
         },
         Command::Droplet {
             action_file,
             name,
             inputs,
             json,
-        } => action::run_action(&action_file, &name, &inputs, None, json),
+        } => action::run_action(&action_file, &name, &inputs, None, false, json),
         Command::Preflight {
             profile,
             input,

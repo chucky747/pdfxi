@@ -3724,35 +3724,53 @@ title = "Screen reader and accesskit integration"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-automation/src/action_document.rs",
-    "crates/pdfxi-automation/src/action_wizard.rs",
-    "crates/pdfxi-automation/src/lib.rs",
-    "crates/pdfxi-automation/src/library.rs",
     "crates/pdfxi-cli/src/action.rs",
-    "docs/evidence/automation/T-0160.md",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0321.md",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation: 198 passed, 0 failed (10 new action_document::tests::* covering round-trip, version mismatch, syntax/escape errors, empty input, duplicate ids, empty name, special characters and determinism), 0 doc tests; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0160.md."
+evidence = "docs/evidence/cli/T-0321.md"
 id = "AUTO-001"
 notes = """
-T-0160 adds `pdfxi_automation::action_document`, a versioned, serializable text
-document around the existing `ActionSequence`/`WizardStep` model.
-`ActionDocument::to_text`/`from_text` use a deterministic, tab-delimited,
-escaped line format (version header, NAME, BUDGET, STEP records, END) with no
-serde dependency, and round-trip byte-for-byte including special characters.
-`ACTION_DOCUMENT_VERSION` is checked on import and a foreign version is rejected
-with typed `ActionDocumentError::UnsupportedVersion`; malformed records, bad
-escapes, empty input, invalid numbers, and invalid wrapped sequences all return
-typed, line-numbered errors. `from_sequence` and `validate` re-check the wrapped
-sequence. All public items have rustdoc; no new dependency, unsafe, or non-test
-panic. Honest remaining scope is outside this row's library boundary: no UI
-Action Wizard editor for create/edit, and no PDF mutation — the document model
-covers import/export/validation/versioning of the existing sequence model only.
-Prior T-0050 ActionLibrary/CLI evidence is retained below.
+Verified through `pdfxi action create <FILE.act> --name NAME --step ID:KIND
+[--param ID:KEY=VALUE ...]` and `pdfxi action run <FILE.act> NAME --input
+FILE.pdf [--output-dir DIR] [--execute] [--json]`.
+
+action create parses ID:KIND steps (import, convert, watermark, security,
+export, custom-command), attaches ID:KEY=VALUE parameters, validates the Action
+model and writes the tab-delimited file, refusing an existing file without
+--force. action run keeps staging by default. With --execute it selects
+RealOperations: import enforces the byte budget and requires pdfxi-core to parse
+the input as a PDF, watermark stamps every page with the real default overlay
+(72 pt, 15% alpha, 45 degrees, centred, front) via the shared decorate helper,
+and export writes the artifact beneath --output-dir. Security and
+custom-command steps are refused with typed messages. Both modes share the
+DocumentExecutor/BatchQueue pipeline and JSON shape.
+
+Evidence: action create writes a 124-byte file with load/stamp/save and the
+text=DRAFT and target=final.pdf parameters; action show lists them. Running the
+file with --execute reports imported (917 bytes), watermarked every page with
+DRAFT and exported 1292 bytes; the export parses through pdfxi-core, extracts
+the source paragraph and DRAFT, and reports PDF 1.4 and one page. A security
+action fails at the lock step, convert to docx reports not supported by
+--execute, custom commands are refused, a non-PDF import reports not a PDF, an
+existing file without --force is refused, and an unknown-step parameter is
+refused.
+
+Gates: cargo test -p pdfxi-cli --test cli action_ = 16 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: the real path supports PDF import, text watermark and export only; no
+format conversion, encryption/permissions or custom commands. Droplet keeps
+staging defaults and the watermark style is fixed.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::action_create_writes_a_valid_action_that_executes",
+    "cli::action_create_rejects_bad_inputs",
+    "cli::action_run_execute_applies_watermark_and_writes_export",
+    "cli::action_run_execute_refuses_unsupported_steps_and_inputs",
     "action_document::tests::format_round_trip_is_lossless",
     "action_document::tests::version_mismatch_is_rejected",
     "action_document::tests::invalid_syntax_is_typed_with_line_numbers",
@@ -3765,7 +3783,6 @@ tests = [
     "action_document::tests::errors_are_actionable",
     "library::tests::single_action_file_is_backwards_compatible",
     "library::tests::multiple_actions_are_parsed_in_file_order",
-    "action_show_prints_steps_and_parameters",
 ]
 title = "Action Wizard create edit import export"
 

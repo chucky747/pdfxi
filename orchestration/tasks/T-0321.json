@@ -1,0 +1,20 @@
+{
+  "id": "T-0321",
+  "lane": "automation",
+  "title": "Action Wizard create and real run host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0320"],
+  "owns": [
+    "crates/pdfxi-cli/src/action.rs",
+    "crates/pdfxi-cli/src/decorate.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0321.md",
+    "orchestration/feature-updates/T-0321.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli action_ passes; pdfxi action create writes a validated action file and pdfxi action run --execute imports a real PDF, stamps a watermark and writes the export; AUTO-001 moves to verified.",
+  "notes": "Adds ActionStep import, Action create_action, and RealOperations (PDF import, watermark, export) selected by --execute; staging remains the default.",
+  "evidence": "docs/evidence/cli/T-0321.md"
+}

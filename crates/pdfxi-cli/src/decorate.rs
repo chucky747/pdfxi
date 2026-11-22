@@ -492,6 +492,59 @@ pub(crate) struct WatermarkRequest<'a> {
     pub json: bool,
 }
 
+/// Apply a default centred watermark to an in-memory document.
+///
+/// Used by `action run --execute`; the mark is the requested text at 72 pt,
+/// 15% alpha, rotated 45 degrees, in front of the page content. Returns the
+/// complete saved PDF bytes.
+pub(crate) fn apply_default_watermark(document: &Document, text: &str) -> anyhow::Result<Vec<u8>> {
+    let count = document.page_count().context("count pages")?;
+    if count == 0 {
+        bail!("document has no pages");
+    }
+    let geometries = page_geometries(document, count)?;
+    let watermark = Watermark::new(MarkContent::Text(text.to_owned()))
+        .with_style(WatermarkStyle::new(
+            StandardFont::Helvetica,
+            72.0,
+            TextColor::BLACK,
+            0.15,
+        )?)
+        .with_position(WatermarkPosition::Center)
+        .with_rotation_degrees(45.0)
+        .with_placement(Placement::Front);
+    let overlays =
+        render_watermark_page_set(&watermark, &geometries).context("render watermark overlays")?;
+    let mut stamps = Vec::new();
+    for (index, overlay) in overlays.iter().enumerate() {
+        if overlay.content_bytes().is_empty() {
+            continue;
+        }
+        stamps.push((
+            index,
+            StampOverlay {
+                content: overlay.content_bytes().to_vec(),
+                fonts: overlay
+                    .fonts()
+                    .iter()
+                    .map(|(name, font)| (name.clone(), font.base_name().to_owned()))
+                    .collect(),
+                ext_gstates: overlay
+                    .alpha()
+                    .map(|(name, alpha)| vec![(name.to_owned(), f64::from(alpha))])
+                    .unwrap_or_default(),
+                front: true,
+            },
+        ));
+    }
+    let plan = PagePlan::identity()
+        .then(PageOperation::StampPages { overlays: stamps })
+        .context("build the watermark plan")?;
+    document
+        .apply_page_plan(&plan)
+        .context("apply the watermark plan")
+}
+
 pub(crate) fn run_watermark(
     file: &Path,
     out: &Path,
