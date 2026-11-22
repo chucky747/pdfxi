@@ -3751,6 +3751,152 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn create_office_converts_pages_and_verifies_text() {
+    let bundle = TempPath::new("json");
+    bundle.write(
+        br#"{"kind":"word","title":"Quarterly Report","markup":"<h1>Quarterly Report</h1><p>Hello PDFXI.</p><table><tr><td>Region</td><td>Sales</td></tr></table><!--pdfxi:page--><p>Second page body.</p>"}"#,
+    );
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "create",
+        "office",
+        bundle.arg(),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["kind"], "Word");
+    assert_eq!(value["title"], "Quarterly Report");
+    assert_eq!(value["output_name"], "quarterly_report.docx");
+    assert_eq!(value["model_pages"], 2);
+    assert_eq!(value["model_blocks"], 4);
+    assert_eq!(value["pdf_pages"], 2);
+    assert_eq!(value["expected_lines"], 4);
+    assert_eq!(value["verified_lines"], 4);
+    assert_eq!(value["strict"], false);
+    assert!(
+        value["unsupported"]
+            .as_array()
+            .expect("unsupported")
+            .is_empty()
+    );
+
+    let bytes = fs::read(&out.path).expect("office PDF");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("Quarterly Report"), "{text}");
+    let extracted = run(&["text", out.arg()]);
+    assert!(extracted.status.success(), "stderr: {}", stderr(&extracted));
+    let text = stdout(&extracted);
+    assert!(text.contains("Hello PDFXI."), "{text}");
+    assert!(text.contains("Region | Sales"), "{text}");
+    assert!(text.contains("Second page body."), "{text}");
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&["create", "office", bundle.arg(), "--out", again.arg()]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second office PDF"),
+        "Office conversion is deterministic"
+    );
+}
+
+#[test]
+fn create_office_reports_or_rejects_unsupported_bundles() {
+    let unsupported = TempPath::new("json");
+    unsupported
+        .write(br#"{"kind":"excel","title":"Book","markup":"<p>Cell</p><img src=\"x.png\"/>"}"#);
+
+    let strict = run(&[
+        "create",
+        "office",
+        unsupported.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--strict",
+    ]);
+    assert!(!strict.status.success());
+    assert!(
+        stderr(&strict).contains("unsupported Office construct"),
+        "{}",
+        stderr(&strict)
+    );
+
+    let out = TempOut::new("pdf");
+    let reported = run(&[
+        "create",
+        "office",
+        unsupported.arg(),
+        "--out",
+        out.arg(),
+        "--json",
+    ]);
+    assert!(reported.status.success(), "stderr: {}", stderr(&reported));
+    let value: Value = serde_json::from_str(&stdout(&reported)).expect("valid JSON");
+    assert_eq!(value["kind"], "Excel");
+    assert_eq!(value["model_pages"], 1);
+    assert_eq!(value["unsupported"][0], "media");
+    assert_eq!(value["verified_lines"], 1);
+
+    let empty_title = TempPath::new("json");
+    empty_title.write(br#"{"kind":"ppt","title":"","markup":"<p>x</p>"}"#);
+    let bad_title = run(&[
+        "create",
+        "office",
+        empty_title.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!bad_title.status.success());
+    assert!(
+        stderr(&bad_title).contains("title must not be empty"),
+        "{}",
+        stderr(&bad_title)
+    );
+
+    let unknown = TempPath::new("json");
+    unknown.write(br#"{"kind":"visio","title":"T","markup":"<p>x</p>"}"#);
+    let bad_kind = run(&[
+        "create",
+        "office",
+        unknown.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!bad_kind.status.success());
+    assert!(
+        stderr(&bad_kind).contains("unknown Office kind"),
+        "{}",
+        stderr(&bad_kind)
+    );
+
+    let malformed = TempPath::new("json");
+    malformed.write(b"not json");
+    assert!(
+        !run(&[
+            "create",
+            "office",
+            malformed.arg(),
+            "--out",
+            TempOut::new("pdf").arg()
+        ])
+        .status
+        .success()
+    );
+
+    let missing = run(&[
+        "create",
+        "office",
+        TempPath::new("json").arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+    ]);
+    assert!(!missing.status.success());
+}
+
+#[test]
 fn create_ocr_overlays_invisible_searchable_text() {
     let image = TempPath::new("png");
     image.write(&sample_png());

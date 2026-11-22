@@ -1,0 +1,19 @@
+{
+  "id": "T-0314",
+  "lane": "convert",
+  "title": "Office conversion to PDF host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0313"],
+  "owns": [
+    "crates/pdfxi-cli/src/office.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0314.md",
+    "orchestration/feature-updates/T-0314.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli create_office passes; pdfxi create office validates a real bundle, builds the conversion plan, imports the model, writes one PDF page per model page, and every converted line extracts; CREATE-006 moves to verified.",
+  "notes": "Hosts office_contract and office_import: bundle JSON -> plan -> OfficeDocument -> per-page text PDF -> merged output with text verification.",
+  "evidence": "docs/evidence/cli/T-0314.md"
+}

@@ -711,30 +711,47 @@ title = "Create PDF from HTML"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/office_contract.rs",
-    "crates/pdfxi-convert/src/office_import.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0174.md",
+    "crates/pdfxi-cli/src/office.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0314.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 5 new office_contract tests pass, including office_conversion_plan_is_deterministic_and_maps_target_by_kind, office_envelope_validation_rejects_empty_and_oversized_fields, office_conversion_plan_types_unsupported_constructs, strict_office_conversion_promotes_findings_to_typed_error and active_content_is_reported_as_a_typed_import_error; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
+evidence = "docs/evidence/cli/T-0314.md"
 id = "CREATE-006"
 notes = """
-Library-level gap closed: `pdfxi_convert::office_contract` adds an explicit
-envelope validator, a deterministic `OfficeConversionPlan` naming the canonical
-target adapter (Word->Docx, Excel->Xlsx, PowerPoint->Pptx) and a sanitized,
-path-safe output part name, and a typed `OfficeUnsupported` representation of
-every skipped construct. A strict variant promotes findings to a typed error.
-The existing `office_import` parser and Office exporters are reused unchanged.
+Verified through `pdfxi create office <BUNDLE.json> --out PDF [--strict]
+[--json]`.
 
-Honest remaining scope (host boundary): no ZIP/OOXML archive reading, real
-Office/LibreOffice extraction process, COM automation, inline-style fidelity,
-image embedding, or CLI/UI. Library-level scope is complete with the documented
-subset; see the row verification policy in `docs/ASSUMPTIONS.md`.
+The bundle JSON carries kind, title and already-extracted HTML/XML markup. The
+host validates the envelope, builds the deterministic OfficeConversionPlan (or
+the strict variant), imports the markup into the shared OfficeDocument, lays
+paragraphs, list items, table rows and text boxes out as text in a PDF page of
+the model's exact size, merges the model pages in order with PagePlan::merge,
+then reopens the output and requires every normalized expected line to extract.
+Empty model pages become blank pages. Unsupported constructs are reported by
+the plan or rejected with --strict.
+
+Evidence: a Word bundle with a heading, a paragraph, a two-row table and a page
+break reports target Word, output quarterly_report.docx, 2 model pages, 4
+blocks, no unsupported constructs, 2 PDF pages, 5/5 verified lines, 79
+extracted characters and 1776 bytes; pdfxi info reports 2 pages and repeated
+runs are byte-identical. An Excel bundle with an img reports unsupported
+[media] in non-strict mode and fails with 'unsupported Office construct' under
+--strict. Empty titles, unknown kinds, malformed JSON and missing manifests
+fail with typed errors.
+
+Gates: cargo test -p pdfxi-cli --test cli create_office = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: the Office extractor remains host-side; output is text-only with no
+images, charts, fonts, colours, inline styles or positioned layout, and page
+size comes from the bundle model (A4).
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::create_office_converts_pages_and_verifies_text",
+    "cli::create_office_reports_or_rejects_unsupported_bundles",
     "office_contract::tests::office_conversion_plan_is_deterministic_and_maps_target_by_kind",
     "office_contract::tests::office_envelope_validation_rejects_empty_and_oversized_fields",
     "office_contract::tests::office_conversion_plan_types_unsupported_constructs",

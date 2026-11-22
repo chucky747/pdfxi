@@ -66,6 +66,8 @@ mod action;
 mod api;
 /// pdfxi create ocr: overlay an invisible searchable-text layer.
 mod ocr;
+/// pdfxi create office: convert an Office intake bundle into a PDF.
+mod office;
 /// pdfxi ops: enumerate and resolve scriptable automation operations.
 mod ops;
 /// pdfxi plugin: plan plugin invocations and validate typed outputs.
@@ -1655,6 +1657,24 @@ enum CreateCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Convert an Office intake bundle into a PDF.
+    ///
+    /// The bundle JSON carries `kind` (`word`, `excel`, `powerpoint`), `title`
+    /// and already-extracted HTML/XML `markup`. No OOXML archive or Office
+    /// process is involved; the extractor remains host-side.
+    Office {
+        /// Bundle manifest JSON.
+        bundle: PathBuf,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Reject bundles with unsupported constructs instead of reporting them.
+        #[arg(long)]
+        strict: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Assemble scanned PNG page images into a PDF.
     Scan {
         /// Destination PDF.
@@ -2676,6 +2696,12 @@ fn main() -> anyhow::Result<()> {
                 language,
                 json,
             } => ocr::create_ocr(&image, &out, &words, dpi, language.as_deref(), json),
+            CreateCommand::Office {
+                bundle,
+                out,
+                strict,
+                json,
+            } => office::create_office(&bundle, &out, strict, json),
             CreateCommand::Scan {
                 out,
                 scans,

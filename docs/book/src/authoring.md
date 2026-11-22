@@ -13,6 +13,7 @@ command.
 | Plain text and a documented Markdown subset | `CREATE-004` | verified | `pdfxi-convert::create` | `create text` |
 | PNG and JPEG images | `CREATE-003` | verified | `pdfxi-convert::create` | `create image` |
 | PostScript and EPS (bounded subset) | `CREATE-013` | verified | `pdfxi-convert::postscript_ingest` + `postscript_pdf` | `create postscript` |
+| Office intake bundles (Word/Excel/PowerPoint) | `CREATE-006` | verified | `pdfxi-convert::office_contract` + `office_import` | `create office` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -35,6 +36,21 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Office conversion is exposed as:
+
+```text
+pdfxi create office <BUNDLE.json> --out <OUTPUT.pdf> [--strict] [--json]
+```
+
+`BUNDLE.json` is the caller-extracted Office content:
+`{"kind":"word","title":"Quarterly report","markup":"<h1>...</h1><p>...</p>"}`.
+`kind` accepts `word`/`excel`/`powerpoint` (and the usual extensions). The command
+validates the envelope, builds the deterministic `OfficeConversionPlan`,
+imports the markup into the shared `OfficeDocument`, lays each model page out as
+text in a same-size PDF page, merges pages in order, and reopens the output to
+require every converted line to extract. `--strict` rejects a bundle with any
+unsupported construct instead of reporting it. No OOXML archive or Office
+process is opened; the extractor that produces the markup remains host-side.
 Searchable OCR layers are exposed as:
 
 ```text
