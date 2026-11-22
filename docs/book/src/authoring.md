@@ -19,6 +19,7 @@ command.
 | Sandboxed Acrobat-compatible JavaScript | `AUTO-004` | verified | `pdfxi-automation::js` | `script run` |
 | Watched-folder conversion | `CREATE-014` | verified | `pdfxi-automation::watched` + `pdfxi-convert` adapters | `watch` |
 | Static form-field recognition | `FORMS-005` | verified | `pdfxi-forms::recognition` | `form recognize` |
+| Font size/spacing/colour restyle | `EDIT-002` | verified | `pdfxi-edit::restyle_run_text` | `restyle` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -41,6 +42,20 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Text restyling is exposed as:
+
+```text
+pdfxi restyle <FILE.pdf> --out <OUT.pdf> [--page N] [--run N]
+    [--size PT] [--scale PCT] [--char-spacing PT] [--word-spacing PT]
+    [--color R,G,B] [--json]
+```
+
+The run selects its paragraph block. The whole block is re-emitted with the
+requested `Tc`, `Tw`, `Tz`, `rg` and `Tf` values and reflowed at the block
+width; other content operators are preserved and the font family is unchanged
+(the existing font resource or the embedded fallback is reused). The output is
+reopened and the target text must still extract. Supported edits are font size,
+horizontal scaling, character/word spacing and RGB fill colour.
 Static form recognition is exposed as:
 
 ```text

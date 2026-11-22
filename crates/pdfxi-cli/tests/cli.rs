@@ -3751,6 +3751,163 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn restyle_applies_style_and_verifies_text() {
+    let source = create_text_pdf("Styled paragraph line one.\nLine two of the paragraph.");
+    let out = TempOut::new("pdf");
+    let styled = run(&[
+        "restyle",
+        source.arg(),
+        "--out",
+        out.arg(),
+        "--run",
+        "0",
+        "--size",
+        "20",
+        "--scale",
+        "90",
+        "--char-spacing",
+        "0.5",
+        "--word-spacing",
+        "1",
+        "--color",
+        "1,0,0",
+        "--json",
+    ]);
+    assert!(styled.status.success(), "stderr: {}", stderr(&styled));
+    let value: Value = serde_json::from_str(&stdout(&styled)).expect("valid JSON");
+    assert_eq!(value["page"], 0);
+    assert_eq!(value["run"], 0);
+    assert_eq!(value["font_size"], 20.0);
+    assert_eq!(value["horizontal_scaling"], 90.0);
+    assert_eq!(value["character_spacing"], 0.5);
+    assert_eq!(value["word_spacing"], 1.0);
+    assert_eq!(value["fill_color"], serde_json::json!([1.0, 0.0, 0.0]));
+    assert_eq!(value["embedded"], true);
+    assert_eq!(value["verified_text"], true);
+
+    let bytes = fs::read(&out.path).expect("restyled PDF");
+    let document = pdfxi_core::Document::from_bytes(bytes.clone()).expect("reopen restyled");
+    let text = document.page_text(0).expect("page text");
+    assert!(text.contains("Styled paragraph line one."), "{text}");
+    assert!(text.contains("Line two of the paragraph."), "{text}");
+    let content = document.page_content(0).expect("content stream");
+    let content = String::from_utf8_lossy(&content);
+    assert!(
+        content.contains("0.5000 Tc 1.0000 Tw 90.0000 Tz 0 Ts 1.0000 0.0000 0.0000 rg"),
+        "{content}"
+    );
+    assert!(content.contains("20.0000 Tf"), "{content}");
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&[
+        "restyle",
+        source.arg(),
+        "--out",
+        again.arg(),
+        "--run",
+        "0",
+        "--size",
+        "20",
+        "--scale",
+        "90",
+        "--char-spacing",
+        "0.5",
+        "--word-spacing",
+        "1",
+        "--color",
+        "1,0,0",
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second restyled PDF"),
+        "restyle is deterministic"
+    );
+}
+
+#[test]
+fn restyle_rejects_bad_requests() {
+    let source = create_text_pdf("Restyle me.");
+
+    let no_style = run(&["restyle", source.arg(), "--out", TempOut::new("pdf").arg()]);
+    assert!(!no_style.status.success());
+    assert!(
+        stderr(&no_style).contains("pass at least one"),
+        "{}",
+        stderr(&no_style)
+    );
+
+    let zero_size = run(&[
+        "restyle",
+        source.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--size",
+        "0",
+    ]);
+    assert!(!zero_size.status.success());
+    assert!(
+        stderr(&zero_size).contains("font size must be finite and positive"),
+        "{}",
+        stderr(&zero_size)
+    );
+
+    let bad_color = run(&[
+        "restyle",
+        source.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--color",
+        "1,0",
+    ]);
+    assert!(!bad_color.status.success());
+    assert!(
+        stderr(&bad_color).contains("must be R,G,B"),
+        "{}",
+        stderr(&bad_color)
+    );
+
+    let missing_run = run(&[
+        "restyle",
+        source.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--run",
+        "99",
+        "--size",
+        "12",
+    ]);
+    assert!(!missing_run.status.success());
+    assert!(
+        stderr(&missing_run).contains("does not exist"),
+        "{}",
+        stderr(&missing_run)
+    );
+
+    let missing_page = run(&[
+        "restyle",
+        source.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--page",
+        "5",
+        "--size",
+        "12",
+    ]);
+    assert!(!missing_page.status.success());
+
+    let missing_file = run(&[
+        "restyle",
+        TempPath::new("pdf").arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--size",
+        "12",
+    ]);
+    assert!(!missing_file.status.success());
+}
+
+#[test]
 fn form_recognize_writes_fields_from_hints() {
     let dir = TempDir::new();
     let manifest = dir.path.join("hints.json");

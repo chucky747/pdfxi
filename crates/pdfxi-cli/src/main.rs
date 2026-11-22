@@ -76,6 +76,8 @@ mod office_roundtrip;
 mod ops;
 /// pdfxi plugin: plan plugin invocations and validate typed outputs.
 mod plugin;
+/// pdfxi restyle: change font size, spacing, scaling and colour.
+mod restyle;
 /// pdfxi create scan: assemble scanned PNG pages into a PDF.
 mod scan;
 /// pdfxi script: run a file in the sandboxed JavaScript subset.
@@ -374,6 +376,42 @@ enum Command {
         /// Integration action.
         #[command(subcommand)]
         command: OfficeCommand,
+    },
+    /// Change font size, spacing, scaling or colour of a paragraph.
+    ///
+    /// The run selects the block; the whole block is re-emitted with the
+    /// requested style and reflowed. The font family is unchanged. The output is
+    /// reopened and the target text must still extract.
+    Restyle {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the restyled document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Zero-based page index.
+        #[arg(long, default_value_t = 0)]
+        page: usize,
+        /// Zero-based run index on that page.
+        #[arg(long, default_value_t = 0)]
+        run: usize,
+        /// New font size in points.
+        #[arg(long, value_name = "PT")]
+        size: Option<f64>,
+        /// Horizontal scaling in percent (`100` is normal).
+        #[arg(long, value_name = "PCT")]
+        scale: Option<f64>,
+        /// Extra character spacing in unscaled text units.
+        #[arg(long, value_name = "PT")]
+        char_spacing: Option<f64>,
+        /// Extra word spacing in unscaled text units.
+        #[arg(long, value_name = "PT")]
+        word_spacing: Option<f64>,
+        /// Fill colour as `R,G,B` in 0..=1.
+        #[arg(long, value_name = "R,G,B")]
+        color: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
     },
     /// Browse or extract a PDF portfolio collection.
     ///
@@ -2227,6 +2265,29 @@ fn main() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Restyle {
+            file,
+            out,
+            page,
+            run,
+            size,
+            scale,
+            char_spacing,
+            word_spacing,
+            color,
+            json,
+        } => restyle::run_restyle(
+            &file,
+            &out,
+            page,
+            run,
+            size,
+            scale,
+            char_spacing,
+            word_spacing,
+            color.as_deref(),
+            json,
+        ),
         Command::Portfolio {
             file,
             json,

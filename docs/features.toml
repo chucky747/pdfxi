@@ -1171,28 +1171,50 @@ title = "Edit text with paragraph reflow"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/text_style.rs",
-    "docs/evidence/author/T-0137.md",
+    "crates/pdfxi-edit/src/content_edit.rs",
+    "crates/pdfxi-cli/src/restyle.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0320.md",
 ]
 domain = "Edit"
-evidence = "docs/evidence/author/T-0137.md"
+evidence = "docs/evidence/cli/T-0320.md"
 id = "EDIT-002"
 notes = """
-T-0137 adds pdfxi_edit::text_style, a model-only text style contract. `RunStyle`
-describes font family/size, horizontal scaling, character/word spacing and RGB
-`FillColor`; `validate_style` enforces a positive finite size, positive finite
-scaling, bounded spacing, a non-empty bounded family name, and color components
-in 0.0..=1.0, returning typed `StyleError` variants. `apply_style` merges a
-partial `StyleOverride` onto a base per run and validates the result.
-`resolve_paragraph_style` implements the documented deterministic first-run-wins
-rule (the first run setting each attribute wins, others fall back to the
-default), and `style_paragraph` yields a `ParagraphStylePlan` with the resolved
-paragraph style and per-run effective styles. Like EDIT-001 this is a model;
-emitting PDF text operators is a host adapter responsibility.
+Verified through `pdfxi restyle <FILE.pdf> --out OUT.pdf [--page N] [--run N]
+[--size PT] [--scale PCT] [--char-spacing PT] [--word-spacing PT]
+[--color R,G,B] [--json]`.
+
+The library adds RunStyleOverride (optional font size, horizontal scaling,
+character/word spacing, RGB fill) with typed validation and restyle_run_text,
+which replaces every show operator in the run's paragraph block with one
+re-emitted text object using the requested Tc/Tw/Tz/rg/Tf at the block's
+baselines and reflow width, preserving non-text operators. The font family is
+unchanged; the existing simple font is reused when it can encode the text,
+otherwise the bundled fallback font is embedded. The CLI requires at least one
+style option, resolves the run in the text model, applies the override, saves,
+reopens and requires the target's leading token to extract.
+
+Evidence: restyling run 0 of a two-line text PDF with size 20, scale 90, char
+spacing 0.5, word spacing 1 and red reports block 0, 9 reflowed lines, FXF0
+CourierPrime embedded, 53 extracted characters, verified_text true and 74439
+bytes; pdfxi text returns both lines and the saved content contains
+0.5000 Tc 1.0000 Tw 90.0000 Tz 0 Ts 1.0000 0.0000 0.0000 rg and 20.0000 Tf. No
+style option, size 0, a two-component colour, run 99, page 5 and a missing file
+fail with typed errors; repeated runs are byte-identical.
+
+Gates: cargo test -p pdfxi-edit restyle = 2 passed and cargo test -p pdfxi-cli
+--test cli restyle = 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: paragraph-level restyle only; no font-family change, per-glyph styling,
+alignment or line-height change, and reflow can change line breaks.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "content_edit::tests::restyle_sentence_applies_size_spacing_and_colour",
+    "content_edit::tests::restyle_override_validation_is_typed",
+    "cli::restyle_applies_style_and_verifies_text",
+    "cli::restyle_rejects_bad_requests",
     "text_style::tests::style_validation_rejects_bad_inputs",
     "text_style::tests::per_run_style_application_merges_and_validates",
     "text_style::tests::paragraph_style_resolution_first_run_wins_is_deterministic",

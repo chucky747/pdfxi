@@ -1,0 +1,21 @@
+{
+  "id": "T-0320",
+  "lane": "author",
+  "title": "Text restyle host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0319"],
+  "owns": [
+    "crates/pdfxi-edit/src/content_edit.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-cli/src/restyle.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0320.md",
+    "orchestration/feature-updates/T-0320.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit restyle and cargo test -p pdfxi-cli --test cli restyle pass; pdfxi restyle rewrites a real paragraph with size/scaling/spacing/colour and the text still extracts; EDIT-002 moves to verified.",
+  "notes": "Adds RunStyleOverride + restyle_run_text to pdfxi-edit and the pdfxi restyle CLI host with reload verification.",
+  "evidence": "docs/evidence/cli/T-0320.md"
+}

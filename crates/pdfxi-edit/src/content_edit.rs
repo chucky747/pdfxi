@@ -189,6 +189,119 @@ pub struct FontChoice {
     pub embedded: bool,
 }
 
+/// Paragraph-level style overrides applied by [`restyle_run_text`].
+///
+/// Every field is optional; omitted values keep the anchor run's current value.
+/// The fill colour is an RGB triple in `0.0..=1.0`. Family changes are not
+/// applied, so the block keeps its font resource or the embedded fallback.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RunStyleOverride {
+    /// New font size in text-space units.
+    pub font_size: Option<f64>,
+    /// Horizontal scaling in percent (`100` is normal).
+    pub horizontal_scaling: Option<f64>,
+    /// Extra character spacing in unscaled text units.
+    pub character_spacing: Option<f64>,
+    /// Extra word spacing in unscaled text units.
+    pub word_spacing: Option<f64>,
+    /// Fill colour components in `0.0..=1.0`.
+    pub fill_color: Option<[f64; 3]>,
+}
+
+impl RunStyleOverride {
+    /// Create an empty override that keeps every current value.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            font_size: None,
+            horizontal_scaling: None,
+            character_spacing: None,
+            word_spacing: None,
+            fill_color: None,
+        }
+    }
+
+    /// Set the font size.
+    #[must_use]
+    pub const fn with_font_size(mut self, font_size: f64) -> Self {
+        self.font_size = Some(font_size);
+        self
+    }
+
+    /// Set the horizontal scaling percentage.
+    #[must_use]
+    pub const fn with_horizontal_scaling(mut self, percent: f64) -> Self {
+        self.horizontal_scaling = Some(percent);
+        self
+    }
+
+    /// Set the extra character spacing.
+    #[must_use]
+    pub const fn with_character_spacing(mut self, spacing: f64) -> Self {
+        self.character_spacing = Some(spacing);
+        self
+    }
+
+    /// Set the extra word spacing.
+    #[must_use]
+    pub const fn with_word_spacing(mut self, spacing: f64) -> Self {
+        self.word_spacing = Some(spacing);
+        self
+    }
+
+    /// Set the RGB fill colour.
+    #[must_use]
+    pub const fn with_fill_color(mut self, red: f64, green: f64, blue: f64) -> Self {
+        self.fill_color = Some([red, green, blue]);
+        self
+    }
+
+    /// Validate every supplied component.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TextEditError::InvalidFontSize`] for a non-positive size and
+    /// [`TextEditError::InvalidStyle`] for an out-of-range scaling, spacing or
+    /// colour component.
+    pub fn validate(&self) -> Result<(), TextEditError> {
+        if let Some(size) = self.font_size
+            && (!size.is_finite() || size <= 0.0)
+        {
+            return Err(TextEditError::InvalidFontSize(size));
+        }
+        if let Some(scaling) = self.horizontal_scaling
+            && (!scaling.is_finite() || !(1.0..=1000.0).contains(&scaling))
+        {
+            return Err(TextEditError::InvalidStyle(
+                "horizontal scaling must be finite in 1..=1000",
+            ));
+        }
+        for (name, value) in [
+            ("character spacing", self.character_spacing),
+            ("word spacing", self.word_spacing),
+        ] {
+            if let Some(value) = value
+                && (!value.is_finite() || value.abs() > 1000.0)
+            {
+                return Err(TextEditError::InvalidStyle(match name {
+                    "character spacing" => "character spacing must be finite in -1000..=1000",
+                    _ => "word spacing must be finite in -1000..=1000",
+                }));
+            }
+        }
+        if let Some(color) = self.fill_color
+            && color
+                .iter()
+                .any(|component| !component.is_finite() || !(0.0..=1.0).contains(component))
+        {
+            return Err(TextEditError::InvalidStyle(
+                "colour components must be finite in 0..=1",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Result of [`replace_run_text`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReplaceOutcome {
@@ -307,6 +420,9 @@ pub enum TextEditError {
     /// A font size was not finite or not positive.
     #[error("font size must be finite and positive, got {0}")]
     InvalidFontSize(f64),
+    /// A style component was outside its documented range.
+    #[error("invalid text style: {0}")]
+    InvalidStyle(&'static str),
     /// A rectangle was outside the page or degenerate.
     #[error("invalid edit rectangle: {0}")]
     InvalidRect(&'static str),
@@ -549,6 +665,68 @@ pub fn replace_run_text(
         &paragraph,
         new_text,
         target_width,
+        None,
+    )
+}
+
+/// Restyle the paragraph containing one run and reflow it.
+///
+/// The run identifies the target block; the supplied [`RunStyleOverride`]
+/// applies to that block's re-emitted text. Existing text-showing operators in
+/// the block are replaced and other content is preserved, matching
+/// [`replace_run_text`]. The font family is not changed: the block keeps its
+/// font resource, or the bundled fallback font when the existing font cannot
+/// encode the text.
+///
+/// # Errors
+///
+/// Returns [`TextEditError::RunNotFound`] for an unknown run,
+/// [`TextEditError::InvalidFontSize`] or [`TextEditError::InvalidStyle`] for an
+/// invalid override, and the reflow and font errors of
+/// [`replace_run_text`].
+pub fn restyle_run_text(
+    document: &mut Document,
+    page_index: usize,
+    run_index: usize,
+    style: &RunStyleOverride,
+) -> Result<ReplaceOutcome, TextEditError> {
+    style.validate()?;
+    let effective = effective_document(document)?;
+    let model = text_blocks(&effective, page_index)?;
+    let run_count = model.runs().count();
+    let block = model
+        .block_for_run(run_index)
+        .ok_or(TextEditError::RunNotFound {
+            index: run_index,
+            runs: run_count,
+        })?;
+    let target = block.run(run_index).ok_or(TextEditError::RunNotFound {
+        index: run_index,
+        runs: run_count,
+    })?;
+    let paragraph = block
+        .lines
+        .iter()
+        .map(|line| {
+            line.run_indices
+                .iter()
+                .filter_map(|index| block.run(*index))
+                .map(|run| run.text.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<String>>()
+        .join(" ");
+    let target_width = f64::from(block.width.max(1.0));
+    rebuild_block(
+        document,
+        &effective,
+        page_index,
+        block,
+        target,
+        &paragraph,
+        &target.text,
+        target_width,
+        Some(style),
     )
 }
 
@@ -567,18 +745,22 @@ fn rebuild_block(
     paragraph: &str,
     reported_text: &str,
     target_width: f64,
+    style: Option<&RunStyleOverride>,
 ) -> Result<ReplaceOutcome, TextEditError> {
     let fonts = load_fonts(effective, &effective.page(page_index)?)?;
     let existing = fonts.get(&anchor.font);
 
     let reuse = existing.is_some_and(|font| font.can_encode(paragraph, reported_text));
+    let font_size = style
+        .and_then(|style| style.font_size)
+        .unwrap_or(anchor.font_size);
     let metrics;
     let mut choice;
     if reuse {
         let font = existing.ok_or(TextEditError::UnencodableText {
             font: anchor.font.clone(),
         })?;
-        metrics = LayoutMetrics::Existing(font.clone(), anchor.font_size);
+        metrics = LayoutMetrics::Existing(font.clone(), font_size);
         choice = FontChoice {
             resource: anchor.font.clone(),
             base_font: font.base_font.clone(),
@@ -591,7 +773,7 @@ fn rebuild_block(
             .filter(|character| !character.is_control())
             .collect();
         let fallback = FallbackFont::new(ttf, &chars)?;
-        metrics = LayoutMetrics::Fallback(fallback, anchor.font_size);
+        metrics = LayoutMetrics::Fallback(fallback, font_size);
         choice = FontChoice {
             resource: String::new(),
             base_font: FALLBACK_BASE_FONT.to_owned(),
@@ -627,11 +809,21 @@ fn rebuild_block(
 
     let start_x = f64::from(anchor.start.x);
     let first_baseline = f64::from(anchor.start.y);
-    let line_step = anchor.font_size * LINE_HEIGHT_FACTOR;
+    let line_step = font_size * LINE_HEIGHT_FACTOR;
+    let character_spacing = style
+        .and_then(|style| style.character_spacing)
+        .unwrap_or(0.0);
+    let word_spacing = style.and_then(|style| style.word_spacing).unwrap_or(0.0);
+    let scaling = style
+        .and_then(|style| style.horizontal_scaling)
+        .unwrap_or(100.0);
+    let [red, green, blue] = style
+        .and_then(|style| style.fill_color)
+        .unwrap_or([0.0, 0.0, 0.0]);
     let mut generated = String::new();
     generated.push_str(&format!(
-        "0 Tc 0 Tw 100 Tz 0 Ts 0 g /{} {:.4} Tf ",
-        choice.resource, anchor.font_size
+        "{character_spacing:.4} Tc {word_spacing:.4} Tw {scaling:.4} Tz 0 Ts {red:.4} {green:.4} {blue:.4} rg /{} {font_size:.4} Tf ",
+        choice.resource
     ));
     for (line_index, line) in reflowed.iter().enumerate() {
         let baseline = first_baseline - line_index as f64 * line_step;
@@ -1752,6 +1944,7 @@ fn replace_text_block(
         &paragraph,
         &paragraph,
         target_width,
+        None,
     )?)
 }
 
@@ -6103,5 +6296,74 @@ mod tests {
             b"\nQ\n",
             "object_end must be just past EI"
         );
+    }
+
+    #[test]
+    fn restyle_sentence_applies_size_spacing_and_colour() {
+        let mut document = fixture("microsoft-excel-2019-sample.pdf");
+        let model = text_blocks(&document, 0).expect("text model");
+        let block = model
+            .blocks
+            .iter()
+            .find(|block| {
+                block
+                    .runs
+                    .iter()
+                    .any(|run| run.text.contains("orchestra rehearsed"))
+            })
+            .expect("sentence block");
+        let run = block.runs.first().expect("sentence run").clone();
+        let style = RunStyleOverride::new()
+            .with_font_size(18.0)
+            .with_horizontal_scaling(90.0)
+            .with_character_spacing(0.5)
+            .with_word_spacing(1.0)
+            .with_fill_color(1.0, 0.0, 0.0);
+        let outcome = restyle_run_text(&mut document, 0, run.index, &style).expect("restyle run");
+        assert_eq!(outcome.block_index, block.index);
+        assert_eq!(outcome.new_text, run.text);
+
+        let bytes = document.save().expect("save restyled document");
+        let reopened = Document::from_bytes(bytes).expect("reopen restyled document");
+        let content = reopened.page_content(0).expect("content stream");
+        let text = String::from_utf8_lossy(&content);
+        assert!(
+            text.contains("0.5000 Tc 1.0000 Tw 90.0000 Tz 0 Ts 1.0000 0.0000 0.0000 rg"),
+            "style prefix missing"
+        );
+        assert!(text.contains("18.0000 Tf"), "font size prefix missing");
+        let extracted = reopened.page_text(0).expect("extract text");
+        assert!(extracted.contains("orchestra rehearsed"), "{extracted}");
+    }
+
+    #[test]
+    fn restyle_override_validation_is_typed() {
+        let mut document = fixture("microsoft-excel-2019-sample.pdf");
+        let model = text_blocks(&document, 0).expect("text model");
+        let run = model.runs().next().expect("run").index;
+
+        let bad_size = RunStyleOverride::new().with_font_size(0.0);
+        assert!(matches!(
+            restyle_run_text(&mut document, 0, run, &bad_size),
+            Err(TextEditError::InvalidFontSize(0.0))
+        ));
+
+        let bad_scale = RunStyleOverride::new().with_horizontal_scaling(0.0);
+        assert!(matches!(
+            restyle_run_text(&mut document, 0, run, &bad_scale),
+            Err(TextEditError::InvalidStyle(_))
+        ));
+
+        let bad_colour = RunStyleOverride::new().with_fill_color(2.0, 0.0, 0.0);
+        assert!(matches!(
+            restyle_run_text(&mut document, 0, run, &bad_colour),
+            Err(TextEditError::InvalidStyle(_))
+        ));
+
+        let missing = RunStyleOverride::new().with_font_size(12.0);
+        assert!(matches!(
+            restyle_run_text(&mut document, 0, 99_999, &missing),
+            Err(TextEditError::RunNotFound { .. })
+        ));
     }
 }

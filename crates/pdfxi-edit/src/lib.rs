@@ -104,10 +104,10 @@ pub use compare::{
 };
 pub use content_edit::{
     FALLBACK_BASE_FONT, FontChoice, ImageFormat, ImagePlacement, ObjectEditError, ObjectKind,
-    ObjectReplaceOutcome, ObjectReplacement, PageObject, PageTextModel, ReplaceOutcome, TextAlign,
-    TextBlock, TextEditError, TextLine, TextPlacement, TextRun, add_image, add_text_box,
-    delete_object, list_objects, move_object, replace_object, replace_run_text, resize_object,
-    text_blocks,
+    ObjectReplaceOutcome, ObjectReplacement, PageObject, PageTextModel, ReplaceOutcome,
+    RunStyleOverride, TextAlign, TextBlock, TextEditError, TextLine, TextPlacement, TextRun,
+    add_image, add_text_box, delete_object, list_objects, move_object, replace_object,
+    replace_run_text, resize_object, restyle_run_text, text_blocks,
 };
 pub use document_annotations::{
     ARROW_HEAD_LENGTH, AnnotationEditError, AnnotationRef, AnnotationState, AnnotationSubtype,
