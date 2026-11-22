@@ -2908,6 +2908,7 @@ dependencies = [
  "pdfxi-automation",
  "pdfxi-convert",
  "pdfxi-core",
+ "pdfxi-edit",
  "pdfxi-render",
  "pdfxi-testkit",
  "pdfxi-text",
