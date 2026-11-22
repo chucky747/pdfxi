@@ -3751,6 +3751,212 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn create_ocr_overlays_invisible_searchable_text() {
+    let image = TempPath::new("png");
+    image.write(&sample_png());
+    let words = TempPath::new("json");
+    words.write(
+        br#"{"language":"eng","words":[
+            {"text":"Hi","x":0,"y":0,"width":2,"height":2,"confidence":95},
+            {"text":"Low","x":0,"y":0,"width":2,"height":2,"confidence":10}
+        ]}"#,
+    );
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "create",
+        "ocr",
+        image.arg(),
+        "--out",
+        out.arg(),
+        "--words",
+        words.arg(),
+        "--dpi",
+        "72",
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["engine"], "json-words");
+    assert_eq!(value["words_received"], 2);
+    assert_eq!(value["kept"], 1);
+    assert_eq!(value["rejected"], 1);
+    assert_eq!(value["suspect"], 0);
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["page_width"], 2.0);
+    assert_eq!(value["page_height"], 2.0);
+    assert_eq!(value["verified_words"], 1);
+    assert_eq!(value["extracted_chars"], 2);
+
+    let bytes = fs::read(&out.path).expect("ocr PDF");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("3 Tr"), "the layer must be invisible: {text}");
+    assert!(text.contains("(Hi) Tj"), "{text}");
+    assert!(text.contains("/FOcr"), "{text}");
+
+    let extracted = run(&["text", out.arg()]);
+    assert!(extracted.status.success(), "stderr: {}", stderr(&extracted));
+    assert_eq!(stdout(&extracted).trim(), "Hi");
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&[
+        "create",
+        "ocr",
+        image.arg(),
+        "--out",
+        again.arg(),
+        "--words",
+        words.arg(),
+        "--dpi",
+        "72",
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        bytes,
+        fs::read(&again.path).expect("second OCR PDF"),
+        "OCR overlay is deterministic"
+    );
+}
+
+#[test]
+fn create_ocr_rejects_bad_words_and_inputs() {
+    let image = TempPath::new("png");
+    image.write(&sample_png());
+
+    let empty = TempPath::new("json");
+    empty.write(br#"{"words":[]}"#);
+    let no_words = run(&[
+        "create",
+        "ocr",
+        image.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--words",
+        empty.arg(),
+    ]);
+    assert!(!no_words.status.success());
+    assert!(
+        stderr(&no_words).contains("contains no words"),
+        "{}",
+        stderr(&no_words)
+    );
+
+    let blank = TempPath::new("json");
+    blank.write(br#"{"words":[{"text":" ","x":0,"y":0,"width":1,"height":1,"confidence":90}]}"#);
+    let empty_text = run(&[
+        "create",
+        "ocr",
+        image.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--words",
+        blank.arg(),
+    ]);
+    assert!(!empty_text.status.success());
+    assert!(
+        stderr(&empty_text).contains("empty text"),
+        "{}",
+        stderr(&empty_text)
+    );
+
+    let negative = TempPath::new("json");
+    negative
+        .write(br#"{"words":[{"text":"x","x":0,"y":0,"width":-1,"height":1,"confidence":90}]}"#);
+    let bad_box = run(&[
+        "create",
+        "ocr",
+        image.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--words",
+        negative.arg(),
+    ]);
+    assert!(!bad_box.status.success());
+    assert!(
+        stderr(&bad_box).contains("box must be finite"),
+        "{}",
+        stderr(&bad_box)
+    );
+
+    let malformed = TempPath::new("json");
+    malformed.write(b"not json");
+    assert!(
+        !run(&[
+            "create",
+            "ocr",
+            image.arg(),
+            "--out",
+            TempOut::new("pdf").arg(),
+            "--words",
+            malformed.arg()
+        ])
+        .status
+        .success()
+    );
+
+    let words = TempPath::new("json");
+    words.write(br#"{"words":[{"text":"Hi","x":0,"y":0,"width":2,"height":2,"confidence":90}]}"#);
+    let blank_language = run(&[
+        "create",
+        "ocr",
+        image.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--words",
+        words.arg(),
+        "--language",
+        " ",
+    ]);
+    assert!(!blank_language.status.success());
+    assert!(
+        stderr(&blank_language).contains("language tags must not be blank"),
+        "{}",
+        stderr(&blank_language)
+    );
+
+    let zero_dpi = run(&[
+        "create",
+        "ocr",
+        image.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--words",
+        words.arg(),
+        "--dpi",
+        "0",
+    ]);
+    assert!(!zero_dpi.status.success());
+
+    let gif = TempPath::new("gif");
+    gif.write(b"GIF89a");
+    let unsupported = run(&[
+        "create",
+        "ocr",
+        gif.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--words",
+        words.arg(),
+    ]);
+    assert!(!unsupported.status.success());
+    assert!(
+        stderr(&unsupported).contains("expected png, jpg or jpeg"),
+        "{}",
+        stderr(&unsupported)
+    );
+
+    let missing = run(&[
+        "create",
+        "ocr",
+        TempPath::new("png").arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--words",
+        words.arg(),
+    ]);
+    assert!(!missing.status.success());
+}
+
+#[test]
 fn create_scan_assembles_simplex_png_pages() {
     let first = TempPath::new("png");
     first.write(&sample_png());

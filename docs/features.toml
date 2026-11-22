@@ -798,39 +798,44 @@ title = "Scan to PDF with TWAIN and WIA"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/ocr_pipeline.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0165.md",
+    "crates/pdfxi-cli/src/ocr.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0313.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert (CARGO_TARGET_DIR=target/lanes/convert): 322 unit + 31 integration tests passed, 0 failed, TEST_EXIT=0. All 12 ocr_pipeline::tests green, including engine_is_invoked_once_per_page, word_boxes_map_to_pdf_points_with_top_left_inversion, confidence_threshold_filters_and_flags_suspect_words, empty_ocr_result_yields_an_empty_searchable_layer and plan_and_report_are_byte_deterministic. Clippy/doc/fmt scoped to pdfxi-convert EXIT=0. Full output in docs/evidence/convert/T-0165.md."
+evidence = "docs/evidence/cli/T-0313.md"
 id = "CREATE-008"
 notes = """
-ADR 0008 local equivalent for the retired Tesseract-hosted OCR flow:
-`ocr_pipeline` defines a caller-supplied `OcrEngine` trait returning text,
-per-word boxes and confidence, with no Tesseract dependency and no process
-spawn. It mirrors (and documents how to bridge to) the existing pdfxi-text
-sidecar contract shape — OcrImage/OcrBox/OcrSpan/OcrPage/OcrOptions and
-ConfidencePolicy — without adding a crate dependency, per docs/ARCHITECTURE.md.
-It validates inputs, invokes the engine once per page in ascending page order,
-assembles deterministic page text, maps clamped pixel boxes into invisible
-PDF-point text positions (top-left pixel origin to bottom-left PDF origin),
-applies a confidence policy that reports kept/rejected/suspect words and empty
-pages, and returns a typed-error `SearchableTextPlan` plus a stable `OcrReport`.
+Verified through `pdfxi create ocr <PAGE.png|jpg> --out PDF --words WORDS.json
+[--dpi 300] [--language TAG] [--json]`.
 
-This closes the convert-lane half of CREATE-008; the render lane's pure OCR
-contract in pdfxi-text (T-0057/T-0071) is unchanged and still green.
+The words file is the caller-supplied recognition result in top-left pixel
+boxes. The host reads the image header for width/height, validates the JSON,
+builds a grayscale OcrImage (bounded to 64M pixels), and runs the pipeline with a
+JsonEngine and the default confidence policy. It embeds the image at
+pixels/dpi*72 points with zero margins and appends a content stream using
+BT 3 Tr ... Tj ET (invisible render mode), a Helvetica /FOcr resource and each
+planned word at its position and height. The output is reopened, its text is
+extracted, and every kept word must be found.
 
-Verified at library level only. Exact remaining scope (outside this task's
-claim): a real OCR backend implementation of `OcrEngine`, emission of the
-planned invisible OcrText layer into final PDF bytes by the PDF writer,
-UI wiring, an integrator-owned mdBook page, and the integrator merge into
-docs/features.toml. No Tesseract binary, sidecar process, network, or GUI code
-is added here.
+Evidence: a 2x2 PNG at 72 dpi with words Hi (confidence 95) and Low (10) reports
+kept 1, rejected 1, suspect 0, page 2.00x2.00 pt, verified_words 1,
+extracted_chars 2 and 1419 bytes; pdfxi text returns Hi, the saved bytes contain
+3 Tr and (Hi) Tj, and repeated runs are byte-identical. Empty word lists, blank
+text, a negative box, malformed JSON, a blank language tag, DPI 0, an
+unsupported extension and a missing image fail.
+
+Gates: cargo test -p pdfxi-cli --test cli create_ocr = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: no OCR engine or process is bundled; one image page per command; Latin-1
+invisible text; no deskew, rotation detection or language auto-detection.
 """
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
+    "cli::create_ocr_overlays_invisible_searchable_text",
+    "cli::create_ocr_rejects_bad_words_and_inputs",
     "ocr_pipeline::tests::engine_is_invoked_once_per_page",
     "ocr_pipeline::tests::word_boxes_map_to_pdf_points_with_top_left_inversion",
     "ocr_pipeline::tests::out_of_range_boxes_are_clamped_to_the_raster",

@@ -64,6 +64,8 @@ mod action;
 
 // Local line-delimited JSON automation API over stdin/stdout (`api`).
 mod api;
+/// pdfxi create ocr: overlay an invisible searchable-text layer.
+mod ocr;
 /// pdfxi ops: enumerate and resolve scriptable automation operations.
 mod ops;
 /// pdfxi plugin: plan plugin invocations and validate typed outputs.
@@ -1629,6 +1631,30 @@ enum CreateCommand {
         #[arg(long)]
         markdown: bool,
     },
+    /// Overlay an invisible searchable-text layer from OCR words.
+    ///
+    /// `--words` is the caller-supplied recognition result (one page, top-left
+    /// pixel boxes); the command embeds the image and writes invisible text at
+    /// the planned positions. No OCR engine or process is bundled.
+    Ocr {
+        /// Scanned PNG or JPEG page.
+        image: PathBuf,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// JSON words file.
+        #[arg(long, value_name = "PATH")]
+        words: PathBuf,
+        /// Declared image resolution in dots per inch.
+        #[arg(long, default_value_t = 300.0)]
+        dpi: f64,
+        /// Override the detected language tag.
+        #[arg(long, value_name = "TAG")]
+        language: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Assemble scanned PNG page images into a PDF.
     Scan {
         /// Destination PDF.
@@ -2642,6 +2668,14 @@ fn main() -> anyhow::Result<()> {
                 strict,
                 json,
             } => create::create_postscript(&input, &output, strict, json),
+            CreateCommand::Ocr {
+                image,
+                out,
+                words,
+                dpi,
+                language,
+                json,
+            } => ocr::create_ocr(&image, &out, &words, dpi, language.as_deref(), json),
             CreateCommand::Scan {
                 out,
                 scans,

@@ -1,0 +1,19 @@
+{
+  "id": "T-0313",
+  "lane": "convert",
+  "title": "Searchable OCR layer host",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0312"],
+  "owns": [
+    "crates/pdfxi-cli/src/ocr.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0313.md",
+    "orchestration/feature-updates/T-0313.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli create_ocr passes; pdfxi create ocr embeds a real image, applies the OCR pipeline plan and writes an invisible searchable-text layer whose kept words extract; CREATE-008 moves to verified.",
+  "notes": "Adds a JSON-backed OcrEngine, image header parsing, and an invisible-text overlay writer over create_from_image output.",
+  "evidence": "docs/evidence/cli/T-0313.md"
+}

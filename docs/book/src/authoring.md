@@ -14,6 +14,7 @@ command.
 | PNG and JPEG images | `CREATE-003` | verified | `pdfxi-convert::create` | `create image` |
 | PostScript and EPS (bounded subset) | `CREATE-013` | verified | `pdfxi-convert::postscript_ingest` + `postscript_pdf` | `create postscript` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
+| OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
 | Local HTML and a CSS subset | `CREATE-005` | verified | `pdfxi-convert::create::html` | — |
 | Office, scan, portfolios | `CREATE-006`–`CREATE-010` | planned | — | — |
@@ -34,6 +35,21 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Searchable OCR layers are exposed as:
+
+```text
+pdfxi create ocr <PAGE.png|jpg> --out <OUTPUT.pdf> --words <WORDS.json>
+    [--dpi 300] [--language TAG] [--json]
+```
+
+`WORDS.json` is the caller-supplied recognition result for one page:
+`{"language":"eng","words":[{"text":"Hello","x":10,"y":20,"width":40,"height":14,"confidence":95}]}`.
+Boxes are top-left pixel coordinates. The command feeds them through the
+`ocr_pipeline` model (confidence filtering, deterministic reading order,
+top-left to bottom-left mapping), embeds the image at `pixels / dpi * 72` points,
+and appends an invisible (`3 Tr`) text layer at the planned positions. It
+reopens the output and requires every kept word to extract. No OCR engine or
+process is bundled; any backend that can emit this JSON can drive it.
 Scan assembly is exposed as:
 
 ```text
