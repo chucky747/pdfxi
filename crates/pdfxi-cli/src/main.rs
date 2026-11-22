@@ -102,6 +102,8 @@ mod restyle;
 mod scan;
 /// pdfxi script: run a file in the sandboxed JavaScript subset.
 mod script;
+/// pdfxi separations: derive print plates from real page content.
+mod separations;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
 mod toolset;
 /// pdfxi transparency inspect: read blend modes and transparency groups.
@@ -427,6 +429,17 @@ enum Command {
         /// Exit non-zero when any action is rejected.
         #[arg(long)]
         strict: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Derive print plates (process and spot inks) from real page content.
+    Separations {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Show the output preview for one plate name.
+        #[arg(long, value_name = "NAME")]
+        plate: Option<String>,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -2833,6 +2846,9 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Separations { file, plate, json } => {
+            separations::separations(&file, plate.as_deref(), json)
+        }
         Command::Media { command } => match command {
             MediaCommand::List {
                 file,

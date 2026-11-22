@@ -1,0 +1,19 @@
+{
+  "id": "T-0337",
+  "lane": "convert",
+  "title": "Separations and output-preview host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0336"],
+  "owns": [
+    "crates/pdfxi-cli/src/separations.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0337.md",
+    "orchestration/feature-updates/T-0337.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli separations passes; pdfxi separations derives process and spot plates from real content streams and /Separation resources, reports paint operations and pages, and answers --plate queries; PRINT-004 moves to verified.",
+  "notes": "Scans content-stream colour operators with q/Q state and page /ColorSpace resources, then builds pdfxi_app::print::SeparationsPlan.",
+  "evidence": "docs/evidence/cli/T-0337.md"
+}

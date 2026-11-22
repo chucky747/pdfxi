@@ -11426,6 +11426,121 @@ fn media_list_rejects_documents_without_media() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// separations: print plates from content (T-0337)
+// ---------------------------------------------------------------------------
+
+/// A one-page PDF with a spot separation, CMYK, RGB and gray paint operations.
+fn t0337_separations_pdf() -> Vec<u8> {
+    let content = "q /CS0 cs 1 scn Q 0.1 0.2 0.3 0.4 k 0.5 0.6 0.7 rg 0.4 g";
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+             /Resources << /ColorSpace << /CS0 [/Separation (Spot Orange) /DeviceCMYK 5 0 R] >> >> >>"
+                .to_owned(),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ),
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.5 1 0] /N 1 >>".to_owned(),
+        ],
+    )
+}
+
+#[test]
+fn separations_reports_process_and_spot_plates() {
+    let pdf = TempPdf::new(&t0337_separations_pdf());
+    let output = run(&["separations", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["device_rgb_operations"], 1);
+    assert_eq!(value["device_gray_operations"], 1);
+    let plates = value["plates"].as_array().expect("plates");
+    assert_eq!(plates.len(), 5);
+    assert_eq!(plates[0]["name"], "Black");
+    assert_eq!(plates[0]["process"].as_bool(), Some(true));
+    assert_eq!(plates[0]["operations"], 2);
+    assert_eq!(plates[0]["pages"], serde_json::json!([1]));
+    for name in ["Cyan", "Magenta", "Yellow"] {
+        let row = plates
+            .iter()
+            .find(|row| row["name"] == name)
+            .expect("process plate");
+        assert_eq!(row["process"].as_bool(), Some(true));
+        assert_eq!(row["operations"], 1);
+    }
+    let spot = plates
+        .iter()
+        .find(|row| row["name"] == "Spot Orange")
+        .expect("spot plate");
+    assert_eq!(spot["process"].as_bool(), Some(false));
+    assert_eq!(spot["operations"], 1);
+    assert_eq!(spot["pages"], serde_json::json!([1]));
+    assert!(
+        value["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("4 process, 1 spot")
+    );
+    assert!(
+        value["descriptor"]
+            .as_str()
+            .unwrap_or("")
+            .contains("5:spot:1:Spot Orange")
+    );
+}
+
+#[test]
+fn separations_plate_query_is_the_output_preview() {
+    let pdf = TempPdf::new(&t0337_separations_pdf());
+    let output = run(&["separations", pdf.arg(), "--plate", "Spot Orange", "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["name"], "Spot Orange");
+    assert_eq!(value["process"].as_bool(), Some(false));
+    assert_eq!(value["operations"], 1);
+    assert_eq!(value["pages"], serde_json::json!([1]));
+
+    let text = run(&["separations", pdf.arg(), "--plate", "cyan"]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    assert!(
+        stdout(&text).contains("plate: Cyan  process: true  operations: 1"),
+        "{}",
+        stdout(&text)
+    );
+
+    let missing = run(&["separations", pdf.arg(), "--plate", "Varnish"]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("no plate named"),
+        "{}",
+        stderr(&missing)
+    );
+}
+
+#[test]
+fn separations_reports_no_plates_for_colourless_content() {
+    let pdf = TempPdf::new(&t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_owned(),
+            "<< /Length 4 >>\nstream\nq Q\nendstream".to_owned(),
+        ],
+    ));
+    let output = run(&["separations", pdf.arg(), "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert!(value["plates"].as_array().expect("plates").is_empty());
+    assert_eq!(value["summary"], "separations: none");
+    assert_eq!(value["descriptor"], "separations-plan/v1");
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");

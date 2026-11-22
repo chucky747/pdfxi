@@ -3526,28 +3526,48 @@ title = "ICC color management and output intents"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/separations.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0337.md",
     "crates/pdfxi-app/src/print.rs",
-    "crates/pdfxi-app/src/lib.rs",
-    "docs/evidence/app/T-0150.md",
 ]
 domain = "Print Production"
-evidence = "cargo test -p pdfxi-app: 297 passed, 0 failed; --features ui: 360 passed, 0 failed. New poster tests: poster_tile_grid_and_overlap_are_deterministic (3x3 grid, overlap strides, source-window rects), poster_rejects_bad_overlap_scale_geometry_and_huge_grids. fmt/clippy/doc EXIT=0. Full output in docs/evidence/app/T-0150.md."
+evidence = "docs/evidence/cli/T-0337.md"
 id = "PRINT-004"
 notes = """
-T-0150 adds poster_tiles to pdfxi-app::print. Given a source page, sheet,
-percentage scale, and inter-tile overlap, the planner derives the tile grid from
-the stride (sheet - overlap), then emits each tile's row/column, window offset,
-exact source-page slice, and a PageTransform that a host applies before clipping
-to the sheet. It rejects non-finite/negative overlap, invalid scale or geometry,
-and tile grids above the bounded cell limit with typed errors.
+Verified through `pdfxi separations <INPUT.pdf> [--plate NAME] [--json]`.
 
-HOST BACKEND BOUNDARY: rasterising and compositing the overlapping tiles onto
-physical sheets is the host printer backend's job. This complements, and does
-not replace, the pre-existing Output Preview model on this id.
+The host decodes every page content stream, tokenizes it while skipping strings,
+comments and inline-image data, tracks the graphics state across q/Q, and
+resolves named /ColorSpace resources from the page's inherited /Resources,
+including /Separation (spot name) and /DeviceN [names]. It counts paint
+operations for k/K (all four process inks), g/G (black), rg/RG (reported as
+device RGB, no fixed plate), sh and sc/scn/SC/SCN under a spot/DeviceN space,
+then builds pdfxi_app::print::SeparationsPlan and prints ids, process/spot,
+operations and pages. --plate NAME (case-insensitive) is the output-preview
+query for one ink.
+
+Evidence: a real page with content q /CS0 cs 1 scn Q 0.1 0.2 0.3 0.4 k
+0.5 0.6 0.7 rg 0.4 g and /CS0 [/Separation (Spot Orange) /DeviceCMYK 5 0 R]
+reports 5 plates (Black 2 ops, Cyan/Magenta/Yellow 1 op, Spot Orange 1 op),
+device RGB 1 and device gray 1, summary "4 process, 1 spot" and the descriptor;
+--plate "Spot Orange" reports process false, 1 operation, pages [1]; --plate
+cyan is case-insensitive; an unknown plate fails. A q Q-only page reports no
+plates and separations: none.
+
+Gates: cargo test -p pdfxi-cli separations = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: no proofing, plate rasterization, ink limits, trapping or file output.
+Device RGB is counted but not mapped to process plates; ICCBased and Indexed
+spaces do not create plates, and spot names are read verbatim.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::separations_reports_process_and_spot_plates",
+    "cli::separations_plate_query_is_the_output_preview",
+    "cli::separations_reports_no_plates_for_colourless_content",
     "print::impose_tests::poster_tile_grid_and_overlap_are_deterministic",
     "print::impose_tests::poster_rejects_bad_overlap_scale_geometry_and_huge_grids",
 ]

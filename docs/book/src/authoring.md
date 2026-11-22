@@ -37,6 +37,7 @@ command.
 | Interactive actions and triggers | `MEDIA-005` | verified | `pdfxi-render::actions` | `interactions [--strict]` |
 | Audio and video annotations | `MEDIA-001` | verified | `pdfxi-render::media` | `media list [--extract]` |
 | HTML5 media replacement for Flash | `MEDIA-002` | verified | `pdfxi-render::html5_media` | `media html5` |
+| Output preview and separations | `PRINT-004` | verified | `pdfxi-app::print::SeparationsPlan` + content scan | `separations [--plate]` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -502,6 +503,26 @@ stream) and writes a deterministic, inert `<audio>`/`<video>` element wrapped in
 a complete HTML document with a strict content-security policy. Remote URLs,
 absolute paths, traversal segments, control characters and oversized dimensions
 are rejected. This is the HTML5 replacement surface for a Flash-era player.
+
+### Output preview and separations
+
+`PRINT-004` (verified) derives the print plates from real page content and hosts
+`pdfxi_app::print::SeparationsPlan`:
+
+```text
+pdfxi separations <INPUT.pdf> [--plate NAME] [--json]
+```
+
+For every page the command decodes the content streams and tracks the graphics
+state (`q`/`Q`) across colour operators (`cs`/`CS`, `sc`/`scn`/`SC`/`SCN`,
+`g`/`G`, `rg`/`RG`, `k`/`K`). `/ColorSpace` resources are resolved through the
+page's (inherited) `/Resources`, including `/Separation` and `/DeviceN` arrays,
+so spot inks are named from the document. It counts paint operations per plate,
+lists the pages that image each plate, and builds the canonical process-first
+`SeparationsPlan`. `--plate NAME` is the output-preview query for one ink
+(case-insensitive) and reports its operation count and pages. Device-RGB paint
+operations are reported separately because they have no fixed process plate.
+Nothing is rasterized, separated to files or proofed.
 
 ## Page boxes and page operations
 
