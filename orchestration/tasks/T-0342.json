@@ -1,0 +1,19 @@
+{
+  "id": "T-0342",
+  "lane": "convert",
+  "title": "Signature field workflow host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0341"],
+  "owns": [
+    "crates/pdfxi-cli/src/signature.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0342.md",
+    "orchestration/feature-updates/T-0342.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli signature_ passes; pdfxi signature create writes a real contract-checked /Sig field with a /Contents placeholder, plan computes and validates the byte range, and verify runs structure-only verification; FORMS-010 moves to verified.",
+  "notes": "Hosts pdfxi_forms signature/signatureplan/signing: field creation, byte-length-preserving placeholder insertion, byte-range planning and structure-only verification.",
+  "evidence": "docs/evidence/cli/T-0342.md"
+}

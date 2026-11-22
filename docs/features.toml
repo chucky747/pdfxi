@@ -2569,28 +2569,54 @@ title = "Distribute and collect forms locally"
 
 [[feature]]
 docs = [
+    "crates/pdfxi-cli/src/signature.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0342.md",
     "crates/pdfxi-forms/src/signing.rs",
-    "crates/pdfxi-forms/src/acroform.rs",
-    "crates/pdfxi-forms/src/serialize.rs",
-    "crates/pdfxi-forms/src/lib.rs",
-    "docs/evidence/forms/T-0185.md",
+    "crates/pdfxi-forms/src/signatureplan.rs",
 ]
 domain = "Forms"
-evidence = "cargo test -p pdfxi-forms (CARGO_TARGET_DIR=target/lanes/forms): 313 passed, 0 failed; 12 new hardening tests green. cargo fmt -p pdfxi-forms -- --check EXIT=0; cargo clippy -p pdfxi-forms --all-targets --no-deps -- -D warnings EXIT=0; RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-forms --no-deps EXIT=0. Full output in docs/evidence/forms/T-0185.md."
+evidence = "docs/evidence/cli/T-0342.md"
 id = "FORMS-010"
 notes = """
-FORMS-010 stays verified; the T-0168 signature work is hardened, not reopened.
-verify now validates the caller-supplied byte-range plan against the document
-before use; signed_bytes rejects overlapping/inverted, empty and out-of-bounds
-ranges with typed errors; VerificationOutcome/LifecycleReport carry an explicit
-Authenticity level with the structure-only authenticity warning documented; and
-/ByteRange uses exact integer serialization (PdfValue::Integer) so large offsets
-never lose precision or become scientific notation. Crypto remains with the
-security lane and the workflow UI with the app lane.
+Verified through `pdfxi signature create --out FILE [--field NAME]
+[--signer NAME] [--reason TEXT] [--location TEXT] [--rect x,y,w,h]
+[--placeholder-bytes N] [--json]`, `pdfxi signature plan FILE [--json]` and
+`pdfxi signature verify FILE --contents HEX [--json]`.
+
+create builds SignatureField + SignaturePlan, serializes through
+serialize_form_pdf (page object 5), sets /V /Contents to a zero literal of N
+characters and swaps its delimiters to <...> in place so xref offsets are
+unchanged, reparses the result, reloads the AcroForm and requires the /Sig field
+before writing. plan finds /Contents <hex>, calls plan_byte_range, validates it
+and reports [a b c d], the covered byte count, placeholder size and the
+/Filter//SubFilter from the file. verify computes the same plan, reconstructs
+signed_bytes, rejects an all-zero placeholder and runs StructureOnlyVerifier on
+the covered bytes and provided hex, always reporting authenticity
+structure-only.
+
+Evidence: create with signer Ada Lovelace and a reason writes a 9,030-byte
+one-page PDF that the core reader parses; plan reports [0, 302, 8496, 534],
+836 signed bytes, 8192 placeholder chars, Adobe.PPKLite/adbe.pkcs7.detached;
+verify with deadbeef01020304 reports valid true, authenticity structure-only,
+detail structure-ok:...:836:8. An all-zero placeholder, an off-page rectangle,
+an odd placeholder size, a three-value rectangle, a document without a
+placeholder and non-hex contents all fail with typed errors.
+
+Gates: cargo test -p pdfxi-cli signature_ = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: field creation, byte-range planning and structure-only verification; no
+cryptography, hashing, key/certificate handling, timestamping, revocation,
+completed-signature byte-range patching or workflow UI. A structure-only result
+is never presented as an authentic signature.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::signature_create_plans_and_verifies_a_real_field",
+    "cli::signature_create_rejects_bad_rects_and_sizes",
+    "cli::signature_plan_rejects_documents_without_a_placeholder",
     "signing::tests::signed_bytes_rejects_overlapping_ranges",
     "signing::tests::signed_bytes_rejects_empty_first_range",
     "signing::tests::signed_bytes_rejects_empty_second_range",

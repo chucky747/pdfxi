@@ -42,6 +42,7 @@ command.
 | Deployment preferences and customization | `PLAT-006` | verified | `pdfxi-core::preferences` | `policy show/write/merge/check` |
 | Shell integration and file associations | `PLAT-005` | verified | `pdfxi-core::association` | `shell plan/register/status/unregister` |
 | Browser integration | `PLAT-004` | verified | `pdfxi-core::browser_handoff` | `handoff open/parse/link` |
+| Electronic signature fields and workflows | `FORMS-010` | verified | `pdfxi-forms::signature` + `signing` | `signature create/plan/verify` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -614,6 +615,31 @@ scheme and traversal, and resolves the same plan. `link` builds the HTML
 `file:` URL with an optional fragment. Missing files, traversal, remote schemes
 and unsupported MIME types are typed errors. Nothing is fetched over the network
 by the command.
+
+### Electronic signature fields
+
+`FORMS-010` (verified) hosts the signature field and byte-range workflow from
+`pdfxi_forms::signature`, `signatureplan` and `signing`:
+
+```text
+pdfxi signature create --out FILE [--field NAME] [--signer NAME] [--reason TEXT]
+    [--location TEXT] [--rect x,y,w,h] [--placeholder-bytes N] [--json]
+pdfxi signature plan FILE [--json]
+pdfxi signature verify FILE --contents HEX [--json]
+```
+
+`create` builds a `/FT /Sig` field with its widget through `SignaturePlan`
+(contract-checked: `/Type`, `/FT`, `/T`, `/Ff`, `/V`, `/Kids` and a
+`/Widget` kid), serializes a one-page PDF, inserts an N-character `/Contents`
+placeholder by swapping the zero literal's delimiters for hex delimiters
+(byte-length preserving, so the xref stays valid), and reloads the document to
+confirm the field. `plan` finds the placeholder, computes the exact
+`/ByteRange [a b c d]` with `plan_byte_range`, validates it, and reports the
+number of bytes the signer must hash plus the filter/subfilter. `verify` runs
+the same plan and hands the covered bytes plus caller-supplied hex to
+`StructureOnlyVerifier`; it reports `structure-only` authenticity and rejects an
+all-zero placeholder as unsigned. No cryptography, key handling or hashing is
+performed here.
 
 ## Page boxes and page operations
 

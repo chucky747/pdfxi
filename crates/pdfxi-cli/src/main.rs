@@ -110,6 +110,8 @@ mod script;
 mod separations;
 /// pdfxi shell: file associations and the pdfxi:// protocol.
 mod shell;
+/// pdfxi signature: signature fields, byte-range planning and verification.
+mod signature;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
 mod toolset;
 /// pdfxi transparency inspect: read blend modes and transparency groups.
@@ -438,6 +440,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Create signature fields and plan or verify the signer byte range.
+    Signature {
+        /// Signature action.
+        #[command(subcommand)]
+        command: SignatureCommand,
     },
     /// Hand a local export to the browser, or build its `file:` URL.
     Handoff {
@@ -2021,6 +2029,57 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `signature` command.
+#[derive(Debug, Subcommand)]
+enum SignatureCommand {
+    /// Create a one-page PDF with a contract-checked signature field.
+    Create {
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Field name.
+        #[arg(long, default_value = "Signature1")]
+        field: String,
+        /// Signer name.
+        #[arg(long)]
+        signer: Option<String>,
+        /// Signing reason.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Signing location.
+        #[arg(long)]
+        location: Option<String>,
+        /// Widget rectangle as `x,y,w,h` in points.
+        #[arg(long, default_value = "72,72,240,48")]
+        rect: String,
+        /// `/Contents` placeholder size in hex characters.
+        #[arg(long, default_value_t = 8192)]
+        placeholder_bytes: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Plan the byte range a signer must cover.
+    Plan {
+        /// Prepared signature PDF.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify caller-supplied signature bytes structurally.
+    Verify {
+        /// Prepared signature PDF.
+        file: PathBuf,
+        /// Signature bytes as hex.
+        #[arg(long, value_name = "HEX")]
+        contents: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `handoff` command.
 #[derive(Debug, Subcommand)]
 enum HandoffCommand {
@@ -3056,6 +3115,33 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Signature { command } => match command {
+            SignatureCommand::Create {
+                out,
+                field,
+                signer,
+                reason,
+                location,
+                rect,
+                placeholder_bytes,
+                json,
+            } => signature::create(
+                &out,
+                &field,
+                signer.as_deref(),
+                reason.as_deref(),
+                location.as_deref(),
+                &rect,
+                placeholder_bytes,
+                json,
+            ),
+            SignatureCommand::Plan { file, json } => signature::plan(&file, json),
+            SignatureCommand::Verify {
+                file,
+                contents,
+                json,
+            } => signature::verify(&file, &contents, json),
+        },
         Command::Handoff { command } => match command {
             HandoffCommand::Open {
                 file,

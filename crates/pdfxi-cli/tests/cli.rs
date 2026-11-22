@@ -12168,6 +12168,153 @@ fn handoff_parse_accepts_file_urls_and_rejects_remote_schemes() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// signature: electronic signature fields (T-0342)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn signature_create_plans_and_verifies_a_real_field() {
+    let dir = TempDir::new();
+    let out = dir.child("sig.pdf");
+    let created = run(&[
+        "signature",
+        "create",
+        "--out",
+        out.to_str().expect("out"),
+        "--signer",
+        "Ada Lovelace",
+        "--reason",
+        "Approval",
+        "--json",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let value: Value = serde_json::from_str(&stdout(&created)).expect("valid JSON");
+    assert_eq!(value["field"], "Signature1");
+    assert_eq!(value["placeholder_bytes"], 8192);
+    assert_eq!(value["reloaded"], true);
+    assert!(
+        value["signature_line"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Digitally signed by Ada Lovelace")
+    );
+    let bytes = fs::read(&out).expect("signature PDF written");
+    let document = pdfxi_core::Document::from_bytes(bytes).expect("core parses the signature PDF");
+    assert_eq!(document.page_count().expect("page count"), 1);
+
+    let planned = run(&["signature", "plan", out.to_str().expect("out"), "--json"]);
+    assert!(planned.status.success(), "stderr: {}", stderr(&planned));
+    let value: Value = serde_json::from_str(&stdout(&planned)).expect("valid JSON");
+    let range = value["byte_range"].as_array().expect("byte range");
+    assert_eq!(range.len(), 4);
+    assert_eq!(range[0], 0);
+    assert!(range[1].as_u64().unwrap_or(0) > 0);
+    assert!(range[2].as_u64().unwrap_or(0) > range[1].as_u64().unwrap_or(0));
+    assert!(range[3].as_u64().unwrap_or(0) > 0);
+    assert!(value["signed_bytes"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(value["filter"], "Adobe.PPKLite");
+    assert_eq!(value["subfilter"], "adbe.pkcs7.detached");
+    assert_eq!(value["placeholder_bytes"], 8192);
+
+    let verified = run(&[
+        "signature",
+        "verify",
+        out.to_str().expect("out"),
+        "--contents",
+        "deadbeef01020304",
+        "--json",
+    ]);
+    assert!(verified.status.success(), "stderr: {}", stderr(&verified));
+    let value: Value = serde_json::from_str(&stdout(&verified)).expect("valid JSON");
+    assert_eq!(value["field"], "Signature1");
+    assert_eq!(value["valid"], true);
+    assert_eq!(value["authenticity"], "structure-only");
+    assert_eq!(value["contents_bytes"], 8);
+    assert!(
+        value["detail"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("structure-ok:Adobe.PPKLite:adbe.pkcs7.detached:")
+    );
+
+    let placeholder = run(&[
+        "signature",
+        "verify",
+        out.to_str().expect("out"),
+        "--contents",
+        "0000",
+    ]);
+    assert!(!placeholder.status.success());
+    assert!(
+        stderr(&placeholder).contains("unsigned placeholder"),
+        "{}",
+        stderr(&placeholder)
+    );
+}
+
+#[test]
+fn signature_create_rejects_bad_rects_and_sizes() {
+    let dir = TempDir::new();
+    let out = dir.child("sig.pdf").to_str().expect("out").to_owned();
+    let off_page = run(&[
+        "signature",
+        "create",
+        "--out",
+        &out,
+        "--rect",
+        "600,700,100,100",
+    ]);
+    assert!(!off_page.status.success());
+    assert!(
+        stderr(&off_page).contains("outside the 612x792 page"),
+        "{}",
+        stderr(&off_page)
+    );
+
+    let odd = run(&[
+        "signature",
+        "create",
+        "--out",
+        &out,
+        "--placeholder-bytes",
+        "1001",
+    ]);
+    assert!(!odd.status.success());
+    assert!(
+        stderr(&odd).contains("not an even number"),
+        "{}",
+        stderr(&odd)
+    );
+
+    let bad_rect = run(&["signature", "create", "--out", &out, "--rect", "1,2,3"]);
+    assert!(!bad_rect.status.success());
+    assert!(
+        stderr(&bad_rect).contains("four comma-separated"),
+        "{}",
+        stderr(&bad_rect)
+    );
+}
+
+#[test]
+fn signature_plan_rejects_documents_without_a_placeholder() {
+    let plain = create_text_pdf("No signature field.");
+    let output = run(&["signature", "plan", plain.arg()]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("/Contents placeholder not found"),
+        "{}",
+        stderr(&output)
+    );
+
+    let bad_hex = run(&["signature", "verify", plain.arg(), "--contents", "xyz"]);
+    assert!(!bad_hex.status.success());
+    assert!(
+        stderr(&bad_hex).contains("hex string"),
+        "{}",
+        stderr(&bad_hex)
+    );
+}
+
 #[test]
 fn compare_reports_identical_documents() {
     let source = real_fixture("powerpoint-slides.pdf");
