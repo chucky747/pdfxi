@@ -1,0 +1,19 @@
+{
+  "id": "T-0296",
+  "lane": "forms",
+  "title": "Form validation and calculation hosts",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0295"],
+  "owns": [
+    "crates/pdfxi-cli/src/form.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0296.md",
+    "orchestration/feature-updates/T-0296.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli form_ and cargo test -p pdfxi-cli --bin pdfxi form:: pass; pdfxi form validate applies typed values and reports property errors with exit 2, pdfxi form calculate evaluates sum/product/average/min/max plans, and FORMS-003 moves to verified.",
+  "notes": "Adds --set typed assignments, a FieldProperties/PropertySet validation report, and CalculationPlan evaluation on forms loaded from real bytes.",
+  "evidence": "docs/evidence/cli/T-0296.md"
+}

@@ -1021,6 +1021,46 @@ enum FormCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Validate field definitions and values.
+    Validate {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Value assignment `NAME=VALUE`; repeat for each field.
+        #[arg(long = "set", value_name = "NAME=VALUE")]
+        assignments: Vec<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Evaluate sum/product/average/min/max calculations over field values.
+    Calculate {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Value assignment `NAME=VALUE`; repeat for each field.
+        #[arg(long = "set", value_name = "NAME=VALUE")]
+        assignments: Vec<String>,
+        /// Sum `TARGET=SRC1,SRC2`; repeat for each calculation.
+        #[arg(long = "sum", value_name = "TARGET=SOURCES")]
+        sums: Vec<String>,
+        /// Product `TARGET=SRC1,SRC2`; repeat for each calculation.
+        #[arg(long = "product", value_name = "TARGET=SOURCES")]
+        products: Vec<String>,
+        /// Average `TARGET=SRC1,SRC2`; repeat for each calculation.
+        #[arg(long = "average", value_name = "TARGET=SOURCES")]
+        averages: Vec<String>,
+        /// Minimum `TARGET=SRC1,SRC2`; repeat for each calculation.
+        #[arg(long = "min", value_name = "TARGET=SOURCES")]
+        mins: Vec<String>,
+        /// Maximum `TARGET=SRC1,SRC2`; repeat for each calculation.
+        #[arg(long = "max", value_name = "TARGET=SOURCES")]
+        maxs: Vec<String>,
+        /// Decimal places in results (0-12).
+        #[arg(long, default_value_t = 6)]
+        decimals: u8,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Operations on the `pdfxi create` command group.
@@ -1617,6 +1657,55 @@ fn main() -> anyhow::Result<()> {
         Command::Form { command } => match command {
             FormCommand::Create { out, fields, json } => form::run_create(&out, &fields, json),
             FormCommand::List { file, json } => form::run_list(&file, json),
+            FormCommand::Validate {
+                file,
+                assignments,
+                json,
+            } => form::run_validate(&file, &assignments, json),
+            FormCommand::Calculate {
+                file,
+                assignments,
+                sums,
+                products,
+                averages,
+                mins,
+                maxs,
+                decimals,
+                json,
+            } => {
+                let mut requests: Vec<form::CalculationRequest<'_>> = Vec::new();
+                for spec in &sums {
+                    requests.push(form::CalculationRequest {
+                        spec: spec.as_str(),
+                        op: pdfxi_forms::CalculationOp::Sum,
+                    });
+                }
+                for spec in &products {
+                    requests.push(form::CalculationRequest {
+                        spec: spec.as_str(),
+                        op: pdfxi_forms::CalculationOp::Product,
+                    });
+                }
+                for spec in &averages {
+                    requests.push(form::CalculationRequest {
+                        spec: spec.as_str(),
+                        op: pdfxi_forms::CalculationOp::Average,
+                    });
+                }
+                for spec in &mins {
+                    requests.push(form::CalculationRequest {
+                        spec: spec.as_str(),
+                        op: pdfxi_forms::CalculationOp::Min,
+                    });
+                }
+                for spec in &maxs {
+                    requests.push(form::CalculationRequest {
+                        spec: spec.as_str(),
+                        op: pdfxi_forms::CalculationOp::Max,
+                    });
+                }
+                form::run_calculate(&file, &assignments, &requests, decimals, json)
+            }
         },
         Command::Update {
             file,

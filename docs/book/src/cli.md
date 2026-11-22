@@ -48,6 +48,8 @@ pdfxi <COMMAND> --help
 | `export conformance <FILE> --profile PROFILE [--out PATH] [--plan] [--policy report\|reject] [--output-intent SUBTYPE] [--json]` | Normalize for PDF/A, PDF/X or PDF/E | verified (`EXPORT-008`) |
 | `form create <OUT> --field KIND:NAME:X,Y,W,H[:OPTIONS] ... [--json]` | Build a one-page form PDF | verified (`FORMS-002`) |
 | `form list <FILE> [--json]` | List AcroForm fields | verified (`FORMS-002`) |
+| `form validate <FILE> [--set NAME=VALUE] ... [--json]` | Validate field definitions and values | verified (`FORMS-003`) |
+| `form calculate <FILE> [--set NAME=VALUE] ... [--sum\|--product\|--average\|--min\|--max TARGET=SOURCES] ... [--decimals N] [--json]` | Evaluate calculations | verified (`FORMS-003`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -116,7 +118,15 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `form create` builds typed AcroForm fields from repeatable
+- `form validate` loads the fields, applies `--set NAME=VALUE` assignments
+  (`true`/`false` for checkboxes, `a|b` for choices/radio, numbers otherwise),
+  then validates every definition and value through the property model. It
+  prints a stable report and exits `2` when the form is invalid, `0` when it is
+  valid, and `1` for a typed input error.
+- `form calculate` applies the same assignments in memory and evaluates one or
+  more `--sum/--product/--average/--min/--max TARGET=SRC1,SRC2` steps in
+  dependency order, printing each target's rounded result. The evaluation is
+  read-only: results are not written back to the PDF.- `form create` builds typed AcroForm fields from repeatable
   `KIND:NAME:X,Y,W,H[:OPT1|OPT2]` descriptions (`text`, `checkbox`, `radio`,
   `combo`, `list`, `button`, `signature`) on a single 612x792 page, serializes
   them with `pdfxi-forms::serialize_form_pdf`, and reloads the bytes through

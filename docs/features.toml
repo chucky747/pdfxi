@@ -2083,14 +2083,54 @@ tests = [
 title = "Create text checkbox radio choice and button fields"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/propertyedit.rs, docs/evidence/forms/T-0149.md"
+docs = [
+    "crates/pdfxi-cli/src/form.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0296.md",
+]
 domain = "Forms"
-evidence = "docs/evidence/forms/T-0149.md"
+evidence = "docs/evidence/cli/T-0296.md"
 id = "FORMS-003"
-notes = "Property descriptors per field type, deterministic atomic edit plans, dictionary/form application, re-validation and undo snapshots. Editing UI remains host work."
+notes = """
+Verified through two hosts over forms loaded from real bytes.
+
+`pdfxi form validate <FILE> [--set NAME=VALUE] ... [--json]` types each assignment
+from the target widget (true/false for checkboxes, a|b for choice/radio, number
+then text otherwise; unknown and read-only fields are typed errors), builds a
+FieldProperties record per field (type, required, read-only, max length,
+choices) and runs PropertySet::validate over definitions and values. It exits 0
+when valid, 2 when the form has errors and 1 for typed input errors.
+
+`pdfxi form calculate <FILE> [--set ...] [--sum|--product|--average|--min|--max
+TARGET=SRC1,SRC2] ... [--decimals N] [--json]` builds a CalculationPlan and
+applies it in dependency order, reporting each target's value rounded to the
+requested decimals (default 6, max 12). Cycles, missing fields and non-numeric
+sources are typed errors. Results are evaluated in memory and not written back.
+
+Evidence: a five-field form created by the FORMS-002 host gives total = 7 for
+--sum total=a,b with a=3,b=4, total = 3.5 for --average with --decimals 1, a
+valid report (fields 5, valid true, errors 0) for a=3/state=CA, and an invalid
+choice state=ZZ reported with field 'state' and message "'ZZ', which is not an
+allowed choice" plus exit code 2. Missing sources and bad checkbox values fail
+with typed messages.
+
+Gates: cargo test -p pdfxi-cli --test cli form_ = 3 passed; cargo test
+-p pdfxi-cli --bin pdfxi form:: = 6 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: property/definition validation and calculation evaluation are reachable
+on real bytes; assignments and results are not persisted back into the PDF.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::form_validate_and_calculate_use_typed_values",
+    "form::tests::assignments_parse_names_and_values",
+    "form::tests::typed_values_follow_the_widget_type",
+    "form::tests::calculation_specs_parse_targets_and_sources",
+    "form::tests::field_descriptions_parse_all_supported_kinds",
+    "form::tests::field_descriptions_reject_bad_input",
+    "form::tests::rectangles_validate_geometry",
     "propertyedit::tests::descriptors_vary_by_field_type",
     "propertyedit::tests::apply_updates_field_dictionary_and_properties",
 ]

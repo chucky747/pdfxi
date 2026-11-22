@@ -16,8 +16,9 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use pdfxi_forms::{
-    FieldSpec, FormSource, PdfDocument, PdfValue, WidgetRect, load_acroform, parse_pdf,
-    serialize_form_pdf,
+    Calculation, CalculationOp, CalculationPlan, CalculationStep, Field, FieldProperties,
+    FieldSpec, FieldType, FieldValue, Form, FormSource, PdfDocument, PdfValue, PropertySet,
+    WidgetRect, load_acroform, parse_pdf, serialize_form_pdf,
 };
 use serde::Serialize;
 
@@ -251,7 +252,13 @@ fn loaded_fields(bytes: &[u8]) -> anyhow::Result<Option<Vec<LoadedRow>>> {
 
 /// Render a field value for the text report.
 fn render_value(value: &pdfxi_forms::FieldValue) -> String {
-    format!("{value:?}")
+    match value {
+        FieldValue::Empty => String::new(),
+        FieldValue::Text(text) => text.clone(),
+        FieldValue::Bool(flag) => flag.to_string(),
+        FieldValue::Choice(choices) => choices.join("|"),
+        FieldValue::Number(number) => format!("{number}"),
+    }
 }
 
 /// `pdfxi form create`.
@@ -411,9 +418,285 @@ pub(crate) fn run_list(file: &Path, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Exit code used when a form has validation errors.
+pub(crate) const EXIT_INVALID_FORM: i32 = 2;
+
+/// One validation error row.
+#[derive(Serialize)]
+struct ValidationRow {
+    /// Field the error belongs to.
+    field: String,
+    /// Human-readable message.
+    message: String,
+}
+
+/// JSON shape of `pdfxi form validate`.
+#[derive(Serialize)]
+struct ValidateReport {
+    /// Inspected file.
+    file: String,
+    /// Number of terminal fields.
+    fields: usize,
+    /// Whether every definition and value is valid.
+    valid: bool,
+    /// Number of errors.
+    error_count: usize,
+    /// Errors in stable order.
+    errors: Vec<ValidationRow>,
+}
+
+/// One calculation result row.
+#[derive(Serialize)]
+struct CalculationRow {
+    /// Target field.
+    target: String,
+    /// Evaluated value.
+    value: String,
+}
+
+/// JSON shape of `pdfxi form calculate`.
+#[derive(Serialize)]
+struct CalculateReport {
+    /// Inspected file.
+    file: String,
+    /// Steps evaluated.
+    calculations: usize,
+    /// Number of decimal places.
+    decimals: u8,
+    /// Results in evaluation order.
+    results: Vec<CalculationRow>,
+}
+
+/// Load the terminal form model of a PDF written in the classic layout.
+fn load_form(file: &Path) -> anyhow::Result<Form> {
+    let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let document =
+        parse_pdf(&bytes).map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let source = ParsedSource(&document);
+    let load = load_acroform(&source).map_err(|error| anyhow::anyhow!("load form: {error}"))?;
+    load.into_form()
+        .with_context(|| format!("{} has no /AcroForm", file.display()))
+}
+
+/// Parse `NAME=VALUE`.
+fn parse_assignment(text: &str) -> anyhow::Result<(String, String)> {
+    let (name, value) = text
+        .split_once('=')
+        .with_context(|| format!("assignment {text:?} needs the form NAME=VALUE"))?;
+    let name = name.trim();
+    if name.is_empty() {
+        bail!("assignment {text:?} has an empty field name");
+    }
+    Ok((name.to_owned(), value.trim().to_owned()))
+}
+
+/// Build a typed value matching the field's widget type.
+fn typed_value(field: &Field, text: &str) -> anyhow::Result<FieldValue> {
+    match field.field_type() {
+        FieldType::CheckBox => match text {
+            "true" => Ok(FieldValue::Bool(true)),
+            "false" => Ok(FieldValue::Bool(false)),
+            other => bail!(
+                "checkbox {:?} needs true or false, got {other:?}",
+                field.name()
+            ),
+        },
+        FieldType::Choice | FieldType::Radio => {
+            let choices: Vec<String> = text
+                .split('|')
+                .map(str::trim)
+                .filter(|choice| !choice.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if choices.is_empty() {
+                bail!(
+                    "{:?} needs at least one option name separated by |",
+                    field.name()
+                );
+            }
+            Ok(FieldValue::Choice(choices))
+        }
+        _ => {
+            if let Ok(number) = text.parse::<f64>() {
+                if !number.is_finite() {
+                    bail!("value {text:?} is not finite");
+                }
+                Ok(FieldValue::Number(number))
+            } else {
+                Ok(FieldValue::Text(text.to_owned()))
+            }
+        }
+    }
+}
+
+/// Apply `NAME=VALUE` assignments to the model.
+fn apply_assignments(form: &mut Form, assignments: &[String]) -> anyhow::Result<()> {
+    for assignment in assignments {
+        let (name, text) = parse_assignment(assignment)?;
+        let field = form
+            .field(&name)
+            .with_context(|| format!("no field named {name:?}"))?;
+        let value = typed_value(field, &text)?;
+        form.set_value(&name, value)
+            .map_err(|error| anyhow::anyhow!("set {name:?}: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Build a property set from the loaded fields.
+fn properties_of(form: &Form) -> anyhow::Result<PropertySet> {
+    let mut set = PropertySet::new();
+    for field in form.fields() {
+        let mut properties = FieldProperties::new(field.name(), field.field_type())
+            .with_required(field.flags().is_required())
+            .with_read_only(field.flags().is_read_only());
+        if let Some(max_len) = field.constraint().max_len() {
+            properties = properties.with_max_len(max_len);
+        }
+        if matches!(field.field_type(), FieldType::Choice | FieldType::Radio) {
+            properties = properties.with_choices(field.choices().iter().cloned());
+        }
+        set.add(properties)
+            .map_err(|error| anyhow::anyhow!("build properties for {:?}: {error}", field.name()))?;
+    }
+    Ok(set)
+}
+
+/// `pdfxi form validate`.
+pub(crate) fn run_validate(file: &Path, assignments: &[String], json: bool) -> anyhow::Result<()> {
+    let mut form = load_form(file)?;
+    apply_assignments(&mut form, assignments)?;
+    let properties = properties_of(&form)?;
+    let summary = properties.validate(&form);
+    let report = ValidateReport {
+        file: file.display().to_string(),
+        fields: form.len(),
+        valid: summary.is_valid(),
+        error_count: summary.error_count(),
+        errors: summary
+            .errors()
+            .iter()
+            .map(|error| ValidationRow {
+                field: error.field().to_owned(),
+                message: error.to_string(),
+            })
+            .collect(),
+    };
+    let exit = if report.valid { 0 } else { EXIT_INVALID_FORM };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("file: {}", report.file);
+        println!("fields: {}", report.fields);
+        println!("valid: {}", report.valid);
+        for row in &report.errors {
+            println!("error: {}  {}", row.field, row.message);
+        }
+        println!("errors: {}", report.error_count);
+    }
+    if exit != 0 {
+        std::process::exit(exit);
+    }
+    Ok(())
+}
+
+/// One requested calculation: an operator and a `TARGET=SOURCE,...` spec.
+pub(crate) struct CalculationRequest<'a> {
+    /// Target and source spec.
+    pub spec: &'a str,
+    /// Arithmetic operation.
+    pub op: CalculationOp,
+}
+
+/// Parse `TARGET=SRC1,SRC2` into a calculation.
+fn parse_calculation(
+    request: &CalculationRequest<'_>,
+    decimals: u8,
+) -> anyhow::Result<Calculation> {
+    let (target, sources) = request.spec.split_once('=').with_context(|| {
+        format!(
+            "calculation {:?} needs the form TARGET=SRC1,SRC2",
+            request.spec
+        )
+    })?;
+    let target = target.trim();
+    if target.is_empty() {
+        bail!("calculation {:?} has an empty target", request.spec);
+    }
+    let sources: Vec<String> = sources
+        .split(',')
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if sources.is_empty() {
+        bail!(
+            "calculation {:?} needs at least one source field",
+            request.spec
+        );
+    }
+    Ok(Calculation::new(target, request.op, sources).with_decimals(decimals))
+}
+
+/// `pdfxi form calculate`.
+pub(crate) fn run_calculate(
+    file: &Path,
+    assignments: &[String],
+    requests: &[CalculationRequest<'_>],
+    decimals: u8,
+    json: bool,
+) -> anyhow::Result<()> {
+    if requests.is_empty() {
+        bail!("give at least one of --sum, --product, --average, --min or --max");
+    }
+    if decimals > 12 {
+        bail!("--decimals must be at most 12");
+    }
+    let mut form = load_form(file)?;
+    apply_assignments(&mut form, assignments)?;
+    let steps: Vec<CalculationStep> = requests
+        .iter()
+        .map(|request| parse_calculation(request, decimals))
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .map(CalculationStep::Standard)
+        .collect();
+    let plan = CalculationPlan::new(steps);
+    let report = plan
+        .apply(&mut form)
+        .map_err(|error| anyhow::anyhow!("evaluate calculations: {error}"))?;
+    let payload = CalculateReport {
+        file: file.display().to_string(),
+        calculations: report.len(),
+        decimals,
+        results: report
+            .results()
+            .iter()
+            .map(|result| CalculationRow {
+                target: result.target().to_owned(),
+                value: render_value(result.value()),
+            })
+            .collect(),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+    println!("file: {}", payload.file);
+    println!("calculations: {}", payload.calculations);
+    println!("decimals: {}", payload.decimals);
+    for row in &payload.results {
+        println!("{} = {}", row.target, row.value);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_field, parse_rect};
+    use super::{
+        CalculationRequest, parse_assignment, parse_calculation, parse_field, parse_rect,
+        typed_value,
+    };
 
     #[test]
     fn field_descriptions_parse_all_supported_kinds() {
@@ -470,5 +753,77 @@ mod tests {
         assert!(parse_rect("10,20,0,40").is_err());
         assert!(parse_rect("NaN,20,30,40").is_err());
         assert!(parse_rect("10,20,30").is_err());
+    }
+
+    #[test]
+    fn assignments_parse_names_and_values() {
+        assert_eq!(
+            parse_assignment(" total = 12 ").expect("assignment"),
+            ("total".to_owned(), "12".to_owned())
+        );
+        assert!(parse_assignment("total").is_err());
+        assert!(parse_assignment("=12").is_err());
+    }
+
+    #[test]
+    fn typed_values_follow_the_widget_type() {
+        use pdfxi_forms::{Field, FieldType, FieldValue};
+
+        let checkbox = Field::new("agree", FieldType::CheckBox);
+        assert_eq!(
+            typed_value(&checkbox, "true").expect("true"),
+            FieldValue::Bool(true)
+        );
+        assert!(typed_value(&checkbox, "yes").is_err());
+
+        let radio = Field::new("color", FieldType::Radio);
+        assert_eq!(
+            typed_value(&radio, "red|green").expect("choice"),
+            FieldValue::Choice(vec!["red".to_owned(), "green".to_owned()])
+        );
+
+        let text = Field::new("amount", FieldType::Text);
+        assert_eq!(
+            typed_value(&text, "12.5").expect("number"),
+            FieldValue::Number(12.5)
+        );
+        assert_eq!(
+            typed_value(&text, "hello").expect("text"),
+            FieldValue::Text("hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn calculation_specs_parse_targets_and_sources() {
+        use pdfxi_forms::CalculationOp;
+
+        let request = CalculationRequest {
+            spec: " total = a, b , c ",
+            op: CalculationOp::Sum,
+        };
+        let calculation = parse_calculation(&request, 2).expect("calculation");
+        assert_eq!(calculation.target(), "total");
+        assert_eq!(calculation.sources(), &["a", "b", "c"]);
+        assert_eq!(calculation.decimals(), 2);
+        assert!(
+            parse_calculation(
+                &CalculationRequest {
+                    spec: "total=",
+                    op: CalculationOp::Sum
+                },
+                6
+            )
+            .is_err()
+        );
+        assert!(
+            parse_calculation(
+                &CalculationRequest {
+                    spec: "a,b",
+                    op: CalculationOp::Sum
+                },
+                6
+            )
+            .is_err()
+        );
     }
 }

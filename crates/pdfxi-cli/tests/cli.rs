@@ -3263,6 +3263,124 @@ fn form_create_writes_typed_fields_and_reloads_them() {
 }
 
 #[test]
+fn form_validate_and_calculate_use_typed_values() {
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:a:72,700,100,24",
+        "--field",
+        "text:b:72,660,100,24",
+        "--field",
+        "text:total:72,620,100,24",
+        "--field",
+        "combo:state:72,560,200,24:CA|NY",
+        "--field",
+        "checkbox:agree:72,520,14,14",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    let sum = run(&[
+        "form",
+        "calculate",
+        out.arg(),
+        "--set",
+        "a=3",
+        "--set",
+        "b=4",
+        "--sum",
+        "total=a,b",
+        "--json",
+    ]);
+    assert!(sum.status.success(), "stderr: {}", stderr(&sum));
+    let value: Value = serde_json::from_str(&stdout(&sum)).expect("valid JSON");
+    assert_eq!(value["calculations"], 1);
+    assert_eq!(value["decimals"], 6);
+    assert_eq!(value["results"][0]["target"], "total");
+    assert_eq!(value["results"][0]["value"], "7");
+
+    let average = run(&[
+        "form",
+        "calculate",
+        out.arg(),
+        "--set",
+        "a=3",
+        "--set",
+        "b=4",
+        "--average",
+        "total=a,b",
+        "--decimals",
+        "1",
+    ]);
+    assert!(average.status.success(), "stderr: {}", stderr(&average));
+    assert!(
+        stdout(&average).contains("total = 3.5"),
+        "{}",
+        stdout(&average)
+    );
+
+    let valid = run(&[
+        "form",
+        "validate",
+        out.arg(),
+        "--set",
+        "a=3",
+        "--set",
+        "state=CA",
+        "--json",
+    ]);
+    assert!(valid.status.success(), "stderr: {}", stderr(&valid));
+    let value: Value = serde_json::from_str(&stdout(&valid)).expect("valid JSON");
+    assert_eq!(value["valid"], true);
+    assert_eq!(value["error_count"], 0);
+    assert_eq!(value["fields"], 5);
+
+    let invalid = run(&["form", "validate", out.arg(), "--set", "state=ZZ", "--json"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    let value: Value = serde_json::from_str(&stdout(&invalid)).expect("valid JSON");
+    assert_eq!(value["valid"], false);
+    assert_eq!(value["error_count"], 1);
+    assert_eq!(value["errors"][0]["field"], "state");
+    assert!(
+        value["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not an allowed choice"),
+        "{}",
+        stdout(&invalid)
+    );
+
+    let unknown_field = run(&["form", "validate", out.arg(), "--set", "missing=1"]);
+    assert!(!unknown_field.status.success());
+
+    let unknown_source = run(&[
+        "form",
+        "calculate",
+        out.arg(),
+        "--set",
+        "a=3",
+        "--sum",
+        "total=a,missing",
+    ]);
+    assert!(!unknown_source.status.success());
+    assert!(
+        stderr(&unknown_source).contains("does not exist"),
+        "{}",
+        stderr(&unknown_source)
+    );
+
+    let bad_checkbox = run(&["form", "validate", out.arg(), "--set", "agree=maybe"]);
+    assert!(!bad_checkbox.status.success());
+    assert!(
+        stderr(&bad_checkbox).contains("true or false"),
+        "{}",
+        stderr(&bad_checkbox)
+    );
+}
+
+#[test]
 fn form_create_and_list_reject_bad_input() {
     let out = TempOut::new("pdf");
     let no_fields = run(&["form", "create", out.arg()]);
