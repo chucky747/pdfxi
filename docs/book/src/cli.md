@@ -17,6 +17,7 @@ pdfxi <COMMAND> --help
 | `info <FILE> [--json]` | Path, PDF version, byte length, page count | verified (`AUTO-009`) |
 | `text <FILE>` | Plain text from page content streams | verified (`AUTO-010`) |
 | `search <FILE> <QUERY> [--case-sensitive] [--whole-word] [--json]` | Cross-page text search | implemented |
+| `replace <FILE> --out PATH --find T --replace T [--case-sensitive] [--whole-word] [--diacritic-insensitive] [--limit N] [--json]` | Literal find-and-replace across a document | verified (`EDIT-003`) |
 | `render <FILE> --page N --scale S --out PATH [--format png\|ppm]` | Rasterize one page | implemented, `pdfium` build |
 | `action list <FILE>` | List named actions in an action file | implemented |
 | `action show <FILE> <NAME>` | Show an action's steps and parameters | implemented |
@@ -128,7 +129,14 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `structure apply` reads a JSON tree (`lang`, `nodes` with role/page/bbox/
+- `replace` is the writing half of `find_replace`: it locates literal matches in
+  the run model, rewrites the containing run through `replace_run_text`, saves,
+  reopens and re-extracts to report `initial_matches`, `replaced` and
+  `remaining`. Matches must lie inside one run; a match spanning two runs is
+  left untouched and counted as remaining. Whole-run deletions are skipped for
+  the same reason. Every replacement reflows its block, so a paragraph may be
+  rewrapped or its lines joined. `--limit` bounds the work (default 1000) and
+  `limit_reached` reports when it stopped the run.- `structure apply` reads a JSON tree (`lang`, `nodes` with role/page/bbox/
   text/`alt`/`actual_text`/`expansion`/`artifact`/children, and `roots`),
   validates it, then merges `pdfxi_accessibility::write_structure_tree` into a
   real document: remapped structure objects, `/StructTreeRoot`, `/ParentTree`,

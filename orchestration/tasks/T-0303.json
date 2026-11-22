@@ -1,0 +1,19 @@
+{
+  "id": "T-0303",
+  "lane": "core",
+  "title": "Document find-and-replace host",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0302"],
+  "owns": [
+    "crates/pdfxi-cli/src/replace.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0303.md",
+    "orchestration/feature-updates/T-0303.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli replace_ passes; pdfxi replace finds literal matches in the run model, rewrites the containing run, saves, reopens and reports initial/replaced/remaining counts on real PDFs; EDIT-003 moves to verified.",
+  "notes": "Hosts pdfxi_edit::find_replace by mapping matches to single runs and applying pdfxi_edit::replace_run_text, reloading after each edit and re-extracting the saved file.",
+  "evidence": "docs/evidence/cli/T-0303.md"
+}

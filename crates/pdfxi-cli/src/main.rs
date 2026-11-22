@@ -109,6 +109,8 @@ mod portfolio;
 mod read_aloud;
 /// `pdfxi reflow`: lay page text out as a narrow reading column.
 mod reflow;
+/// `pdfxi replace`: literal find-and-replace across a document.
+mod replace;
 /// `pdfxi structure apply`: write a tagged-PDF structure tree.
 mod structure;
 /// `pdfxi update`: append an incremental revision with new information.
@@ -206,6 +208,39 @@ enum Command {
         /// page boundaries.
         #[arg(long)]
         whole_word: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace literal text across the document's extracted page text.
+    ///
+    /// Matches are rewritten inside the single text run that contains them and
+    /// the result is saved, reopened and re-extracted. Matches spanning two runs
+    /// are reported as remaining rather than merged.
+    Replace {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Destination PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Literal text to find.
+        #[arg(long, value_name = "TEXT")]
+        find: String,
+        /// Replacement text.
+        #[arg(long = "replace", value_name = "TEXT")]
+        replacement: String,
+        /// Match case exactly.
+        #[arg(long)]
+        case_sensitive: bool,
+        /// Accept a match only at word boundaries.
+        #[arg(long)]
+        whole_word: bool,
+        /// Fold common diacritics before matching.
+        #[arg(long)]
+        diacritic_insensitive: bool,
+        /// Maximum replacements; zero uses the built-in limit of 1000.
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -1653,6 +1688,29 @@ fn main() -> anyhow::Result<()> {
             whole_word,
             json,
         } => search(&file, &query, case_sensitive, whole_word, json),
+        Command::Replace {
+            file,
+            out,
+            find,
+            replacement,
+            case_sensitive,
+            whole_word,
+            diacritic_insensitive,
+            limit,
+            json,
+        } => replace::run_replace(replace::ReplaceRequest {
+            file: &file,
+            out: &out,
+            find: &find,
+            replacement: &replacement,
+            options: pdfxi_edit::SearchOptions {
+                case_sensitive,
+                whole_word,
+                diacritic_insensitive,
+            },
+            limit,
+            json,
+        }),
         Command::Render {
             file,
             page,

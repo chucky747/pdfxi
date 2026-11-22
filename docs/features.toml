@@ -1120,34 +1120,53 @@ title = "Edit fonts size spacing and color"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/find_replace.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0138.md",
+    "crates/pdfxi-cli/src/replace.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0303.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 12 new find_replace tests passed, full suite 268 passed / 0 failed, TEST_EXIT=0; fmt/clippy/doc EXIT=0. See docs/evidence/author/T-0138.md."
+evidence = "docs/evidence/cli/T-0303.md"
 id = "EDIT-003"
 notes = """
-Adds a dependency-free document-wide find/replace model in pdfxi-edit.
-`SearchOptions` carries case_sensitive, whole_word and diacritic_insensitive
-flags; matching is literal Unicode-scalar comparison with a bounded, one-to-one
-case fold and a documented diacritic fold (common precomposed Latin letters
-plus combining-mark ranges). There is no regex engine and no pattern syntax, so
-arbitrary regular expressions are never executed and work is bounded by
-query_len x text_len per line. `SearchDocument` / `SearchPage` take
-caller-supplied extracted text; `find_all` returns `SearchHit`s with page, line
-and half-open scalar offsets, sorted by (page, line, start) so results are
-deterministic even when input pages are out of order. `build_replace_all_plan`
-emits a `ReplaceAllPlan` of `ReplaceStep`s chosen leftmost-first with no
-overlaps, a configurable replacement cap, and typed `FindReplaceError` variants
-for empty query, oversized query/line/replacement, invalid options and cap
-exceeded. This is verified at the library-model level: this crate never reads
-or rewrites content streams, so host serialization of the plan and UI wiring
-remain future work. No new dependency and no source-byte mutation.
+Verified through `pdfxi replace <FILE> --out PATH --find T --replace T
+[--case-sensitive] [--whole-word] [--diacritic-insensitive] [--limit N] [--json]`.
+
+Matching is pdfxi_edit::find_replace::find_all with the same literal bounded
+options as pdfxi search. A match is accepted only when both scalar offsets lie
+inside one run of the page text model; the run is rewritten with
+pdfxi_edit::replace_run_text, which reflows the block and embeds the bundled
+fallback font when the original cannot encode the replacement. After every
+replacement the document is written and reparsed, because the edit stages a new
+content stream while the in-memory reader still reports pre-edit text; a full
+save avoids the core reader's bounded incremental xref-chain limit. The final
+file is written, reopened and re-extracted, and the report carries
+initial_matches, replaced, remaining, per-page rows, embedded_font_blocks and
+limit_reached. A run with matches that are all unmappable fails instead of
+writing unchanged bytes, and --limit (default 1000) bounds the work.
+
+Evidence: minimal.pdf Hello->Goodbye reports 1 initial, 1 replaced, 0 remaining,
+bytes 839, and extraction returns "Goodbye, PDFXI!". The real 3-page
+powerpoint-slides.pdf marker->label reports pages 3, initial 3, replaced 3,
+remaining 0, embedded_font_blocks 3, and all three pages extract the new word.
+A 120-line multi-page document replaces 120 matches and pdfxi search finds 120
+afterwards; whole-word replaces four standalone alpha words and leaves
+"alphabet"; a limit of 1 leaves 1 of 2 matches and reports limit_reached; a
+non-Latin-1 replacement extracts correctly. Empty --find and a case-sensitive
+miss behave as documented.
+
+Gates: cargo test -p pdfxi-cli --test cli replace_ = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: literal matching, one run at a time; matches spanning runs and whole-run
+deletions stay in remaining; replacement reflows the block so wrapping and line
+grouping can change; no undo history or GUI dialog.
 """
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
+    "cli::replace_rewrites_text_and_reports_remaining_matches",
+    "cli::replace_spans_pages_options_and_unicode",
+    "cli::replace_runs_on_a_real_world_document",
     "find_replace::tests::case_sensitivity_controls_matching",
     "find_replace::tests::whole_word_rejects_substrings",
     "find_replace::tests::diacritics_fold_precomposed_and_combining_forms",

@@ -3540,6 +3540,254 @@ fn font_add_text_handles_an_authoring_page_and_alignment() {
 }
 
 #[test]
+fn replace_rewrites_text_and_reports_remaining_matches() {
+    let source = root_fixture("minimal.pdf");
+    let out = TempOut::new("pdf");
+    let replaced = run(&[
+        "replace",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--find",
+        "Hello",
+        "--replace",
+        "Goodbye",
+        "--case-sensitive",
+        "--json",
+    ]);
+    assert!(replaced.status.success(), "stderr: {}", stderr(&replaced));
+    let value: Value = serde_json::from_str(&stdout(&replaced)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["initial_matches"], 1);
+    assert_eq!(value["replaced"], 1);
+    assert_eq!(value["remaining"], 0);
+    assert_eq!(value["limit_reached"], false);
+    assert_eq!(value["case_sensitive"], true);
+    let rows = value["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["page"], 1);
+
+    let text = run(&["text", out.arg()]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    assert!(stdout(&text).contains("Goodbye, PDFXI!"));
+    assert!(!stdout(&text).contains("Hello"));
+
+    let again = TempOut::new("pdf");
+    let repeated = run(&[
+        "replace",
+        source.to_str().expect("utf-8"),
+        "--out",
+        again.arg(),
+        "--find",
+        "Hello",
+        "--replace",
+        "Goodbye",
+        "--case-sensitive",
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        fs::read(&out.path).expect("first"),
+        fs::read(&again.path).expect("second"),
+        "replacement is deterministic"
+    );
+
+    let miss = run(&[
+        "replace",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--find",
+        "hello",
+        "--replace",
+        "x",
+        "--case-sensitive",
+        "--json",
+    ]);
+    assert!(miss.status.success(), "stderr: {}", stderr(&miss));
+    let value: Value = serde_json::from_str(&stdout(&miss)).expect("valid JSON");
+    assert_eq!(value["initial_matches"], 0);
+    assert_eq!(value["replaced"], 0);
+
+    let empty = run(&[
+        "replace",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--find",
+        "",
+        "--replace",
+        "x",
+    ]);
+    assert!(!empty.status.success());
+    assert!(
+        stderr(&empty).contains("--find must not be empty"),
+        "{}",
+        stderr(&empty)
+    );
+}
+
+#[test]
+fn replace_spans_pages_options_and_unicode() {
+    let content: String = (0..120)
+        .map(|index| {
+            if index % 30 == 7 {
+                format!("line {index:03} alpha alphabet marker\n")
+            } else {
+                format!("line {index:03} marker\n")
+            }
+        })
+        .collect();
+    let text = TempPath::new("txt");
+    text.write(content.as_bytes());
+    let source = TempOut::new("pdf");
+    let created = run(&["create", "text", text.arg(), source.arg()]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let info = run(&["info", source.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(
+        !stdout(&info).contains("pages: 1\n"),
+        "fixture must span more than one page: {}",
+        stdout(&info)
+    );
+
+    let out = TempOut::new("pdf");
+    let replaced = run(&[
+        "replace",
+        source.arg(),
+        "--out",
+        out.arg(),
+        "--find",
+        "marker",
+        "--replace",
+        "label",
+        "--json",
+    ]);
+    assert!(replaced.status.success(), "stderr: {}", stderr(&replaced));
+    let value: Value = serde_json::from_str(&stdout(&replaced)).expect("valid JSON");
+    assert_eq!(value["initial_matches"], 120);
+    assert_eq!(value["replaced"], 120);
+    assert_eq!(value["remaining"], 0);
+    assert_eq!(value["limit_reached"], false);
+    let pages: Vec<u64> = value["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .filter_map(|row| row["page"].as_u64())
+        .collect();
+    assert!(
+        pages.iter().any(|page| *page > 1),
+        "replacement must span pages"
+    );
+
+    let scanned = run(&["search", out.arg(), "label", "--json"]);
+    assert!(scanned.status.success(), "stderr: {}", stderr(&scanned));
+    let value: Value = serde_json::from_str(&stdout(&scanned)).expect("valid JSON");
+    let matches = value["matches"].as_array().expect("matches");
+    assert_eq!(matches.len(), 120, "{}", stdout(&scanned));
+
+    let whole = TempOut::new("pdf");
+    let whole_word = run(&[
+        "replace",
+        source.arg(),
+        "--out",
+        whole.arg(),
+        "--find",
+        "alpha",
+        "--replace",
+        "ALPHA",
+        "--whole-word",
+        "--case-sensitive",
+        "--json",
+    ]);
+    assert!(
+        whole_word.status.success(),
+        "stderr: {}",
+        stderr(&whole_word)
+    );
+    let value: Value = serde_json::from_str(&stdout(&whole_word)).expect("valid JSON");
+    assert_eq!(value["initial_matches"], 4);
+    assert_eq!(value["replaced"], 4);
+    let text = run(&["text", whole.arg()]);
+    assert!(
+        stdout(&text).contains("alphabet"),
+        "whole-word keeps the substring"
+    );
+
+    let limited = TempOut::new("pdf");
+    let limit = run(&[
+        "replace",
+        source.arg(),
+        "--out",
+        limited.arg(),
+        "--find",
+        "marker",
+        "--replace",
+        "label",
+        "--limit",
+        "3",
+        "--json",
+    ]);
+    assert!(limit.status.success(), "stderr: {}", stderr(&limit));
+    let value: Value = serde_json::from_str(&stdout(&limit)).expect("valid JSON");
+    assert_eq!(value["replaced"], 3);
+    assert_eq!(value["remaining"], 117);
+    assert_eq!(value["limit_reached"], true);
+    assert_eq!(value["limit"], 3);
+
+    let unicode = TempOut::new("pdf");
+    let accented = run(&[
+        "replace",
+        source.arg(),
+        "--out",
+        unicode.arg(),
+        "--find",
+        "line 001",
+        "--replace",
+        "Grüße 001",
+        "--case-sensitive",
+        "--json",
+    ]);
+    assert!(accented.status.success(), "stderr: {}", stderr(&accented));
+    let value: Value = serde_json::from_str(&stdout(&accented)).expect("valid JSON");
+    assert_eq!(value["replaced"], 1);
+    let text = run(&["text", unicode.arg()]);
+    assert!(stdout(&text).contains("Grüße 001"), "{}", stdout(&text));
+}
+
+#[test]
+fn replace_runs_on_a_real_world_document() {
+    let source = root_fixture("realworld/powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let replaced = run(&[
+        "replace",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--find",
+        "marker",
+        "--replace",
+        "label",
+        "--json",
+    ]);
+    assert!(replaced.status.success(), "stderr: {}", stderr(&replaced));
+    let value: Value = serde_json::from_str(&stdout(&replaced)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert_eq!(value["initial_matches"], 3);
+    assert_eq!(value["replaced"], 3);
+    assert_eq!(value["remaining"], 0);
+    assert!(
+        value["embedded_font_blocks"].as_u64().unwrap_or(0) > 0,
+        "the real fixture needs the embedded fallback font: {}",
+        stdout(&replaced)
+    );
+    let text = run(&["text", out.arg()]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    assert_eq!(stdout(&text).matches("label").count(), 3);
+    let info = run(&["info", out.arg()]);
+    assert!(stdout(&info).contains("pages: 3"), "{}", stdout(&info));
+}
+
+#[test]
 fn structure_apply_writes_a_tagged_tree_on_a_real_page() {
     let source = root_fixture("minimal.pdf");
     let out = TempOut::new("pdf");
