@@ -135,6 +135,8 @@ mod export;
 mod marks;
 mod preflight;
 mod production;
+/// pdfxi trust: offline chain and revocation evaluation.
+mod trust;
 // Virtual PDF printer control: install/status/remove the "PDFXI PDF" queue and
 // capture one finished job (`printer`).
 mod printer;
@@ -506,6 +508,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Evaluate an X.509 chain against caller-supplied anchors and CRLs.
+    Trust {
+        /// Trust action.
+        #[command(subcommand)]
+        command: TrustCommand,
     },
     /// Register, inspect or remove per-user file associations and the protocol.
     Shell {
@@ -2131,6 +2139,35 @@ enum ProductionCommand {
     },
 }
 
+/// Actions of the `trust` command.
+#[derive(Debug, Subcommand)]
+enum TrustCommand {
+    /// Verify a leaf certificate against anchors, intermediates and CRLs.
+    Verify {
+        /// PEM bundle or DER file of trust anchors (repeatable entries).
+        #[arg(long, value_name = "PATH")]
+        anchor: PathBuf,
+        /// Leaf certificate as PEM or DER.
+        #[arg(long, value_name = "PATH")]
+        leaf: PathBuf,
+        /// Intermediate certificate or PEM bundle (repeatable).
+        #[arg(long, value_name = "PATH")]
+        intermediate: Vec<PathBuf>,
+        /// DER-encoded CRL (repeatable).
+        #[arg(long, value_name = "PATH")]
+        crl: Vec<PathBuf>,
+        /// Evaluation time in Unix seconds (default: current time).
+        #[arg(long, value_name = "UNIX")]
+        time: Option<u64>,
+        /// Require revocation presence, freshness and CRL signatures.
+        #[arg(long)]
+        strict: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `sign` command.
 ///
 /// `Create` carries the whole identity and output description while `Verify`
@@ -3381,6 +3418,17 @@ fn run_cli() -> anyhow::Result<()> {
             password,
             json,
         } => protect::unprotect(&file, &out, &password, json),
+        Command::Trust { command } => match command {
+            TrustCommand::Verify {
+                anchor,
+                leaf,
+                intermediate,
+                crl,
+                time,
+                strict,
+                json,
+            } => trust::verify(&anchor, &leaf, &intermediate, &crl, time, strict, json),
+        },
         Command::Shell { command } => match command {
             ShellCommand::Plan { exe, json } => shell::plan(exe.as_deref(), json),
             ShellCommand::Register { root, exe, json } => {

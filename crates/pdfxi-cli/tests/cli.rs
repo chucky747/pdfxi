@@ -12761,6 +12761,337 @@ fn protect_rejects_encrypted_input_and_bad_options() {
 }
 
 // ---------------------------------------------------------------------------
+// trust: offline chain and revocation evaluation (T-0347)
+// ---------------------------------------------------------------------------
+
+struct TrustFixtures {
+    ca_pem: PathBuf,
+    other_ca_pem: PathBuf,
+    leaf_pem: PathBuf,
+    good_crl: PathBuf,
+    revoked_crl: PathBuf,
+}
+
+fn write_trust_fixtures(dir: &TempDir) -> TrustFixtures {
+    use std::str::FromStr;
+
+    use der::Encode;
+    use der::EncodePem;
+    use der::asn1::UtcTime;
+    use der::pem::LineEnding;
+    use rsa::pkcs1v15::Signature as RsaRawSignature;
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::{Keypair, SignatureEncoding, Signer};
+    use sha2::Sha256;
+    use spki::SubjectPublicKeyInfoOwned;
+    use x509_cert::builder::{Builder as _, CertificateBuilder, Profile};
+    use x509_cert::name::Name;
+    use x509_cert::serial_number::SerialNumber;
+    use x509_cert::time::{Time, Validity};
+
+    fn validity() -> Validity {
+        Validity {
+            not_before: Time::UtcTime(
+                UtcTime::from_unix_duration(std::time::Duration::from_secs(1_600_000_000))
+                    .expect("notBefore"),
+            ),
+            not_after: Time::UtcTime(
+                UtcTime::from_unix_duration(std::time::Duration::from_secs(2_000_000_000))
+                    .expect("notAfter"),
+            ),
+        }
+    }
+
+    let mut rng = rand::rngs::OsRng;
+    let ca_key = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("CA key");
+    let ca_signer = SigningKey::<Sha256>::new(ca_key);
+    let ca_name = Name::from_str("CN=PDFXI Test CA,O=PDFXI").expect("CA name");
+    let ca_spki =
+        SubjectPublicKeyInfoOwned::from_key(ca_signer.verifying_key()).expect("CA public key");
+    let ca_cert = CertificateBuilder::new(
+        Profile::Root,
+        SerialNumber::from(1_u32),
+        validity(),
+        ca_name.clone(),
+        ca_spki,
+        &ca_signer,
+    )
+    .expect("CA builder")
+    .build::<RsaRawSignature>()
+    .expect("CA certificate");
+
+    let leaf_key = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("leaf key");
+    let leaf_signer = SigningKey::<Sha256>::new(leaf_key);
+    let leaf_name = Name::from_str("CN=PDFXI Test Leaf,O=PDFXI").expect("leaf name");
+    let leaf_spki =
+        SubjectPublicKeyInfoOwned::from_key(leaf_signer.verifying_key()).expect("leaf key");
+    let leaf_cert = CertificateBuilder::new(
+        Profile::Leaf {
+            issuer: ca_name.clone(),
+            enable_key_agreement: false,
+            enable_key_encipherment: false,
+        },
+        SerialNumber::from(7_u32),
+        validity(),
+        leaf_name,
+        leaf_spki,
+        &ca_signer,
+    )
+    .expect("leaf builder")
+    .build::<RsaRawSignature>()
+    .expect("leaf certificate");
+
+    let other_key = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("other CA key");
+    let other_signer = SigningKey::<Sha256>::new(other_key);
+    let other_name = Name::from_str("CN=Unrelated Root,O=PDFXI").expect("other name");
+    let other_spki =
+        SubjectPublicKeyInfoOwned::from_key(other_signer.verifying_key()).expect("other key");
+    let other_cert = CertificateBuilder::new(
+        Profile::Root,
+        SerialNumber::from(99_u32),
+        validity(),
+        other_name,
+        other_spki,
+        &other_signer,
+    )
+    .expect("other builder")
+    .build::<RsaRawSignature>()
+    .expect("other certificate");
+
+    let issuer_der = ca_cert
+        .tbs_certificate
+        .subject
+        .to_der()
+        .expect("issuer name DER");
+    let make_crl = |revoked: Vec<pdfxi_security::RevokedCertificate>| {
+        let crl = pdfxi_security::Crl::new(&issuer_der, 1_650_000_000, 1_850_000_000, revoked)
+            .expect("CRL");
+        let signature = ca_signer.sign(crl.tbs_der());
+        crl.with_signature(
+            pdfxi_security::SignatureAlgorithm::Sha256WithRsa,
+            signature.to_bytes().to_vec(),
+        )
+        .to_der()
+    };
+    let good_crl = make_crl(Vec::new());
+    let revoked_crl = make_crl(vec![pdfxi_security::RevokedCertificate::new(
+        7,
+        1_650_000_000,
+        pdfxi_security::RevocationReason::KeyCompromise,
+    )]);
+
+    let ca_pem = dir.child("ca.pem");
+    let other_ca_pem = dir.child("other-ca.pem");
+    let leaf_pem = dir.child("leaf.pem");
+    let good_crl_path = dir.child("good.crl");
+    let revoked_crl_path = dir.child("revoked.crl");
+    fs::write(&ca_pem, ca_cert.to_pem(LineEnding::LF).expect("CA PEM")).expect("write CA");
+    fs::write(
+        &other_ca_pem,
+        other_cert.to_pem(LineEnding::LF).expect("other PEM"),
+    )
+    .expect("write other CA");
+    fs::write(
+        &leaf_pem,
+        leaf_cert.to_pem(LineEnding::LF).expect("leaf PEM"),
+    )
+    .expect("write leaf");
+    fs::write(&good_crl_path, good_crl).expect("write good CRL");
+    fs::write(&revoked_crl_path, revoked_crl).expect("write revoked CRL");
+    TrustFixtures {
+        ca_pem,
+        other_ca_pem,
+        leaf_pem,
+        good_crl: good_crl_path,
+        revoked_crl: revoked_crl_path,
+    }
+}
+
+#[test]
+fn trust_verifies_a_chain_and_revocation() {
+    let dir = TempDir::new();
+    let fixtures = write_trust_fixtures(&dir);
+    let ca = fixtures.ca_pem.to_str().expect("ca");
+    let leaf = fixtures.leaf_pem.to_str().expect("leaf");
+
+    let plain = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        ca,
+        "--leaf",
+        leaf,
+        "--time",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(plain.status.success(), "stderr: {}", stderr(&plain));
+    let value: Value = serde_json::from_str(&stdout(&plain)).expect("trust JSON");
+    assert_eq!(value["trusted"], true);
+    assert_eq!(value["reason"], Value::Null);
+    assert_eq!(value["chain_serials"], serde_json::json!([7, 1]));
+    assert_eq!(value["anchor_serial"], 1);
+    assert_eq!(value["evaluated_at"], 1_700_000_000_u64);
+    assert_eq!(value["strict"], false);
+    let revocation = value["revocation"].as_array().expect("revocation");
+    assert_eq!(revocation.len(), 1);
+    assert_eq!(revocation[0]["serial"], 7);
+    assert_eq!(revocation[0]["status"], "unknown");
+    assert_eq!(revocation[0]["signature_verified"], false);
+
+    let good = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        ca,
+        "--leaf",
+        leaf,
+        "--time",
+        "1700000000",
+        "--crl",
+        fixtures.good_crl.to_str().expect("crl"),
+        "--strict",
+        "--json",
+    ]);
+    assert!(good.status.success(), "stderr: {}", stderr(&good));
+    let value: Value = serde_json::from_str(&stdout(&good)).expect("trust JSON");
+    assert_eq!(value["trusted"], true);
+    assert_eq!(value["revocation"][0]["status"], "good");
+    assert_eq!(value["revocation"][0]["signature_verified"], true);
+
+    let revoked = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        ca,
+        "--leaf",
+        leaf,
+        "--time",
+        "1700000000",
+        "--crl",
+        fixtures.revoked_crl.to_str().expect("crl"),
+        "--strict",
+        "--json",
+    ]);
+    assert!(!revoked.status.success());
+    let value: Value = serde_json::from_str(&stdout(&revoked)).expect("trust JSON");
+    assert_eq!(value["trusted"], false);
+    assert_eq!(value["reason"], "revoked:7");
+    assert_eq!(value["revocation"][0]["status"], "revoked");
+    assert_eq!(value["revocation"][0]["revoked_at"], 1_650_000_000_u64);
+    assert_eq!(value["revocation"][0]["signature_verified"], true);
+    assert!(
+        stderr(&revoked).contains("not trusted"),
+        "{}",
+        stderr(&revoked)
+    );
+
+    let strict_missing = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        ca,
+        "--leaf",
+        leaf,
+        "--time",
+        "1700000000",
+        "--strict",
+    ]);
+    assert!(!strict_missing.status.success());
+    assert!(
+        stderr(&strict_missing).contains("revocation_unknown:7"),
+        "{}",
+        stderr(&strict_missing)
+    );
+
+    let other = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        fixtures.other_ca_pem.to_str().expect("ca"),
+        "--leaf",
+        leaf,
+        "--time",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(!other.status.success());
+    let value: Value = serde_json::from_str(&stdout(&other)).expect("trust JSON");
+    assert_eq!(value["trusted"], false);
+    assert!(!value["reason"].as_str().unwrap_or("").is_empty());
+}
+
+#[test]
+fn trust_rejects_bad_inputs() {
+    let dir = TempDir::new();
+    let fixtures = write_trust_fixtures(&dir);
+    let ca = fixtures.ca_pem.to_str().expect("ca");
+    let leaf = fixtures.leaf_pem.to_str().expect("leaf");
+
+    let missing = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        dir.child("missing.pem").to_str().expect("path"),
+        "--leaf",
+        leaf,
+    ]);
+    assert!(!missing.status.success());
+    assert!(stderr(&missing).contains("read"), "{}", stderr(&missing));
+
+    let garbage = dir.child("garbage.pem");
+    fs::write(&garbage, b"not a certificate").expect("write garbage");
+    let bad_anchor = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        garbage.to_str().expect("path"),
+        "--leaf",
+        leaf,
+    ]);
+    assert!(!bad_anchor.status.success());
+    assert!(
+        stderr(&bad_anchor).contains("parse"),
+        "{}",
+        stderr(&bad_anchor)
+    );
+
+    let both = dir.child("both.pem");
+    let mut bundle = fs::read(&fixtures.ca_pem).expect("ca bytes");
+    bundle.extend_from_slice(&fs::read(&fixtures.leaf_pem).expect("leaf bytes"));
+    fs::write(&both, bundle).expect("write bundle");
+    let multi = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        ca,
+        "--leaf",
+        both.to_str().expect("path"),
+    ]);
+    assert!(!multi.status.success());
+    assert!(stderr(&multi).contains("exactly one"), "{}", stderr(&multi));
+
+    let bad_crl = dir.child("bad.crl");
+    fs::write(&bad_crl, b"not a crl").expect("write bad CRL");
+    let crl_error = run(&[
+        "trust",
+        "verify",
+        "--anchor",
+        ca,
+        "--leaf",
+        leaf,
+        "--crl",
+        bad_crl.to_str().expect("path"),
+    ]);
+    assert!(!crl_error.status.success());
+    assert!(
+        stderr(&crl_error).contains("parse CRL"),
+        "{}",
+        stderr(&crl_error)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // sign: real CMS/RSA signatures (T-0344)
 // ---------------------------------------------------------------------------
 

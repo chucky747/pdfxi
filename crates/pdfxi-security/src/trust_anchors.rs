@@ -306,6 +306,31 @@ impl TrustAnchorBundle {
     }
 }
 
+/// Parse every `CERTIFICATE` block in a PEM input into this crate's
+/// [`Certificate`] type.
+///
+/// This is the caller-facing counterpart of [`TrustAnchorBundle::from_pem`]:
+/// the same tolerant block scanner and the same strict re-parse, but it returns
+/// the certificates so a host can build a leaf/intermediate list or a
+/// [`TrustStore`] from user-supplied files.
+///
+/// # Errors
+///
+/// [`SecurityError::TrustAnchorInvalid`] for an empty, block-free or malformed
+/// PEM input.
+pub fn certificates_from_pem(pem: &[u8]) -> Result<Vec<Certificate>> {
+    let certificates = decode_pem_chain(pem)?;
+    certificates
+        .into_iter()
+        .map(|certificate| {
+            let der = certificate
+                .to_der()
+                .map_err(|_| SecurityError::TrustAnchorInvalid("PEM"))?;
+            Certificate::parse(&der)
+        })
+        .collect()
+}
+
 /// Decode every `CERTIFICATE` block in a PEM input.
 ///
 /// The block scanner accepts CRLF or LF line endings, a UTF-8 BOM, arbitrary

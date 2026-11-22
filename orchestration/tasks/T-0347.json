@@ -1,0 +1,21 @@
+{
+  "id": "T-0347",
+  "lane": "convert",
+  "title": "Trust and revocation host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0346"],
+  "owns": [
+    "crates/pdfxi-security/src/trust_anchors.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-cli/src/trust.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0347.md",
+    "orchestration/feature-updates/T-0347.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli trust_ passes; pdfxi trust verify evaluates a real chain with PEM/DER anchors, intermediates and signed CRLs, applies the strict revocation policy and exits non-zero on an untrusted decision; SEC-007 moves to verified.",
+  "notes": "Hosts TrustManager/RsaPkcs1Verifier and exposes certificates_from_pem. Offline only: no OCSP or platform store.",
+  "evidence": "docs/evidence/cli/T-0347.md"
+}

@@ -238,7 +238,7 @@ pub use timestamp_authority::{
     DetachedSignatureReport, TsaStatus, TsaTokenModel, TsaValidationReport,
     validate_detached_signature_against_certificate, validate_tsa_token,
 };
-pub use trust_anchors::{ChainTrustReport, TrustAnchorBundle};
+pub use trust_anchors::{ChainTrustReport, TrustAnchorBundle, certificates_from_pem};
 pub use trust_manager::{
     Crl, RevocationEvidence, RevocationPolicy, RevocationReason, RevocationStatus,
     RevokedCertificate, TrustDecision, TrustFailureReason, TrustManager, TrustReport,

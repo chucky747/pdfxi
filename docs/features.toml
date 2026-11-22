@@ -2902,16 +2902,61 @@ tests = [
 title = "Timestamp and signature validation"
 
 [[feature]]
-docs = "crates/pdfxi-security/src/trust_manager.rs, docs/evidence/security/T-0133.md"
+docs = [
+    "crates/pdfxi-security/src/trust_manager.rs",
+    "crates/pdfxi-security/src/trust_anchors.rs",
+    "crates/pdfxi-security/src/x509/mod.rs",
+    "crates/pdfxi-cli/src/trust.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/security/T-0133.md",
+    "docs/evidence/cli/T-0347.md",
+]
 domain = "Security"
-evidence = "docs/evidence/security/T-0133.md"
+evidence = "docs/evidence/cli/T-0347.md"
 id = "SEC-007"
-notes = "Signed CRL DER round-trip plus issuer/usage/algorithm/validity checks through the shared verifier; strict policy excludes invalid CRLs and reports a typed reason."
+notes = """
+Signed CRL DER round-trip plus issuer/usage/algorithm/validity checks through
+the shared verifier; strict policy excludes invalid CRLs and reports a typed
+reason.
+
+`pdfxi trust verify --anchor PATH --leaf PATH [--intermediate PATH ...]
+[--crl PATH ...] [--time UNIX] [--strict] [--json]` builds a TrustStore from
+the anchor file (PEM bundle or one DER certificate), loads exactly one PEM/DER
+leaf and any intermediates, parses DER CRLs, pins the evaluation clock and runs
+TrustManager with RsaPkcs1Verifier. Validity windows, CA constraints,
+keyCertSign, path length, critical extensions and every signature are checked,
+then CRLs are matched by issuer. --strict applies RevocationPolicy::strict()
+(presence, freshness and CRL signatures required). The report lists the leaf
+subject/serial, counts, the typed decision (no_anchor, issuer_unknown,
+revoked:<serial>, revocation_unknown:<serial>, revocation_stale:<serial>,
+crl_signature_invalid:<serial>, ...), the validated serial path and
+per-certificate revocation evidence; an untrusted decision exits non-zero.
+Callers can now decode certificate PEM with certificates_from_pem, the same
+tolerant scanner TrustAnchorBundle::from_pem uses.
+
+Evidence: a generated root CA (serial 1), leaf (serial 7), unrelated root
+(serial 99) and signed CRLs with/without serial 7 revoked. Trusted run reports
+[7, 1] with anchor 1, revocation unknown and exit 0; a strict good-CRL run
+reports status good and signature verified; a strict revoked-CRL run exits 1
+with revoked:7, revocation date 1650000000 and signature verified; strict with
+no CRL fails revocation_unknown:7; an unrelated anchor fails issuer_unknown.
+Missing files, garbage anchors, a two-certificate leaf file and a malformed CRL
+are typed errors. Fixtures are generated at runtime and never committed.
+
+Gates: CLI trust_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: offline chain building and CRL revocation only. No OCSP, AIA fetching,
+online timestamping or platform certificate store; anchors and CRLs are explicit
+files. A trusted decision only means the supplied anchors vouch for the chain.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "trust_manager::tests::crl_signature_verifies_against_issuer",
     "trust_manager::tests::crl_signature_rejects_invalid_signature",
+    "cli::trust_verifies_a_chain_and_revocation",
+    "cli::trust_rejects_bad_inputs",
 ]
 title = "Trust manager and revocation checks"
 

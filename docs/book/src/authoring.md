@@ -47,6 +47,7 @@ command.
 | Electronic signature fields and workflows | `FORMS-010` | verified | `pdfxi-forms::signature` + `signing` | `signature create/plan/verify` |
 | RC4 and AES encryption handlers | `SEC-002` | verified | `pdfxi-security::protect` + `encryption_writer` | `protect` / `unprotect` |
 | Sign and certify documents | `SEC-005` | verified | `pdfxi-security::pdf_signature` | `sign create` / `sign verify` |
+| Trust manager and revocation checks | `SEC-007` | verified | `pdfxi-security::TrustManager` + CRLs | `trust verify` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -685,6 +686,26 @@ is checked as PDF/X-4 plus the document-part requirements: a catalog
 page (`PDFVT1.DPART_PAGE_UNASSIGNED`). A passing verdict is a deterministic
 subset preflight, not a conformance certification; reported-only constraints
 list what the profile did not inspect.
+### Trust and revocation
+
+`SEC-007` (verified) hosts the offline trust decision from
+`pdfxi_security::TrustManager`:
+
+```text
+pdfxi trust verify --anchor PATH --leaf PATH [--intermediate PATH ...]
+    [--crl PATH ...] [--time UNIX] [--strict] [--json]
+```
+
+The anchor file is a PEM bundle or one DER certificate; the leaf must contain
+exactly one PEM/DER certificate; intermediates may be repeated. CRLs are DER and
+matched by issuer. Validation checks validity windows, CA constraints,
+`keyCertSign`, path length, critical extensions and every signature with
+`RsaPkcs1Verifier`, then evaluates the supplied CRLs. `--strict` requires
+revocation presence, freshness and CRL signatures. The report gives the typed
+decision, the validated serial path and per-certificate revocation evidence; an
+untrusted decision exits non-zero. Anchors and CRLs are explicit local files —
+no network, OCSP, AIA fetching or platform store.
+
 ### Password protection
 
 `SEC-002` (verified) hosts the standard security handler from
