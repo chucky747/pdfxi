@@ -1,0 +1,16 @@
+{
+  "id": "T-0362",
+  "lane": "app",
+  "title": "GUI session wedge resolved (W-6)",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0361"],
+  "owns": [
+    "docs/evidence/ui/T-0362.md",
+    "orchestration/tasks/T-0362.json",
+    "orchestration/blockers/ENV-gui-session-wedged.md"
+  ],
+  "acceptance": "A fresh viewer launch creates a real top-level window, responds, and terminates cleanly; the blocker is resolved with pasted evidence; the print test remains green.",
+  "notes": "W-6 bounded attempt succeeded: the wedged console session recovered without a code change. No source change.",
+  "evidence": "docs/evidence/ui/T-0362.md"
+}
