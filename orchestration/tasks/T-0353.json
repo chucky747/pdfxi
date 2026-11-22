@@ -1,0 +1,19 @@
+{
+  "id": "T-0353",
+  "lane": "convert",
+  "title": "Loupe and gesture host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0352"],
+  "owns": [
+    "crates/pdfxi-cli/src/loupe.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0353.md",
+    "orchestration/feature-updates/T-0353.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli loupe_ passes; pdfxi loupe builds the real LoupeModel from a page, applies drag/scroll/pinch/zoom/centre/reset gestures and reports geometry; VIEW-018 moves to verified.",
+  "notes": "Headless host for the loupe model. Native input capture, OS window and magnified raster rendering remain the GUI boundary.",
+  "evidence": "docs/evidence/cli/T-0353.md"
+}

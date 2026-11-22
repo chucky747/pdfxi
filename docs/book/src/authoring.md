@@ -53,6 +53,7 @@ command.
 | Security envelopes and attachment encryption | `SEC-010` | verified | `pdfxi-security::security_envelope` | `envelope seal/open/verify` |
 | Policy-based protection replacement | `SEC-011` | verified | `pdfxi-security::policy` | `protection apply` |
 | Full screen and presentation mode | `VIEW-012` | verified | `pdfxi-app::presentation` | `present` |
+| Loupe magnifier and gesture navigation | `VIEW-018` | verified | `pdfxi-app::loupe` | `loupe` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -710,6 +711,23 @@ is checked as PDF/X-4 plus the document-part requirements: a catalog
 page (`PDFVT1.DPART_PAGE_UNASSIGNED`). A passing verdict is a deterministic
 subset preflight, not a conformance certification; reported-only constraints
 list what the profile did not inspect.
+### Loupe and gestures
+
+`VIEW-018` (verified) hosts the window-free loupe model from `pdfxi_app::loupe`:
+
+```text
+pdfxi loupe FILE [--page N] [--zoom Z] [--lens WxH] [--shape rectangle|circle]
+    [--viewport WxH] [--center X,Y] [--commands GESTURES] [--json]
+```
+
+The page's real media size builds the lens (default viewport = page) and zoom is
+clamped to 1..=16. `--commands` is a semicolon-separated list of `drag:DX,DY`,
+`scroll:DX,DY`, `pinch:FACTOR`, `zoom-in`, `zoom-out`, `center:X,Y` and `reset`.
+The report gives the lens and destination/source rectangles, page/screen
+centres, bounded drag, containment, the page/screen round trip and each step's
+effect. Native input capture and magnified raster rendering remain the GUI host
+boundary.
+
 ### Presentation mode
 
 `VIEW-012` (verified) hosts the window-free presentation state machine from

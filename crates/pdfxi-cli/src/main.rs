@@ -136,6 +136,8 @@ mod export;
 
 // Byte-level subset preflight (`preflight`) and printer-mark placement
 // (`marks`) added for T-0131. Both use the core application API.
+/// pdfxi loupe: window-free magnifier and gesture navigation.
+mod loupe;
 mod marks;
 mod preflight;
 /// pdfxi prepress: trapping presets and flattening policy.
@@ -1016,6 +1018,36 @@ enum Command {
         /// Destination for the normalized PDF; defaults to a sibling file.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect the loupe magnifier and apply gesture navigation.
+    Loupe {
+        /// Source PDF.
+        input: PathBuf,
+        /// One-based page.
+        #[arg(long, default_value_t = 1)]
+        page: usize,
+        /// Magnification (clamped to 1..=16).
+        #[arg(long, default_value_t = 2.0)]
+        zoom: f32,
+        /// Lens size as `WxH`.
+        #[arg(long, default_value = "200x200")]
+        lens: String,
+        /// Lens shape: `rectangle` or `circle`.
+        #[arg(long, default_value = "rectangle")]
+        shape: String,
+        /// Viewport size as `WxH` (defaults to the page size).
+        #[arg(long, value_name = "WxH")]
+        viewport: Option<String>,
+        /// Lens centre in page space as `X,Y`.
+        #[arg(long, value_name = "X,Y")]
+        center: Option<String>,
+        /// Semicolon-separated gestures: `drag:DX,DY`, `scroll:DX,DY`,
+        /// `pinch:FACTOR`, `zoom-in`, `zoom-out`, `center:X,Y`, `reset`.
+        #[arg(long, default_value = "")]
+        commands: String,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -4812,6 +4844,27 @@ fn run_cli() -> anyhow::Result<()> {
             output,
             json,
         } => preflight::run_preflight(&profile, &input, fix, output.as_deref(), json),
+        Command::Loupe {
+            input,
+            page,
+            zoom,
+            lens,
+            shape,
+            viewport,
+            center,
+            commands,
+            json,
+        } => loupe::inspect(
+            &input,
+            page,
+            zoom,
+            &lens,
+            &shape,
+            viewport.as_deref(),
+            center.as_deref(),
+            &commands,
+            json,
+        ),
         Command::Present {
             input,
             commands,

@@ -6169,30 +6169,50 @@ title = "Find text in a document and select copy text"
 docs = [
     "crates/pdfxi-app/src/loupe.rs",
     "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-cli/src/loupe.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/app/T-0173.md",
+    "docs/evidence/cli/T-0353.md",
 ]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0173.md: 4 new loupe::tests plus the 10 prior loupe tests all pass; cargo test -p pdfxi-app 381/0 and --features ui 444/0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0353.md"
 id = "VIEW-018"
 notes = """
-Verified for the deterministic loupe/gesture model only (ADR 0008). The existing
-geometry validation, zoom clamping, exact page/screen inverses, source/dest rect
-mapping, shape-aware hit testing, bounded drag/scroll/pinch handling and
-determinism are now complete at model level. T-0173 adds
-`LoupeModel::reset_accumulated_drag()`: the bounded drag total previously had no
-reset path and could only saturate for the whole session, so a host could not
-start a fresh per-pointer gesture sequence; panning and zoom state are left
-untouched by the reset. New tests pin accumulator reset/restart, half-open
-rectangle and closed-radius circle hit-test boundaries, `screen_to_page`
-destination-corner inversion plus exact centre mapping, and the distinction
-that scroll deltas pan without feeding the drag accumulator.
+Verified for the deterministic loupe/gesture model only (ADR 0008). Geometry
+validation, zoom clamping, exact page/screen inverses, source/dest mapping,
+shape-aware hit testing, bounded drag/scroll/pinch handling and determinism are
+complete; T-0173 added LoupeModel::reset_accumulated_drag so a host can start a
+fresh per-pointer sequence without disturbing pan/zoom, plus boundary and
+corner-inversion tests.
 
-Remaining scope is the host boundary and is deliberately not claimed: no native
-pointer/scroll/pinch event capture, no OS window, and no magnified-raster
-rendering. The host feeds `GestureDelta`s into `apply` and draws `dest_rect`.
+T-0353 supplies the host. `pdfxi loupe FILE [--page N] [--zoom Z] [--lens WxH]
+[--shape rectangle|circle] [--viewport WxH] [--center X,Y] [--commands
+GESTURES] [--json]` reads the real page media size (default viewport = page),
+builds LoupeModel::new (clamping zoom to 1..=16) and applies a semicolon-
+separated gesture list: drag:DX,DY, scroll:DX,DY, pinch:FACTOR, zoom-in,
+zoom-out, center:X,Y and reset. The report gives page/viewport/lens geometry,
+requested and applied zoom, lens centre in page and screen space, dest_rect,
+source_rect, accumulated drag, shape-aware containment, the
+screen_to_page(page_to_screen(center)) round trip, and every step's effect and
+resulting zoom/centre.
+
+Evidence: a 612x792 page with a circular 200x150 lens at viewport 612x792 steps
+drag:40,-20 (panned, centre 286,406), scroll:10,10 (panned, 291,411), pinch:1.5
+(zoomed to 3), zoom-in (3.75), reset (ignored) and center:0,0 (panned) with
+dest [206,321,200,150]; a 3x + pinch:2 run reaches 6x and contains its screen
+centre; a 20x request clamps to 16x. Page 0/9, zoom 0, a zero lens, a bad
+viewport, an unknown shape, a bad centre, unknown/partial commands and a
+non-PDF are typed errors.
+
+Gates: CLI loupe_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: the complete loupe/gesture model is user-reachable from the CLI on real
+pages. Native pointer/scroll/pinch capture, the OS window and magnified raster
+rendering remain the GUI host boundary and are not claimed.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "loupe::tests::new_validates_geometry_and_centres_the_lens",
     "loupe::tests::zoom_is_bounded_and_sanitized",
@@ -6208,6 +6228,8 @@ tests = [
     "loupe::tests::hit_testing_boundaries_are_half_open_and_radius_closed",
     "loupe::tests::screen_to_page_maps_dest_corners_to_source_corners",
     "loupe::tests::scroll_deltas_do_not_feed_the_drag_accumulator",
+    "cli::loupe_inspects_and_applies_gestures",
+    "cli::loupe_rejects_bad_geometry_and_commands",
 ]
 title = "Loupe magnifier and gesture navigation"
 

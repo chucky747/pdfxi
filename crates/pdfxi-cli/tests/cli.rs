@@ -2515,6 +2515,131 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// loupe: window-free magnifier and gestures (T-0353)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loupe_inspects_and_applies_gestures() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+    let stepped = run(&[
+        "loupe",
+        pdf.arg(),
+        "--page",
+        "1",
+        "--zoom",
+        "2",
+        "--lens",
+        "200x150",
+        "--shape",
+        "circle",
+        "--viewport",
+        "612x792",
+        "--center",
+        "306,396",
+        "--commands",
+        "drag:40,-20;scroll:10,10;pinch:1.5;zoom-in;reset;center:0,0",
+        "--json",
+    ]);
+    assert!(stepped.status.success(), "stderr: {}", stderr(&stepped));
+    let value: Value = serde_json::from_str(&stdout(&stepped)).expect("loupe JSON");
+    assert_eq!(value["page"], 1);
+    assert_eq!(value["page_width"], 612.0);
+    assert_eq!(value["page_height"], 792.0);
+    assert_eq!(value["viewport_width"], 612.0);
+    assert_eq!(value["shape"], "circle");
+    assert_eq!(value["requested_zoom"], 2.0);
+    assert_eq!(value["zoom"], 3.75);
+    assert_eq!(value["lens_width"], 200.0);
+    assert_eq!(value["lens_height"], 150.0);
+    assert_eq!(value["center_page"]["x"], 0.0);
+    assert_eq!(value["center_page"]["y"], 0.0);
+    assert_eq!(value["dest_rect"]["width"], 200.0);
+    assert_eq!(value["dest_rect"]["height"], 150.0);
+    assert_eq!(value["contains_screen_center"], true);
+    let effects: Vec<&str> = value["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|step| step["effect"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        effects,
+        ["panned", "panned", "zoomed", "zoomed", "ignored", "panned"]
+    );
+    let zooms: Vec<f64> = value["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|step| step["zoom"].as_f64().unwrap_or(0.0))
+        .collect();
+    assert_eq!(zooms, [2.0, 2.0, 3.0, 3.75, 3.75, 3.75]);
+    assert_eq!(value["accumulated_drag"]["x"], 0.0);
+    assert_eq!(value["accumulated_drag"]["y"], 0.0);
+
+    let clamped = run(&[
+        "loupe",
+        pdf.arg(),
+        "--zoom",
+        "20",
+        "--lens",
+        "240x180",
+        "--commands",
+        "pinch:2",
+        "--json",
+    ]);
+    assert!(clamped.status.success(), "stderr: {}", stderr(&clamped));
+    let value: Value = serde_json::from_str(&stdout(&clamped)).expect("loupe JSON");
+    assert_eq!(value["requested_zoom"], 20.0);
+    assert_eq!(value["zoom"], 16.0);
+    assert_eq!(value["shape"], "rectangle");
+    assert_eq!(value["steps"][0]["zoom"], 16.0);
+    assert!(
+        (value["round_trip"]["x"].as_f64().unwrap_or(-1.0)
+            - value["center_page"]["x"].as_f64().unwrap_or(0.0))
+        .abs()
+            < 0.001
+    );
+    assert!(value["contains_page_center"].as_bool().unwrap_or(false));
+
+    let text = run(&["loupe", pdf.arg()]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    assert!(stdout(&text).contains("zoom: 2 (requested 2)"));
+}
+
+#[test]
+fn loupe_rejects_bad_geometry_and_commands() {
+    let pdf = TempPdf::new(&t0131_roomy_pdf());
+    let cases = [
+        (vec!["--page", "0"], "one-based"),
+        (vec!["--page", "9"], "outside"),
+        (vec!["--zoom", "0"], "finite and positive"),
+        (vec!["--lens", "0x100"], "finite positive"),
+        (vec!["--viewport", "wide"], "--viewport"),
+        (vec!["--shape", "square"], "unknown lens shape"),
+        (vec!["--center", "a,b"], "--center"),
+        (vec!["--commands", "swipe"], "unknown loupe command"),
+        (vec!["--commands", "drag:1"], "needs DX,DY"),
+        (vec!["--commands", "pinch:x"], "pinch factor"),
+    ];
+    for (args, needle) in cases {
+        let mut command = vec!["loupe", pdf.arg()];
+        command.extend(args.iter().copied());
+        let output = run(&command);
+        assert!(!output.status.success(), "args: {args:?}");
+        assert!(
+            stderr(&output).contains(needle),
+            "{needle}: {}",
+            stderr(&output)
+        );
+    }
+
+    let bad = TempPdf::new(b"not a pdf");
+    let output = run(&["loupe", bad.arg()]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("parse"), "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
 // present: window-free presentation mode (T-0352)
 // ---------------------------------------------------------------------------
 
