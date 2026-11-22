@@ -1331,87 +1331,99 @@ title = "Split and merge documents"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/header_footer.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0125.md",
+    "crates/pdfxi-core/src/pages.rs",
+    "crates/pdfxi-cli/src/decorate.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0286.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 185 passed, 0 failed, including 8 new header_footer tests (22 in the module). fmt/clippy/doc/workspace-check all EXIT=0. Full output in docs/evidence/author/T-0125.md."
+evidence = "docs/evidence/cli/T-0286.md"
 id = "EDIT-008"
 notes = """
-Library contract complete: the six-slot overlay model now renders {page},
-{pages}, {date}, {title} and {filename} tokens with margins, left/center/right
-alignment, five number formats with offset and prefix/suffix, odd/even/first-page
-and alternate (every/offset) selection, rotation/MediaBox-aware transforms,
-deterministic byte output, and typed errors (InvalidAlternateStride,
-PageSetLengthMismatch, PageIndexOutOfRange). render_page_set applies a layout to
-a whole page set; compose_page_set composes per-page bytes copy-on-write. Output
-is PDF content-stream bytes (this crate has no full PDF writer), not a complete
-PDF file. No desktop UI or CLI exposure in this task.
+Verified through a new writer operation and a CLI host. `PageOperation::Stamp`
+and `StampPages` append an overlay content stream to each targeted page and merge
+the overlay's fonts and /ExtGState entries into a direct copy of the page's
+resource dictionary under names the page does not already use, rewriting the
+overlay's resource tokens to match; the stamp is therefore ordinary page content
+(rendered, searched, extracted) and a page that already used /F1 keeps its font.
+`Document::page_frame(index)` exposes the media box and effective rotation the
+overlay renderers need.
+
+`pdfxi decorate header-footer <FILE> --out PATH [--header TEXT] [--footer TEXT]
+[--side left|center|right] [--font-size N] [--margin N] [--title T] [--date D]
+[--json]` renders the pdfxi-edit six-slot layout per page and stamps it. Templates
+accept {page}, {pages}, {date}, {title} and {filename}; an unknown placeholder is
+a typed error.
+
+Evidence on fixtures/realworld/powerpoint-slides.pdf: three pages stamped with
+header "Quarterly Review" and footer "Page {page} of {pages}"; pdfxi text shows
+"Quarterly ReviewPage 1 of 3", "Page 2 of 3" and "Page 3 of 3" appended to each
+page's original text, which is preserved.
+
+Gates: cargo test -p pdfxi-core --lib pages = 25 passed; cargo test -p pdfxi-cli
+= 37 bin + 121 integration + 1 doc test; clippy --workspace --all-targets
+--all-features -D warnings = 0; fmt --all --check = 0.
+
+Scope: cover pages and alternate/odd-even selection are model-level and not
+exposed as CLI flags yet; the six-slot model, tokens, margins, alignment,
+numbering formats, page filters and rotation are.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
-    "token_substitution_renders_all_token_kinds",
-    "page_number_formats_and_start_offset",
-    "odd_even_and_first_page_suppression",
-    "all_six_slots_render_into_one_stream",
-    "escaped_literal_strings_are_valid_and_deterministic",
-    "rotation_transform_accounts_for_media_box_origin",
-    "overlay_bytes_are_deterministic",
-    "invalid_configuration_is_rejected",
-    "compose_content_preserves_original_bytes",
-    "suppressed_page_renders_empty_overlay",
-    "per_slot_style_produces_multiple_font_resources",
-    "page_index_out_of_range_is_rejected",
-    "number_for_rejects_unrepresentable_and_overflowing_indices",
-    "substitute_propagates_numbering_overflow",
-    "header_footer::tests::token_substitution_includes_filename_token",
-    "header_footer::tests::alternate_selection_stride_and_offset",
-    "header_footer::tests::zero_alternate_stride_is_rejected",
+    "pages::tests::stamp_appends_content_and_merges_fonts_without_collisions",
+    "pages::tests::stamp_placeholder_replacement_respects_token_boundaries",
+    "pages::tests::invalid_stamp_overlays_are_rejected",
+    "cli::decorate_header_footer_stamps_every_page",
+    "cli::decorate_header_footer_json_reports_the_page_set",
+    "cli::decorate_header_footer_rejects_bad_templates",
     "header_footer::tests::render_page_set_applies_layout_over_all_pages",
     "header_footer::tests::render_page_set_respects_suppression_and_numbering",
-    "header_footer::tests::compose_page_set_is_copy_on_write_and_deterministic",
-    "header_footer::tests::compose_page_set_length_mismatch_is_typed",
-    "header_footer::tests::filename_token_renders_into_overlay_stream",
 ]
 title = "Headers footers and page numbering"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/watermark.rs",
-    "docs/evidence/author/T-0125.md",
+    "crates/pdfxi-core/src/pages.rs",
+    "crates/pdfxi-cli/src/decorate.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0286.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 185 passed, 0 failed, including 3 new watermark page-set tests (14 in the module). fmt/clippy/doc/workspace-check all EXIT=0. Full output in docs/evidence/author/T-0125.md."
+evidence = "docs/evidence/cli/T-0286.md"
 id = "EDIT-009"
 notes = """
-Library contract complete: typed Watermark with text/vector/image content,
-style (font/size/colour/opacity), rotation, position (center/tile/diagonal/
-absolute), scale, page range, front/behind placement and first-page/odd-even/
-alternate suppression. Deterministic additive content streams with
-MediaBox-origin and /Rotate-aware transforms, ExtGState alpha, copy-on-write
-composition and resource merging that preserves unknown keys.
-render_watermark_page_set applies one mark across a page set deterministically.
-No desktop UI or CLI exposure in this task.
+Verified through the same writer operation and a CLI host. `pdfxi decorate
+watermark <FILE> --out PATH --text TEXT [--font-size N] [--opacity F]
+[--rotation D] [--tile] [--json]` renders the pdfxi-edit text watermark per page,
+merges its font and alpha ExtGState into the page resources and stamps it in
+front of the content.
+
+Evidence on fixtures/realworld/powerpoint-slides.pdf: "DRAFT" at 72pt, opacity
+0.2, rotation 45 on all three pages; pdfxi text shows DRAFT on every page, the
+page /Contents arrays gain the overlay stream, and the output contains
+/ExtGState and /ca 0.2. --tile repeats the mark (the test asserts more than one
+COPY on page 1), and opacity outside 0..=1 or empty text is rejected.
+
+Gates: cargo test -p pdfxi-cli decorate = 6 passed; clippy -D warnings = 0; fmt
+--all --check = 0.
+
+Scope: text watermarks with opacity, rotation, centring, tiling and front
+placement are exposed; vector and image marks and behind placement are model-only
+for now and are not claimed.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "pages::tests::stamp_appends_content_and_merges_fonts_without_collisions",
+    "pages::tests::invalid_stamp_overlays_are_rejected",
+    "cli::decorate_watermark_adds_text_and_alpha",
+    "cli::decorate_watermark_tiles_repeat_the_mark",
+    "cli::decorate_watermark_rejects_bad_alpha_and_states",
     "watermark::tests::text_watermark_geometry",
-    "watermark::tests::rotation_transform_composes_page_and_mark_rotation",
     "watermark::tests::tiled_placement_emits_grid_of_marks",
     "watermark::tests::opacity_extgstate_is_emitted_and_patched",
-    "watermark::tests::behind_vs_front_ordering_and_copy_on_write",
-    "watermark::tests::page_range_and_suppression",
     "watermark::tests::deterministic_bytes",
-    "watermark::tests::resource_preservation_and_collision",
-    "watermark::tests::invalid_configuration_is_rejected",
-    "watermark::tests::vector_and_image_marks_and_missing_xobject",
-    "watermark::tests::diagonal_adds_implicit_tilt",
-    "watermark::tests::render_watermark_page_set_applies_and_suppresses_deterministically",
-    "watermark::tests::render_watermark_page_set_alternate_selection",
-    "watermark::tests::render_watermark_page_set_rejects_invalid_config",
 ]
 title = "Watermarks and backgrounds"
 

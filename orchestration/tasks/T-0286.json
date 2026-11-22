@@ -1,0 +1,23 @@
+{
+  "id": "T-0286",
+  "lane": "core",
+  "title": "Page-stamp operation and the decorate host for headers, footers and watermarks",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0285"],
+  "owns": [
+    "crates/pdfxi-core/src/pages.rs",
+    "crates/pdfxi-core/src/page.rs",
+    "crates/pdfxi-core/src/lib.rs",
+    "crates/pdfxi-cli/src/decorate.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/Cargo.toml",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0286.md",
+    "orchestration/feature-updates/T-0286.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-core --lib pages and cargo test -p pdfxi-cli pass; pdfxi decorate header-footer stamps extractable per-page headers and footers and pdfxi decorate watermark stamps extractable text with merged alpha on real fixtures; EDIT-008 and EDIT-009 move to verified.",
+  "notes": "PageOperation::Stamp/StampPages append an overlay content stream and merge its fonts and ExtGState entries into a direct copy of the page resources under collision-free names; Document::page_frame exposes media box and rotation; the decorate command group hosts the pdfxi-edit header/footer and watermark renderers.",
+  "evidence": "docs/evidence/cli/T-0286.md"
+}

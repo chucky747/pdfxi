@@ -82,3 +82,15 @@ impl Page {
         self.media_box.height()
     }
 }
+
+/// The page frame a host needs to place an overlay on one page.
+///
+/// `media` is the page's media box in points and `rotation` is the effective
+/// `/Rotate` (inherited values flattened, normalized to 0, 90, 180 or 270).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageFrame {
+    /// `/MediaBox` as `[left, bottom, right, top]` in points.
+    pub media: [f64; 4],
+    /// Effective `/Rotate` in degrees.
+    pub rotation: u16,
+}

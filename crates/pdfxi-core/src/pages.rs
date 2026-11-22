@@ -115,6 +115,49 @@ pub enum PageOperation {
         /// Target height in points; must be finite and positive.
         height: f64,
     },
+    /// Stamp a pre-rendered content overlay on the targeted pages.
+    ///
+    /// The overlay is wrapped in a Form XObject whose `/BBox` is the page media
+    /// box and whose `/Resources` carry the overlay's own fonts and graphics
+    /// states, so the page's existing resource names cannot collide with it.
+    /// Each stamped page gets a direct `/Resources` dictionary derived from its
+    /// own, extended with one uniquely named `/XObject` entry. The overlay is
+    /// painted after the page content ([`StampOverlay::front`]) or before it.
+    ///
+    /// The overlay bytes are interpreted in the page's own coordinate space;
+    /// callers that need `/Rotate`-aware placement must emit the transform
+    /// themselves (the `pdfxi-edit` overlay renderers do).
+    Stamp {
+        /// Which pages to stamp.
+        target: RotationTarget,
+        /// Overlay content and the resources it references.
+        overlay: StampOverlay,
+    },
+    /// Stamp a different overlay on each listed page position.
+    ///
+    /// This is the page-set form of [`PageOperation::Stamp`]: a host that
+    /// renders one overlay per page (page numbers, per-page stamps) can pass
+    /// them all in one operation. Each position must be unique and in range;
+    /// positions without an entry are left untouched.
+    StampPages {
+        /// `(selection position, overlay)` pairs, in application order.
+        overlays: Vec<(usize, StampOverlay)>,
+    },
+}
+
+/// A content overlay stamped on pages by [`PageOperation::Stamp`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct StampOverlay {
+    /// Content-stream bytes in the page's coordinate space.
+    pub content: Vec<u8>,
+    /// `(resource name, base font name)` pairs, e.g. `("F1", "Helvetica")`.
+    ///
+    /// Each entry becomes a standard Type 1 font in the overlay's own resources.
+    pub fonts: Vec<(String, String)>,
+    /// `(resource name, alpha)` pairs written as `/ExtGState` entries.
+    pub ext_gstates: Vec<(String, f64)>,
+    /// Paint above the existing content when `true`, beneath it when `false`.
+    pub front: bool,
 }
 
 /// One page in a plan's working selection.
@@ -132,6 +175,8 @@ struct SelectionEntry {
     crop_box: Option<[f64; 4]>,
     /// Content transform `[a, b, c, d, e, f]` written around the contents.
     content_transform: Option<[f64; 6]>,
+    /// Overlays stamped on this page, in plan order.
+    stamps: Vec<StampOverlay>,
 }
 
 /// A deterministic, reusable description of a page-level edit.
@@ -342,6 +387,7 @@ pub(crate) fn apply(document: &Document, plan: &PagePlan) -> Result<Vec<u8>> {
             media_box: None,
             crop_box: None,
             content_transform: None,
+            stamps: Vec::new(),
         });
     }
 
@@ -407,6 +453,7 @@ pub(crate) fn apply(document: &Document, plan: &PagePlan) -> Result<Vec<u8>> {
                             media_box: None,
                             crop_box: None,
                             content_transform: None,
+                            stamps: Vec::new(),
                         });
                     }
                 }
@@ -495,6 +542,33 @@ pub(crate) fn apply(document: &Document, plan: &PagePlan) -> Result<Vec<u8>> {
                         slot.media_box = Some([0.0, 0.0, *width, *height]);
                         slot.crop_box = Some([0.0, 0.0, *width, *height]);
                         slot.content_transform = Some([scale, 0.0, 0.0, scale, offset_x, offset_y]);
+                    }
+                }
+            }
+            PageOperation::Stamp { target, overlay } => {
+                validate_overlay(overlay)?;
+                for position in rotation_positions(target, selection.len())? {
+                    if let Some(slot) = selection.get_mut(position) {
+                        slot.stamps.push(overlay.clone());
+                    }
+                }
+            }
+            PageOperation::StampPages { overlays } => {
+                let mut seen = HashSet::new();
+                for (position, overlay) in overlays {
+                    validate_overlay(overlay)?;
+                    if *position >= selection.len() {
+                        return Err(Error::InvalidPageIndex {
+                            index: *position,
+                            len: selection.len(),
+                            context: "stamp target",
+                        });
+                    }
+                    if !seen.insert(*position) {
+                        return Err(Error::DuplicatePageIndex(*position));
+                    }
+                    if let Some(slot) = selection.get_mut(*position) {
+                        slot.stamps.push(overlay.clone());
                     }
                 }
             }
@@ -598,6 +672,8 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
     // Build a fresh page dictionary for each selected position.
     let mut new_pages: Vec<(u32, Object)> = Vec::with_capacity(selection.len());
     let mut extra_objects: Vec<(u32, Object)> = Vec::new();
+    let mut font_counter = 0usize;
+    let mut graphics_counter = 0usize;
     for (position, entry) in selection.iter().enumerate() {
         let source = sources[entry.source];
         let structure = source.supported_structure()?;
@@ -625,13 +701,13 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
             "Rotate".to_owned(),
             Object::Integer(i64::from(entry.rotation)),
         );
-        let mut media_box = Vec::with_capacity(4);
         let media = entry.media_box.unwrap_or([
             page.media_box.left,
             page.media_box.bottom,
             page.media_box.right,
             page.media_box.top,
         ]);
+        let mut media_box = Vec::with_capacity(4);
         for coordinate in media {
             media_box.push(if coordinate.fract() == 0.0 {
                 Object::Integer(coordinate as i64)
@@ -668,6 +744,70 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
                 None => Object::Null,
             };
             dictionary.insert("Resources".to_owned(), value);
+        }
+
+        // Stamp overlays are appended (or prepended) as their own content
+        // streams, with their fonts and graphics states merged into a direct
+        // copy of this page's resource dictionary. Resource names in the overlay
+        // are placeholders that are rewritten to names this page does not use
+        // yet, so a page `/F1` can never collide with a stamp `/F1`.
+        if !entry.stamps.is_empty() {
+            let store = object_store
+                .get(entry.source)
+                .ok_or(Error::CannotSerialize(
+                    "page source is missing from the object store".to_owned(),
+                ))?;
+            let base = match page.resources {
+                Some(resources) => store.get(&resources.number),
+                None => None,
+            };
+            let mut resources = match base {
+                Some(object) => resolved_dictionary(object, store)?,
+                None => match dictionary.get("Resources") {
+                    Some(object) => resolved_dictionary(object, store)?,
+                    None => Dictionary::new(),
+                },
+            };
+            let mut fonts = match resources.get("Font") {
+                Some(object) => resolved_dictionary(object, store)?,
+                None => Dictionary::new(),
+            };
+            let mut graphics = match resources.get("ExtGState") {
+                Some(object) => resolved_dictionary(object, store)?,
+                None => Dictionary::new(),
+            };
+            let mut behind = Vec::new();
+            let mut front = Vec::new();
+            for overlay in &entry.stamps {
+                let content = merge_stamp_resources(
+                    overlay,
+                    &mut fonts,
+                    &mut graphics,
+                    &mut font_counter,
+                    &mut graphics_counter,
+                )?;
+                let number = allocate()?;
+                extra_objects.push((number, content_stream(content)));
+                let invocation = Object::Reference(ObjectId::new(number, 0));
+                if overlay.front {
+                    front.push(invocation);
+                } else {
+                    behind.push(invocation);
+                }
+            }
+            resources.insert("Font".to_owned(), Object::Dictionary(fonts));
+            resources.insert("ExtGState".to_owned(), Object::Dictionary(graphics));
+            dictionary.insert("Resources".to_owned(), Object::Dictionary(resources));
+
+            let contents = dictionary.get("Contents").cloned().unwrap_or(Object::Null);
+            let mut items = behind;
+            match contents {
+                Object::Array(existing) => items.extend(existing),
+                Object::Null => {}
+                other => items.push(other),
+            }
+            items.extend(front);
+            dictionary.insert("Contents".to_owned(), Object::Array(items));
         }
 
         let number = *page_numbers.get(position).ok_or(Error::CannotSerialize(
@@ -945,6 +1085,23 @@ fn validate_operation_shape(operation: &PageOperation) -> Result<()> {
             }
             Ok(())
         }
+        PageOperation::Stamp { target, overlay } => {
+            if let RotationTarget::Indices(indices) = target {
+                require_non_empty(indices)?;
+            }
+            validate_overlay(overlay)
+        }
+        PageOperation::StampPages { overlays } => {
+            if overlays.is_empty() {
+                return Err(Error::CannotSerialize(
+                    "stamp-pages operation has no overlays".to_owned(),
+                ));
+            }
+            for (_, overlay) in overlays {
+                validate_overlay(overlay)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -978,6 +1135,122 @@ fn content_stream(data: Vec<u8>) -> Object {
         Object::Integer(i64::try_from(data.len()).unwrap_or(i64::MAX)),
     );
     Object::Stream { dictionary, data }
+}
+
+/// Validate one stamp overlay before it is written.
+fn validate_overlay(overlay: &StampOverlay) -> Result<()> {
+    if overlay.content.is_empty() {
+        return Err(Error::CannotSerialize(
+            "stamp overlay has no content".to_owned(),
+        ));
+    }
+    for (name, base) in &overlay.fonts {
+        if name.is_empty() || base.is_empty() {
+            return Err(Error::CannotSerialize(
+                "stamp overlay font has an empty name".to_owned(),
+            ));
+        }
+    }
+    for (name, alpha) in &overlay.ext_gstates {
+        if name.is_empty() || !alpha.is_finite() || !(0.0..=1.0).contains(alpha) {
+            return Err(Error::CannotSerialize(format!(
+                "stamp overlay alpha {name:?}={alpha} is not a finite value in 0..=1"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Rewrite one overlay's resource placeholders to page-unique names and return
+/// its content bytes.
+///
+/// `fonts` and `graphics` are the page's current resource dictionaries, which
+/// are extended in place. A placeholder is replaced only as the exact token
+/// `/<placeholder>`, so a font named `F1` cannot corrupt another token that
+/// merely contains those characters.
+fn merge_stamp_resources(
+    overlay: &StampOverlay,
+    fonts: &mut Dictionary,
+    graphics: &mut Dictionary,
+    next_font: &mut usize,
+    next_graphics: &mut usize,
+) -> Result<Vec<u8>> {
+    let mut content = overlay.content.clone();
+    for (placeholder, base) in &overlay.fonts {
+        let name = unique_name("F", fonts, next_font)?;
+        content = replace_token(&content, placeholder, &name);
+        let mut font = Dictionary::new();
+        font.insert("Type".to_owned(), Object::Name("Font".to_owned()));
+        font.insert("Subtype".to_owned(), Object::Name("Type1".to_owned()));
+        font.insert("BaseFont".to_owned(), Object::Name(base.clone()));
+        fonts.insert(name, Object::Dictionary(font));
+    }
+    for (placeholder, alpha) in &overlay.ext_gstates {
+        let name = unique_name("GS", graphics, next_graphics)?;
+        content = replace_token(&content, placeholder, &name);
+        let mut state = Dictionary::new();
+        state.insert("Type".to_owned(), Object::Name("ExtGState".to_owned()));
+        state.insert("ca".to_owned(), Object::Real(*alpha));
+        state.insert("CA".to_owned(), Object::Real(*alpha));
+        graphics.insert(name, Object::Dictionary(state));
+    }
+    Ok(content)
+}
+
+/// Pick `<prefix><n>` that the resource dictionary does not already use.
+fn unique_name(prefix: &str, dictionary: &Dictionary, counter: &mut usize) -> Result<String> {
+    loop {
+        *counter = counter
+            .checked_add(1)
+            .ok_or_else(|| Error::CannotSerialize("resource name counter overflow".to_owned()))?;
+        let name = format!("{prefix}{counter}");
+        if dictionary.get(&name).is_none() {
+            return Ok(name);
+        }
+    }
+}
+
+/// Replace every exact `/<placeholder>` token in `content` with `/<name>`.
+fn replace_token(content: &[u8], placeholder: &str, name: &str) -> Vec<u8> {
+    let needle = format!("/{placeholder}");
+    let replacement = format!("/{name}");
+    let mut out = Vec::with_capacity(content.len());
+    let mut index = 0_usize;
+    while index < content.len() {
+        let rest = &content[index..];
+        if rest.starts_with(needle.as_bytes()) {
+            let after = index + needle.len();
+            // Only a whole token counts: the next byte must not continue the
+            // name (so `/F1` never matches `/F10`).
+            let boundary = content
+                .get(after)
+                .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_');
+            if boundary {
+                out.extend_from_slice(replacement.as_bytes());
+                index = after;
+                continue;
+            }
+        }
+        out.push(content[index]);
+        index += 1;
+    }
+    out
+}
+
+/// Resolve a resource object to a dictionary that can be copied and extended.
+fn resolved_dictionary(object: &Object, store: &BTreeMap<u32, Object>) -> Result<Dictionary> {
+    match object {
+        Object::Dictionary(dictionary) => Ok(dictionary.clone()),
+        Object::Reference(id) => match store.get(&id.number) {
+            Some(Object::Dictionary(dictionary)) => Ok(dictionary.clone()),
+            _ => Err(Error::MalformedPageTree(
+                "page /Resources is not a dictionary".to_owned(),
+            )),
+        },
+        _ => Err(Error::MalformedPageTree(
+            "page /Resources is not a dictionary".to_owned(),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -1607,5 +1880,88 @@ mod tests {
             })
             .expect_err("zero width must fail");
         assert!(matches!(error, Error::CannotSerialize(_)), "{error:?}");
+    }
+
+    #[test]
+    fn stamp_appends_content_and_merges_fonts_without_collisions() {
+        let document = Document::from_bytes(pages_pdf(2)).expect("fixture parses");
+        let overlay = StampOverlay {
+            content: b"BT /F1 12 Tf 72 40 Td (STAMPED) Tj ET\n".to_vec(),
+            fonts: vec![("F1".to_owned(), "Helvetica".to_owned())],
+            ext_gstates: vec![("GS0".to_owned(), 0.5)],
+            front: true,
+        };
+        let plan = PagePlan::identity()
+            .then(PageOperation::Stamp {
+                target: RotationTarget::Indices(vec![1]),
+                overlay,
+            })
+            .expect("stamp plan");
+        let bytes = document.apply_page_plan(&plan).expect("stamp applies");
+
+        let page_texts = texts(&bytes);
+        assert_eq!(page_texts.len(), 2);
+        assert!(page_texts[0].contains("Page 1"));
+        assert!(
+            !page_texts[0].contains("STAMPED"),
+            "only page 2 is stamped: {:?}",
+            page_texts[0]
+        );
+        assert!(page_texts[1].contains("Page 2"));
+        assert!(
+            page_texts[1].contains("STAMPED"),
+            "the stamp must be page content: {:?}",
+            page_texts[1]
+        );
+
+        // The page already used `/F1`; the overlay font is renamed, so both the
+        // original text and the stamp stay readable.
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(raw.contains("/BaseFont /Helvetica"));
+        assert!(raw.contains("/F2"), "overlay font must be renamed: {raw}");
+        assert!(raw.contains("/ExtGState"), "alpha must be merged: {raw}");
+        let reparsed = Document::from_bytes(bytes).expect("stamped output reparses");
+        assert_eq!(reparsed.page_count().expect("page count"), 2);
+    }
+
+    #[test]
+    fn stamp_placeholder_replacement_respects_token_boundaries() {
+        assert_eq!(
+            replace_token(b"/F1 12 Tf /F10 /F1", "F1", "F2"),
+            b"/F2 12 Tf /F10 /F2"
+        );
+        assert_eq!(replace_token(b"no tokens", "F1", "F2"), b"no tokens");
+    }
+
+    #[test]
+    fn invalid_stamp_overlays_are_rejected() {
+        let empty = PagePlan::identity()
+            .then(PageOperation::Stamp {
+                target: RotationTarget::All,
+                overlay: StampOverlay {
+                    content: Vec::new(),
+                    fonts: Vec::new(),
+                    ext_gstates: Vec::new(),
+                    front: true,
+                },
+            })
+            .expect_err("empty content must fail");
+        assert!(matches!(empty, Error::CannotSerialize(_)), "{empty:?}");
+
+        let bad_alpha = PagePlan::identity()
+            .then(PageOperation::Stamp {
+                target: RotationTarget::All,
+                overlay: StampOverlay {
+                    content: b"q Q".to_vec(),
+                    fonts: Vec::new(),
+                    ext_gstates: vec![("GS0".to_owned(), 1.5)],
+                    front: true,
+                },
+            })
+            .expect_err("alpha above 1 must fail");
+        assert!(
+            matches!(bad_alpha, Error::CannotSerialize(_)),
+            "{bad_alpha:?}"
+        );
     }
 }

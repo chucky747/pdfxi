@@ -27,6 +27,8 @@ pdfxi <COMMAND> --help
 | `reflow <FILE> [--width N] [--page N] [--json]` | Reading-order text column | verified (`VIEW-013`) |
 | `read-aloud <FILE> [--wpm N] [--page N] [--seek N] [--json]` | Deterministic utterance queue | verified (`VIEW-013`) |
 | `optimize <FILE> --out PATH [--remove-metadata] [--remove-optional] [--no-compress] [--json]` | Compact the object graph and report | verified (`EDIT-014`) |
+| `decorate header-footer <FILE> --out PATH [--header TEXT] [--footer TEXT] [--side left\|center\|right] [--json]` | Stamp headers and footers | verified (`EDIT-008`) |
+| `decorate watermark <FILE> --out PATH --text TEXT [--opacity F] [--rotation D] [--tile] [--json]` | Stamp a text watermark | verified (`EDIT-009`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -66,6 +68,11 @@ Commands are integration-tested by invoking the real binary; see
   that stream, so a file can still end up marginally larger after renumbering;
   the report prints the real signed size change. The report is byte-identical
   across runs on the same input.
+- `decorate` writes its overlay as real page content: the stamped text is
+  extractable and searchable, and the overlay's fonts and `/ExtGState` entries
+  are merged into a copy of each page's resources under names the page does not
+  already use. Placeholders are `{page}`, `{pages}`, `{date}`, `{title}` and
+  `{filename}`; an unknown placeholder is an error.
 
 Exit codes:
 
@@ -96,6 +103,8 @@ pdfxi compare .\fixtures\realworld\powerpoint-slides.pdf .\revised.pdf --lines
 pdfxi reflow .\fixtures\realworld\powerpoint-slides.pdf --width 40 --page 1
 pdfxi read-aloud .\fixtures\realworld\powerpoint-slides.pdf --wpm 150 --seek 1 --json
 pdfxi optimize .\fixtures\realworld\powerpoint-slides.pdf --out .\optimized.pdf
+pdfxi decorate header-footer .\fixtures\realworld\powerpoint-slides.pdf --out .\paged.pdf --footer "Page {page} of {pages}"
+pdfxi decorate watermark .\fixtures\realworld\powerpoint-slides.pdf --out .\draft.pdf --text DRAFT --opacity 0.2
 ```
 
 See [Automation](automation.md) for the action-file format and the staging-only

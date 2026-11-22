@@ -118,8 +118,8 @@ pub use office_drop::{
     validate_relative_name,
 };
 pub use optimizer::{CancellationToken, OptimizationReport, OptimizationResult, OptimizeOptions};
-pub use page::{Page, Rectangle};
-pub use pages::{PageOperation, PagePlan, RotationTarget};
+pub use page::{Page, PageFrame, Rectangle};
+pub use pages::{PageOperation, PagePlan, RotationTarget, StampOverlay};
 pub use parser::{XrefReport, XrefSectionKind, XrefSectionReport, inspect_xref};
 pub use preferences::{
     DeploymentPreferences, MAX_LOCALE_BYTES, MAX_PREFERENCES_PATH_BYTES, MAX_TOGGLE_NAME_BYTES,
@@ -512,6 +512,24 @@ impl Document {
             .as_ref()
             .map(|structure| structure.pages.len())
             .map_err(Clone::clone)
+    }
+
+    /// Return the media box and effective rotation of the page at `index`.
+    ///
+    /// This is the geometry a host needs to place an overlay: a header/footer
+    /// or watermark renderer needs the display dimensions and the page
+    /// rotation, not just the raw `/MediaBox`.
+    pub fn page_frame(&self, index: usize) -> Result<PageFrame> {
+        let page = self.page(index)?;
+        Ok(PageFrame {
+            media: [
+                page.media_box.left,
+                page.media_box.bottom,
+                page.media_box.right,
+                page.media_box.top,
+            ],
+            rotation: pages::effective_rotation(self, index)?,
+        })
     }
 
     /// Return metadata for the page at `index` in document order.

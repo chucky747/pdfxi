@@ -25,6 +25,9 @@ pdfxi-text = { workspace = true }
 # external dependency is introduced. `default-features = false` keeps the
 # optional renderer path out of these headless commands.
 pdfxi-convert = { workspace = true }
+# Header/footer, watermark and Bates models plus page geometry for the
+# decorate command group. A workspace crate, so no new external dependency.
+pdfxi-edit = { path = "../pdfxi-edit", version = "0.1.0" }
 pdfxi-accessibility = { workspace = true }
 # Optional native renderer used only by `pdfxi render`. Default builds keep the
 # CLI free of PDFium and still compile the command as a clear error path.

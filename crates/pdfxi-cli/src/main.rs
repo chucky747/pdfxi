@@ -83,6 +83,8 @@ mod pages;
 // Link annotations and embedded-file attachments (`links`, `attachments`).
 /// `pdfxi compare`: side-by-side revision compare of two PDFs.
 mod compare;
+/// `pdfxi decorate`: stamp headers and footers on pages.
+mod decorate;
 mod links;
 /// `pdfxi optimize`: rewrite a document with the core optimizer.
 mod optimize;
@@ -325,6 +327,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Stamp page decoration (headers, footers) onto every page.
+    Decorate {
+        /// The decoration to apply.
+        #[command(subcommand)]
+        command: DecorateCommand,
+    },
     /// Rewrite a document with the optimizer and report what changed.
     ///
     /// Compacts the object graph, drops unreachable objects, Flate-compresses
@@ -522,6 +530,76 @@ enum ActionCommand {
         /// written: the resolved path is only recorded in the outcome.
         #[arg(long, value_name = "DIR")]
         output_dir: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi decorate` command group.
+#[derive(Debug, Subcommand)]
+enum DecorateCommand {
+    /// Stamp a header and/or footer on every page.
+    ///
+    /// Text placeholders are `{page}`, `{pages}`, `{date}`, `{title}` and
+    /// `{filename}`; everything else is literal. `--side` chooses which of the
+    /// three header/footer slots the text occupies.
+    HeaderFooter {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the decorated document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Header template.
+        #[arg(long, value_name = "TEXT")]
+        header: Option<String>,
+        /// Footer template.
+        #[arg(long, value_name = "TEXT")]
+        footer: Option<String>,
+        /// Which slot the header and footer occupy.
+        #[arg(long, value_enum, default_value_t = decorate::Side::Center)]
+        side: decorate::Side,
+        /// Font size in points (4-48).
+        #[arg(long, default_value_t = 10.0)]
+        font_size: f32,
+        /// Page margin in points.
+        #[arg(long, default_value_t = 36.0)]
+        margin: f32,
+        /// Document title substituted for `{title}`.
+        #[arg(long, default_value = "")]
+        title: String,
+        /// Preformatted date substituted for `{date}`.
+        #[arg(long, default_value = "")]
+        date: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stamp a text watermark on every page.
+    ///
+    /// The mark is real page content: its text is extracted and searched like
+    /// any other text, and `--opacity` adds an `/ExtGState` alpha to the page.
+    Watermark {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the decorated document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Watermark text.
+        #[arg(long, value_name = "TEXT")]
+        text: String,
+        /// Font size in points (4-200).
+        #[arg(long, default_value_t = 72.0)]
+        font_size: f32,
+        /// Alpha in 0..=1.
+        #[arg(long, default_value_t = 0.15)]
+        opacity: f32,
+        /// Rotation in degrees.
+        #[arg(long, default_value_t = 45.0)]
+        rotation: f32,
+        /// Repeat the mark on a grid instead of centring it.
+        #[arg(long)]
+        tile: bool,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -948,6 +1026,54 @@ fn main() -> anyhow::Result<()> {
             !no_compress,
             json,
         ),
+        Command::Decorate { command } => match command {
+            DecorateCommand::HeaderFooter {
+                file,
+                out,
+                header,
+                footer,
+                side,
+                font_size,
+                margin,
+                title,
+                date,
+                json,
+            } => decorate::run_header_footer(
+                &file,
+                &out,
+                &decorate::HeaderFooterRequest {
+                    header: header.as_deref(),
+                    footer: footer.as_deref(),
+                    side,
+                    font_size,
+                    margin,
+                    title: &title,
+                    date: &date,
+                    json,
+                },
+            ),
+            DecorateCommand::Watermark {
+                file,
+                out,
+                text,
+                font_size,
+                opacity,
+                rotation,
+                tile,
+                json,
+            } => decorate::run_watermark(
+                &file,
+                &out,
+                &decorate::WatermarkRequest {
+                    text: &text,
+                    font_size,
+                    opacity,
+                    rotation,
+                    tile,
+                    json,
+                },
+            ),
+        },
         Command::Pages { command } => match command {
             PagesCommand::Extract { input, pages, out } => pages::extract(&input, &pages, &out),
             PagesCommand::Delete { input, pages, out } => pages::delete(&input, &pages, &out),

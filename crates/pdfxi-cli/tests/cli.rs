@@ -2753,6 +2753,192 @@ fn attachments_report_an_embedded_file() {
 }
 
 #[test]
+fn decorate_header_footer_stamps_every_page() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "decorate",
+        "header-footer",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--header",
+        "Quarterly Review",
+        "--footer",
+        "Page {page} of {pages}",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("stamped: 3"), "{text}");
+
+    let pages = page_texts(&out.path);
+    assert_eq!(pages.len(), 3);
+    for (index, page) in pages.iter().enumerate() {
+        assert!(
+            page.contains("Quarterly Review"),
+            "page {}: {page}",
+            index + 1
+        );
+        assert!(
+            page.contains(&format!("Page {} of 3", index + 1)),
+            "page {}: {page}",
+            index + 1
+        );
+    }
+    assert!(pages[0].contains("Lantern"), "original text is kept");
+}
+
+#[test]
+fn decorate_header_footer_json_reports_the_page_set() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "decorate",
+        "header-footer",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--header",
+        "{title}",
+        "--title",
+        "Board pack",
+        "--side",
+        "left",
+        "--font-size",
+        "12",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert_eq!(value["stamped"], 3);
+    assert_eq!(value["suppressed"], 0);
+    assert_eq!(value["font_size"], 12.0);
+    assert_eq!(value["header"], "{title}");
+}
+
+#[test]
+fn decorate_header_footer_rejects_bad_templates() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let no_template = run(&[
+        "decorate",
+        "header-footer",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+    ]);
+    assert!(!no_template.status.success());
+    assert!(
+        stderr(&no_template).contains("--header"),
+        "{}",
+        stderr(&no_template)
+    );
+
+    let unknown = run(&[
+        "decorate",
+        "header-footer",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--header",
+        "{nope}",
+    ]);
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("unknown placeholder"),
+        "{}",
+        stderr(&unknown)
+    );
+}
+
+#[test]
+fn decorate_watermark_adds_text_and_alpha() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "decorate",
+        "watermark",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--text",
+        "DRAFT",
+        "--opacity",
+        "0.2",
+        "--json",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let value: Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
+    assert_eq!(value["pages"], 3);
+    assert_eq!(value["stamped"], 3);
+    assert_eq!(value["text"], "DRAFT");
+    assert_eq!(value["opacity"], 0.2);
+    assert_eq!(value["rotation"], 45.0);
+
+    let pages = page_texts(&out.path);
+    assert!(pages.iter().all(|page| page.contains("DRAFT")), "{pages:?}");
+    let raw = fs::read(&out.path).expect("read output");
+    let text = String::from_utf8_lossy(&raw);
+    assert!(text.contains("/ExtGState"), "alpha resource is merged");
+    assert!(text.contains("/ca 0.2"), "alpha value is written");
+}
+
+#[test]
+fn decorate_watermark_tiles_repeat_the_mark() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let output = run(&[
+        "decorate",
+        "watermark",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--text",
+        "COPY",
+        "--tile",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let pages = page_texts(&out.path);
+    assert!(
+        pages[0].matches("COPY").count() > 1,
+        "a tiled mark repeats: {:?}",
+        pages[0]
+    );
+}
+
+#[test]
+fn decorate_watermark_rejects_bad_alpha_and_states() {
+    let source = real_fixture("powerpoint-slides.pdf");
+    let out = TempOut::new("pdf");
+    let bad = run(&[
+        "decorate",
+        "watermark",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--text",
+        "X",
+        "--opacity",
+        "1.5",
+    ]);
+    assert!(!bad.status.success());
+    assert!(stderr(&bad).contains("--opacity"), "{}", stderr(&bad));
+
+    let empty = run(&[
+        "decorate",
+        "watermark",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        out.arg(),
+        "--text",
+        "   ",
+    ]);
+    assert!(!empty.status.success());
+    assert!(stderr(&empty).contains("--text"), "{}", stderr(&empty));
+}
+
+#[test]
 fn optimize_rewrites_a_real_document_and_preserves_text() {
     let source = real_fixture("powerpoint-slides.pdf");
     let out = TempOut::new("pdf");
