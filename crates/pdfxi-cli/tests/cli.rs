@@ -3064,6 +3064,371 @@ fn annotate_rejects_bad_requests() {
 }
 
 #[test]
+fn outline_add_rename_move_remove_round_trip() {
+    let source = root_fixture("realworld/powerpoint-slides.pdf");
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let third = TempOut::new("pdf");
+    let fourth = TempOut::new("pdf");
+    let fifth = TempOut::new("pdf");
+    let sixth = TempOut::new("pdf");
+
+    let listed = run(&["outline", "list", source.to_str().expect("utf-8"), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    assert_eq!(value["present"], true);
+    assert_eq!(value["count"], 3);
+    assert_eq!(value["bookmarks"][0]["title"], "Slide 1: Lantern Slide");
+    assert_eq!(value["bookmarks"][2]["page"], 3);
+
+    let added = run(&[
+        "outline",
+        "add",
+        source.to_str().expect("utf-8"),
+        "--out",
+        first.arg(),
+        "--title",
+        "Appendix",
+        "--page",
+        "2",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    assert!(
+        stdout(&added).contains("3  Appendix  page 2"),
+        "{}",
+        stdout(&added)
+    );
+
+    let child = run(&[
+        "outline",
+        "add",
+        first.arg(),
+        "--out",
+        second.arg(),
+        "--title",
+        "Details",
+        "--page",
+        "1",
+        "--parent",
+        "3",
+    ]);
+    assert!(child.status.success(), "stderr: {}", stderr(&child));
+    assert!(
+        stdout(&child).contains("3.0  Details  page 1"),
+        "{}",
+        stdout(&child)
+    );
+
+    let renamed = run(&[
+        "outline",
+        "rename",
+        second.arg(),
+        "--out",
+        third.arg(),
+        "--path",
+        "3.0",
+        "--title",
+        "Appendix details",
+    ]);
+    assert!(renamed.status.success(), "stderr: {}", stderr(&renamed));
+
+    let moved = run(&[
+        "outline",
+        "move",
+        third.arg(),
+        "--out",
+        fourth.arg(),
+        "--path",
+        "3.0",
+        "--index",
+        "0",
+    ]);
+    assert!(moved.status.success(), "stderr: {}", stderr(&moved));
+    let moved_text = stdout(&moved);
+    assert!(
+        moved_text.contains("0  Appendix details  page 1"),
+        "{moved_text}"
+    );
+
+    let removed = run(&[
+        "outline",
+        "remove",
+        fourth.arg(),
+        "--out",
+        fifth.arg(),
+        "--path",
+        "4",
+    ]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+
+    let final_list = run(&["outline", "list", fifth.arg(), "--json"]);
+    assert!(
+        final_list.status.success(),
+        "stderr: {}",
+        stderr(&final_list)
+    );
+    let value: Value = serde_json::from_str(&stdout(&final_list)).expect("valid JSON");
+    assert_eq!(value["count"], 4);
+    assert_eq!(value["bookmarks"][0]["title"], "Appendix details");
+    assert_eq!(value["bookmarks"][0]["path"], "0");
+    let titles: Vec<&str> = value["bookmarks"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| row["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(
+        titles,
+        vec![
+            "Appendix details",
+            "Slide 1: Lantern Slide",
+            "Slide 2: Harbor Slide",
+            "Slide 3: Meadow Slide"
+        ]
+    );
+
+    let bad_path = run(&[
+        "outline",
+        "remove",
+        fifth.arg(),
+        "--out",
+        sixth.arg(),
+        "--path",
+        "9",
+    ]);
+    assert!(!bad_path.status.success());
+    assert!(
+        stderr(&bad_path).contains("bookmark"),
+        "{}",
+        stderr(&bad_path)
+    );
+}
+
+#[test]
+fn link_add_and_remove_round_trip() {
+    let source = root_fixture("realworld/powerpoint-slides.pdf");
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let third = TempOut::new("pdf");
+
+    let uri = run(&[
+        "link",
+        "add",
+        source.to_str().expect("utf-8"),
+        "--out",
+        first.arg(),
+        "--page",
+        "1",
+        "--rect",
+        "72,600,240,630",
+        "--uri",
+        "https://example.com/a?b=1",
+        "--highlight",
+        "outline",
+        "--json",
+    ]);
+    assert!(uri.status.success(), "stderr: {}", stderr(&uri));
+    let value: Value = serde_json::from_str(&stdout(&uri)).expect("valid JSON");
+    assert_eq!(value["page"], 1);
+    assert_eq!(value["links"][0]["kind"], "uri");
+    assert_eq!(value["links"][0]["uri"], "https://example.com/a?b=1");
+    assert_eq!(value["links"][0]["rect"][2], 240.0);
+
+    let internal = run(&[
+        "link",
+        "add",
+        first.arg(),
+        "--out",
+        second.arg(),
+        "--page",
+        "2",
+        "--rect",
+        "50,50,150,80",
+        "--to-page",
+        "3",
+    ]);
+    assert!(internal.status.success(), "stderr: {}", stderr(&internal));
+    assert!(
+        stdout(&internal).contains("page 3  rect: 50 50 150 80"),
+        "{}",
+        stdout(&internal)
+    );
+
+    let listed = run(&["links", second.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    assert_eq!(value["count"], 2);
+    assert_eq!(value["links"][0]["kind"], "uri");
+    assert_eq!(value["links"][1]["kind"], "page");
+    assert_eq!(value["links"][1]["dest_page"], 3);
+
+    let removed = run(&[
+        "link",
+        "remove",
+        second.arg(),
+        "--out",
+        third.arg(),
+        "--page",
+        "1",
+        "--index",
+        "0",
+    ]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+    assert!(
+        stdout(&removed).contains("links: 0"),
+        "{}",
+        stdout(&removed)
+    );
+
+    let out_of_range = run(&[
+        "link",
+        "remove",
+        third.arg(),
+        "--out",
+        third.arg(),
+        "--page",
+        "1",
+        "--index",
+        "0",
+    ]);
+    assert!(!out_of_range.status.success());
+
+    let conflicting = run(&[
+        "link",
+        "add",
+        source.to_str().expect("utf-8"),
+        "--out",
+        first.arg(),
+        "--page",
+        "1",
+        "--rect",
+        "0,0,10,10",
+        "--uri",
+        "https://example.com",
+        "--to-page",
+        "2",
+    ]);
+    assert!(!conflicting.status.success());
+}
+
+#[test]
+fn attach_add_remove_round_trip() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let payload = TempPath::new("bin");
+    let bytes = b"navigation attachment payload";
+    payload.write(bytes);
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+
+    let added = run(&[
+        "attach",
+        "add",
+        source.to_str().expect("utf-8"),
+        "--out",
+        first.arg(),
+        "--attachment",
+        payload.arg(),
+        "--description",
+        "navigation evidence",
+        "--mime",
+        "application/octet-stream",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    assert!(stdout(&added).contains("size: 29"), "{}", stdout(&added));
+
+    let listed = run(&["attachments", first.arg(), "--json"]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    assert_eq!(value["count"], 1);
+    assert_eq!(
+        value["attachments"][0]["name"],
+        payload
+            .path
+            .file_name()
+            .expect("file name")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(
+        value["attachments"][0]["description"],
+        "navigation evidence"
+    );
+
+    let directory = std::env::temp_dir().join(format!(
+        "pdfxi-nav-attach-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    let extraction = run(&[
+        "attachments",
+        first.arg(),
+        "--extract",
+        directory.to_str().expect("utf-8 dir"),
+    ]);
+    assert!(
+        extraction.status.success(),
+        "stderr: {}",
+        stderr(&extraction)
+    );
+    let extracted_name = payload.path.file_name().expect("file name").to_owned();
+    let extracted = fs::read(directory.join(extracted_name)).expect("extracted attachment");
+    assert_eq!(extracted, bytes);
+    let _ = fs::remove_dir_all(&directory);
+
+    let duplicate = run(&[
+        "attach",
+        "add",
+        first.arg(),
+        "--out",
+        second.arg(),
+        "--attachment",
+        payload.arg(),
+    ]);
+    assert!(!duplicate.status.success());
+    assert!(
+        stderr(&duplicate).contains("already exists"),
+        "{}",
+        stderr(&duplicate)
+    );
+
+    let removed = run(&[
+        "attach",
+        "remove",
+        first.arg(),
+        "--out",
+        second.arg(),
+        "--name",
+        payload
+            .path
+            .file_name()
+            .expect("file name")
+            .to_string_lossy()
+            .as_ref(),
+    ]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+    assert!(
+        stdout(&removed).contains("attachments: 0"),
+        "{}",
+        stdout(&removed)
+    );
+
+    let missing = run(&[
+        "attach",
+        "remove",
+        second.arg(),
+        "--out",
+        second.arg(),
+        "--name",
+        "missing.bin",
+    ]);
+    assert!(!missing.status.success());
+}
+
+#[test]
 fn decorate_bates_numbers_every_page() {
     let source = real_fixture("powerpoint-slides.pdf");
     let out = TempOut::new("pdf");

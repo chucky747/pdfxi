@@ -152,8 +152,10 @@ pub use measurement::{
 };
 pub use navigation::{
     Attachment, Bookmark, BookmarkPath, Destination, FitType, Link, LinkBorder, LinkHighlight,
-    LinkStore, LinkTarget, MAX_NAME_BYTES, NameTree, NavigationError, Outline, dict_to_link,
-    dict_to_name_tree, dict_to_outline, link_to_dict, name_tree_to_dict, outline_to_dict,
+    LinkStore, LinkTarget, MAX_NAME_BYTES, NameTree, NavigationError, NavigationWriteError,
+    Outline, StagedAttachment, StagedLink, add_attachment, add_link, dict_to_link,
+    dict_to_name_tree, dict_to_outline, link_rect, link_to_dict, name_tree_to_dict,
+    outline_to_dict, page_destination, read_outline, remove_attachment, remove_link, write_outline,
 };
 pub use paragraph_edit::{
     EditError, EditLimits, EditPlan, EditStep, FixedMetrics, FnMetrics, GlyphMetrics,

@@ -1,0 +1,24 @@
+{
+  "id": "T-0291",
+  "lane": "author",
+  "title": "Document-level bookmark, link and attachment editing with a CLI host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0290"],
+  "owns": [
+    "crates/pdfxi-edit/src/navigation/document_navigation.rs",
+    "crates/pdfxi-edit/src/navigation/mod.rs",
+    "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-edit/tests/real_document_navigation.rs",
+    "crates/pdfxi-cli/src/navigation.rs",
+    "crates/pdfxi-cli/src/annotate.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0291.md",
+    "orchestration/feature-updates/T-0291.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-edit --lib navigation::document_navigation, cargo test -p pdfxi-edit --test real_document_navigation and cargo test -p pdfxi-cli pass; pdfxi outline/link/attach edits real bookmarks, links and embedded files that survive a save and read back; EDIT-011 moves to verified.",
+  "notes": "Adds add_link/remove_link and add_attachment/remove_attachment writers that stage into a real Document, plus pdfxi outline/link/attach hosts. Writers reparse staged changes so several edits chain into one save.",
+  "evidence": "docs/evidence/cli/T-0291.md"
+}

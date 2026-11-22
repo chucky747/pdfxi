@@ -88,6 +88,9 @@ mod compare;
 /// `pdfxi decorate`: stamp headers and footers on pages.
 mod decorate;
 mod links;
+/// `pdfxi outline`, `pdfxi link` and `pdfxi attach`: edit bookmarks, links
+/// and embedded files (`navigation`).
+mod navigation;
 /// `pdfxi optimize`: rewrite a document with the core optimizer.
 mod optimize;
 /// `pdfxi portfolio`: list and extract a PDF portfolio collection.
@@ -340,6 +343,24 @@ enum Command {
         /// The annotation operation to perform.
         #[command(subcommand)]
         command: AnnotateCommand,
+    },
+    /// Edit bookmarks in the document outline.
+    Outline {
+        /// The outline operation to perform.
+        #[command(subcommand)]
+        command: OutlineCommand,
+    },
+    /// Add or remove link annotations.
+    Link {
+        /// The link operation to perform.
+        #[command(subcommand)]
+        command: LinkCommand,
+    },
+    /// Add or remove embedded-file attachments.
+    Attach {
+        /// The attachment operation to perform.
+        #[command(subcommand)]
+        command: AttachCommand,
     },
     /// Rewrite a document with the optimizer and report what changed.
     ///
@@ -711,6 +732,183 @@ enum AnnotateCommand {
         /// One-based page to inspect.
         #[arg(long, value_name = "N", default_value_t = 1)]
         page: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi outline` command group.
+#[derive(Debug, Subcommand)]
+enum OutlineCommand {
+    /// List the bookmark tree with destinations.
+    List {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Append a bookmark under a parent path.
+    Add {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Bookmark title.
+        #[arg(long, value_name = "TEXT")]
+        title: String,
+        /// One-based destination page.
+        #[arg(long, value_name = "N")]
+        page: usize,
+        /// Parent path such as `0.1`; the root list when omitted.
+        #[arg(long, value_name = "PATH")]
+        parent: Option<String>,
+        /// Insert position under the parent; appends when omitted.
+        #[arg(long, value_name = "N")]
+        index: Option<usize>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change one bookmark's title.
+    Rename {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Dotted bookmark path such as `0.1`.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// New title.
+        #[arg(long, value_name = "TEXT")]
+        title: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a bookmark under another parent.
+    Move {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Dotted bookmark path to move.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// New parent path; the root list when omitted.
+        #[arg(long, value_name = "PATH")]
+        parent: Option<String>,
+        /// Position under the new parent; appends when omitted.
+        #[arg(long, value_name = "N")]
+        index: Option<usize>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one bookmark and its children.
+    Remove {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Dotted bookmark path such as `0.1`.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi link` command group.
+#[derive(Debug, Subcommand)]
+enum LinkCommand {
+    /// Add a link annotation to one page.
+    Add {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// One-based page that receives the link.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        page: usize,
+        /// Rectangle in points: `x0,y0,x1,y1`.
+        #[arg(long, value_name = "RECT")]
+        rect: String,
+        /// External URI target.
+        #[arg(long, value_name = "URL", conflicts_with = "to_page")]
+        uri: Option<String>,
+        /// One-based internal page target.
+        #[arg(long, value_name = "N")]
+        to_page: Option<usize>,
+        /// Hover highlight: none, invert, outline or push.
+        #[arg(long, default_value = "none")]
+        highlight: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one link annotation from a page.
+    Remove {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// One-based page that carries the link.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        page: usize,
+        /// Zero-based link index in page annotation order.
+        #[arg(long, value_name = "N", default_value_t = 0)]
+        index: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi attach` command group.
+#[derive(Debug, Subcommand)]
+enum AttachCommand {
+    /// Embed a file in the catalog name tree.
+    Add {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// File whose bytes are embedded.
+        #[arg(long, value_name = "PATH")]
+        attachment: PathBuf,
+        /// Name-tree key; defaults to the attachment file name.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Optional `/Desc` text.
+        #[arg(long, default_value = "")]
+        description: String,
+        /// MIME type; defaults to application/octet-stream.
+        #[arg(long, default_value = "")]
+        mime: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a file from the catalog name tree.
+    Remove {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Name-tree key to remove.
+        #[arg(long, value_name = "NAME")]
+        name: String,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -1174,6 +1372,100 @@ fn main() -> anyhow::Result<()> {
                 json,
             ),
             AnnotateCommand::List { file, page, json } => annotate::run_list(&file, page, json),
+        },
+        Command::Outline { command } => match command {
+            OutlineCommand::List { file, json } => navigation::run_outline_list(&file, json),
+            OutlineCommand::Add {
+                file,
+                out,
+                title,
+                page,
+                parent,
+                index,
+                json,
+            } => navigation::run_outline_add(navigation::OutlineAddRequest {
+                file: &file,
+                out: &out,
+                title: &title,
+                page,
+                parent: parent.as_deref(),
+                index,
+                json,
+            }),
+            OutlineCommand::Rename {
+                file,
+                out,
+                path,
+                title,
+                json,
+            } => navigation::run_outline_rename(&file, &out, &path, &title, json),
+            OutlineCommand::Move {
+                file,
+                out,
+                path,
+                parent,
+                index,
+                json,
+            } => navigation::run_outline_move(&file, &out, &path, parent.as_deref(), index, json),
+            OutlineCommand::Remove {
+                file,
+                out,
+                path,
+                json,
+            } => navigation::run_outline_remove(&file, &out, &path, json),
+        },
+        Command::Link { command } => match command {
+            LinkCommand::Add {
+                file,
+                out,
+                page,
+                rect,
+                uri,
+                to_page,
+                highlight,
+                json,
+            } => navigation::run_link_add(navigation::LinkAddRequest {
+                file: &file,
+                out: &out,
+                page,
+                rect: &rect,
+                uri: uri.as_deref(),
+                to_page,
+                highlight: &highlight,
+                json,
+            }),
+            LinkCommand::Remove {
+                file,
+                out,
+                page,
+                index,
+                json,
+            } => navigation::run_link_remove(&file, &out, page, index, json),
+        },
+        Command::Attach { command } => match command {
+            AttachCommand::Add {
+                file,
+                out,
+                attachment,
+                name,
+                description,
+                mime,
+                json,
+            } => navigation::run_attach_add(navigation::AttachAddRequest {
+                file: &file,
+                out: &out,
+                attachment: &attachment,
+                name: name.as_deref(),
+                description: &description,
+                mime: &mime,
+                json,
+            }),
+            AttachCommand::Remove {
+                file,
+                out,
+                name,
+                json,
+            } => navigation::run_attach_remove(&file, &out, &name, json),
         },
         Command::Decorate { command } => match command {
             DecorateCommand::HeaderFooter {

@@ -69,7 +69,7 @@ fn load(file: &Path) -> anyhow::Result<Document> {
 }
 
 /// Parse `x0,y0,x1,y1` into a rectangle.
-fn parse_rect(text: &str) -> anyhow::Result<Rect> {
+pub(crate) fn parse_rect(text: &str) -> anyhow::Result<Rect> {
     let values: Vec<f32> = text
         .split(',')
         .map(|part| {

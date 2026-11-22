@@ -33,6 +33,15 @@ pdfxi <COMMAND> --help
 | `api [--once]` | Local JSON request/response API over stdio | verified (`AUTO-006`) |
 | `annotate add <FILE> --out PATH --kind free-text\|callout\|cloud\|pencil\|stamp\|file-attachment [--rect x0,y0,x1,y1] [--text T] [--ink STROKES] [--stamp-name N] [--attachment PATH] [--json]` | Add a drawing annotation | verified (`REVIEW-002`, `REVIEW-003`) |
 | `annotate list <FILE> [--page N] [--json]` | List one page's annotations | verified (`REVIEW-002`) |
+| `outline list <FILE> [--json]` | List the bookmark tree | verified (`EDIT-011`) |
+| `outline add <FILE> --out PATH --title T --page N [--parent PATH] [--index N]` | Append a bookmark | verified (`EDIT-011`) |
+| `outline rename <FILE> --out PATH --path PATH --title T` | Rename a bookmark | verified (`EDIT-011`) |
+| `outline move <FILE> --out PATH --path PATH [--parent PATH] [--index N]` | Move a bookmark | verified (`EDIT-011`) |
+| `outline remove <FILE> --out PATH --path PATH` | Remove a bookmark and its children | verified (`EDIT-011`) |
+| `link add <FILE> --out PATH --page N --rect x0,y0,x1,y1 (--uri URL \| --to-page N) [--highlight none\|invert\|outline\|push]` | Add a link annotation | verified (`EDIT-011`) |
+| `link remove <FILE> --out PATH --page N --index K` | Remove a link annotation | verified (`EDIT-011`) |
+| `attach add <FILE> --out PATH --attachment PATH [--name NAME] [--description D] [--mime TYPE]` | Embed a file in the name tree | verified (`EDIT-011`) |
+| `attach remove <FILE> --out PATH --name NAME` | Remove an embedded file | verified (`EDIT-011`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -96,7 +105,19 @@ Commands are integration-tested by invoking the real binary; see
   cloud. `--page` is one-based, `--rect`/`--anchor` are points, and `--font-size`
   is limited to 4-72. `annotate list` reads back every annotation with its `/NM`
   id, subtype, text, author, rect and date.
-- `annotate add --kind pencil` takes `--ink "x0,y0 x1,y1; x2,y2"` and
+- `outline` edits the catalog `/Outlines` tree. Paths are dotted child indices
+  (`0.1` is the second child of the first root); an omitted `--parent` addresses
+  the root list and an omitted `--index` appends. `outline list` prints the tree
+  with one-based page destinations and reports items whose destination could not
+  be represented.
+- `link add` writes a real `/Link` annotation with `/Rect`, `/H`, `/Border`,
+  `/C` and either `/A << /S /URI ... >>` or a `/Dest [page /Fit]` array that
+  references the document's page object. `link remove` counts links in
+  annotation order, so `--index 0` removes the first link on the page.
+- `attach add` registers an `/EmbeddedFile` stream through a `/Filespec` in the
+  catalog `/Names /EmbeddedFiles` name tree, which is the same tree
+  `pdfxi attachments` reads; `attach remove` deletes the entry. Existing name
+  tree entries are preserved and re-sorted.- `annotate add --kind pencil` takes `--ink "x0,y0 x1,y1; x2,y2"` and
   `--stroke-width`; `--kind stamp` takes `--stamp-name` (for example Approved)
   and `--text`; `--kind file-attachment` takes `--attachment PATH` and an
   optional `--name`. An attachment is embedded as an `/EmbeddedFile` stream

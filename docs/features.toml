@@ -1474,31 +1474,71 @@ title = "Bates numbering"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-edit/src/navigation/edit.rs",
-    "crates/pdfxi-edit/src/navigation/mod.rs",
-    "crates/pdfxi-edit/src/navigation/attachment.rs",
-    "crates/pdfxi-edit/src/navigation/error.rs",
-    "crates/pdfxi-edit/src/lib.rs",
-    "docs/evidence/author/T-0125.md",
+    "crates/pdfxi-edit/src/navigation/document_navigation.rs",
+    "crates/pdfxi-cli/src/navigation.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0291.md",
 ]
 domain = "Edit"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 185 passed, 0 failed, including 16 new navigation::edit tests plus all existing outline/link/attachment/error tests. fmt/clippy/doc/workspace-check all EXIT=0. Full output in docs/evidence/author/T-0125.md."
+evidence = "docs/evidence/cli/T-0291.md"
 id = "EDIT-011"
 notes = """
-Library contract complete: new navigation::edit module addresses bookmarks by
-BookmarkPath (child-index path from the outline root) with bookmark_at,
-insert_bookmark, rename_bookmark, remove_bookmark and move_bookmark; moving a
-node into itself or a descendant returns NavigationError::MoveCreatesCycle, and
-same-parent index shifts are handled. LinkStore adds/removes/replaces/lists link
-annotations by page with stable ids and a deterministic /Links dictionary.
-NameTree::remove complements insert for embedded-file add/remove. All edits are
-copy-on-write and round-trip through the existing dictionary serializers; seven
-new typed NavigationError variants cover bad paths, cycles, missing links and
-missing attachments. No desktop UI or CLI exposure in this task.
+Verified through new document writers plus CLI hosts. add_link stages a real
+/Link annotation with /Rect, /H, /Border, /C and either a URI or Named action or
+a /Dest [page /Fit] array using the document's page object; remove_link deletes
+the nth /Link from a direct or indirect /Annots array. add_attachment stages an
+/EmbeddedFile stream plus /Filespec (/F, /UF, /EF /F, optional /Desc) and inserts
+it into the catalog /Names /EmbeddedFiles tree, preserving and re-sorting
+existing entries; remove_attachment deletes one entry and drops /Names when it
+becomes empty. Payloads are capped at MAX_ATTACHMENT_BYTES and duplicate names
+are refused. NavigationWriteError adds typed failures for pages, indices,
+rectangles, URIs, coordinates, duplicate/missing attachments, size and malformed
+name trees. Writers reparse staged changes and allocate object ids in blocks, so
+link, attachment and outline edits chain into one save.
+
+Hosts: pdfxi outline list/add/rename/move/remove (dotted BookmarkPath, one-based
+pages, appending when --index is omitted), pdfxi link add/remove (--uri or
+--to-page, --highlight, zero-based link index) and pdfxi attach add/remove
+(--attachment/--name/--description/--mime). Every host saves then re-reads the
+file for its report.
+
+Evidence: powerpoint-slides.pdf shows the three real bookmarks read, an Appendix
+appended, a child added/renamed/moved to the root and a root removed; the link
+chain shows a URI and an internal page jump read back by `pdfxi links` and the
+first link removed; attach add is listed by `pdfxi attachments`, extracted
+byte-for-byte, then removed and re-added under a folder name. The real-document
+tests cover powerpoint-slides.pdf (outline edited with page text unchanged) and
+the hybrid microsoft-excel-2019-sample.pdf (link + attachment with a NUL byte +
+bookmark, single save, reopened and asserted through links(), attachments(),
+attachment_bytes() and read_outline()).
+
+Gates: cargo test -p pdfxi-edit --lib navigation::document_navigation = 7 passed;
+cargo test -p pdfxi-edit --test real_document_navigation = 3 passed; cargo test
+-p pdfxi-cli --test cli outline/link/attach = 3 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: bookmarks, links and document-level embedded files are reachable and
+round-trip through a full save; desktop panels remain app-level, link borders
+use model defaults, and attachments are edited by name rather than streamed.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "navigation::document_navigation::tests::links_are_staged_read_back_and_removed",
+    "navigation::document_navigation::tests::page_destination_links_use_the_real_page_object",
+    "navigation::document_navigation::tests::invalid_links_are_rejected_without_staging",
+    "navigation::document_navigation::tests::attachments_are_registered_sorted_and_removed",
+    "navigation::document_navigation::tests::duplicate_and_invalid_attachments_are_rejected",
+    "navigation::document_navigation::tests::outline_written_after_a_link_and_attachment_survives_one_save",
+    "navigation::document_navigation::tests::model_link_dictionary_agrees_with_the_staged_annotation",
+    "outline_edit_keeps_the_existing_powerpoint_bookmarks",
+    "link_attachment_and_bookmark_edits_survive_on_a_hybrid_file",
+    "removing_a_link_and_attachment_leaves_the_file_consistent",
+    "cli::outline_add_rename_move_remove_round_trip",
+    "cli::link_add_and_remove_round_trip",
+    "cli::attach_add_remove_round_trip",
+    "navigation::tests::bookmark_paths_parse_and_render",
+    "navigation::tests::highlights_parse_case_insensitively_and_reject_unknown_names",
     "navigation::edit::tests::bookmark_insert_at_root_and_nested_positions",
     "navigation::edit::tests::bookmark_invalid_path_is_typed_error",
     "navigation::edit::tests::bookmark_edits_keep_serialization_deterministic",
