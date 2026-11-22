@@ -1,0 +1,19 @@
+{
+  "id": "T-0322",
+  "lane": "author",
+  "title": "Alt text and table editor host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0321"],
+  "owns": [
+    "crates/pdfxi-cli/src/a11y_edit.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0322.md",
+    "orchestration/feature-updates/T-0322.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli accessibility_alt passes; pdfxi accessibility alt/table edit a real tagged PDF by /XI_NodeId and read the saved values back; ACCESS-002 moves to verified.",
+  "notes": "Walks /StructTreeRoot, finds the /XI_NodeId element, updates /Alt or /Scope, saves and re-verifies.",
+  "evidence": "docs/evidence/cli/T-0322.md"
+}

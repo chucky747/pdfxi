@@ -3619,14 +3619,46 @@ tests = [
 title = "Tag tree and reading order editor"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/nav.rs, docs/evidence/app/T-0171.md"
+docs = [
+    "crates/pdfxi-cli/src/a11y_edit.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0322.md",
+]
 domain = "Accessibility"
-evidence = "docs/evidence/app/T-0171.md"
+evidence = "docs/evidence/cli/T-0322.md"
 id = "ACCESS-002"
-notes = "Deterministic touch/gesture navigation over the focus order with typed validation; native gesture capture and screen-reader hosts remain external."
+notes = """
+Verified through `pdfxi accessibility alt <FILE.pdf> --out OUT.pdf --node N
+(--text TEXT | --clear) [--json]` and `pdfxi accessibility table <FILE.pdf>
+--out OUT.pdf --node N [--scope row|column|both] [--json]`.
+
+The host walks the catalog /StructTreeRoot through its /K references (visited
+set, 200000-element cap) to the element whose /XI_NodeId matches. alt writes
+/Alt and its /XI_Alt mirror as a PDF text string, or removes both with --clear.
+table requires a TH/TD role and writes /Scope /Row, /Column or /Both, or removes
+it when --scope is omitted. The document is saved, reopened, and the element is
+resolved again; the stored value must match before the command succeeds.
+
+Evidence: applying a tree to fixtures/minimal.pdf reports en-US, then alt node 2
+with Updated paragraph alt reports role paragraph, field alt, 2476 bytes; the
+saved bytes contain the UTF-16/PDFDoc hex 5570646174656420706172616772617068
+20616C74 and no longer contain the old 4F6C6420706172616772617068. Table node 4
+with --scope column reports role tableheader, value Column, 2459 bytes and
+/Scope /Column. An unknown node, a paragraph passed to table, an unknown scope
+and an untagged PDF fail with typed errors.
+
+Gates: cargo test -p pdfxi-cli --test cli accessibility_alt = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: only tagged PDFs carrying /XI_NodeId (the pdfxi structure apply shape);
+only /Alt and /Scope are edited, with no tree creation/reordering, table cell
+creation or GUI editor.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::accessibility_alt_and_table_edit_tagged_structure",
+    "cli::accessibility_alt_and_table_reject_bad_targets",
     "nav::tests::touch_swipes_walk_the_focus_ring_and_wrap",
     "nav::tests::touch_rejects_non_finite_and_non_positive_pinch_with_typed_errors",
 ]

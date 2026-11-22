@@ -7114,6 +7114,195 @@ fn structure_apply_writes_a_tagged_tree_on_a_real_page() {
 }
 
 #[test]
+fn accessibility_alt_and_table_edit_tagged_structure() {
+    let source = root_fixture("minimal.pdf");
+    let tagged = TempOut::new("pdf");
+    let tree = TempPath::new("json");
+    tree.write(
+        br#"{
+  "lang": "en-US",
+  "nodes": [
+    {"id":1,"role":"Document","page":0,"children":[2,3]},
+    {"id":2,"role":"P","page":0,"bbox":[72,700,400,730],"text":"Paragraph","alt":"Old paragraph"},
+    {"id":3,"role":"Table","page":0,"children":[4,5]},
+    {"id":4,"role":"TH","page":0,"bbox":[72,650,200,670],"text":"Header"},
+    {"id":5,"role":"TD","page":0,"bbox":[72,620,200,640],"text":"Cell"}
+  ],
+  "roots": [1]
+}"#,
+    );
+    let applied = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        tagged.arg(),
+        "--tree",
+        tree.arg(),
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+
+    let alt = TempOut::new("pdf");
+    let changed = run(&[
+        "accessibility",
+        "alt",
+        tagged.arg(),
+        "--out",
+        alt.arg(),
+        "--node",
+        "2",
+        "--text",
+        "Updated paragraph alt",
+        "--json",
+    ]);
+    assert!(changed.status.success(), "stderr: {}", stderr(&changed));
+    let value: Value = serde_json::from_str(&stdout(&changed)).expect("valid JSON");
+    assert_eq!(value["node"], 2);
+    assert_eq!(value["field"], "alt");
+    assert_eq!(value["value"], "Updated paragraph alt");
+    let bytes = fs::read(&alt.path).expect("alt PDF");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("557064617465642070617261677261706820616C74"),
+        "{text}"
+    );
+    assert!(!text.contains("4F6C6420706172616772617068"), "{text}");
+    pdfxi_core::Document::from_bytes(bytes).expect("alt PDF parses");
+
+    let cleared = TempOut::new("pdf");
+    let clear = run(&[
+        "accessibility",
+        "alt",
+        alt.arg(),
+        "--out",
+        cleared.arg(),
+        "--node",
+        "2",
+        "--clear",
+        "--json",
+    ]);
+    assert!(clear.status.success(), "stderr: {}", stderr(&clear));
+    let value: Value = serde_json::from_str(&stdout(&clear)).expect("valid JSON");
+    assert_eq!(value["value"], Value::Null);
+    let bytes = fs::read(&cleared.path).expect("cleared PDF");
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("557064617465642070617261677261706820616C74")
+    );
+
+    let scoped = TempOut::new("pdf");
+    let scope = run(&[
+        "accessibility",
+        "table",
+        tagged.arg(),
+        "--out",
+        scoped.arg(),
+        "--node",
+        "4",
+        "--scope",
+        "column",
+        "--json",
+    ]);
+    assert!(scope.status.success(), "stderr: {}", stderr(&scope));
+    let value: Value = serde_json::from_str(&stdout(&scope)).expect("valid JSON");
+    assert_eq!(value["role"], "tableheader");
+    assert_eq!(value["value"], "Column");
+    let bytes = fs::read(&scoped.path).expect("scoped PDF");
+    assert!(String::from_utf8_lossy(&bytes).contains("/Scope /Column"));
+}
+
+#[test]
+fn accessibility_alt_and_table_reject_bad_targets() {
+    let source = root_fixture("minimal.pdf");
+    let tagged = TempOut::new("pdf");
+    let tree = TempPath::new("json");
+    tree.write(
+        br#"{"nodes":[
+            {"id":1,"role":"Document","page":0,"children":[2,3]},
+            {"id":2,"role":"P","page":0,"text":"Paragraph"},
+            {"id":3,"role":"Table","page":0,"children":[4]},
+            {"id":4,"role":"TD","page":0,"bbox":[72,600,200,620],"text":"Cell"}
+        ],"roots":[1]}"#,
+    );
+    let applied = run(&[
+        "structure",
+        "apply",
+        source.to_str().expect("utf-8"),
+        "--out",
+        tagged.arg(),
+        "--tree",
+        tree.arg(),
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+
+    let missing = run(&[
+        "accessibility",
+        "alt",
+        tagged.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--node",
+        "99",
+        "--text",
+        "x",
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("no structure element"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let wrong_role = run(&[
+        "accessibility",
+        "table",
+        tagged.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--node",
+        "2",
+        "--scope",
+        "row",
+    ]);
+    assert!(!wrong_role.status.success());
+    assert!(
+        stderr(&wrong_role).contains("not a table header or data cell"),
+        "{}",
+        stderr(&wrong_role)
+    );
+
+    let bad_scope = run(&[
+        "accessibility",
+        "table",
+        tagged.arg(),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--node",
+        "4",
+        "--scope",
+        "sideways",
+    ]);
+    assert!(!bad_scope.status.success());
+    assert!(
+        stderr(&bad_scope).contains("unknown scope"),
+        "{}",
+        stderr(&bad_scope)
+    );
+
+    let untagged = run(&[
+        "accessibility",
+        "alt",
+        source.to_str().expect("utf-8"),
+        "--out",
+        TempOut::new("pdf").arg(),
+        "--node",
+        "1",
+        "--text",
+        "x",
+    ]);
+    assert!(!untagged.status.success());
+}
+
+#[test]
 fn structure_apply_tags_every_page_and_rejects_bad_trees() {
     let source = root_fixture("realworld/powerpoint-slides.pdf");
     let out = TempOut::new("pdf");

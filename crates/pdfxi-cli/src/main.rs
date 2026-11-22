@@ -63,6 +63,8 @@ mod image;
 mod action;
 
 // Local line-delimited JSON automation API over stdin/stdout (`api`).
+/// pdfxi accessibility alt/table: edit tagged structure entries.
+mod a11y_edit;
 mod api;
 /// pdfxi create portfolio: assemble a PDF portfolio from real files.
 mod create_portfolio;
@@ -1588,6 +1590,43 @@ enum FormCommand {
 /// Operations on the `pdfxi accessibility` command group.
 #[derive(Debug, Subcommand)]
 enum AccessibilityCommand {
+    /// Set or clear `/Alt` text on one tagged structure element.
+    Alt {
+        /// Path to the tagged PDF.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// `/XI_NodeId` of the structure element.
+        #[arg(long, value_name = "N")]
+        node: u64,
+        /// Alternative text; omit with `--clear`.
+        #[arg(long, value_name = "TEXT", conflicts_with = "clear")]
+        text: Option<String>,
+        /// Remove the existing `/Alt` entry.
+        #[arg(long)]
+        clear: bool,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set or clear the `/Scope` of a table header/data cell.
+    Table {
+        /// Path to the tagged PDF.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// `/XI_NodeId` of the table cell.
+        #[arg(long, value_name = "N")]
+        node: u64,
+        /// `row`, `column` or `both`; omit to clear.
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
     /// Check document accessibility metadata and PDF/UA-1 structure.
     Check {
         /// Path to the PDF file.
@@ -2603,6 +2642,27 @@ fn main() -> anyhow::Result<()> {
             } => form::run_collect(&file, &responses, json),
         },
         Command::Accessibility { command } => match command {
+            AccessibilityCommand::Alt {
+                file,
+                out,
+                node,
+                text,
+                clear,
+                json,
+            } => a11y_edit::set_alt(
+                &file,
+                &out,
+                node,
+                if clear { None } else { text.as_deref() },
+                json,
+            ),
+            AccessibilityCommand::Table {
+                file,
+                out,
+                node,
+                scope,
+                json,
+            } => a11y_edit::set_scope(&file, &out, node, scope.as_deref(), json),
             AccessibilityCommand::Check {
                 file,
                 title,

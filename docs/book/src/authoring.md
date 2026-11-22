@@ -21,6 +21,7 @@ command.
 | Static form-field recognition | `FORMS-005` | verified | `pdfxi-forms::recognition` | `form recognize` |
 | Font size/spacing/colour restyle | `EDIT-002` | verified | `pdfxi-edit::restyle_run_text` | `restyle` |
 | Action Wizard create/edit/import/export | `AUTO-001` | verified | `pdfxi-automation::action_document` + real action operations | `action create` / `action run --execute` |
+| Alt text and table editor | `ACCESS-002` | verified | tagged structure `/XI_NodeId` entries | `accessibility alt` / `accessibility table` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -43,6 +44,19 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Tagged alt text and table scopes are edited with:
+
+```text
+pdfxi accessibility alt <FILE.pdf> --out <OUT.pdf> --node N
+    (--text TEXT | --clear) [--json]
+pdfxi accessibility table <FILE.pdf> --out <OUT.pdf> --node N
+    [--scope row|column|both] [--json]
+```
+
+`--node` is the `/XI_NodeId` written by `pdfxi structure apply`. The command
+walks the real `/StructTreeRoot` from the catalog, updates `/Alt` (and its
+`/XI_Alt` mirror) or the `/Scope` of a `TH`/`TD` cell, saves, reopens and reads
+the value back. Omitting `--scope` clears it.
 Actions are created and executed as:
 
 ```text
