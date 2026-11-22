@@ -13092,6 +13092,210 @@ fn trust_rejects_bad_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// id: digital-ID metadata catalog (T-0348)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn id_imports_lists_and_removes_a_pem_identity() {
+    let dir = TempDir::new();
+    let (key, cert) = write_test_identity(&dir, "PDFXI Catalog Signer");
+    let key = key.to_str().expect("key");
+    let cert = cert.to_str().expect("cert");
+    let store = dir.child("ids.json");
+    let store_arg = store.to_str().expect("store");
+
+    let inspected = run(&[
+        "id",
+        "inspect",
+        "--key",
+        key,
+        "--cert",
+        cert,
+        "--label",
+        "Signer",
+        "--time",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(inspected.status.success(), "stderr: {}", stderr(&inspected));
+    let value: Value = serde_json::from_str(&stdout(&inspected)).expect("inspect JSON");
+    assert_eq!(value["label"], "Signer");
+    assert!(
+        value["subject"]
+            .as_str()
+            .unwrap_or("")
+            .contains("PDFXI Catalog Signer")
+    );
+    assert_eq!(value["fingerprint_sha256"].as_str().unwrap_or("").len(), 64);
+    assert_eq!(value["key_algorithm"], "1.2.840.113549.1.1.1");
+    assert_eq!(value["not_after"], 2_000_000_000_u64);
+    assert_eq!(value["validity"], "valid");
+    assert!(!store.exists(), "inspect must not create the catalog");
+
+    let imported = run(&[
+        "id",
+        "import",
+        "--store",
+        store_arg,
+        "--label",
+        "Signer",
+        "--key",
+        key,
+        "--cert",
+        cert,
+        "--time",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(imported.status.success(), "stderr: {}", stderr(&imported));
+    let value: Value = serde_json::from_str(&stdout(&imported)).expect("import JSON");
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["ids"][0]["label"], "Signer");
+    assert_eq!(value["ids"][0]["validity"], "valid");
+    let catalog = fs::read_to_string(&store).expect("catalog written");
+    assert!(
+        !catalog.contains("PRIVATE KEY"),
+        "no key material is stored"
+    );
+    assert!(catalog.contains("fingerprint_sha256"));
+
+    let listed = run(&[
+        "id",
+        "list",
+        "--store",
+        store_arg,
+        "--time",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("list JSON");
+    assert_eq!(value["count"], 1);
+    assert_eq!(value["ids"][0]["label"], "Signer");
+
+    let expired = run(&[
+        "id",
+        "list",
+        "--store",
+        store_arg,
+        "--time",
+        "2100000000",
+        "--json",
+    ]);
+    assert!(expired.status.success(), "stderr: {}", stderr(&expired));
+    let value: Value = serde_json::from_str(&stdout(&expired)).expect("list JSON");
+    assert_eq!(value["ids"][0]["validity"], "expired");
+
+    let duplicate = run(&[
+        "id",
+        "import",
+        "--store",
+        store_arg,
+        "--label",
+        "SameCert",
+        "--key",
+        key,
+        "--cert",
+        cert,
+        "--time",
+        "1700000000",
+    ]);
+    assert!(!duplicate.status.success());
+    assert!(
+        stderr(&duplicate).contains("already catalogued"),
+        "{}",
+        stderr(&duplicate)
+    );
+
+    let removed = run(&[
+        "id", "remove", "--store", store_arg, "--label", "Signer", "--json",
+    ]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+    let value: Value = serde_json::from_str(&stdout(&removed)).expect("remove JSON");
+    assert_eq!(value["removed"], "Signer");
+    assert_eq!(value["count"], 0);
+
+    let again = run(&["id", "remove", "--store", store_arg, "--label", "Signer"]);
+    assert!(!again.status.success());
+    assert!(
+        stderr(&again).contains("no digital ID"),
+        "{}",
+        stderr(&again)
+    );
+}
+
+#[test]
+fn id_rejects_bad_identity_inputs() {
+    let dir = TempDir::new();
+    let (key, cert) = write_test_identity(&dir, "Catalog Errors");
+    let key = key.to_str().expect("key");
+    let cert = cert.to_str().expect("cert");
+    let store = dir.child("ids.json");
+    let store_arg = store.to_str().expect("store");
+
+    let missing = run(&["id", "inspect", "--label", "X"]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("supply --pfx"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let conflict = run(&[
+        "id", "inspect", "--label", "X", "--pfx", cert, "--key", key, "--cert", cert,
+    ]);
+    assert!(!conflict.status.success());
+    assert!(
+        stderr(&conflict).contains("cannot be combined"),
+        "{}",
+        stderr(&conflict)
+    );
+
+    let bad_label = run(&[
+        "id",
+        "import",
+        "--store",
+        store_arg,
+        "--label",
+        "bad/label",
+        "--key",
+        key,
+        "--cert",
+        cert,
+    ]);
+    assert!(!bad_label.status.success());
+    assert!(
+        stderr(&bad_label).contains("path separators"),
+        "{}",
+        stderr(&bad_label)
+    );
+
+    let garbage_key = dir.child("garbage-key.pem");
+    fs::write(&garbage_key, b"not a private key").expect("write garbage key");
+    let bad_key = run(&[
+        "id",
+        "inspect",
+        "--label",
+        "X",
+        "--key",
+        garbage_key.to_str().expect("path"),
+        "--cert",
+        cert,
+    ]);
+    assert!(!bad_key.status.success());
+    assert!(
+        stderr(&bad_key).contains("parse private key"),
+        "{}",
+        stderr(&bad_key)
+    );
+
+    let empty = run(&["id", "list", "--store", store_arg, "--json"]);
+    assert!(empty.status.success(), "stderr: {}", stderr(&empty));
+    let value: Value = serde_json::from_str(&stdout(&empty)).expect("list JSON");
+    assert_eq!(value["count"], 0);
+}
+
+// ---------------------------------------------------------------------------
 // sign: real CMS/RSA signatures (T-0344)
 // ---------------------------------------------------------------------------
 

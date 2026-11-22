@@ -82,6 +82,8 @@ mod geo;
 mod handoff;
 /// pdfxi home: recents, favorites and collections over a state file.
 mod home;
+/// pdfxi id: a metadata-only catalog of local digital IDs.
+mod id;
 /// pdfxi interactions: audit /AA additional actions.
 mod interactions;
 /// pdfxi media: media annotations and the HTML5 replacement envelope.
@@ -447,6 +449,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Inspect, catalogue, list or remove local digital IDs.
+    Id {
+        /// Digital-ID action.
+        #[command(subcommand)]
+        command: IdCommand,
     },
     /// Sign a PDF with a real CMS/RSA signature, or verify one.
     Sign {
@@ -2139,6 +2147,97 @@ enum ProductionCommand {
     },
 }
 
+/// Identity file inputs for `pdfxi id`.
+#[derive(Debug, Args)]
+struct IdentityArgs {
+    /// Password-protected PKCS#12 container.
+    #[arg(long, value_name = "PATH")]
+    pfx: Option<PathBuf>,
+    /// PKCS#12 password (empty when omitted).
+    #[arg(long, value_name = "PASSWORD", default_value = "")]
+    password: String,
+    /// PEM or DER PKCS#8 private key.
+    #[arg(long, value_name = "PATH")]
+    key: Option<PathBuf>,
+    /// PEM or DER certificate.
+    #[arg(long, value_name = "PATH")]
+    cert: Option<PathBuf>,
+}
+
+impl IdentityArgs {
+    /// Convert to the host's file description.
+    fn into_files(self) -> id::IdentityFiles {
+        id::IdentityFiles {
+            pfx: self.pfx,
+            password: self.password,
+            key: self.key,
+            cert: self.cert,
+        }
+    }
+}
+
+/// Actions of the `id` command.
+#[derive(Debug, Subcommand)]
+enum IdCommand {
+    /// Validate and describe one identity without touching a catalog.
+    Inspect {
+        /// Identity files.
+        #[command(flatten)]
+        identity: IdentityArgs,
+        /// Label used in the report.
+        #[arg(long, default_value = "Identity")]
+        label: String,
+        /// Evaluation time in Unix seconds (default: current time).
+        #[arg(long, value_name = "UNIX")]
+        time: Option<u64>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate an identity and add its metadata to the catalog.
+    Import {
+        /// Metadata catalog file.
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        /// Catalog label.
+        #[arg(long, value_name = "LABEL")]
+        label: String,
+        /// Identity files.
+        #[command(flatten)]
+        identity: IdentityArgs,
+        /// Import time in Unix seconds (default: current time).
+        #[arg(long, value_name = "UNIX")]
+        time: Option<u64>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List catalogued identities with their validity at a given time.
+    List {
+        /// Metadata catalog file.
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        /// Evaluation time in Unix seconds (default: current time).
+        #[arg(long, value_name = "UNIX")]
+        time: Option<u64>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one catalogued identity.
+    Remove {
+        /// Metadata catalog file.
+        #[arg(long, value_name = "PATH")]
+        store: PathBuf,
+        /// Catalog label.
+        #[arg(long, value_name = "LABEL")]
+        label: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `trust` command.
 #[derive(Debug, Subcommand)]
 enum TrustCommand {
@@ -3316,6 +3415,23 @@ fn run_cli() -> anyhow::Result<()> {
             json,
             extract,
         } => links::run_attachments(&file, json, extract.as_deref()),
+        Command::Id { command } => match command {
+            IdCommand::Inspect {
+                identity,
+                label,
+                time,
+                json,
+            } => id::inspect(&identity.into_files(), &label, time, json),
+            IdCommand::Import {
+                store,
+                label,
+                identity,
+                time,
+                json,
+            } => id::import(&store, &label, &identity.into_files(), time, json),
+            IdCommand::List { store, time, json } => id::list(&store, time, json),
+            IdCommand::Remove { store, label, json } => id::remove(&store, &label, json),
+        },
         Command::Sign { command } => match command {
             SignCommand::Create {
                 file,

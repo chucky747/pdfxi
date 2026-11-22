@@ -167,6 +167,26 @@ impl fmt::Debug for PrivateKeyPkcs8 {
     }
 }
 
+/// Decode one PKCS#8 `PRIVATE KEY` PEM block into DER for
+/// [`PrivateKeyPkcs8::parse`].
+///
+/// Only the `PRIVATE KEY` label is accepted; `RSA PRIVATE KEY` (PKCS#1) and
+/// encrypted blocks are rejected with a typed error. The decoded bytes are
+/// returned to the caller unchanged and are never logged.
+///
+/// # Errors
+///
+/// [`SecurityError::DigitalIdKeyMalformed`] for a non-PEM input, a different
+/// PEM label, or a body that is not valid base64.
+pub fn private_key_der_from_pem(pem: &str) -> Result<Vec<u8>> {
+    let (label, document) =
+        der::Document::from_pem(pem).map_err(|_| SecurityError::DigitalIdKeyMalformed("PEM"))?;
+    if label != "PRIVATE KEY" {
+        return Err(SecurityError::DigitalIdKeyMalformed("PEM label"));
+    }
+    Ok(document.as_bytes().to_vec())
+}
+
 /// A validated certificate paired with its caller-supplied private key.
 #[derive(Clone, PartialEq, Eq)]
 pub struct KeyCertificatePair {

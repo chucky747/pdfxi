@@ -14,7 +14,7 @@ pdfxi-core = { workspace = true }
 # the hand-rolled toy RSA path with RustCrypto; all are MIT/Apache-2.0.
 cms = { version = "0.2.3", features = ["builder"] }
 const-oid = "0.9"
-der = "0.7"
+der = { version = "0.7", features = ["pem"] }
 # Vetted OS-entropy source for AES-256 file keys and R5/R6 salts (T-0256).
 # MIT OR Apache-2.0, already in the workspace lock graph through `rand`.
 getrandom = "0.2"

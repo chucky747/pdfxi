@@ -1,0 +1,22 @@
+{
+  "id": "T-0348",
+  "lane": "convert",
+  "title": "Digital-ID catalog host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0347"],
+  "owns": [
+    "crates/pdfxi-security/src/digital_id_lifecycle.rs",
+    "crates/pdfxi-security/src/lib.rs",
+    "crates/pdfxi-security/Cargo.toml",
+    "crates/pdfxi-cli/src/id.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0348.md",
+    "orchestration/feature-updates/T-0348.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli id_ passes; pdfxi id inspect/import/list/remove validate real PKCS#12 or PEM identities, keep a metadata-only catalog and reject unsafe input; SEC-004 moves to verified.",
+  "notes": "Hosts DigitalIdLifecycleStore/KeyCertificatePair plus pkcs12::import_pfx and the new private_key_der_from_pem. Catalog stores no key material.",
+  "evidence": "docs/evidence/cli/T-0348.md"
+}

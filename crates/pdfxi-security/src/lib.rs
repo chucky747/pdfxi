@@ -165,7 +165,7 @@ pub use cms::{
 };
 pub use digital_id_lifecycle::{
     DigitalIdLifecycleStore, ExportedKeyPair, IdListing, KeyCertificatePair, PrivateKeyPkcs8,
-    open_store, seal_store,
+    open_store, private_key_der_from_pem, seal_store,
 };
 pub use encryption::EncryptionMethod;
 pub use encryption_writer::{

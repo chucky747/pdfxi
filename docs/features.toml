@@ -2748,37 +2748,59 @@ docs = [
     "crates/pdfxi-security/src/digital_id_lifecycle.rs",
     "crates/pdfxi-security/src/lib.rs",
     "crates/pdfxi-security/src/error.rs",
+    "crates/pdfxi-cli/src/id.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/security/T-0143.md",
+    "docs/evidence/cli/T-0348.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security: 277 passed, 0 failed, including 9 new digital_id_lifecycle::tests::* (store round-trip + sorted deterministic listing, wrong-password typed error, expired/not-yet-valid classification, duplicate identity, rotation returns old pair, malformed PKCS#8, key/certificate algorithm mismatch, Debug secret redaction, envelope tampering). fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0143.md."
+evidence = "docs/evidence/cli/T-0348.md"
 id = "SEC-004"
 notes = """
 T-0143 completes the local digital-ID lifecycle. PrivateKeyPkcs8 validates a
-caller-supplied PKCS#8 v1 shape (INTEGER 0, AlgorithmIdentifier, non-empty
-OCTET STRING) and redacts its bytes in Debug. KeyCertificatePair checks the key
-algorithm OID against the certificate SubjectPublicKeyInfo OID. DigitalIdLifecycleStore
-is a BTreeMap keyed by label, so list(now) is sorted/deterministic and carries
-caller-clocked validity (Expired / NotYetValid / Valid), subject/issuer display,
-serial, certificate fingerprint, and key algorithm OID. import / import_exported
-/ export / remove / rotate are all typed and leave the store unchanged on failure;
-duplicate labels and duplicate certificate fingerprints are rejected. seal_store /
-open_store wrap the whole store in a password-protected envelope built only from
-the existing AES-256-CBC and SHA-256 primitives (local HMAC-SHA256 + iterated,
-domain-separated key derivation); the salt is stored in the envelope, an IV is
-derived from the key, the HMAC is checked in constant time, and a wrong password
-is indistinguishable from tampering. No filesystem, network, or wall clock access.
-Typed errors: DigitalIdKeyMalformed, DigitalIdKeyAlgorithmMismatch,
-StoreEnvelopeMalformed, StoreEnvelopeIntegrityFailed, StoreEnvelopeVersionUnsupported.
+caller-supplied PKCS#8 v1 shape and redacts its bytes in Debug.
+KeyCertificatePair checks the key algorithm OID against the certificate
+SubjectPublicKeyInfo OID. DigitalIdLifecycleStore is a BTreeMap keyed by label
+with caller-clocked validity, subject/issuer display, serial, fingerprint and
+key algorithm OID; import/export/remove/rotate are typed and leave the store
+unchanged on failure. seal_store/open_store wrap the store in a
+password-protected AES-256-CBC/HMAC-SHA256 envelope.
 
-Host boundaries (not library gaps): the desktop UI for selecting/managing IDs,
-real PKCS#12/PFX bundle parsing of encrypted files, and OS keystore/HSM-backed
-KeyHandle implementations remain host adapters. The prior in-progress note about
-PKCS#12/PFX and UI is now scoped out of the library row; the requested PKCS#8-ish
-bytes-in/validated-structure model is fully delivered and tested.
+T-0348 adds the caller: `pdfxi id inspect --label L (--pfx ID.p12
+[--password PW] | --key KEY --cert CERT) [--time UNIX] [--json]`,
+`pdfxi id import --store FILE --label L (identity) [--time UNIX] [--json]`,
+`pdfxi id list --store FILE [--time UNIX] [--json]` and
+`pdfxi id remove --store FILE --label L [--json]`. inspect validates one
+identity and reports subject, issuer, serial, fingerprint, key OID, validity
+window and validity at --time. import validates the identity, re-imports it
+through DigitalIdLifecycleStore, and writes a metadata-only catalog entry; the
+private key is never copied into the catalog or printed. A certificate already
+catalogued under another label is rejected; the same label may be re-imported
+(rotation). list recomputes validity at --time and a missing catalog is empty;
+remove deletes one entry. Labels are bounded and reject control characters and
+path separators; the catalog is bounded to 64 entries, version-checked and
+written through a temporary file. Sources are PKCS#12 (pkcs12::import_pfx) or a
+PEM/DER PKCS#8 key plus a PEM/DER certificate; PKCS#8 PEM decoding is exposed as
+private_key_der_from_pem.
+
+Evidence: a generated self-signed RSA identity reports subject
+CN=PDFXI Catalog Evidence,O=PDFXI, serial 7, fingerprint 52c7ac01..., key OID
+1.2.840.113549.1.1.1, valid at 1_700_000_000 and expired at 2_100_000_000. The
+catalog JSON contains no PRIVATE KEY bytes. Duplicate certificate, unknown
+removal, missing identity, pfx/PEM conflict, unsafe label and a garbage key are
+typed errors; listing a missing catalog succeeds with count 0.
+
+Gates: CLI id_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: identity validation and a metadata catalog. The catalog stores no key
+material; it records where the identity lives and what the certificate says.
+Not a key vault, no OS certificate store or hardware token management, and the
+catalog is not confidential (certificate metadata is public). PKCS#12 support is
+what pkcs12::import_pfx accepts; PEM support is PKCS#8 with a certificate.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "digital_id_lifecycle::tests::store_round_trip_lists_sorted_and_deterministic",
     "digital_id_lifecycle::tests::wrong_password_is_typed",
@@ -2789,6 +2811,8 @@ tests = [
     "digital_id_lifecycle::tests::key_algorithm_mismatch_is_typed",
     "digital_id_lifecycle::tests::secrets_are_redacted_in_debug",
     "digital_id_lifecycle::tests::envelope_tampering_is_typed",
+    "cli::id_imports_lists_and_removes_a_pem_identity",
+    "cli::id_rejects_bad_identity_inputs",
 ]
 title = "Digital IDs and certificate management"
 

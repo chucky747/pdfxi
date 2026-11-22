@@ -48,6 +48,7 @@ command.
 | RC4 and AES encryption handlers | `SEC-002` | verified | `pdfxi-security::protect` + `encryption_writer` | `protect` / `unprotect` |
 | Sign and certify documents | `SEC-005` | verified | `pdfxi-security::pdf_signature` | `sign create` / `sign verify` |
 | Trust manager and revocation checks | `SEC-007` | verified | `pdfxi-security::TrustManager` + CRLs | `trust verify` |
+| Digital IDs and certificate management | `SEC-004` | verified | `pdfxi-security::digital_id_lifecycle` | `id inspect/import/list/remove` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -686,6 +687,27 @@ is checked as PDF/X-4 plus the document-part requirements: a catalog
 page (`PDFVT1.DPART_PAGE_UNASSIGNED`). A passing verdict is a deterministic
 subset preflight, not a conformance certification; reported-only constraints
 list what the profile did not inspect.
+### Digital IDs
+
+`SEC-004` (verified) hosts the digital-ID lifecycle from
+`pdfxi_security::digital_id_lifecycle`:
+
+```text
+pdfxi id inspect --label L (--pfx ID.p12 [--password PW] | --key KEY --cert CERT)
+    [--time UNIX] [--json]
+pdfxi id import --store FILE --label L (identity) [--time UNIX] [--json]
+pdfxi id list --store FILE [--time UNIX] [--json]
+pdfxi id remove --store FILE --label L [--json]
+```
+
+The identity may be a password-protected PKCS#12 container or a PEM/DER PKCS#8
+key with a PEM/DER certificate. `inspect` validates the key/certificate pair and
+reports subject, issuer, serial, SHA-256 fingerprint, key algorithm, validity
+window and validity at `--time`. `import` writes a **metadata-only** catalog
+entry — no private key bytes — and rejects a certificate already catalogued
+under another label. `list` recomputes validity at `--time`; `remove` deletes an
+entry. Labels are bounded and reject control characters and path separators.
+
 ### Trust and revocation
 
 `SEC-007` (verified) hosts the offline trust decision from
