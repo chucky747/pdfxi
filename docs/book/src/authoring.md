@@ -17,6 +17,7 @@ command.
 | PDF Portfolios from real files | `CREATE-010` | verified | `pdfxi-convert::portfolio_package` | `create portfolio` |
 | Office integration round trip | `PLAT-003` | verified | `pdfxi-convert::office_integration` | `office plan` / `office convert` |
 | Sandboxed Acrobat-compatible JavaScript | `AUTO-004` | verified | `pdfxi-automation::js` | `script run` |
+| Watched-folder conversion | `CREATE-014` | verified | `pdfxi-automation::watched` + `pdfxi-convert` adapters | `watch` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -39,6 +40,20 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+Watched-folder conversion is exposed as:
+
+```text
+pdfxi watch <FOLDER> --out <DIR> [--ext txt ...] [--suffix pdf]
+    [--markers SNAPSHOT.json] [--poll-every N] [--ticks N] [--json]
+```
+
+Each eligible file is converted with the in-process adapters: `.txt` and
+`.md`/`.markdown` become text/markdown PDFs, `.html`/`.htm` go through the
+bounded HTML importer, `.png`/`.jpg`/`.jpeg` are embedded, and `.pdf` is passed
+through unchanged. Processed paths persist in the marker snapshot so later
+polls skip them; converter errors are per-file failures that stay eligible for
+retry. The host advances a deterministic number of ticks; the OS scheduler that
+invokes it is outside the program.
 The JavaScript sandbox is exposed as:
 
 ```text

@@ -1055,32 +1055,47 @@ title = "PostScript and Distiller-compatible ingestion"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-convert/src/watched_contract.rs",
-    "crates/pdfxi-automation/src/watched.rs",
-    "crates/pdfxi-convert/src/lib.rs",
-    "docs/evidence/convert/T-0174.md",
+    "crates/pdfxi-cli/src/watch.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0318.md",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-convert: 5 new watched_contract tests pass, including watched_config_validation_rejects_relative_and_traversal_roots, watched_config_validation_rejects_unsafe_extensions_and_zero_limits, watched_plan_sorts_candidates_and_records_per_file_outcomes, watched_plan_rejects_duplicate_paths_and_over_budget_inputs and watched_plan_summary_is_byte_for_byte_deterministic; 347 unit tests total, 0 failed; TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/convert/T-0174.md."
+evidence = "docs/evidence/cli/T-0318.md"
 id = "CREATE-014"
 notes = """
-Library-level gap closed inside this crate: `pdfxi_convert::watched_contract`
-provides the file-system-free half of the adapter — `WatchedConfig::validate`
-(rooted/traversal-free paths, safe extensions, nonzero budgets) and
-`build_watched_plan`, which turns caller-observed candidates into a sorted
-deterministic plan with typed per-file dispositions and a stable summary. No
-filesystem access, symlink resolution, or thread is used. This complements the
-existing host-side `pdfxi_automation::watched` implementation, which is owned
-by another lane and was not edited.
+Verified through `pdfxi watch <FOLDER> --out <DIR> [--ext ...] [--suffix pdf]
+[--markers SNAPSHOT.json] [--poll-every N] [--ticks N] [--json]`.
 
-Honest remaining scope (host boundary): a real OS watcher/background poll,
-output persistence, and CLI/host wiring remain outside pdfxi-convert.
-Library-level scope is complete; see the row verification policy in
-`docs/ASSUMPTIONS.md`.
+The watch host now installs PdfConverter as the FolderConverter: .txt uses
+create_from_text, .md/.markdown use create_from_markdown, .html/.htm use
+capture_html_markup, .png/.jpg/.jpeg use create_from_image, and .pdf passes
+through unchanged. WatchedFolderConfig validates the absolute traversal-free
+root, safe extensions and budgets; WatchedFolder scans real files; processed
+paths persist through MarkerSnapshot and are skipped on later polls; converter
+errors are typed per-file failures that stay eligible for retry. Outputs are
+written beneath the canonical output root, which must be outside the watched
+folder, and every output name is checked for path escape.
+
+Evidence: watching a .txt, .html and .png with --ext txt --ext html --ext png
+reports converted 3, failed 0, written 3 and outputs note.pdf, page.pdf and
+image.pdf. The text PDF extracts Watched hello. and Second line.; the HTML PDF
+extracts HTML page and Body text.; the image PDF parses as one page; pdfxi info
+reports PDF 1.4, 965 bytes and 1 page for note.pdf. The existing marker test
+still shows .pdf inputs as byte-identical passthrough.
+
+Gates: cargo test -p pdfxi-cli --test cli watch = 4 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: the host runs a deterministic number of ticks and does not install an OS
+watcher/service; there is no OCR, PS/EPS intake, or retry policy beyond the next
+poll.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::watch_converts_text_html_and_images_to_pdf",
+    "cli::watch_processes_files_and_persists_markers",
+    "cli::watch_rejects_unsafe_or_invalid_setups",
     "watched_contract::tests::watched_config_validation_rejects_relative_and_traversal_roots",
     "watched_contract::tests::watched_config_validation_rejects_unsafe_extensions_and_zero_limits",
     "watched_contract::tests::watched_plan_sorts_candidates_and_records_per_file_outcomes",

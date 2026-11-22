@@ -1,0 +1,18 @@
+{
+  "id": "T-0318",
+  "lane": "convert",
+  "title": "Watched-folder conversion host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0317"],
+  "owns": [
+    "crates/pdfxi-cli/src/watch.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0318.md",
+    "orchestration/feature-updates/T-0318.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli watch passes; pdfxi watch converts real .txt/.html/.png files into parseable PDFs, persists markers and skips processed files; CREATE-014 moves to verified.",
+  "notes": "Replaces the passthrough converter in the watch host with create_from_text/create_from_markdown/capture_html_markup/create_from_image.",
+  "evidence": "docs/evidence/cli/T-0318.md"
+}

@@ -3751,6 +3751,60 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn watch_converts_text_html_and_images_to_pdf() {
+    let watched = TempDir::new();
+    let out = TempDir::new();
+    fs::write(watched.child("note.txt"), b"Watched hello.\nSecond line.").expect("write text");
+    fs::write(
+        watched.child("page.html"),
+        b"<h1>HTML page</h1><p>Body text.</p>",
+    )
+    .expect("write html");
+    fs::write(watched.child("image.png"), sample_png()).expect("write image");
+
+    let polled = run(&[
+        "watch",
+        watched.arg(),
+        "--out",
+        out.arg(),
+        "--ext",
+        "txt",
+        "--ext",
+        "html",
+        "--ext",
+        "png",
+        "--json",
+    ]);
+    assert!(polled.status.success(), "stderr: {}", stderr(&polled));
+    let value: Value = serde_json::from_str(&stdout(&polled)).expect("valid JSON");
+    assert_eq!(value["suffix"], "pdf");
+    assert_eq!(value["written"], 3);
+    let report = &value["reports"][0];
+    assert_eq!(report["converted"], 3);
+    assert_eq!(report["failed"], 0);
+
+    let note = fs::read(out.child("note.pdf")).expect("text PDF");
+    assert!(note.starts_with(b"%PDF-"));
+    let document = pdfxi_core::Document::from_bytes(note).expect("parse text PDF");
+    assert_eq!(document.page_count().expect("pages"), 1);
+    let text = document.page_text(0).expect("text");
+    assert!(text.contains("Watched hello."), "{text}");
+    assert!(text.contains("Second line."), "{text}");
+
+    let html = fs::read(out.child("page.pdf")).expect("html PDF");
+    assert!(html.starts_with(b"%PDF-"));
+    let document = pdfxi_core::Document::from_bytes(html).expect("parse html PDF");
+    let text = document.page_text(0).expect("html text");
+    assert!(text.contains("HTML page"), "{text}");
+    assert!(text.contains("Body text."), "{text}");
+
+    let image = fs::read(out.child("image.pdf")).expect("image PDF");
+    assert!(image.starts_with(b"%PDF-"));
+    let document = pdfxi_core::Document::from_bytes(image).expect("parse image PDF");
+    assert_eq!(document.page_count().expect("pages"), 1);
+}
+
+#[test]
 fn script_run_evaluates_and_updates_fields() {
     let dir = TempDir::new();
     let script = dir.path.join("invoice.js");

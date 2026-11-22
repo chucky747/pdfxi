@@ -6,9 +6,10 @@
 //! deterministic number of host ticks through `PollSchedule`. The OS scheduler
 //! that invokes the command repeatedly is intentionally outside this program.
 //!
-//! Converted bytes are the input bytes (`PassthroughConverter`): this command
-//! proves the watch/poll/marker pipeline; content conversion belongs to the
-//! converter a caller would install.
+//! Converted bytes come from the real in-process adapters: `.txt` and `.md`
+//! become text PDFs, `.html`/`.htm` go through the bounded HTML importer,
+//! `.png`/`.jpg`/`.jpeg` are embedded, and `.pdf` is passed through unchanged.
+//! A converter error is a typed per-file failure that stays eligible for retry.
 //!
 //! Safety: the output directory is canonicalized, must exist outside the watched
 //! root, and every output path is checked to stay beneath it.
@@ -17,8 +18,12 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, bail};
 use pdfxi_automation::{
-    BackoffPolicy, FileOutcomeState, MarkerSnapshot, PassthroughConverter, PollInterval,
-    PollSchedule, WatchedFolder, WatchedFolderConfig,
+    BackoffPolicy, FileOutcomeState, FolderConverter, MarkerSnapshot, PollInterval, PollSchedule,
+    WatchedFolder, WatchedFolderConfig,
+};
+use pdfxi_convert::{
+    CaptureOptions, CreateImageFormat, CreateOptions, capture_html_markup, create_from_image,
+    create_from_markdown, create_from_text,
 };
 use serde::Serialize;
 
@@ -93,6 +98,50 @@ struct WatchReport {
     written: usize,
     /// Markers after the run.
     marker_count: usize,
+}
+
+/// Converts each watched file with the real in-process PDF adapters.
+struct PdfConverter;
+
+impl FolderConverter for PdfConverter {
+    fn convert(&self, relative_path: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let extension = Path::new(relative_path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "pdf" => Ok(bytes.to_vec()),
+            "txt" => {
+                let text = std::str::from_utf8(bytes)
+                    .map_err(|error| format!("{relative_path}: not UTF-8 text: {error}"))?;
+                create_from_text(text, &CreateOptions::default())
+                    .map_err(|error| format!("{relative_path}: {error}"))
+            }
+            "md" | "markdown" => {
+                let text = std::str::from_utf8(bytes)
+                    .map_err(|error| format!("{relative_path}: not UTF-8 text: {error}"))?;
+                create_from_markdown(text, &CreateOptions::default())
+                    .map_err(|error| format!("{relative_path}: {error}"))
+            }
+            "html" | "htm" => {
+                let markup = std::str::from_utf8(bytes)
+                    .map_err(|error| format!("{relative_path}: not UTF-8 HTML: {error}"))?;
+                capture_html_markup(relative_path, markup, &CaptureOptions::default())
+                    .map(|result| result.into_pdf())
+                    .map_err(|error| format!("{relative_path}: {error}"))
+            }
+            "png" | "jpg" | "jpeg" => {
+                let format = CreateImageFormat::from_extension(&extension)
+                    .ok_or_else(|| format!("{relative_path}: unsupported image {extension:?}"))?;
+                create_from_image(bytes, format, &CreateOptions::default())
+                    .map_err(|error| format!("{relative_path}: {error}"))
+            }
+            other => Err(format!(
+                "{relative_path}: no PDF converter for extension {other:?}"
+            )),
+        }
+    }
 }
 
 /// Whether `child` is inside `root` (both canonical).
@@ -205,7 +254,7 @@ pub(crate) fn run_watch(
                     wait_ticks: None,
                 });
                 let report = watched
-                    .poll_once(&PassthroughConverter)
+                    .poll_once(&PdfConverter)
                     .map_err(|error| anyhow::anyhow!("poll tick {tick}: {error}"))?;
                 let mut files = Vec::with_capacity(report.entries().len());
                 for entry in report.entries() {
