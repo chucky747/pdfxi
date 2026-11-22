@@ -51,6 +51,7 @@ command.
 | Trust manager and revocation checks | `SEC-007` | verified | `pdfxi-security::TrustManager` + CRLs | `trust verify` |
 | Digital IDs and certificate management | `SEC-004` | verified | `pdfxi-security::digital_id_lifecycle` | `id inspect/import/list/remove` |
 | Security envelopes and attachment encryption | `SEC-010` | verified | `pdfxi-security::security_envelope` | `envelope seal/open/verify` |
+| Policy-based protection replacement | `SEC-011` | verified | `pdfxi-security::policy` | `protection apply` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -708,6 +709,25 @@ is checked as PDF/X-4 plus the document-part requirements: a catalog
 page (`PDFVT1.DPART_PAGE_UNASSIGNED`). A passing verdict is a deterministic
 subset preflight, not a conformance certification; reported-only constraints
 list what the profile did not inspect.
+### Policy-based protection
+
+`SEC-011` (verified) hosts the local protection policy from
+`pdfxi_security::policy`:
+
+```text
+pdfxi protection apply FILE --out PATH --name NAME --password PW [--owner PW]
+    [--handler standard-r2|r3|r4|r6] [--permissions LIST] [--recipient LABEL ...]
+    [--expiry UNIX] [--now UNIX] [--watermark] [--watermark-text TEXT] [--json]
+```
+
+The policy is validated, its deterministic plan is applied at `--now`, and an
+expired policy is refused before anything is written. `--watermark` stamps a
+visible diagonal watermark first. The prepared document is then protected with
+the selected standard handler and permission mask and reopened fail-closed. The
+report lists the executed plan actions, handler, revision, permissions,
+recipients and reopen result. Recipient labels are declarative; certificate key
+wrapping stays a key-wrap-provider boundary.
+
 ### Security envelopes
 
 `SEC-010` (verified) hosts the authenticated local envelope from

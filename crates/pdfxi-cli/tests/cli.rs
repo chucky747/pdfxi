@@ -2515,6 +2515,246 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// protection: policy-driven document protection (T-0351)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn protection_applies_a_policy_and_a_watermark() {
+    let dir = TempDir::new();
+    let input = create_text_pdf("Protected by policy.");
+    let out = dir.child("guarded.pdf");
+    let applied = run(&[
+        "protection",
+        "apply",
+        input.arg(),
+        "--out",
+        out.to_str().expect("out"),
+        "--name",
+        "Archive",
+        "--password",
+        "test-password",
+        "--owner",
+        "owner-password",
+        "--permissions",
+        "read-only",
+        "--recipient",
+        "alice",
+        "--recipient",
+        "bob",
+        "--expiry",
+        "2000000000",
+        "--now",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(applied.status.success(), "stderr: {}", stderr(&applied));
+    let value: Value = serde_json::from_str(&stdout(&applied)).expect("protection JSON");
+    assert_eq!(value["policy"], "Archive");
+    assert_eq!(value["handler"], "standard-r6");
+    assert_eq!(value["revision"], 6);
+    assert_eq!(value["key_length"], 256);
+    assert_eq!(
+        value["permissions"],
+        serde_json::json!(["print", "accessibility", "print-high"])
+    );
+    assert_eq!(value["recipients"], serde_json::json!(["alice", "bob"]));
+    assert_eq!(
+        value["actions"],
+        serde_json::json!([
+            "validate_policy",
+            "set_permissions",
+            "wrap_recipient_keys",
+            "check_expiry"
+        ])
+    );
+    assert_eq!(value["expired"], false);
+    assert_eq!(value["watermark"], false);
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["reparsed"], true);
+    assert!(value["first_page_chars"].as_u64().unwrap_or(0) > 0);
+    let protected = fs::read(&out).expect("protected output");
+    assert!(
+        protected
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt"),
+        "protected output has no /Encrypt"
+    );
+
+    let plain = dir.child("plain.pdf");
+    let unprotect = run(&[
+        "unprotect",
+        out.to_str().expect("out"),
+        "--out",
+        plain.to_str().expect("plain"),
+        "--password",
+        "test-password",
+    ]);
+    assert!(unprotect.status.success(), "stderr: {}", stderr(&unprotect));
+    let document =
+        pdfxi_core::Document::from_bytes(fs::read(&plain).expect("plain bytes")).expect("parses");
+    assert_eq!(
+        document.page_text(0).expect("page text"),
+        "Protected by policy.\n"
+    );
+
+    let watermarked = dir.child("watermarked.pdf");
+    let stamped = run(&[
+        "protection",
+        "apply",
+        input.arg(),
+        "--out",
+        watermarked.to_str().expect("out"),
+        "--name",
+        "Draft",
+        "--password",
+        "test-password",
+        "--recipient",
+        "alice",
+        "--watermark",
+        "--watermark-text",
+        "DRAFT",
+        "--now",
+        "1700000000",
+        "--json",
+    ]);
+    assert!(stamped.status.success(), "stderr: {}", stderr(&stamped));
+    let value: Value = serde_json::from_str(&stdout(&stamped)).expect("protection JSON");
+    assert_eq!(value["watermark"], true);
+    let plain_watermarked = dir.child("watermarked-plain.pdf");
+    let unprotect = run(&[
+        "unprotect",
+        watermarked.to_str().expect("out"),
+        "--out",
+        plain_watermarked.to_str().expect("plain"),
+        "--password",
+        "test-password",
+    ]);
+    assert!(unprotect.status.success(), "stderr: {}", stderr(&unprotect));
+    let document =
+        pdfxi_core::Document::from_bytes(fs::read(&plain_watermarked).expect("plain bytes"))
+            .expect("parses");
+    assert!(
+        document.page_text(0).expect("page text").contains("DRAFT"),
+        "watermark text was not stamped"
+    );
+}
+
+#[test]
+fn protection_rejects_expired_policies_and_bad_options() {
+    let dir = TempDir::new();
+    let input = create_text_pdf("Policy errors.");
+    let out = dir.child("out.pdf");
+    let out_arg = out.to_str().expect("out");
+
+    let expired = run(&[
+        "protection",
+        "apply",
+        input.arg(),
+        "--out",
+        out_arg,
+        "--name",
+        "Old",
+        "--password",
+        "test-password",
+        "--recipient",
+        "alice",
+        "--expiry",
+        "1600000000",
+        "--now",
+        "1700000000",
+    ]);
+    assert!(!expired.status.success());
+    assert!(stderr(&expired).contains("expired"), "{}", stderr(&expired));
+    assert!(!out.exists(), "an expired policy must not write output");
+
+    let cases = [
+        (
+            vec!["--password", "test-password", "--name", "NoRecipients"],
+            "recipient",
+        ),
+        (
+            vec![
+                "--password",
+                "test-password",
+                "--name",
+                "Dup",
+                "--recipient",
+                "a",
+                "--recipient",
+                "a",
+            ],
+            "duplicate",
+        ),
+        (
+            vec![
+                "--password",
+                "test-password",
+                "--name",
+                "BadHandler",
+                "--recipient",
+                "a",
+                "--handler",
+                "rot13",
+            ],
+            "unknown handler",
+        ),
+        (
+            vec![
+                "--password",
+                "test-password",
+                "--name",
+                "Conflict",
+                "--recipient",
+                "a",
+                "--permissions",
+                "annotate",
+            ],
+            "annotation",
+        ),
+        (
+            vec![
+                "--password",
+                "test-password",
+                "--name",
+                "",
+                "--recipient",
+                "a",
+            ],
+            "name",
+        ),
+        (
+            vec!["--password", "", "--name", "Empty", "--recipient", "a"],
+            "--password",
+        ),
+        (
+            vec![
+                "--password",
+                "test-password",
+                "--name",
+                "Watermark",
+                "--recipient",
+                "a",
+                "--watermark",
+                "--watermark-text",
+                "  ",
+            ],
+            "--watermark-text",
+        ),
+    ];
+    for (args, needle) in cases {
+        let mut command = vec!["protection", "apply", input.arg(), "--out", out_arg];
+        command.extend(args.iter().copied());
+        let output = run(&command);
+        assert!(!output.status.success(), "args: {args:?}");
+        assert!(
+            stderr(&output).contains(needle),
+            "{needle}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // prepress: trapping presets and flattening policy (T-0350)
 // ---------------------------------------------------------------------------
 

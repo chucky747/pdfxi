@@ -141,6 +141,8 @@ mod preflight;
 /// pdfxi prepress: trapping presets and flattening policy.
 mod prepress;
 mod production;
+/// pdfxi protection: policy-driven document protection.
+mod protection;
 /// pdfxi trust: offline chain and revocation evaluation.
 mod trust;
 // Virtual PDF printer control: install/status/remove the "PDFXI PDF" queue and
@@ -1015,6 +1017,12 @@ enum Command {
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
+    },
+    /// Apply a named protection policy to a document.
+    Protection {
+        /// Protection action.
+        #[command(subcommand)]
+        command: ProtectionCommand,
     },
     /// Plan trapping presets and transparency flattening for a document.
     Prepress {
@@ -2115,6 +2123,52 @@ enum StructureCommand {
         /// JSON tree description with `lang`, `nodes` and `roots`.
         #[arg(long, value_name = "PATH")]
         tree: PathBuf,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Actions of the `protection` command.
+#[derive(Debug, Subcommand)]
+enum ProtectionCommand {
+    /// Validate a policy, optionally watermark, and write protected output.
+    Apply {
+        /// Input PDF.
+        file: PathBuf,
+        /// Protected output PDF.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Policy name.
+        #[arg(long, value_name = "NAME")]
+        name: String,
+        /// User (open) password.
+        #[arg(long, value_name = "PASSWORD")]
+        password: String,
+        /// Owner (permissions) password.
+        #[arg(long, value_name = "PASSWORD")]
+        owner: Option<String>,
+        /// Security handler: `standard-r2`, `standard-r3`, `standard-r4` or `standard-r6`.
+        #[arg(long, default_value = "standard-r6")]
+        handler: String,
+        /// Permissions: `all`, `none`, `read-only` or a comma list.
+        #[arg(long, default_value = "all")]
+        permissions: String,
+        /// Declared recipient label (repeatable).
+        #[arg(long = "recipient", value_name = "LABEL")]
+        recipient: Vec<String>,
+        /// Policy expiry in Unix seconds.
+        #[arg(long, value_name = "UNIX")]
+        expiry: Option<i64>,
+        /// Evaluation time in Unix seconds (default: current time).
+        #[arg(long, value_name = "UNIX")]
+        now: Option<i64>,
+        /// Stamp a visible watermark before protecting.
+        #[arg(long)]
+        watermark: bool,
+        /// Watermark text.
+        #[arg(long, default_value = "CONFIDENTIAL")]
+        watermark_text: String,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -4729,6 +4783,37 @@ fn run_cli() -> anyhow::Result<()> {
             output,
             json,
         } => preflight::run_preflight(&profile, &input, fix, output.as_deref(), json),
+        Command::Protection { command } => match command {
+            ProtectionCommand::Apply {
+                file,
+                out,
+                name,
+                password,
+                owner,
+                handler,
+                permissions,
+                recipient,
+                expiry,
+                now,
+                watermark,
+                watermark_text,
+                json,
+            } => protection::apply(
+                &file,
+                &out,
+                &name,
+                &password,
+                owner.as_deref(),
+                &handler,
+                &permissions,
+                &recipient,
+                expiry,
+                now,
+                watermark,
+                &watermark_text,
+                json,
+            ),
+        },
         Command::Prepress { command } => match command {
             PrepressCommand::Plan {
                 input,

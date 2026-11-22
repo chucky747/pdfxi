@@ -3157,21 +3157,59 @@ title = "Security envelopes and attachment encryption"
 [[feature]]
 docs = [
     "crates/pdfxi-security/src/policy.rs",
+    "crates/pdfxi-security/src/protect.rs",
+    "crates/pdfxi-cli/src/protection.rs",
+    "crates/pdfxi-cli/src/decorate.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/security/T-0176.md",
+    "docs/evidence/cli/T-0351.md",
 ]
 domain = "Security"
-evidence = "cargo test -p pdfxi-security: 345 passed, 0 failed (policy suite unchanged and green, including protection_policy_validates_handler_key_length_and_recipients and protection_apply_rejects_expired_policy_with_typed_error); TEST_EXIT=0. fmt/clippy/doc EXIT=0. Full output in docs/evidence/security/T-0176.md."
+evidence = "docs/evidence/cli/T-0351.md"
 id = "SEC-011"
 notes = """
-No policy code was changed by T-0176. The row remains verified from T-0162:
 ProtectionPolicy, validate_policy_spec, build_protection_plan and
-apply_protection_policy are deterministic, typed and caller-clocked. The same
-full pdfxi-security suite was re-run after the envelope hardening and all policy
-tests still pass. Local/offline decision model only; no rights-management
-server, no network, no host clock, no new deps or panics.
+apply_protection_policy are deterministic, typed and caller-clocked. The model
+is local/offline: no rights-management server, network, host clock, new deps or
+panics.
+
+T-0351 adds the caller. `pdfxi protection apply FILE --out PATH --name NAME
+--password PW [--owner PW] [--handler standard-r2|r3|r4|r6] [--permissions
+LIST] [--recipient LABEL ...] [--expiry UNIX] [--now UNIX] [--watermark]
+[--watermark-text TEXT] [--json]` builds ProtectionPolicy::with_protection_id
+from the handler, key length, validated permission mask and recipients, attaches
+expiry and the watermark flag, and calls apply_protection_policy(policy, now),
+which refuses an expired policy before any output is written. When --watermark is
+set, a visible diagonal watermark is stamped with the existing page-decoration
+renderer; otherwise the source is saved unchanged. The prepared document is
+protected with the standard security handler using the policy permission mask and
+requested revision, then reopened with the user password and required to match
+the prepared page count and first-page text length (fail closed). The report
+lists policy, handler, revision, key length, permissions, recipients, executed
+actions, evaluation time, expiry decision, watermark flag, size and reopen
+result. Recipient labels are declarative; certificate key wrapping remains a
+key-wrap-provider boundary.
+
+Evidence: a read-only AES-256 policy with expiry and two recipients writes a
+1,709-byte revision-6/256-bit file, actions
+validate_policy,set_permissions,wrap_recipient_keys,check_expiry, 1 page, 41
+first-page chars, and unprotect restores the original text. The watermark run
+reports apply_watermark, 46 chars, and extracts DRAFT after unprotect. An
+expired policy writes no file; missing/duplicate recipients, an unknown handler,
+annotate-without-modify, an empty name/password and blank watermark text are
+typed errors.
+
+Gates: CLI protection_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: local policy-driven protection (permission mask, handler/revision,
+caller-clocked expiry, optional visible watermark, fail-closed reopen). No
+rights-management server, network, licence call or host clock read. Recipient
+labels are declarative; certificate key wrapping is a provider boundary. Not a
+guarantee that a hostile reader honours permission bits.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
     "policy::tests::protection_policy_validates_handler_key_length_and_recipients",
     "policy::tests::protection_policy_exposes_handler_key_length_and_recipients",
@@ -3179,6 +3217,8 @@ tests = [
     "policy::tests::protection_apply_report_is_deterministic",
     "policy::tests::protection_apply_rejects_expired_policy_with_typed_error",
     "policy::tests::policy_set_applies_protection_plan",
+    "cli::protection_applies_a_policy_and_a_watermark",
+    "cli::protection_rejects_expired_policies_and_bad_options",
 ]
 title = "Policy-based protection replacement"
 

@@ -1,0 +1,19 @@
+{
+  "id": "T-0351",
+  "lane": "convert",
+  "title": "Policy-based protection host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0350"],
+  "owns": [
+    "crates/pdfxi-cli/src/protection.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0351.md",
+    "orchestration/feature-updates/T-0351.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli protection_ passes; pdfxi protection apply validates and applies a real ProtectionPolicy, refuses expiry, optionally watermarks, protects with the policy mask and reopens fail-closed; SEC-011 moves to verified.",
+  "notes": "Hosts ProtectionPolicy/apply_protection_policy composed with protect_document and the watermark renderer. Recipient labels are declarative; certificate key wrapping stays a provider boundary.",
+  "evidence": "docs/evidence/cli/T-0351.md"
+}
