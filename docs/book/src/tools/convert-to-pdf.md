@@ -45,6 +45,25 @@ The same caveat applies to exporting to Office from
 [Export](export.md), where the container is written but compatibility is not
 re-verified.
 
+## Retired capture features
+
+The Adobe browser-capture extension and mail-client capture are replaced by
+local, file-based adapters (ADR 0008). No remote fetch, browser extension,
+network client or active content is involved.
+
+- **HTML and MHTML capture.** `pdfxi_convert::capture` renders caller-supplied
+  HTML/MHTML-like markup through the bounded HTML subset. `pdfxi watch`
+  converts `.html` and `.htm` files through `capture_html_markup`; the
+  `capture_html_file` and `capture_mhtml` entry points remain library APIs.
+- **Email to PDF.** `pdfxi_convert::email` parses a saved `.eml` file (folded
+  headers, bounded MIME parts, a text/plain or text/html body) and renders the
+  body to PDF. Attachment names are listed, never decoded or embedded. This is
+  currently a library API; there is no CLI host yet.
+
+Both rows (`CREATE-011`, `CREATE-012`) are final `replaced` states under
+ADR 0008 and ADR 0009: a local equivalent is delivered instead of a network
+integration, and the narrower scope is recorded here and in the row notes.
+
 ## Limits
 
 - Page size is fixed to Letter; margins and font size are not exposed.

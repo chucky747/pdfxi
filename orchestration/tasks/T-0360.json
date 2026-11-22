@@ -1,0 +1,17 @@
+{
+  "id": "T-0360",
+  "lane": "create",
+  "title": "Explicit ADR-bound replacement notes for CREATE-011/012",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0358"],
+  "owns": [
+    "docs/book/src/tools/convert-to-pdf.md",
+    "docs/evidence/convert/T-0360.md",
+    "orchestration/tasks/T-0360.json",
+    "orchestration/feature-updates/T-0360.toml"
+  ],
+  "acceptance": "CREATE-011 and CREATE-012 keep status replaced under ADR 0008/0009, cite the mdBook coverage required by the ADR, and their notes name the local replacement and its host reachability accurately; cargo xtask features apply --task T-0360 --clean succeeds and goal-verify stays green.",
+  "notes": "W-4 matrix residue. Both rows are terminal replaced states (ADR 0008, ADR 0009); this task makes the replacement explicit in notes/docs and adds the missing mdBook coverage.",
+  "evidence": "docs/evidence/convert/T-0360.md"
+}

@@ -977,11 +977,24 @@ tests = [
 title = "Create and customize PDF Portfolios"
 
 [[feature]]
-docs = "crates/pdfxi-convert/src/capture.rs, docs/evidence/convert/T-0107.md"
+docs = [
+    "crates/pdfxi-convert/src/capture.rs",
+    "docs/book/src/tools/convert-to-pdf.md",
+    "docs/evidence/convert/T-0107.md",
+]
 domain = "Create"
 evidence = "docs/evidence/convert/T-0107.md"
 id = "CREATE-011"
-notes = "Replaced by the local `pdfxi_convert::capture` adapter (ADR 0008): `capture_html_file`, `capture_html_markup`, and `capture_mhtml` render caller-supplied local HTML/MHTML-like input through the existing bounded HTML subset. No remote fetch, browser extension, active content, or traversal; typed size/encoding errors. No CLI exposure in this task."
+notes = """
+Replaced by the local `pdfxi_convert::capture` adapter (ADR 0008):
+`capture_html_file`, `capture_html_markup`, and `capture_mhtml` render
+caller-supplied local HTML/MHTML-like input through the existing bounded HTML
+subset. No remote fetch, browser extension, active content, or traversal; typed
+size/encoding errors. `pdfxi watch` converts `.html`/`.htm` through
+`capture_html_markup`; the file and MHTML entry points remain library APIs.
+Terminal status per ADR 0008 and ADR 0009; the mdBook coverage required by the
+ADR is in `docs/book/src/tools/convert-to-pdf.md`.
+"""
 priority = "P3"
 status = "replaced"
 tests = [
@@ -998,11 +1011,23 @@ tests = [
 title = "Browser page capture extension"
 
 [[feature]]
-docs = "crates/pdfxi-convert/src/email.rs, docs/evidence/convert/T-0107.md"
+docs = [
+    "crates/pdfxi-convert/src/email.rs",
+    "docs/book/src/tools/convert-to-pdf.md",
+    "docs/evidence/convert/T-0107.md",
+]
 domain = "Create"
 evidence = "docs/evidence/convert/T-0107.md"
 id = "CREATE-012"
-notes = "Replaced by local `pdfxi_convert::email` ingestion (ADR 0008): a saved .eml file is parsed for folded headers, bounded MIME parts, and text/plain or text/html bodies and rendered to PDF. Attachment names are listed only; content is never decoded or embedded. No network or mail client."
+notes = """
+Replaced by local `pdfxi_convert::email` ingestion (ADR 0008): a saved `.eml`
+file is parsed for folded headers, bounded MIME parts, and text/plain or
+text/html bodies and rendered to PDF. Attachment names are listed only; content
+is never decoded or embedded. No network or mail client. The local equivalent
+is currently library-level with no CLI host. Terminal status per ADR 0008 and
+ADR 0009; the mdBook coverage required by the ADR is in
+`docs/book/src/tools/convert-to-pdf.md`.
+"""
 priority = "P3"
 status = "replaced"
 tests = [
