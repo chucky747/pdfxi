@@ -91,6 +91,8 @@ mod compare;
 mod conformance;
 /// `pdfxi decorate`: stamp headers and footers on pages.
 mod decorate;
+/// `pdfxi font add-text`: embed the CID font and write text with it.
+mod font;
 /// `pdfxi form create` and `pdfxi form list`: build and inspect AcroForm fields.
 mod form;
 /// `pdfxi linearize` and `pdfxi pack`: choose the on-disk object layout.
@@ -404,6 +406,12 @@ enum Command {
         /// The version-history operation to perform.
         #[command(subcommand)]
         command: VersionsCommand,
+    },
+    /// Embed a CID font and write text with it.
+    Font {
+        /// The font operation to perform.
+        #[command(subcommand)]
+        command: FontCommand,
     },
     /// Append an incremental revision with updated document information.
     ///
@@ -1183,6 +1191,37 @@ enum VersionsCommand {
     },
 }
 
+/// Operations on the `pdfxi font` command group.
+#[derive(Debug, Subcommand)]
+enum FontCommand {
+    /// Embed the bundled Type0/CID font and insert a wrapped text box.
+    AddText {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Text to place; newlines start a new paragraph.
+        #[arg(long, value_name = "TEXT")]
+        text: String,
+        /// Rectangle in points: `x0,y0,x1,y1`.
+        #[arg(long, value_name = "RECT")]
+        rect: String,
+        /// One-based page to edit.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        page: usize,
+        /// Font size in points.
+        #[arg(long, default_value_t = 12.0)]
+        font_size: f64,
+        /// Alignment: left, center or right.
+        #[arg(long, default_value = "left")]
+        align: String,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Operations on the `pdfxi create` command group.
 #[derive(Debug, Subcommand)]
 enum CreateCommand {
@@ -1864,6 +1903,27 @@ fn main() -> anyhow::Result<()> {
                 json,
             } => versions::run_diff(&left, &right, store.as_deref(), json),
             VersionsCommand::Remove { id, store, json } => versions::run_remove(id, &store, json),
+        },
+        Command::Font { command } => match command {
+            FontCommand::AddText {
+                file,
+                out,
+                text,
+                rect,
+                page,
+                font_size,
+                align,
+                json,
+            } => font::run_add_text(font::AddTextRequest {
+                file: &file,
+                out: &out,
+                page,
+                rect: &rect,
+                text: &text,
+                font_size,
+                align: &align,
+                json,
+            }),
         },
         Command::Update {
             file,

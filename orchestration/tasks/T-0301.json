@@ -1,0 +1,19 @@
+{
+  "id": "T-0301",
+  "lane": "core",
+  "title": "CID font embedding host",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0300"],
+  "owns": [
+    "crates/pdfxi-cli/src/font.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0301.md",
+    "orchestration/feature-updates/T-0301.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli font_add_text and cargo test -p pdfxi-cli --bin pdfxi font:: pass; pdfxi font add-text embeds the Type0/CIDFontType2/FontFile2/ToUnicode graph, saves real bytes whose inserted text extracts, and STD-004 moves to verified.",
+  "notes": "Hosts pdfxi_edit::add_text_box over the bundled Courier Prime program, then reopens the output to verify the font graph and ToUnicode-extractable text.",
+  "evidence": "docs/evidence/cli/T-0301.md"
+}

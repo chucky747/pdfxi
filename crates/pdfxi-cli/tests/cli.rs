@@ -3381,6 +3381,165 @@ fn form_validate_and_calculate_use_typed_values() {
 }
 
 #[test]
+fn font_add_text_embeds_a_cid_font_and_extracts_text() {
+    let source = root_fixture("minimal.pdf");
+    let first = TempOut::new("pdf");
+    let second = TempOut::new("pdf");
+    let added = run(&[
+        "font",
+        "add-text",
+        source.to_str().expect("utf-8"),
+        "--out",
+        first.arg(),
+        "--text",
+        "Embedded font proof 2026",
+        "--rect",
+        "72,600,400,680",
+        "--font-size",
+        "14",
+        "--json",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    let value: Value = serde_json::from_str(&stdout(&added)).expect("valid JSON");
+    assert_eq!(value["page"], 1);
+    assert_eq!(value["lines"], 1);
+    assert_eq!(value["font_size"], 14.0);
+    assert_eq!(value["align"], "left");
+    assert_eq!(value["words_found"], value["words_checked"]);
+    assert!(value["words_checked"].as_u64().unwrap_or(0) >= 4);
+    assert_eq!(value["font"]["base_font"], "CourierPrime");
+    assert_eq!(value["font"]["descendant_subtype"], "CIDFontType2");
+    assert_eq!(value["font"]["has_font_file"], true);
+    assert_eq!(value["font"]["has_to_unicode"], true);
+    assert!(
+        value["resource"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("FXF"),
+        "{}",
+        stdout(&added)
+    );
+
+    let extracted = run(&["text", first.arg()]);
+    assert!(extracted.status.success(), "stderr: {}", stderr(&extracted));
+    let text = stdout(&extracted);
+    assert!(text.contains("Embedded font proof 2026"), "{text}");
+
+    let info = run(&["info", first.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+
+    let repeated = run(&[
+        "font",
+        "add-text",
+        source.to_str().expect("utf-8"),
+        "--out",
+        second.arg(),
+        "--text",
+        "Embedded font proof 2026",
+        "--rect",
+        "72,600,400,680",
+        "--font-size",
+        "14",
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        fs::read(&first.path).expect("first output"),
+        fs::read(&second.path).expect("second output"),
+        "font insertion is deterministic"
+    );
+}
+
+#[test]
+fn font_add_text_handles_an_authoring_page_and_alignment() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let out = TempOut::new("pdf");
+    let added = run(&[
+        "font",
+        "add-text",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--text",
+        "Centered CID font line",
+        "--rect",
+        "72,500,400,560",
+        "--align",
+        "center",
+        "--json",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    let value: Value = serde_json::from_str(&stdout(&added)).expect("valid JSON");
+    assert_eq!(value["align"], "center");
+    assert_eq!(value["font"]["descendant_subtype"], "CIDFontType2");
+    assert_eq!(value["font"]["has_to_unicode"], true);
+    let extracted = run(&["text", out.arg()]);
+    assert!(extracted.status.success(), "stderr: {}", stderr(&extracted));
+    assert!(stdout(&extracted).contains("Centered CID font line"));
+
+    let blank = run(&[
+        "font",
+        "add-text",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--text",
+        "  ",
+        "--rect",
+        "72,500,400,560",
+    ]);
+    assert!(!blank.status.success());
+
+    let bad_align = run(&[
+        "font",
+        "add-text",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--text",
+        "x",
+        "--rect",
+        "72,500,400,560",
+        "--align",
+        "justified",
+    ]);
+    assert!(!bad_align.status.success());
+    assert!(
+        stderr(&bad_align).contains("unknown --align"),
+        "{}",
+        stderr(&bad_align)
+    );
+
+    let off_page = run(&[
+        "font",
+        "add-text",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--text",
+        "x",
+        "--rect",
+        "600,500,900,560",
+    ]);
+    assert!(!off_page.status.success());
+
+    let zero_page = run(&[
+        "font",
+        "add-text",
+        source.to_str().expect("utf-8"),
+        "--out",
+        out.arg(),
+        "--text",
+        "x",
+        "--rect",
+        "72,500,400,560",
+        "--page",
+        "0",
+    ]);
+    assert!(!zero_page.status.success());
+}
+
+#[test]
 fn versions_snapshot_list_diff_and_remove() {
     let left_text = TempPath::new("txt");
     let right_text = TempPath::new("txt");

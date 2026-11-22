@@ -4401,38 +4401,50 @@ title = "Object streams and linearization"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-core/src/font.rs",
-    "crates/pdfxi-core/src/lib.rs",
-    "docs/evidence/core/T-0172.md",
+    "crates/pdfxi-cli/src/font.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0301.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-core --lib font:: (CARGO_TARGET_DIR=target/lanes/core): 15 passed, 0 failed (11 pre-existing + 4 new); full core suite 370 unit + 6 integration passed; fmt/clippy/doc EXIT=0. Full output in docs/evidence/core/T-0172.md."
+evidence = "docs/evidence/cli/T-0301.md"
 id = "STD-004"
 notes = """
-Closes the writer-side font model at library level. Already present: decide_embedding
-(EmbedFull/SubsetThenEmbed/Standard14 with base-14 detection and deterministic
-subset tags), validated FontProgram, GlyphWidth/validate_metrics,
-ToUnicodeEntry/generate_tounicode (sorted BFChar with UTF-16 surrogate pairs),
-and build_cid_font producing a Type0 + CIDFont + FontDescriptor + FontFile stream
-+ ToUnicode graph with Identity-H, grouped /W runs, hard caps and typed FontError.
-T-0172 adds stage_cid_font, which writes all five plan objects into a Document at
-base_id..=base_id+4 through set_object and returns the Type0 object id. This makes
-the model serializable into the object model: an end-to-end test stages a
-caller-supplied font program, saves the document, reparses it, and verifies all
-five objects survive, the FontFile2 bytes are unchanged, the Identity-H/ToUnicode
-references are intact, and the ToUnicode CMap mapping is present. A second test
-asserts two independent stage+save runs are byte-identical; a negative test
-rejects zero/overflow base ids.
+Verified through `pdfxi font add-text <FILE> --out PATH --text T --rect x0,y0,x1,y1
+[--page N] [--font-size PT] [--align left|center|right] [--json]`.
 
-Honest scope: verified at library level. Binary subsetting of font bytes is a
-documented caller responsibility (the caller supplies already-subset program
-bytes via FontProgram); wiring the returned font id into a page /Resources and a
-content stream is the producer's job; conformance checks live in pdfxi-standards.
-These are documented boundaries of the model, not unfinished library work.
+The command calls pdfxi_edit::add_text_box, which embeds the bundled Courier
+Prime program (SIL OFL 1.1) as a /Type0 font with a /CIDFontType2 descendant,
+/FontFile2, /CIDToGIDMap, CID-keyed /W widths and a /ToUnicode CMap via
+pdfxi_core::font::stage_cid_font, and appends a content stream using the page
+resource. It wraps to the box and supports left/center/right alignment.
+
+After saving, the host reopens the bytes and verifies the named page font
+resource is /Subtype /Type0, /DescendantFonts[0] is /CIDFontType2, the descriptor
+carries /FontFile2 (or FontFile3/FontFile), the Type0 dictionary has /ToUnicode,
+and every inserted word is present in the extracted page text. Resolution walks
+the page /Parent chain when /Resources is inherited. It fails rather than
+silently writing unsearchable text.
+
+Evidence: minimal.pdf yields resource FXF0, base font CourierPrime, Type0 object
+6, descendant CIDFontType2, font_file and to_unicode true, 4/4 words found; the
+authoring page-boxes fixture works with center alignment and 4/4 words. pdfxi
+text on both outputs returns the inserted words, and two runs are byte-identical.
+Bad input (blank text, unknown alignment, off-page rectangle, page 0) is rejected.
+
+Gates: cargo test -p pdfxi-cli --test cli font_add_text = 2 passed; cargo test
+-p pdfxi-cli --bin pdfxi font:: = 1 passed; whole workspace fmt/clippy/tests
+green.
+
+Scope: the bundled TrueType program is embedded as a full CID font (no binary
+subsetting), one font per text box, horizontal text only; arbitrary caller
+programs and subsetting remain library-level.
 """
 priority = "P1"
-status = "library"
+status = "verified"
 tests = [
+    "cli::font_add_text_embeds_a_cid_font_and_extracts_text",
+    "cli::font_add_text_handles_an_authoring_page_and_alignment",
+    "font::tests::alignments_parse_and_reject_unknown_names",
     "font::tests::cid_font_plan_stages_five_objects_into_document",
     "font::tests::cid_font_round_trips_through_document_save_and_reparse",
     "font::tests::cid_font_document_save_is_byte_deterministic",

@@ -58,6 +58,7 @@ pdfxi <COMMAND> --help
 | `versions list --store PATH [--json]` | List stored snapshots | verified (`MANAGE-005`) |
 | `versions diff <LEFT> <RIGHT> [--store PATH] [--json]` | Diff two snapshots or a snapshot and a PDF | verified (`MANAGE-005`) |
 | `versions remove <ID> --store PATH [--json]` | Remove a stored snapshot | verified (`MANAGE-005`) |
+| `font add-text <FILE> --out PATH --text T --rect x0,y0,x1,y1 [--page N] [--font-size PT] [--align left\|center\|right] [--json]` | Embed the CID font and insert text | verified (`STD-004`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -126,7 +127,12 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `versions` keeps page-text snapshots in a small JSON store (`{"version":1,
+- `font add-text` embeds the bundled Courier Prime program (SIL OFL 1.1) as a
+  `/Type0` font with a `/CIDFontType2` descendant, `/FontFile2`, `/CIDToGIDMap`,
+  CID-keyed `/W` widths and a `/ToUnicode` CMap, writes a wrapped text box with
+  that font, saves, and reopens the result. It verifies the font graph and that
+  every inserted word is extractable through the ToUnicode mapping, so the
+  command fails rather than silently writing unsearchable text.- `versions` keeps page-text snapshots in a small JSON store (`{"version":1,
   "next_id":..., "snapshots":[...]}`) with monotonically increasing ids.
   `snapshot` extracts normalised page text from a real PDF, `list` shows the
   stored revisions, `diff` compares two ids or an id and a PDF path with the
