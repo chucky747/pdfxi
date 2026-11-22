@@ -140,6 +140,8 @@ mod marks;
 mod preflight;
 /// pdfxi prepress: trapping presets and flattening policy.
 mod prepress;
+/// pdfxi present: window-free presentation-mode planning.
+mod present;
 mod production;
 /// pdfxi protection: policy-driven document protection.
 mod protection;
@@ -1014,6 +1016,33 @@ enum Command {
         /// Destination for the normalized PDF; defaults to a sibling file.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drive presentation-mode slides and full-screen layout without a window.
+    Present {
+        /// Source PDF.
+        input: PathBuf,
+        /// Comma-separated commands: next, prev, first, last, auto, exit,
+        /// `tick:SECONDS`, `key:NAME` or `gesture:NAME`.
+        #[arg(long, default_value = "next")]
+        commands: String,
+        /// Screen size as `WxH`.
+        #[arg(long, default_value = "1280x720")]
+        screen: String,
+        /// Fit mode: `fit` or `actual`.
+        #[arg(long, default_value = "fit")]
+        fit: String,
+        /// Per-slide auto-advance duration in seconds.
+        #[arg(long, default_value_t = 0.0)]
+        duration: f32,
+        /// Transition: `none`, `fade` or `push`.
+        #[arg(long, default_value = "none")]
+        transition: String,
+        /// One-based page subsequence, for example `1,3,5`.
+        #[arg(long, value_name = "PAGES")]
+        slides: Option<String>,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -4783,6 +4812,25 @@ fn run_cli() -> anyhow::Result<()> {
             output,
             json,
         } => preflight::run_preflight(&profile, &input, fix, output.as_deref(), json),
+        Command::Present {
+            input,
+            commands,
+            screen,
+            fit,
+            duration,
+            transition,
+            slides,
+            json,
+        } => present::run(
+            &input,
+            &commands,
+            &screen,
+            &fit,
+            duration,
+            &transition,
+            slides.as_deref(),
+            json,
+        ),
         Command::Protection { command } => match command {
             ProtectionCommand::Apply {
                 file,

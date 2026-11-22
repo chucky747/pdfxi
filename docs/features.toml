@@ -300,32 +300,56 @@ title = "Links and named destinations"
 [[feature]]
 docs = [
     "crates/pdfxi-app/src/presentation.rs",
+    "crates/pdfxi-app/src/canvas.rs",
     "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-cli/src/present.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/book/src/authoring.md",
     "docs/evidence/app/T-0173.md",
+    "docs/evidence/cli/T-0352.md",
 ]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0173.md: 5 new presentation::tests plus the 14 prior presentation tests all pass; cargo test -p pdfxi-app 381/0 and --features ui 444/0; fmt/clippy/doc EXIT=0."
+evidence = "docs/evidence/cli/T-0352.md"
 id = "VIEW-012"
 notes = """
-Verified for the deterministic presentation model only (ADR 0008). The existing
-slide/order/transition/state-machine/layout model is now complete at model level:
-T-0173 fixes the one remaining validation hole — `Slide` has public fields, so a
-host can bypass `Slide::new` with a struct literal, and `from_slides` previously
-accepted a NaN/negative duration. A NaN duration made every `tick` comparison
-false and corrupted the deterministic remainder carry into a runaway advance;
-`from_slides` now re-validates each duration into a typed
-`PresentationError::InvalidDuration(page, duration)`. New tests also pin the
-TIME_EPSILON boundary, chunked-vs-single-tick determinism, manual navigation
-while playing (elapsed reset, state preserved), terminal Exit from Finished,
-and width-limited fit layout.
+Verified for the deterministic presentation model only (ADR 0008). The
+slide/order/transition/state-machine/layout model is complete: T-0173 revalidates
+durations in from_slides (rejecting NaN/negative bypasses of Slide::new), pins
+the TIME_EPSILON boundary, chunked-vs-single-tick determinism, manual navigation
+while playing, terminal Exit from Finished, and width-limited fit layout.
 
-Remaining scope is the host boundary and is deliberately not claimed: no OS
-full-screen window transition, no native key/swipe event capture, no timer
-thread, and no slide rendering/animation. The host supplies `tick` seconds and
-commands and translates `PresentationOutcome`/`FullscreenLayout` into effects.
+T-0352 supplies the missing host. `pdfxi present FILE [--commands next,prev,...]
+[--screen WxH] [--fit fit|actual] [--duration SEC] [--transition
+none|fade|push] [--slides PAGES] [--json]` parses the document (rejecting zero
+pages), builds one manual slide per page or a strictly increasing `--slides`
+subsequence with `--duration`/`--transition`, and executes a comma-separated
+command list: next, prev, first, last, auto, exit, `key:space|right|left|home|
+end|escape|a` through map_presentation_key, `gesture:swipe-left|swipe-right|
+long-press` through map_presentation_gesture, and `tick:SECONDS` through
+PresentationModel::tick. Every step reports the outcome
+(page_changed:<index>, auto_advance_started, finished, exited, ...), slide index,
+one-based page, auto-advance state and the full-screen layout for the active
+page's real media size; the final layout is reported too.
+
+Evidence: a three-page fixture (612x792, 792x612, 400x400) steps
+next,next,prev,first,last,key:escape to outcomes page_changed 1/2/1/0/2 and
+exited at page 3, with the 400x400 page laid out at 1280x720 as scale 1.8,
+720x720 at (280,0). A two-slide 1,3 fade presentation with duration 2 and
+commands auto,tick:2.5,tick:2.5 starts auto-advance, changes to page 3 and
+finishes. An 800x600 actual-fit layout of a 612x792 page reports x=94, y=-96,
+scale 1. Unknown commands/keys/gestures, bad tick values, bad screens,
+fits/transitions, out-of-range or non-increasing slides and a non-PDF are typed
+errors.
+
+Gates: CLI present_ tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: the complete presentation state machine and layout are user-reachable
+from the CLI on real documents. The OS full-screen window, native event capture,
+timer thread, slide rendering and animation transitions remain the GUI host
+boundary and are not claimed.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "presentation::tests::new_builds_document_order_and_rejects_empty_document",
     "presentation::tests::from_slides_honours_document_order_and_rejects_reordering",
@@ -346,6 +370,8 @@ tests = [
     "presentation::tests::manual_navigation_while_playing_resets_elapsed_and_keeps_auto_advance",
     "presentation::tests::exit_from_finished_and_repeated_exit_are_terminal",
     "presentation::tests::layout_fit_uses_width_limit_for_wide_pages",
+    "cli::present_steps_slides_keys_gestures_and_layout",
+    "cli::present_rejects_bad_sequences_and_geometry",
 ]
 title = "Full screen and presentation mode"
 

@@ -1,0 +1,19 @@
+{
+  "id": "T-0352",
+  "lane": "convert",
+  "title": "Presentation-mode host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0351"],
+  "owns": [
+    "crates/pdfxi-cli/src/present.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0352.md",
+    "orchestration/feature-updates/T-0352.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli present_ passes; pdfxi present drives the real PresentationModel over a document with commands, keys, gestures, ticks, slide subsequences and layouts; VIEW-012 moves to verified.",
+  "notes": "Headless host for the presentation state machine. The OS full-screen window, native events, timer thread and rendering remain the GUI boundary.",
+  "evidence": "docs/evidence/cli/T-0352.md"
+}

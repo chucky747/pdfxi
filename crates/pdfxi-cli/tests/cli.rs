@@ -2515,6 +2515,160 @@ fn marks_rejects_malformed_and_tight_box_inputs() {
 }
 
 // ---------------------------------------------------------------------------
+// present: window-free presentation mode (T-0352)
+// ---------------------------------------------------------------------------
+
+/// A three-page fixture with distinct page sizes.
+fn present_three_page_pdf() -> Vec<u8> {
+    t0131_pdf(
+        "1.7",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] >>".to_owned(),
+        ],
+    )
+}
+
+#[test]
+fn present_steps_slides_keys_gestures_and_layout() {
+    let pdf = TempPdf::new(&present_three_page_pdf());
+    let stepped = run(&[
+        "present",
+        pdf.arg(),
+        "--commands",
+        "next,next,prev,first,last,key:escape",
+        "--json",
+    ]);
+    assert!(stepped.status.success(), "stderr: {}", stderr(&stepped));
+    let value: Value = serde_json::from_str(&stdout(&stepped)).expect("present JSON");
+    assert_eq!(value["pages"], 3);
+    assert_eq!(value["slides"].as_array().expect("slides").len(), 3);
+    assert_eq!(value["slides"][2]["page"], 3);
+    let outcomes: Vec<&str> = value["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|step| step["outcome"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            "page_changed:1",
+            "page_changed:2",
+            "page_changed:1",
+            "page_changed:0",
+            "page_changed:2",
+            "exited"
+        ]
+    );
+    assert_eq!(value["final_index"], 2);
+    assert_eq!(value["final_page"], 3);
+    assert_eq!(value["final_state"], "exited");
+    assert_eq!(value["exited"], true);
+    assert_eq!(value["final_layout"]["scale"], 1.8);
+    assert_eq!(value["final_layout"]["width"], 720.0);
+    assert_eq!(value["final_layout"]["height"], 720.0);
+    assert_eq!(value["final_layout"]["x"], 280.0);
+    assert_eq!(value["final_layout"]["y"], 0.0);
+
+    let auto = run(&[
+        "present",
+        pdf.arg(),
+        "--slides",
+        "1,3",
+        "--duration",
+        "2",
+        "--transition",
+        "fade",
+        "--commands",
+        "auto,tick:2.5,tick:2.5",
+        "--json",
+    ]);
+    assert!(auto.status.success(), "stderr: {}", stderr(&auto));
+    let value: Value = serde_json::from_str(&stdout(&auto)).expect("present JSON");
+    assert_eq!(value["slides"].as_array().expect("slides").len(), 2);
+    assert_eq!(value["slides"][0]["page"], 1);
+    assert_eq!(value["slides"][1]["page"], 3);
+    assert_eq!(value["slides"][1]["duration"], 2.0);
+    assert_eq!(value["slides"][1]["transition"], "Fade");
+    let outcomes: Vec<&str> = value["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|step| step["outcome"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["auto_advance_started", "page_changed:1", "finished"]
+    );
+    assert_eq!(value["final_state"], "finished");
+    assert_eq!(value["final_page"], 3);
+
+    let actual = run(&[
+        "present",
+        pdf.arg(),
+        "--screen",
+        "800x600",
+        "--fit",
+        "actual",
+        "--commands",
+        "first",
+        "--json",
+    ]);
+    assert!(actual.status.success(), "stderr: {}", stderr(&actual));
+    let value: Value = serde_json::from_str(&stdout(&actual)).expect("present JSON");
+    assert_eq!(value["final_layout"]["scale"], 1.0);
+    assert_eq!(value["final_layout"]["width"], 612.0);
+    assert_eq!(value["final_layout"]["x"], 94.0);
+    assert_eq!(value["final_layout"]["y"], -96.0);
+}
+
+#[test]
+fn present_rejects_bad_sequences_and_geometry() {
+    let pdf = TempPdf::new(&present_three_page_pdf());
+    let cases = [
+        (
+            vec!["--commands", "sideways"],
+            "unknown presentation command",
+        ),
+        (vec!["--commands", "key:f13"], "unknown presentation key"),
+        (
+            vec!["--commands", "gesture:pinch"],
+            "unknown presentation gesture",
+        ),
+        (vec!["--commands", "tick:x"], "tick value"),
+        (vec!["--commands", "tick:-1"], "tick seconds"),
+        (vec!["--screen", "wide"], "--screen"),
+        (vec!["--screen", "0x720"], "finite positive"),
+        (vec!["--fit", "stretch"], "unknown fit mode"),
+        (vec!["--transition", "spin"], "unknown transition"),
+        (vec!["--slides", "0"], "outside"),
+        (vec!["--slides", "4"], "outside"),
+        (vec!["--slides", "3,1"], "strictly increasing"),
+        (vec!["--slides", "1,1"], "strictly increasing"),
+    ];
+    for (args, needle) in cases {
+        let mut command = vec!["present", pdf.arg()];
+        command.extend(args.iter().copied());
+        let output = run(&command);
+        assert!(!output.status.success(), "args: {args:?}");
+        assert!(
+            stderr(&output).contains(needle),
+            "{needle}: {}",
+            stderr(&output)
+        );
+    }
+
+    let bad = TempPdf::new(b"not a pdf");
+    let output = run(&["present", bad.arg()]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("parse"), "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
 // protection: policy-driven document protection (T-0351)
 // ---------------------------------------------------------------------------
 

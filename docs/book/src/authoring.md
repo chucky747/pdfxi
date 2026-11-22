@@ -52,6 +52,7 @@ command.
 | Digital IDs and certificate management | `SEC-004` | verified | `pdfxi-security::digital_id_lifecycle` | `id inspect/import/list/remove` |
 | Security envelopes and attachment encryption | `SEC-010` | verified | `pdfxi-security::security_envelope` | `envelope seal/open/verify` |
 | Policy-based protection replacement | `SEC-011` | verified | `pdfxi-security::policy` | `protection apply` |
+| Full screen and presentation mode | `VIEW-012` | verified | `pdfxi-app::presentation` | `present` |
 | ICC colour management and output intents | `PRINT-003` | verified | `pdfxi-render::color` | `color icc` / `color intents` / `color convert` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
@@ -709,6 +710,24 @@ is checked as PDF/X-4 plus the document-part requirements: a catalog
 page (`PDFVT1.DPART_PAGE_UNASSIGNED`). A passing verdict is a deterministic
 subset preflight, not a conformance certification; reported-only constraints
 list what the profile did not inspect.
+### Presentation mode
+
+`VIEW-012` (verified) hosts the window-free presentation state machine from
+`pdfxi_app::presentation`:
+
+```text
+pdfxi present FILE [--commands next,prev,...] [--screen WxH] [--fit fit|actual]
+    [--duration SEC] [--transition none|fade|push] [--slides PAGES] [--json]
+```
+
+Every page becomes a manual slide in document order, or `--slides 1,3` selects a
+strictly increasing subsequence with `--duration`/`--transition`. `--commands`
+accepts `next`, `prev`, `first`, `last`, `auto`, `exit`, `key:space|right|left|
+home|end|escape|a`, `gesture:swipe-left|swipe-right|long-press` and
+`tick:SECONDS`, and reports the outcome, slide/page, auto-advance state and the
+full-screen layout for the page's real size. The OS full-screen window, native
+event capture, timer thread and animation remain the GUI host boundary.
+
 ### Policy-based protection
 
 `SEC-011` (verified) hosts the local protection policy from
