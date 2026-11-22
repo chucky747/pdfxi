@@ -1,6 +1,6 @@
 //! `pdfxi separations`: derive print plates from real page content.
 //!
-//! [`pdfxi_app::print`] owns the canonical [`SeparationsPlan`] (process-first
+//! [`pdfxi_app::print`] owns the canonical [`SeparationsPlan`](pdfxi_app::print::SeparationsPlan) (process-first
 //! ordering, validated bounded names, stable ids). This host scans each page's
 //! real content streams for colour operators, resolves `/ColorSpace`
 //! resources (including `/Separation` and `/DeviceN` spot inks), counts paint

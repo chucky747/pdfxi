@@ -1,6 +1,6 @@
 //! `pdfxi plugin`: plan a plugin invocation and validate typed outputs.
 //!
-//! [`pdfxi_automation::plugin_output`] builds a deterministic execution plan
+//! `pdfxi_automation::plugin_output` builds a deterministic execution plan
 //! from the manifest/invocation model and validates bounded typed results, but
 //! loads no WebAssembly. This host reads a real manifest file, maps capability
 //! and budget flags, and prints the plan or output verdict. No plugin code is

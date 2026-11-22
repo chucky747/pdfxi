@@ -1,6 +1,6 @@
 //! `pdfxi protection apply`: policy-driven document protection.
 //!
-//! [`pdfxi_security::policy`] owns [`ProtectionPolicy`] validation, the ordered
+//! [`pdfxi_security::policy`] owns [`ProtectionPolicy`](pdfxi_security::ProtectionPolicy) validation, the ordered
 //! protection plan, and caller-clocked expiry enforcement. This host applies a
 //! policy to a real PDF: it validates the policy, refuses an expired one,
 //! optionally stamps a visible watermark, writes standard-handler encryption

@@ -2,7 +2,7 @@
 //!
 //! [`pdfxi_security::TrustManager`] builds a path from a leaf certificate to a
 //! caller-supplied anchor, checks validity, CA constraints, key usage and every
-//! signature with [`RsaPkcs1Verifier`], and evaluates caller-supplied CRLs for
+//! signature with [`RsaPkcs1Verifier`](pdfxi_security::RsaPkcs1Verifier), and evaluates caller-supplied CRLs for
 //! revocation. This host loads the certificates from PEM or DER files, pins the
 //! caller's clock, and reports the typed decision. Nothing is fetched over the
 //! network.

@@ -13,9 +13,9 @@
 //!
 //! # Limits
 //!
-//! Alignment is quadratic. More than [`MAX_ALIGNMENT_CELLS`] page or line pairs
+//! Alignment is quadratic. More than `MAX_ALIGNMENT_CELLS` page or line pairs
 //! fail with a clear error instead of allocating unbounded memory. Displayed
-//! differences are capped at [`MAX_DISPLAY_LINES`] rows per page.
+//! differences are capped at `MAX_DISPLAY_LINES` rows per page.
 
 use std::path::Path;
 
@@ -416,7 +416,7 @@ fn line_changes(left: &[String], right: &[String]) -> (usize, usize) {
 /// Append the differing lines of a changed page pair as two columns.
 ///
 /// Aligned-but-different lines print as `- left | + right`; deleted and added
-/// lines print alone. Output is capped at [`MAX_DISPLAY_LINES`] rows.
+/// lines print alone. Output is capped at `MAX_DISPLAY_LINES` rows.
 fn differing_lines(left: &[String], right: &[String], out: &mut Vec<String>) {
     let Ok(ops) = align(left, right) else {
         out.push("  diff unavailable: page is too large to align".to_owned());

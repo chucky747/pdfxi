@@ -1,7 +1,7 @@
 //! `pdfxi office`: plan and execute the Office integration contract.
 //!
 //! [`pdfxi_convert::office_integration`] validates a caller-supplied envelope and
-//! returns a deterministic [`OfficeIntegrationPlan`] that reuses the existing
+//! returns a deterministic [`OfficeIntegrationPlan`](pdfxi_convert::OfficeIntegrationPlan) that reuses the existing
 //! import/export adapters. This host exposes both directions:
 //!
 //! - `import-to-pdf`: Office-derived markup becomes a PDF.

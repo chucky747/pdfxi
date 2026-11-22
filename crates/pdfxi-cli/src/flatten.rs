@@ -1,6 +1,6 @@
 //! `pdfxi flatten`: bake annotation and widget appearances into page content.
 //!
-//! [`pdfxi_edit::flatten`] implements the headless flatten model but has no PDF
+//! [`pdfxi_edit::flatten`](fn@pdfxi_edit::flatten) implements the headless flatten model but has no PDF
 //! object store: it consumes page dictionaries, content and appearance bytes
 //! and returns content plus filtered dictionaries, leaving the XObject
 //! materialization to a downstream writer. This module is that writer.

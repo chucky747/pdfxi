@@ -918,7 +918,7 @@ pub fn add_stamp(
 ///
 /// Returns [`AnnotationEditError::InvalidFontSize`] for a bad size,
 /// [`AnnotationEditError::EmptyShapeRect`] for an empty rectangle,
-/// [`AnnotationEditError::EmptyContents`] for blank text, a page or bounds
+/// [`AnnotationEditError::EmptyText`] for blank text, a page or bounds
 /// error, or a core error when the change cannot be staged.
 pub fn add_free_text(
     document: &mut Document,

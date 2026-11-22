@@ -2,7 +2,7 @@
 //!
 //! [`pdfxi_security::timestamp`] already implements the token structure, the
 //! CMS `SignedData` wrapper and the full validation pipeline, but it has no
-//! host: callers must supply a [`SignatureProvider`] and all trust material.
+//! host: callers must supply a [`SignatureProvider`](pdfxi_security::SignatureProvider) and all trust material.
 //! This module is that host. `timestamp sign` mints a token locally from a
 //! caller-supplied RSA identity (an offline TSA, not a network request) and
 //! `timestamp verify` validates a real token against caller-supplied

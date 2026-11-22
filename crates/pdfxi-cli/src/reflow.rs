@@ -2,7 +2,7 @@
 //!
 //! Reflow is the reading half of the accessibility pair; the speaking half is
 //! `pdfxi read-aloud` in [`crate::read_aloud`]. Both read the same selected page
-//! text through [`selected_pages`], so the column a user reads and the sentences
+//! text through `selected_pages`, so the column a user reads and the sentences
 //! a speech backend is handed come from one extraction.
 //!
 //! The layout is intentionally simple and deterministic: paragraphs are split on

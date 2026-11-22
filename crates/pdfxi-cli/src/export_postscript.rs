@@ -1,6 +1,6 @@
 //! `pdfxi export postscript`: write a positioned text subset as PostScript.
 //!
-//! [`pdfxi_convert::postscript`] renders a caller-supplied [`PsDocument`] as
+//! [`pdfxi_convert::postscript`] renders a caller-supplied [`PsDocument`](pdfxi_convert::PsDocument) as
 //! deterministic DSC PostScript. This host maps every text run from
 //! [`pdfxi_edit::text_blocks`] to a `PsText` at its real page coordinates and
 //! font size, so the output preserves placement and page geometry. Vector art,

@@ -1,0 +1,20 @@
+{
+  "id": "T-0359",
+  "lane": "convert",
+  "title": "Rustdoc link warning sweep",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0358"],
+  "owns": [
+    "crates/pdfxi-cli/src",
+    "crates/pdfxi-edit/src/document_annotations.rs",
+    "crates/pdfxi-edit/src/navigation/document_navigation.rs",
+    "crates/pdfxi-render/src/win_print.rs",
+    "crates/pdfxi-render/src/lib.rs",
+    "docs/evidence/convert/T-0359.md",
+    "orchestration/tasks/T-0359.json"
+  ],
+  "acceptance": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps exits 0; every intra-doc link warning is fixed without behavior changes; cargo fmt --all --check passes.",
+  "notes": "Documentation-only close-out item W-3. Broken intra-doc links in pdfxi-cli bin docs plus the pdfxi-edit/pdfxi-render lib docs. No feature matrix changes.",
+  "evidence": "docs/evidence/convert/T-0359.md"
+}

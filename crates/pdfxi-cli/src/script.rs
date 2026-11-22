@@ -3,7 +3,7 @@
 //! [`pdfxi_automation::Script`] parses and interprets a dependency-free
 //! JavaScript subset with explicit CPU, call, loop, string, array, object and
 //! nesting budgets. This host reads a script file, seeds an in-memory
-//! [`AcrobatContext`] from `--field`/`--event-*`, runs the script with the
+//! [`AcrobatContext`](pdfxi_automation::AcrobatContext) from `--field`/`--event-*`, runs the script with the
 //! documented limits, and reports the return value plus the final field store.
 //!
 //! Nothing in the sandbox can read a file, touch the network, start a process,

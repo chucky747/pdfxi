@@ -1,9 +1,9 @@
 //! `pdfxi create office`: convert an Office intake bundle into a PDF.
 //!
 //! [`pdfxi_convert::office_contract`] validates a caller-supplied
-//! [`OfficeBundle`] (already-extracted Word/Excel/PowerPoint markup) and builds
+//! [`OfficeBundle`](pdfxi_convert::OfficeBundle) (already-extracted Word/Excel/PowerPoint markup) and builds
 //! a deterministic conversion plan, but nothing wrote a PDF. This host imports
-//! the bundle into the shared [`OfficeDocument`] model, lays each model page out
+//! the bundle into the shared [`OfficeDocument`](pdfxi_convert::OfficeDocument) model, lays each model page out
 //! as text in a real PDF page of the same size, merges the pages in order, and
 //! verifies the converted text by reopening the output.
 //!

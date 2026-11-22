@@ -1,7 +1,7 @@
 //! `pdfxi restyle`: change font size, spacing, scaling and colour of a paragraph.
 //!
 //! [`pdfxi_edit::restyle_run_text`] re-emits the text block that contains one run
-//! with a [`RunStyleOverride`]. This host loads a real PDF, resolves the run in
+//! with a [`RunStyleOverride`](pdfxi_edit::RunStyleOverride). This host loads a real PDF, resolves the run in
 //! the geometry-aware text model, applies the requested style, saves, and
 //! reopens the output to verify the text still extracts and the style operators
 //! are present.

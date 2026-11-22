@@ -207,7 +207,7 @@ pub fn remove_link(
 ///
 /// The name is the `/Names` key and the file name shown to readers. When
 /// `file_name` is `None` the name is used. `description` may be empty, and an
-/// empty `mime_type` falls back to [`DEFAULT_MIME_TYPE`]. Existing name-tree
+/// empty `mime_type` falls back to `DEFAULT_MIME_TYPE`. Existing name-tree
 /// entries are preserved and re-sorted, so the output stays deterministic.
 ///
 /// # Errors

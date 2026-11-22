@@ -1,8 +1,8 @@
 //! `pdfxi prepress plan`: trapping presets and transparency-flattening policy.
 //!
 //! [`pdfxi_render::trapping`] models the inputs to a print-production prepress
-//! stage: a validated [`TrappingPreset`], a [`FlattenPolicy`], and a
-//! deterministic [`TrapPlan`]. This host reads a real document for its page
+//! stage: a validated [`TrappingPreset`](pdfxi_render::trapping::TrappingPreset), a [`FlattenPolicy`](pdfxi_render::trapping::FlattenPolicy), and a
+//! deterministic [`TrapPlan`](pdfxi_render::trapping::TrapPlan). This host reads a real document for its page
 //! geometry, resolves the plan, and reports which requested features require a
 //! native prepress backend. Painting traps and rasterizing transparency are
 //! explicitly the backend's responsibility.

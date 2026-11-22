@@ -1,7 +1,7 @@
 //! `pdfxi structure apply`: write a tagged-PDF structure tree into a document.
 //!
 //! [`pdfxi_accessibility::write_structure_tree`] turns a validated
-//! [`A11yTree`] into a structure intermediate: a `/StructTreeRoot`, a
+//! [`A11yTree`](pdfxi_accessibility::A11yTree) into a structure intermediate: a `/StructTreeRoot`, a
 //! `/ParentTree`, structure elements and per-page marked-content overlays. This
 //! host merges that intermediate into a real document: it remaps the generated
 //! object numbers, merges the catalog entries (`/StructTreeRoot`, `/MarkInfo`,

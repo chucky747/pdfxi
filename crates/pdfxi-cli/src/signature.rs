@@ -1,8 +1,8 @@
 //! `pdfxi signature`: electronic signature fields and the signer workflow.
 //!
-//! [`pdfxi_forms::signature`] and [`pdfxi_forms::signatureplan`] own the
+//! `pdfxi_forms::signature` and `pdfxi_forms::signatureplan` own the
 //! `/FT /Sig` field model, the placeholder contract and the deterministic
-//! `/ByteRange` planning; [`pdfxi_forms::signing`] owns the structure-only
+//! `/ByteRange` planning; `pdfxi_forms::signing` owns the structure-only
 //! verification boundary. This host creates a real one-page PDF with a
 //! contract-checked signature field and a `/Contents` placeholder, plans the
 //! exact byte range a signer must cover, and verifies caller-supplied signature

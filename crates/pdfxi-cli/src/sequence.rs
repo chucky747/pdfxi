@@ -1,7 +1,7 @@
 //! `pdfxi action sequence`: real document execution of Action Wizard sequences.
 //!
-//! [`pdfxi_automation::SequenceBatchQueue`] runs an [`ActionSequence`] per input
-//! file through an injected [`SequenceStepRunner`], but its default runner is
+//! [`pdfxi_automation::SequenceBatchQueue`] runs an [`ActionSequence`](pdfxi_automation::ActionSequence) per input
+//! file through an injected [`SequenceStepRunner`](pdfxi_automation::SequenceStepRunner), but its default runner is
 //! deliberately side-effect free. This host supplies a document runner: every
 //! input is parsed as a real PDF, each step mutates that in-memory document
 //! (metadata writes, sandboxed scripts and the documented document commands),

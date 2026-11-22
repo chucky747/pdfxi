@@ -10,7 +10,7 @@
 //! `deny(unsafe_code)` everywhere else and this module overrides it.
 //!
 //! Non-Windows builds compile the same public API and return
-//! [`PrintBackendError::Unsupported`], so callers need no platform branches.
+//! [`PrintBackendError::Unsupported`](crate::win_print::PrintBackendError::Unsupported), so callers need no platform branches.
 
 #![allow(unsafe_code)]
 
