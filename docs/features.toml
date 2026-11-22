@@ -3804,55 +3804,43 @@ title = "Droplets and watched folders"
 
 [[feature]]
 docs = [
-    "crates/pdfxi-automation/src/action_wizard.rs",
-    "crates/pdfxi-automation/src/lib.rs",
-    "docs/evidence/automation/T-0145.md",
+    "crates/pdfxi-cli/src/script.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0317.md",
 ]
 domain = "Automation"
-evidence = "cargo test -p pdfxi-automation: 164 passed, 0 failed (17 new action_wizard tests: sequence validation, duplicate/empty ids, bounded step count, deterministic plan order and sorted reasons, typed per-step deny reasons, unsupported kind, oversized script/budget overage, sandboxed script success, typed step-budget exhaustion, pre-cancellation, executor success/failure propagation, metadata step, command success/failure, denial skipping, determinism, typed codes), 0 doc tests; TEST_EXIT=0. fmt/clippy/doc all EXIT=0. Full output in docs/evidence/automation/T-0145.md."
+evidence = "docs/evidence/cli/T-0317.md"
 id = "AUTO-004"
 notes = """
-The sandboxed Acrobat-compatible JavaScript subset is now bound to an Action
-Wizard-style batch runner at library level. New module `pdfxi_automation::
-action_wizard` adds:
+Verified through `pdfxi script run <SCRIPT.js> [--field NAME=VALUE ...]
+[--event-key KEY] [--event-value VALUE] [--max-steps N] [--json]`.
 
-- `ActionSequence` (named, ordered steps with a `ScriptBudget`) and
-  `WizardStep`/`WizardStepKind` with three supported actions — `RunScript`
-  (caller-supplied source for the existing parser/interpreter), `SetMetadata`
-  (in-memory metadata), `RunCommand` (named automation command) — plus an
-  `Unsupported` kind retained so unknown kinds are denied rather than guessed.
-  Structural validation and `add_step` reject empty sequences, empty/duplicate
-  step ids, and more than MAX_SEQUENCE_STEPS (64) steps.
-- `plan_sequence` -> `RunnerPlan`/`StepPlan`/`PlanDecision`/`PlanDenyReason`: a
-  deterministic, non-executing plan with one entry per step in insertion order
-  and typed allow/deny reasons (empty sequence, duplicate/empty id, sequence too
-  long, unsupported kind, empty/oversized script, empty metadata key,
-  empty/disallowed command, budget field above host ceiling). Reasons are
-  exhaustively collected, sorted, and deduplicated; summaries are stable.
-- `ScriptStepExecutor` trait with `SandboxedScriptExecutor` default that calls
-  the existing `Script::parse_with_limits`/`Script::run` with the step budget
-  and the caller's `CancelToken`. No filesystem, network, process, clock,
-  randomness, or ambient globals; step/fuel, call, loop, and string budgets are
-  enforced by the sandbox and surface as typed `JsError`/`ScriptExecError`.
-- `CommandHandler` trait with `RecordingCommandHandler` default: real command
-  dispatch stays the caller's responsibility; the runner performs no I/O.
-- `SequenceRunner`/`run_sequence` produce a deterministic `SequenceReport`
-  with per-step `StepRunOutcome`, an in-memory metadata map, typed
-  `WizardRunError`s, and byte-stable summaries. Denied steps are skipped
-  without invoking an executor.
+The host reads a real script file within MAX_SCRIPT_BYTES, seeds an in-memory
+AcrobatContext from the field/event flags, and calls run_acrobat_script with
+Limits (default 100000 steps, 64 nested calls, bounded loops/strings/arrays/
+objects/AST depth, or a tighter --max-steps). It reports the return value and
+its JavaScript type, every final field in name order, and event key/value/rc.
+The sandbox rejects eval, Function, require, process, globalThis and similar
+globals and has no file, network, process, clock or randomness access.
 
-Verified at library level: this closes the "no Action Wizard binding" gap from
-the prior AUTO-004 note. Honest remaining scope is outside this row's library
-boundary: no UI Action Wizard editor and no CLI entry point exposing
-`ActionSequence` (the CLI `action`/`droplet` commands still drive the older
-`Action`/`BatchQueue` model, tracked by AUTO-001/AUTO-005); no real PDF mutation
-by script steps (the JS sandbox stays capability-free and metadata is
-in-memory); and command effects are owned by the caller through the trait
-boundaries. No new dependency, unsafe, or non-test panic was introduced.
+Evidence: an invoice script with price 12.5 and qty 4 returns the string 50,
+sets total to 50, seeds event.key=calculate, reports rc true, and repeated runs
+are byte-identical; a 3x5 run returns 15 and sets total to 15. --max-steps 5
+fails with a typed step-budget error, eval('1') is rejected as a dangerous
+global, a missing script fails to read, a field without = and an empty field
+name are rejected.
+
+Gates: cargo test -p pdfxi-cli --test cli script_run = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: the field store is in memory and does not mutate a real PDF form; the
+ActionSequence/SequenceRunner batch binding is not exposed here.
 """
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::script_run_evaluates_and_updates_fields",
+    "cli::script_run_enforces_sandbox_and_budget",
     "action_wizard::tests::valid_sequence_passes_validation",
     "action_wizard::tests::empty_sequence_is_rejected_by_validation_and_plan",
     "action_wizard::tests::duplicate_step_ids_are_rejected",

@@ -78,6 +78,8 @@ mod ops;
 mod plugin;
 /// pdfxi create scan: assemble scanned PNG pages into a PDF.
 mod scan;
+/// pdfxi script: run a file in the sandboxed JavaScript subset.
+mod script;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
 mod toolset;
 /// pdfxi watch: one host-driven poll of a watched folder.
@@ -349,6 +351,17 @@ enum Command {
         /// Write every attachment into this directory.
         #[arg(long, value_name = "DIR")]
         extract: Option<PathBuf>,
+    },
+    /// Run a script in the deterministic Acrobat-compatible sandbox.
+    ///
+    /// Scripts have no file, network, process, clock or random access. Form
+    /// fields are seeded in memory with `--field NAME=VALUE`, and the final
+    /// store is reported. Explicit CPU, call, loop, string, array, object and
+    /// nesting budgets apply.
+    Script {
+        /// Script action.
+        #[command(subcommand)]
+        command: ScriptCommand,
     },
     /// Plan or execute the Word/Excel/PowerPoint integration contract.
     ///
@@ -1605,6 +1618,31 @@ enum StructureCommand {
     },
 }
 
+/// Actions of the `script` command.
+#[derive(Debug, Subcommand)]
+enum ScriptCommand {
+    /// Execute one script file.
+    Run {
+        /// JavaScript file.
+        script: PathBuf,
+        /// Seed a form field as `NAME=VALUE`; repeat for several fields.
+        #[arg(long = "field", value_name = "NAME=VALUE")]
+        field: Vec<String>,
+        /// Seed `event.key`.
+        #[arg(long, value_name = "KEY")]
+        event_key: Option<String>,
+        /// Seed `event.value`.
+        #[arg(long, value_name = "VALUE")]
+        event_value: Option<String>,
+        /// Override the default 100000-step CPU budget.
+        #[arg(long, value_name = "N")]
+        max_steps: Option<u64>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Actions of the `office` command.
 #[derive(Debug, Subcommand)]
 enum OfficeCommand {
@@ -2771,6 +2809,23 @@ fn main() -> anyhow::Result<()> {
                 duplex,
                 json,
             } => scan::create_scan(&scans, &out, dpi, &duplex, json),
+        },
+        Command::Script { command } => match command {
+            ScriptCommand::Run {
+                script,
+                field,
+                event_key,
+                event_value,
+                max_steps,
+                json,
+            } => script::run_script_file(
+                &script,
+                &field,
+                event_key.as_deref(),
+                event_value.as_deref(),
+                max_steps,
+                json,
+            ),
         },
         Command::Office { command } => match command {
             OfficeCommand::Plan { manifest, json } => {

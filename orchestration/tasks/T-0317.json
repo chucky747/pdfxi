@@ -1,0 +1,19 @@
+{
+  "id": "T-0317",
+  "lane": "convert",
+  "title": "Sandboxed JavaScript host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0316"],
+  "owns": [
+    "crates/pdfxi-cli/src/script.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/authoring.md",
+    "docs/evidence/cli/T-0317.md",
+    "orchestration/feature-updates/T-0317.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli script_run passes; pdfxi script run executes a real script file in the sandbox, seeds and reports in-memory fields/event, and enforces the step budget; AUTO-004 moves to verified.",
+  "notes": "Hosts pdfxi_automation::js: run_acrobat_script with Limits, AcrobatContext seeding and final field snapshot.",
+  "evidence": "docs/evidence/cli/T-0317.md"
+}

@@ -16,6 +16,7 @@ command.
 | Office intake bundles (Word/Excel/PowerPoint) | `CREATE-006` | verified | `pdfxi-convert::office_contract` + `office_import` | `create office` |
 | PDF Portfolios from real files | `CREATE-010` | verified | `pdfxi-convert::portfolio_package` | `create portfolio` |
 | Office integration round trip | `PLAT-003` | verified | `pdfxi-convert::office_integration` | `office plan` / `office convert` |
+| Sandboxed Acrobat-compatible JavaScript | `AUTO-004` | verified | `pdfxi-automation::js` | `script run` |
 | Scanned PNG pages (simplex/duplex) | `CREATE-007` | verified | `pdfxi-convert::scan_capture` | `create scan` |
 | OCR words over a scanned image | `CREATE-008` | verified | `pdfxi-convert::ocr_pipeline` | `create ocr` |
 | Merge existing files | `CREATE-009` | verified | `pdfxi-core::pages` | — |
@@ -38,6 +39,20 @@ pdfxi create image <INPUT.png|jpg|jpeg> <OUTPUT.pdf> [options]
 pdfxi create text  <INPUT.txt|md|markdown> <OUTPUT.pdf> [options]
 ```
 
+The JavaScript sandbox is exposed as:
+
+```text
+pdfxi script run <SCRIPT.js> [--field NAME=VALUE ...]
+    [--event-key KEY] [--event-value VALUE] [--max-steps N] [--json]
+```
+
+`--field` seeds the in-memory `this.getField(...)` store; `--event-key` and
+`--event-value` seed `event`. The command parses with `Script::parse_with_limits`
+and runs with `run_acrobat_script` under the default budgets (100000 steps, 64
+nested calls, bounded loops/strings/arrays/objects), or `--max-steps` for a
+tighter CPU budget. It reports the return value and its JavaScript type, the
+final field store and the event state. There is no file, network, process,
+clock, randomness or ambient global access; the store is in memory only.
 The Office integration contract is exposed as:
 
 ```text

@@ -3751,6 +3751,159 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn script_run_evaluates_and_updates_fields() {
+    let dir = TempDir::new();
+    let script = dir.path.join("invoice.js");
+    fs::write(
+        &script,
+        br#"var p = Number(this.getField("price").value);
+var q = Number(this.getField("qty").value);
+this.getField("total").value = String(p * q);
+this.getField("total").value;"#,
+    )
+    .expect("write script");
+
+    let run_script = run(&[
+        "script",
+        "run",
+        script.to_str().expect("script path"),
+        "--field",
+        "price=12.5",
+        "--field",
+        "qty=4",
+        "--field",
+        "total=0",
+        "--event-key",
+        "calculate",
+        "--json",
+    ]);
+    assert!(
+        run_script.status.success(),
+        "stderr: {}",
+        stderr(&run_script)
+    );
+    let value: Value = serde_json::from_str(&stdout(&run_script)).expect("valid JSON");
+    assert_eq!(value["result"], "50");
+    assert_eq!(value["result_type"], "string");
+    assert_eq!(value["max_steps"], 100000);
+    assert_eq!(value["event"]["key"], "calculate");
+    assert_eq!(value["event"]["rc"], true);
+    let fields = value["fields"].as_array().expect("fields");
+    let total = fields
+        .iter()
+        .find(|field| field["name"] == "total")
+        .expect("total field");
+    assert_eq!(total["value"], "50");
+
+    let again = run(&[
+        "script",
+        "run",
+        script.to_str().expect("script path"),
+        "--field",
+        "price=12.5",
+        "--field",
+        "qty=4",
+        "--field",
+        "total=0",
+        "--event-key",
+        "calculate",
+        "--json",
+    ]);
+    assert!(again.status.success(), "stderr: {}", stderr(&again));
+    assert_eq!(
+        stdout(&run_script),
+        stdout(&again),
+        "sandbox execution is deterministic"
+    );
+
+    let plain = run(&[
+        "script",
+        "run",
+        script.to_str().expect("script path"),
+        "--field",
+        "price=3",
+        "--field",
+        "qty=5",
+    ]);
+    assert!(plain.status.success(), "stderr: {}", stderr(&plain));
+    assert!(stdout(&plain).contains("result: 15 (string)"));
+    assert!(stdout(&plain).contains("field: total = 15"));
+}
+
+#[test]
+fn script_run_enforces_sandbox_and_budget() {
+    let dir = TempDir::new();
+    let dangerous = dir.path.join("dangerous.js");
+    fs::write(&dangerous, b"eval('1');").expect("write dangerous script");
+    let refused = run(&["script", "run", dangerous.to_str().expect("script path")]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("dangerous global 'eval'"),
+        "{}",
+        stderr(&refused)
+    );
+
+    let loop_script = dir.path.join("loop.js");
+    fs::write(&loop_script, b"var n = 0; while (true) { n = n + 1; } n;")
+        .expect("write loop script");
+    let budget = run(&[
+        "script",
+        "run",
+        loop_script.to_str().expect("script path"),
+        "--max-steps",
+        "20",
+    ]);
+    assert!(!budget.status.success());
+    assert!(
+        stderr(&budget).contains("budget exceeded"),
+        "{}",
+        stderr(&budget)
+    );
+
+    let simple = dir.path.join("simple.js");
+    fs::write(&simple, b"1 + 1;").expect("write simple script");
+    let bad_field = run(&[
+        "script",
+        "run",
+        simple.to_str().expect("script path"),
+        "--field",
+        "novalue",
+    ]);
+    assert!(!bad_field.status.success());
+    assert!(
+        stderr(&bad_field).contains("must be NAME=VALUE"),
+        "{}",
+        stderr(&bad_field)
+    );
+
+    let empty_name = run(&[
+        "script",
+        "run",
+        simple.to_str().expect("script path"),
+        "--field",
+        "=value",
+    ]);
+    assert!(!empty_name.status.success());
+    assert!(
+        stderr(&empty_name).contains("empty name"),
+        "{}",
+        stderr(&empty_name)
+    );
+
+    let missing = run(&[
+        "script",
+        "run",
+        dir.path.join("absent.js").to_str().expect("script path"),
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("read script"),
+        "{}",
+        stderr(&missing)
+    );
+}
+
+#[test]
 fn office_plan_and_convert_import_to_pdf() {
     let dir = TempDir::new();
     let manifest = dir.path.join("import.json");
