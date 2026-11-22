@@ -1,6 +1,6 @@
 # Installing PDFXI
 
-PDFXI `0.1.0` is a Windows x64 build. Two delivery forms exist: a per-user
+PDFXI `0.1.1` is a Windows x64 build. Two delivery forms exist: a per-user
 Inno Setup installer and a portable zip. Both are unsigned; read
 [Unsigned builds](#unsigned-builds) before you run one.
 
@@ -10,7 +10,7 @@ The installer is built by `scripts/package.ps1` when Inno Setup 6's `ISCC.exe`
 is available. The output is:
 
 ```text
-target/package/pdfxi-setup-0.1.0-windows-x86_64.exe
+target/package/pdfxi-setup-0.1.1-windows-x86_64.exe
 ```
 
 It installs **for the current user only** (`PrivilegesRequired=lowest`): no
@@ -43,7 +43,7 @@ yourself to reset the viewer.
 The portable archive is:
 
 ```text
-target/package/pdfxi-portable-0.1.0-windows-x86_64.zip
+target/package/pdfxi-portable-0.1.1-windows-x86_64.zip
 ```
 
 It contains the viewer, the CLI, the pinned `pdfium.dll` with its licences, the
@@ -160,6 +160,6 @@ cargo xtask docs            # documentation page presence check
 cache, the workspace root, the current directory, and `Path`, and fails with a
 message pointing at `scripts/fetch-pdfium.ps1` when none is present.
 
-`cargo xtask goal-verify --all` is **not** green in `0.1.0`: 115 feature rows
-are `library` or `model` and AC-04 is not met. See the
+`cargo xtask goal-verify --all` is green in `0.1.1`: 145 rows, 143 `verified`
+and 2 `replaced` under ADR 0008/0009. See the
 [feature matrix](../../FEATURES.md) and ADR 0009.

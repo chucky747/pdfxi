@@ -4,11 +4,11 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 54 verified, 13 library, 76 model, 2 replaced, 0 in-progress
+Current status: 143 verified, 0 library, 0 model, 2 replaced, 0 in-progress
 (145 rows; see ADR 0009). A `verified` row runs on real document bytes and a
-user can reach it through the GUI or the CLI. `library` and `model` are honest
-statuses for code that exists but is not a reachable product feature, so 91
-rows are not verified.
+user can reach it through the GUI or the CLI. The two `replaced` rows
+(`CREATE-011`, `CREATE-012`) are accepted terminal states under ADR 0008/0009,
+so every row is terminal and no row is `library` or `model`.
 
 ## Detailed feature pages
 
@@ -44,7 +44,7 @@ Task-oriented M2 chapters live in the [mdBook](book/src/README.md):
 | Edit | 15 | M2, M3 |
 | Export | 9 | M2, M4, M5 |
 | Forms | 10 | M3 |
-| Security | 11 | M3, M4 |
+| Security | 13 | M3, M4 |
 | Review | 9 | M2, M6 |
 | Print Production | 8 | M4, M6 |
 | Accessibility | 6 | M2, M6 |

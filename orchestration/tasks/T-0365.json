@@ -1,0 +1,18 @@
+{
+  "id": "T-0365",
+  "lane": "convert",
+  "title": "Matrix summaries agree with features.toml (review blocking 2)",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0363"],
+  "owns": [
+    "docs/FEATURES.md",
+    "docs/book/src/features.md",
+    "docs/book/src/install.md",
+    "docs/evidence/convert/T-0365.md",
+    "orchestration/tasks/T-0365.json"
+  ],
+  "acceptance": "docs/FEATURES.md, docs/book/src/features.md and docs/book/src/install.md state the real matrix (145 rows: 143 verified + 2 replaced), the real per-domain counts, and the real 0.1.1 gate status; AC-04 is satisfied.",
+  "notes": "Fresh-eyes review blocking finding: FEATURES.md claimed 54 verified / 13 library / 76 model and install.md claimed the gate was not green; book features.md said 143 rows.",
+  "evidence": "docs/evidence/convert/T-0365.md"
+}
