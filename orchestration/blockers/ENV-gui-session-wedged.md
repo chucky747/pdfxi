@@ -6,7 +6,7 @@ Evidence: `docs/evidence/ui/T-0362.md` (GUI window) and
 
 ## Resolution
 
-A fresh viewer launch created a real top-level window and terminated cleanly:
+A fresh viewer launch created a real top-level window; it was then force-stopped (not a user-initiated quit):
 
 ```text
 > target\integration\debug\pdfxi-ui.exe --light fixtures\minimal.pdf
@@ -35,8 +35,9 @@ The wedge (2026-11-22) presented as:
    returned).
 4. The Microsoft Print to PDF driver wrote no file, failing the print test.
 
-The suspected cause was a stuck GPU/driver call in the console session; the
-recorded user action was sign-out/restart. The session recovered on its own.
+The suspected cause was a stuck GPU/driver call in the console session. The
+recorded user action was sign-out/restart, after which the session recovered.
+No code change was required.
 
 ## If it recurs
 

@@ -1,0 +1,21 @@
+{
+  "id": "T-0368",
+  "lane": "orchestrator",
+  "title": "Corrected release v0.1.2: real setup upgrade, evidence fidelity, board and memory",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0367"],
+  "owns": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "docs/book/src/install.md",
+    "docs/evidence/platform/T-0366.md",
+    "docs/evidence/platform/T-0368.md",
+    "orchestration/blockers/ENV-gui-session-wedged.md",
+    "orchestration/BOARD.md",
+    "orchestration/tasks/T-0368.json"
+  ],
+  "acceptance": "Workspace and package are 0.1.2; the real per-user install is upgraded by the 0.1.2 Inno setup so install.ps1, unins000 and DisplayVersion are 0.1.2 and the installed tree passes its manifest; goal-verify --all is green from a clean tree; v0.1.2 is tagged and pushed with v0.1.1 immutable; review should-fixes (blocker wording, evidence fidelity, stale board, memory note) are closed.",
+  "notes": "v0.1.1 is pushed and immutable. The installed 0.1.1 state still had the pre-fix install.ps1 and 0.1.0 uninstall metadata because it was never upgraded through the setup.",
+  "evidence": "docs/evidence/platform/T-0368.md"
+}
