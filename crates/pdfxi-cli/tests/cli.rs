@@ -3381,6 +3381,133 @@ fn form_validate_and_calculate_use_typed_values() {
 }
 
 #[test]
+fn compare_hunks_report_line_changes_with_page_numbers() {
+    let left_text = TempPath::new("txt");
+    let right_text = TempPath::new("txt");
+    left_text.write(b"alpha\nbravo\ncharlie\ndelta\n");
+    right_text.write(b"alpha\nBRAVO\ncharlie\nepsilon\nextra\n");
+    let left_pdf = TempOut::new("pdf");
+    let right_pdf = TempOut::new("pdf");
+    for (text, pdf) in [(&left_text, &left_pdf), (&right_text, &right_pdf)] {
+        let created = run(&["create", "text", text.arg(), pdf.arg()]);
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+
+    let compared = run(&[
+        "compare",
+        left_pdf.arg(),
+        right_pdf.arg(),
+        "--hunks",
+        "--json",
+    ]);
+    assert!(compared.status.success(), "stderr: {}", stderr(&compared));
+    let value: Value = serde_json::from_str(&stdout(&compared)).expect("valid JSON");
+    assert_eq!(value["identical"], false);
+    assert_eq!(value["summary"]["changed"], 2);
+    assert_eq!(value["summary"]["added"], 1);
+    assert_eq!(value["summary"]["removed"], 0);
+    assert_eq!(value["summary"]["pages_examined"], 1);
+    let hunks = value["hunks"].as_array().expect("hunks");
+    assert_eq!(hunks.len(), 3);
+    assert_eq!(hunks[0]["kind"], "changed");
+    assert_eq!(hunks[0]["page"], 1);
+    assert_eq!(hunks[0]["old_line"], 2);
+    assert_eq!(hunks[0]["new_line"], 2);
+    assert_eq!(hunks[0]["old_text"], "bravo");
+    assert_eq!(hunks[0]["new_text"], "BRAVO");
+    assert_eq!(hunks[2]["kind"], "added");
+    assert_eq!(hunks[2]["new_text"], "extra");
+
+    let repeated = run(&[
+        "compare",
+        left_pdf.arg(),
+        right_pdf.arg(),
+        "--hunks",
+        "--json",
+    ]);
+    assert_eq!(
+        stdout(&compared),
+        stdout(&repeated),
+        "hunks are deterministic"
+    );
+
+    let identical = run(&[
+        "compare",
+        left_pdf.arg(),
+        left_pdf.arg(),
+        "--hunks",
+        "--json",
+    ]);
+    assert!(identical.status.success(), "stderr: {}", stderr(&identical));
+    let value: Value = serde_json::from_str(&stdout(&identical)).expect("valid JSON");
+    assert_eq!(value["identical"], true);
+    assert_eq!(value["summary"]["hunks"], 0);
+    assert_eq!(value["hunks"].as_array().expect("hunks").len(), 0);
+
+    let failing = run(&[
+        "compare",
+        left_pdf.arg(),
+        right_pdf.arg(),
+        "--hunks",
+        "--fail-on-difference",
+    ]);
+    assert_eq!(failing.status.code(), Some(1));
+
+    let conflicting = run(&[
+        "compare",
+        left_pdf.arg(),
+        right_pdf.arg(),
+        "--hunks",
+        "--lines",
+    ]);
+    assert!(!conflicting.status.success());
+}
+
+#[test]
+fn compare_hunks_reference_later_pages() {
+    let left_text = TempPath::new("txt");
+    let right_text = TempPath::new("txt");
+    let left: String = (0..120).map(|index| format!("line {index:03}\n")).collect();
+    let mut right: String = (0..120).map(|index| format!("line {index:03}\n")).collect();
+    right = right.replace("line 110", "line 110 changed");
+    left_text.write(left.as_bytes());
+    right_text.write(right.as_bytes());
+    let left_pdf = TempOut::new("pdf");
+    let right_pdf = TempOut::new("pdf");
+    for (text, pdf) in [(&left_text, &left_pdf), (&right_text, &right_pdf)] {
+        let created = run(&["create", "text", text.arg(), pdf.arg()]);
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+    let info = run(&["info", left_pdf.arg()]);
+    assert!(info.status.success(), "stderr: {}", stderr(&info));
+    assert!(
+        !stdout(&info).contains("pages: 1\n"),
+        "fixture must span more than one page: {}",
+        stdout(&info)
+    );
+
+    let compared = run(&[
+        "compare",
+        left_pdf.arg(),
+        right_pdf.arg(),
+        "--hunks",
+        "--json",
+    ]);
+    assert!(compared.status.success(), "stderr: {}", stderr(&compared));
+    let value: Value = serde_json::from_str(&stdout(&compared)).expect("valid JSON");
+    let hunks = value["hunks"].as_array().expect("hunks");
+    assert_eq!(hunks.len(), 1, "{}", stdout(&compared));
+    assert_eq!(hunks[0]["kind"], "changed");
+    assert!(
+        hunks[0]["page"].as_u64().unwrap_or(0) >= 2,
+        "change must reference a later page: {}",
+        stdout(&compared)
+    );
+    assert_eq!(hunks[0]["old_text"], "line 110");
+    assert_eq!(hunks[0]["new_text"], "line 110 changed");
+}
+
+#[test]
 fn accessibility_check_reports_metadata_and_pdfua_gaps() {
     let source = root_fixture("minimal.pdf");
     let first = run(&[

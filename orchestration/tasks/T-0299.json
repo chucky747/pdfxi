@@ -1,0 +1,19 @@
+{
+  "id": "T-0299",
+  "lane": "review",
+  "title": "Line-hunk version diff host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0298"],
+  "owns": [
+    "crates/pdfxi-cli/src/compare.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0299.md",
+    "orchestration/feature-updates/T-0299.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli compare_hunks passes; pdfxi compare --hunks reports Added/Removed/Changed hunks with page and line references and stable JSON on real text PDFs; REVIEW-008 moves to verified.",
+  "notes": "Adds a --hunks mode over pdfxi_edit::compare, mapping normalised page text into TextDocument and reporting the bounded summary, per-hunk page/line references and both texts.",
+  "evidence": "docs/evidence/cli/T-0299.md"
+}

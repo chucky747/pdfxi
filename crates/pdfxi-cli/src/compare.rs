@@ -21,6 +21,7 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use pdfxi_core::Document;
+use pdfxi_edit::{CompareOptions, TextDocument, TextPage as EditTextPage, compare_documents};
 use serde::Serialize;
 
 /// Largest `(left + 1) * (right + 1)` alignment matrix the command will build.
@@ -125,12 +126,23 @@ pub(crate) fn run_compare(
     right: &Path,
     json: bool,
     lines: bool,
+    hunks: bool,
     fail_on_difference: bool,
 ) -> anyhow::Result<()> {
     let left_doc = load(left)?;
     let right_doc = load(right)?;
     let left_pages = pages_of(&left_doc, left)?;
     let right_pages = pages_of(&right_doc, right)?;
+    if hunks {
+        return compare_hunk_mode(
+            left,
+            right,
+            &left_pages,
+            &right_pages,
+            json,
+            fail_on_difference,
+        );
+    }
 
     let left_signatures = left_pages.iter().map(Page::signature).collect::<Vec<_>>();
     let right_signatures = right_pages.iter().map(Page::signature).collect::<Vec<_>>();
@@ -434,6 +446,155 @@ fn differing_lines(left: &[String], right: &[String], out: &mut Vec<String>) {
             (None, None) => {}
         }
     }
+}
+
+/// One hunk row in the JSON report.
+#[derive(Serialize)]
+struct HunkRow {
+    /// `added`, `removed` or `changed`.
+    kind: &'static str,
+    /// One-based page number.
+    page: usize,
+    /// One-based old line, when the hunk has an old side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_line: Option<usize>,
+    /// One-based new line, when the hunk has a new side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_line: Option<usize>,
+    /// Old line text, when the hunk has an old side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_text: Option<String>,
+    /// New line text, when the hunk has a new side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_text: Option<String>,
+}
+
+/// Counts for the hunk-mode report.
+#[derive(Serialize)]
+struct HunkSummary {
+    /// Added hunks.
+    added: usize,
+    /// Removed hunks.
+    removed: usize,
+    /// Changed hunks.
+    changed: usize,
+    /// Distinct pages examined.
+    pages_examined: usize,
+    /// Total hunks.
+    hunks: usize,
+    /// Lines in the left document.
+    old_lines: usize,
+    /// Lines in the right document.
+    new_lines: usize,
+}
+
+/// JSON shape of `pdfxi compare --hunks`.
+#[derive(Serialize)]
+struct HunkReport {
+    /// Left document path.
+    left: String,
+    /// Right document path.
+    right: String,
+    /// Whether the two documents have identical text.
+    identical: bool,
+    /// Counts from the library comparison.
+    summary: HunkSummary,
+    /// Hunks in deterministic page-then-line order.
+    hunks: Vec<HunkRow>,
+}
+
+/// Compare page text with `pdfxi_edit::compare`'s line-hunk model.
+fn compare_hunk_mode(
+    left: &Path,
+    right: &Path,
+    left_pages: &[Page],
+    right_pages: &[Page],
+    json: bool,
+    fail_on_difference: bool,
+) -> anyhow::Result<()> {
+    let to_document = |pages: &[Page], label: &str| -> anyhow::Result<TextDocument> {
+        let entries = pages
+            .iter()
+            .map(|page| EditTextPage {
+                page: page.number - 1,
+                lines: page.lines.clone(),
+            })
+            .collect();
+        TextDocument::new(entries)
+            .map_err(|error| anyhow::anyhow!("build {label} snapshot: {error}"))
+    };
+    let old = to_document(left_pages, "left")?;
+    let new = to_document(right_pages, "right")?;
+    let result = compare_documents(&old, &new, &CompareOptions::default())
+        .map_err(|error| anyhow::anyhow!("compare text: {error}"))?;
+    let report = HunkReport {
+        left: left.display().to_string(),
+        right: right.display().to_string(),
+        identical: result.hunks.is_empty(),
+        summary: HunkSummary {
+            added: result.summary.added,
+            removed: result.summary.removed,
+            changed: result.summary.changed,
+            pages_examined: result.summary.pages_examined,
+            hunks: result.summary.hunks,
+            old_lines: result.summary.old_lines,
+            new_lines: result.summary.new_lines,
+        },
+        hunks: result
+            .hunks
+            .iter()
+            .map(|hunk| HunkRow {
+                kind: hunk.kind.as_str(),
+                page: hunk.page + 1,
+                old_line: hunk.old_line,
+                new_line: hunk.new_line,
+                old_text: hunk.old_text.clone(),
+                new_text: hunk.new_text.clone(),
+            })
+            .collect(),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("left:  {}", report.left);
+        println!("right: {}", report.right);
+        for hunk in &report.hunks {
+            println!(
+                "{}  page {}  old {}  new {}",
+                hunk.kind,
+                hunk.page,
+                hunk.old_line
+                    .map(|line| line.to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+                hunk.new_line
+                    .map(|line| line.to_string())
+                    .unwrap_or_else(|| "-".to_owned())
+            );
+            if let Some(text) = &hunk.old_text {
+                println!("  - {text}");
+            }
+            if let Some(text) = &hunk.new_text {
+                println!("  + {text}");
+            }
+        }
+        println!(
+            "summary: added {}, removed {}, changed {}, pages {}, hunks {}",
+            report.summary.added,
+            report.summary.removed,
+            report.summary.changed,
+            report.summary.pages_examined,
+            report.summary.hunks
+        );
+        println!(
+            "lines: {} -> {}",
+            report.summary.old_lines, report.summary.new_lines
+        );
+        println!("identical: {}", report.identical);
+    }
+    if fail_on_difference && !report.identical {
+        bail!("the documents differ");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

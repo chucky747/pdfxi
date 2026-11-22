@@ -3063,14 +3063,44 @@ tests = [
 title = "Review tracker and participant status"
 
 [[feature]]
-docs = "crates/pdfxi-edit/src/compare.rs, docs/evidence/author/T-0114.md"
+docs = [
+    "crates/pdfxi-cli/src/compare.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0299.md",
+]
 domain = "Review"
-evidence = "docs/evidence/author/T-0114.md"
+evidence = "docs/evidence/cli/T-0299.md"
 id = "REVIEW-008"
-notes = "Deterministic text compare over extracted page text with page/line references and bounded hunks."
+notes = """
+Verified through a new `--hunks` mode on `pdfxi compare`. Each side's normalised
+page text (trimmed, non-empty lines) becomes a pdfxi_edit::TextDocument; pages
+are matched by index and compare_documents runs with CompareOptions::default()
+(bounded pages, per-page lines, line bytes, diff cells and hunks). Output lists
+each added/removed/changed hunk with its one-based page, old/new line numbers and
+both texts, then the summary and line counts. --json exposes identical, summary
+(added, removed, changed, pages_examined, hunks, old_lines, new_lines) and hunks
+(kind, page, old_line, new_line, old_text, new_text). --hunks conflicts with
+--lines; --fail-on-difference exits non-zero when hunks exist.
+
+Evidence: two `create text` PDFs differing in case, one replacement and one extra
+line report changed page 1 old 2/new 2 bravo->BRAVO, changed old 4/new 4
+delta->epsilon, added new 5 extra, summary added 1/changed 2/hunks 3, lines
+4 -> 5. A self-comparison is identical with zero hunks. A 120-line pair with
+`line 110` changed reports exactly one changed hunk on a page at least 2 with the
+correct old/new text. Repeated runs are byte-identical.
+
+Gates: cargo test -p pdfxi-cli --test cli compare_hunks = 2 passed; whole
+workspace fmt/clippy/tests green.
+
+Scope: the line-hunk model is reachable on real bytes with page/line references
+and a bounded deterministic report; the default page-alignment mode is unchanged
+and hunk mode matches pages by index.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::compare_hunks_report_line_changes_with_page_numbers",
+    "cli::compare_hunks_reference_later_pages",
     "compare::tests::added_and_removed_lines_carry_page_and_line_refs",
     "compare::tests::hunks_are_in_deterministic_page_then_line_order",
 ]

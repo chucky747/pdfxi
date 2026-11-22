@@ -296,8 +296,11 @@ enum Command {
         #[arg(long)]
         json: bool,
         /// Print the differing lines of each changed page as two columns.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "hunks")]
         lines: bool,
+        /// Report Added/Removed/Changed line hunks with page and line numbers.
+        #[arg(long)]
+        hunks: bool,
         /// Exit non-zero when the documents are not identical.
         #[arg(long)]
         fail_on_difference: bool,
@@ -1548,8 +1551,9 @@ fn main() -> anyhow::Result<()> {
             right,
             json,
             lines,
+            hunks,
             fail_on_difference,
-        } => compare::run_compare(&left, &right, json, lines, fail_on_difference),
+        } => compare::run_compare(&left, &right, json, lines, hunks, fail_on_difference),
         Command::Reflow {
             file,
             width,

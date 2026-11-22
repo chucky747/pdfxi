@@ -53,6 +53,7 @@ pdfxi <COMMAND> --help
 | `form tabs <FILE> [--policy rows\|columns\|structure\|annotations] [--include-read-only] [--no-wrap] [--json]` | Show tab order and navigation | verified (`FORMS-004`) |
 | `form actions <FILE> [--json]` | Show accepted and rejected field actions | verified (`FORMS-004`) |
 | `accessibility check <FILE> [--title T] [--lang TAG] [--json]` | Check accessibility metadata and PDF/UA-1 structure | verified (`ACCESS-003`) |
+| `compare <LEFT> <RIGHT> --hunks [--json] [--fail-on-difference]` | Line-hunk version diff with page and line references | verified (`REVIEW-008`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -121,7 +122,13 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `accessibility check` runs two deterministic checks and merges them: the
+- `compare --hunks` uses the `pdfxi_edit::compare` line-hunk model instead of
+  page alignment: pages are matched by index and each `added`, `removed` or
+  `changed` line carries its one-based page, old line, new line and both texts.
+  Output is deterministic, `--json` exposes a summary (`added`, `removed`,
+  `changed`, `pages_examined`, `hunks`, `old_lines`, `new_lines`), and
+  `--fail-on-difference` exits non-zero when hunks exist. It conflicts with
+  `--lines`.- `accessibility check` runs two deterministic checks and merges them: the
   accessibility checker over a tree derived from recovered page text (document,
   page and paragraph nodes) with the document title and `/Lang`, and the
   PDF/UA-1 preflight profile over the file's real catalog and structure. It
