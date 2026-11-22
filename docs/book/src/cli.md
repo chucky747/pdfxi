@@ -54,6 +54,8 @@ pdfxi <COMMAND> --help
 | `form tabs <FILE> [--policy rows\|columns\|structure\|annotations] [--include-read-only] [--no-wrap] [--json]` | Show tab order and navigation | verified (`FORMS-004`) |
 | `form actions <FILE> [--json]` | Show accepted and rejected field actions | verified (`FORMS-004`) |
 | `form reader-enable <FILE> --out PATH [--rights LIST] [--reason TEXT] [--placeholder-bytes N] [--json]` | Write local `/Perms /UR` reader-enable metadata | verified (`FORMS-008`) |
+| `form distribute <FILE> --out BUNDLE [--form-id ID] [--title T] [--version N] [--json]` | Export a blank bundle of a form's fields | verified (`FORMS-009`) |
+| `form collect <FILE> --response [RESPONDENT=]PATH ... [--json]` | Merge local FDF/XFDF responses | verified (`FORMS-009`) |
 | `accessibility check <FILE> [--title T] [--lang TAG] [--json]` | Check accessibility metadata and PDF/UA-1 structure | verified (`ACCESS-003`) |
 | `compare <LEFT> <RIGHT> --hunks [--json] [--fail-on-difference]` | Line-hunk version diff with page and line references | verified (`REVIEW-008`) |
 | `versions snapshot <FILE> --store PATH [--label L] [--json]` | Capture page text into a version store | verified (`MANAGE-005`) |
@@ -185,7 +187,16 @@ Commands are integration-tested by invoking the real binary; see
 - `form calculate` applies the same assignments in memory and evaluates one or
   more `--sum/--product/--average/--min/--max TARGET=SRC1,SRC2` steps in
   dependency order, printing each target's rounded result. The evaluation is
-  read-only: results are not written back to the PDF.- `form reader-enable` writes the local compatibility shape used by
+  read-only: results are not written back to the PDF.- `form distribute` reads the AcroForm fields and writes the canonical
+  `PDFXI-BUNDLE-1` text bundle (form id, title, version and one `FIELD` line per
+  field). The written text is reparsed and compared before success.
+- `form collect` loads responses from local FDF or XFDF files (detected from the
+  document), assigns each a respondent id from `RESPONDENT=` or the file stem,
+  and merges them with `merge_responses`. The lexicographically smallest
+  respondent wins a conflict while every differing value is reported; malformed
+  responses are rejected rather than aborting. Merged fields must exist in the
+  PDF, required fields with no value are listed, and the report is deterministic
+  under response reordering. No network is used.- `form reader-enable` writes the local compatibility shape used by
   reader-enable workflows: a `/Perms /UR` dictionary with the PDFXI filter, an
   `/Ff` rights mask, an optional reason and a run of ASCII `0` placeholder
   bytes. It preserves other `/Perms` entries, saves, reopens and reparses the

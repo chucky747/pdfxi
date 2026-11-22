@@ -17,11 +17,12 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use pdfxi_core::{Document, Object, ObjectId};
 use pdfxi_forms::{
-    AcroFormModel, ActionCollector, ActionReport, Calculation, CalculationOp, CalculationPlan,
-    CalculationStep, DocumentRights, Field, FieldProperties, FieldSpec, FieldType, FieldValue,
-    Form, FormSource, NavPolicy, ObjectRef, PdfDocument, PdfValue, PropertySet, ReaderEnablePlan,
-    TabOrder, TabPolicy, TabWidget, UsageRight, UsageRightsSignature, WidgetRect, load_acroform,
-    parse_pdf, parse_rights_dictionary, read_acroform, serialize_form_pdf,
+    AcroFormModel, ActionCollector, ActionReport, BlankBundle, BundleMeta, Calculation,
+    CalculationOp, CalculationPlan, CalculationStep, DocumentRights, Field, FieldProperties,
+    FieldSpec, FieldType, FieldValue, Form, FormSource, NavPolicy, ObjectRef, PdfDocument,
+    PdfValue, PropertySet, ReaderEnablePlan, ResponseFile, ResponseFormat, TabOrder, TabPolicy,
+    TabWidget, UsageRight, UsageRightsSignature, WidgetRect, load_acroform, merge_responses,
+    parse_bundle, parse_pdf, parse_rights_dictionary, read_acroform, serialize_form_pdf,
 };
 use serde::Serialize;
 
@@ -1291,6 +1292,384 @@ pub(crate) fn run_reader_enable(
     println!("can_save: {}", report.can_save);
     println!("certified: false");
     println!("bytes: {}", report.bytes);
+    Ok(())
+}
+
+/// One distributed bundle field.
+#[derive(Serialize)]
+struct BundleRow {
+    /// Fully qualified field name.
+    name: String,
+    /// Stable type label.
+    kind: String,
+    /// Whether a response must supply it.
+    required: bool,
+}
+
+/// JSON shape of `pdfxi form distribute`.
+#[derive(Serialize)]
+struct DistributeReport {
+    /// Source PDF.
+    file: String,
+    /// Written bundle file.
+    out: String,
+    /// Stable form id.
+    form_id: String,
+    /// Human title.
+    title: String,
+    /// Bundle version.
+    version: u32,
+    /// Advertised fields.
+    fields: Vec<BundleRow>,
+    /// Field count.
+    field_count: usize,
+    /// Bytes written.
+    bytes: usize,
+}
+
+/// `pdfxi form distribute`.
+pub(crate) fn run_distribute(
+    file: &Path,
+    out: &Path,
+    form_id: Option<&str>,
+    title: Option<&str>,
+    version: u32,
+    json: bool,
+) -> anyhow::Result<()> {
+    let form = load_form(file)?;
+    let stem = file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::trim)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("PDFXI form")
+        .chars()
+        .take(256)
+        .collect::<String>();
+    let form_id = form_id.unwrap_or("pdfxi-form").trim();
+    if form_id.is_empty() {
+        bail!("--form-id must not be empty");
+    }
+    let title = title.unwrap_or(&stem).trim();
+    if title.is_empty() {
+        bail!("--title must not be empty");
+    }
+    let meta = BundleMeta::new(form_id, title, version)
+        .map_err(|error| anyhow::anyhow!("bundle metadata: {error}"))?;
+    let bundle = BlankBundle::from_form(meta, &form)
+        .map_err(|error| anyhow::anyhow!("build blank bundle: {error}"))?;
+    let text = bundle.to_text();
+    std::fs::write(out, text.as_bytes())
+        .with_context(|| format!("write bundle {}", out.display()))?;
+
+    let written =
+        std::fs::read_to_string(out).with_context(|| format!("read bundle {}", out.display()))?;
+    let parsed = parse_bundle(&written)
+        .map_err(|error| anyhow::anyhow!("reparse bundle {}: {error}", out.display()))?;
+    if parsed != bundle {
+        bail!("written bundle {} does not round-trip", out.display());
+    }
+
+    let report = DistributeReport {
+        file: file.display().to_string(),
+        out: out.display().to_string(),
+        form_id: bundle.meta().form_id().to_owned(),
+        title: bundle.meta().title().to_owned(),
+        version: bundle.meta().version(),
+        fields: bundle
+            .fields()
+            .iter()
+            .map(|field| BundleRow {
+                name: field.name().to_owned(),
+                kind: field.field_type().to_string(),
+                required: field.required(),
+            })
+            .collect(),
+        field_count: bundle.fields().len(),
+        bytes: written.len(),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!("file: {}", report.file);
+    println!("out:  {}", report.out);
+    println!("form_id: {}", report.form_id);
+    println!("title: {}", report.title);
+    println!("version: {}", report.version);
+    for field in &report.fields {
+        println!(
+            "{}\t{}\t{}",
+            field.name,
+            field.kind,
+            if field.required {
+                "required"
+            } else {
+                "optional"
+            }
+        );
+    }
+    println!("fields: {}", report.field_count);
+    println!("bytes: {}", report.bytes);
+    Ok(())
+}
+
+/// One merged field in a collection report.
+#[derive(Serialize)]
+struct CollectedFieldRow {
+    /// Field name.
+    name: String,
+    /// Winning value.
+    value: String,
+    /// Respondent ids that supplied a value.
+    contributors: Vec<String>,
+    /// Whether respondents disagreed.
+    conflict: bool,
+}
+
+/// One contribution to a conflict.
+#[derive(Serialize)]
+struct ConflictValueRow {
+    /// Respondent id.
+    respondent: String,
+    /// Supplied value.
+    value: String,
+}
+
+/// One conflicting field.
+#[derive(Serialize)]
+struct ConflictRow {
+    /// Field name.
+    name: String,
+    /// Every differing contribution.
+    values: Vec<ConflictValueRow>,
+}
+
+/// One rejected response.
+#[derive(Serialize)]
+struct RejectedRow {
+    /// Respondent id.
+    respondent: String,
+    /// Rejection reason.
+    reason: String,
+}
+
+/// Collection counters.
+#[derive(Serialize)]
+struct CollectSummary {
+    /// Responses supplied.
+    responses_received: usize,
+    /// Responses accepted.
+    responses_accepted: usize,
+    /// Responses rejected.
+    responses_rejected: usize,
+    /// Duplicate respondent ids.
+    duplicate_respondents: usize,
+    /// Distinct fields merged.
+    fields_merged: usize,
+    /// Conflicting fields.
+    conflicts: usize,
+}
+
+/// JSON shape of `pdfxi form collect`.
+#[derive(Serialize)]
+struct CollectReport {
+    /// Source PDF.
+    file: String,
+    /// Form fields in the PDF.
+    pdf_fields: usize,
+    /// Counters.
+    summary: CollectSummary,
+    /// Merged fields.
+    fields: Vec<CollectedFieldRow>,
+    /// Conflicts.
+    conflicts: Vec<ConflictRow>,
+    /// Duplicate respondent ids.
+    duplicates: Vec<String>,
+    /// Rejected responses.
+    rejected: Vec<RejectedRow>,
+    /// Required fields with no merged value.
+    missing_required: Vec<String>,
+}
+
+/// Derive a respondent id from a response path.
+fn respondent_of(path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("")
+        .trim();
+    if stem.is_empty() {
+        "response".to_owned()
+    } else {
+        stem.chars().take(256).collect()
+    }
+}
+
+/// Detect the response wire format from its first bytes.
+fn response_format(content: &str) -> ResponseFormat {
+    if content.trim_start().starts_with("%FDF") {
+        ResponseFormat::Fdf
+    } else {
+        ResponseFormat::Xfdf
+    }
+}
+
+/// Split `[RESPONDENT=]PATH`, rejecting an empty explicit respondent.
+fn parse_response(text: &str) -> anyhow::Result<(Option<String>, std::path::PathBuf)> {
+    if let Some((respondent, path)) = text.split_once('=') {
+        let looks_like_path =
+            respondent.contains('/') || respondent.contains('\\') || respondent.contains(':');
+        if !looks_like_path {
+            if respondent.trim().is_empty() {
+                bail!("response {text:?} has an empty respondent id");
+            }
+            return Ok((Some(respondent.trim().to_owned()), path.into()));
+        }
+    }
+    Ok((None, text.into()))
+}
+
+/// `pdfxi form collect`.
+pub(crate) fn run_collect(file: &Path, responses: &[String], json: bool) -> anyhow::Result<()> {
+    if responses.is_empty() {
+        bail!("pass at least one --response [RESPONDENT=]PATH");
+    }
+    let form = load_form(file)?;
+    let known: std::collections::BTreeSet<String> =
+        form.fields().map(|field| field.name().to_owned()).collect();
+    let mut candidates = Vec::with_capacity(responses.len());
+    for text in responses {
+        let (explicit, path) = parse_response(text)?;
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("read response {}", path.display()))?;
+        candidates.push(ResponseFile::new(
+            explicit.unwrap_or_else(|| respondent_of(&path)),
+            response_format(&content),
+            content,
+        ));
+    }
+    let report = merge_responses(&candidates)
+        .map_err(|error| anyhow::anyhow!("merge responses: {error}"))?;
+    let unknown: Vec<String> = report
+        .fields()
+        .iter()
+        .map(|field| field.name().to_owned())
+        .filter(|name| !known.contains(name))
+        .collect();
+    if !unknown.is_empty() {
+        bail!(
+            "responses carry field(s) that {} does not define: {}",
+            file.display(),
+            unknown.join(", ")
+        );
+    }
+    let merged: std::collections::BTreeMap<String, FieldValue> = report
+        .fields()
+        .iter()
+        .map(|field| (field.name().to_owned(), field.value().clone()))
+        .collect();
+    let missing_required = form
+        .fields()
+        .filter(|field| field.is_required())
+        .filter(|field| {
+            merged
+                .get(field.name())
+                .is_none_or(|value| matches!(value, FieldValue::Empty))
+        })
+        .map(|field| field.name().to_owned())
+        .collect::<Vec<_>>();
+    let summary = report.summary();
+    let payload = CollectReport {
+        file: file.display().to_string(),
+        pdf_fields: known.len(),
+        summary: CollectSummary {
+            responses_received: summary.responses_received,
+            responses_accepted: summary.responses_accepted,
+            responses_rejected: summary.responses_rejected,
+            duplicate_respondents: summary.duplicate_respondents,
+            fields_merged: summary.fields_merged,
+            conflicts: summary.conflicts,
+        },
+        fields: report
+            .fields()
+            .iter()
+            .map(|field| CollectedFieldRow {
+                name: field.name().to_owned(),
+                value: render_value(field.value()),
+                contributors: field.contributors().to_vec(),
+                conflict: field.has_conflict(),
+            })
+            .collect(),
+        conflicts: report
+            .conflicts()
+            .iter()
+            .map(|conflict| ConflictRow {
+                name: conflict.name().to_owned(),
+                values: conflict
+                    .values()
+                    .iter()
+                    .map(|contribution| ConflictValueRow {
+                        respondent: contribution.respondent().to_owned(),
+                        value: render_value(contribution.value()),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        duplicates: report.duplicates().to_vec(),
+        rejected: report
+            .rejected()
+            .iter()
+            .map(|rejected| RejectedRow {
+                respondent: rejected.respondent().to_owned(),
+                reason: rejected.reason().to_owned(),
+            })
+            .collect(),
+        missing_required,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+    println!("file: {}", payload.file);
+    println!("pdf_fields: {}", payload.pdf_fields);
+    println!(
+        "responses: {} received, {} accepted, {} rejected",
+        payload.summary.responses_received,
+        payload.summary.responses_accepted,
+        payload.summary.responses_rejected
+    );
+    println!(
+        "fields_merged: {}  conflicts: {}  duplicates: {}",
+        payload.summary.fields_merged,
+        payload.summary.conflicts,
+        payload.summary.duplicate_respondents
+    );
+    for field in &payload.fields {
+        println!(
+            "{}\t{}{}",
+            field.name,
+            field.value,
+            if field.conflict { "\t(conflict)" } else { "" }
+        );
+    }
+    for conflict in &payload.conflicts {
+        let values: Vec<String> = conflict
+            .values
+            .iter()
+            .map(|value| format!("{}={}", value.respondent, value.value))
+            .collect();
+        println!("conflict {}: {}", conflict.name, values.join(", "));
+    }
+    for duplicate in &payload.duplicates {
+        println!("duplicate: {duplicate}");
+    }
+    for rejected in &payload.rejected {
+        println!("rejected {}: {}", rejected.respondent, rejected.reason);
+    }
+    if !payload.missing_required.is_empty() {
+        println!("missing_required: {}", payload.missing_required.join(","));
+    }
     Ok(())
 }
 

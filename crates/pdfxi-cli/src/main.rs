@@ -1185,6 +1185,37 @@ enum FormCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Export a blank bundle describing a form's fields.
+    Distribute {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Destination bundle file.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Stable form identifier.
+        #[arg(long, value_name = "ID")]
+        form_id: Option<String>,
+        /// Human-readable title.
+        #[arg(long, value_name = "TEXT")]
+        title: Option<String>,
+        /// Bundle version.
+        #[arg(long, default_value_t = 1)]
+        version: u32,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Merge FDF/XFDF response files collected for a form.
+    Collect {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Response document as `[RESPONDENT=]PATH`; repeat for each respondent.
+        #[arg(long = "response", value_name = "[RESPONDENT=]PATH", required = true)]
+        responses: Vec<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Operations on the `pdfxi accessibility` command group.
@@ -2003,6 +2034,26 @@ fn main() -> anyhow::Result<()> {
                 placeholder_bytes,
                 json,
             ),
+            FormCommand::Distribute {
+                file,
+                out,
+                form_id,
+                title,
+                version,
+                json,
+            } => form::run_distribute(
+                &file,
+                &out,
+                form_id.as_deref(),
+                title.as_deref(),
+                version,
+                json,
+            ),
+            FormCommand::Collect {
+                file,
+                responses,
+                json,
+            } => form::run_collect(&file, &responses, json),
         },
         Command::Accessibility { command } => match command {
             AccessibilityCommand::Check {

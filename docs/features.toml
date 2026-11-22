@@ -2349,14 +2349,53 @@ tests = [
 title = "Reader-enable form filling and saving"
 
 [[feature]]
-docs = "crates/pdfxi-forms/src/distribution.rs, docs/evidence/forms/T-0115.md"
+docs = [
+    "crates/pdfxi-cli/src/form.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0305.md",
+]
 domain = "Forms"
-evidence = "docs/evidence/forms/T-0115.md"
+evidence = "docs/evidence/cli/T-0305.md"
 id = "FORMS-009"
-notes = "Local bundle export plus FDF/XFDF response-folder import with deterministic merging, conflicts, and status summary; no network."
+notes = """
+Verified through `pdfxi form distribute <FILE> --out BUNDLE [--form-id ID]
+[--title T] [--version N] [--json]` and `pdfxi form collect <FILE> --response
+[RESPONDENT=]PATH ... [--json]`.
+
+distribute loads the PDF's terminal AcroForm fields, builds
+BlankBundle::from_form (defaults: form id pdfxi-form, title from the file stem,
+version 1), writes the canonical PDFXI-BUNDLE-1 text (ID, TITLE, VERSION and one
+FIELD line per field), reads it back and requires parse_bundle to reproduce the
+same bundle. It reports metadata, field rows and bytes.
+
+collect treats each --response as [RESPONDENT=]PATH, using the file stem when no
+id is given, detects FDF by a leading %FDF and otherwise XFDF, and calls
+merge_responses: accepted/rejected documents are independent, conflicts resolve
+to the smallest respondent id with every differing value recorded, and duplicate
+ids are reported. Merged field names must exist in the PDF or the command fails;
+required fields with no merged value are listed. Reports are identical under
+response reordering.
+
+Evidence: a two-field form exports order-form/Order/3 with 2 fields in 94 bytes
+and re-exports byte-identically; a PDF without an AcroForm and an empty form id
+are rejected. Collecting alice.fdf + bob.fdf + carol.xfdf reports 3 received,
+3 accepted, 0 rejected, 2 fields merged, 1 conflict; customer=Ada wins with
+contributors alice,bob,carol and three contributions; reversed input yields
+identical output; a malformed response becomes a rejection while the run
+succeeds; a ghost field fails; no --response is rejected.
+
+Gates: cargo test -p pdfxi-cli --test cli form_distribute = 1 passed; form_collect
+= 1 passed; whole workspace fmt/clippy/tests green.
+
+Scope: local files only, no email/network/server; bundles are the PDFXI text
+format; response names must match the PDF; conflicts are reported but resolved
+automatically.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::form_distribute_exports_a_round_tripping_bundle",
+    "cli::form_collect_merges_responses_and_reports_conflicts",
     "distribution::tests::blank_bundle_exports_and_round_trips",
     "distribution::tests::imports_fdf_and_xfdf_responses",
     "distribution::tests::merge_is_deterministic_under_input_reordering",

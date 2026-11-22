@@ -1,0 +1,19 @@
+{
+  "id": "T-0305",
+  "lane": "forms",
+  "title": "Local form distribution host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0304"],
+  "owns": [
+    "crates/pdfxi-cli/src/form.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0305.md",
+    "orchestration/feature-updates/T-0305.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli form_distribute and form_collect pass; pdfxi form distribute writes and reparses the canonical bundle and pdfxi form collect merges real FDF/XFDF files deterministically with conflicts, rejections and required-field reporting; FORMS-009 moves to verified.",
+  "notes": "Wires BlankBundle and merge_responses to local files with respondent naming, PDF field validation and deterministic reports.",
+  "evidence": "docs/evidence/cli/T-0305.md"
+}

@@ -3540,6 +3540,241 @@ fn font_add_text_handles_an_authoring_page_and_alignment() {
 }
 
 #[test]
+fn form_distribute_exports_a_round_tripping_bundle() {
+    let form = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        form.arg(),
+        "--field",
+        "text:customer:72,700,200,20",
+        "--field",
+        "text:agree:72,660,200,20",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    let bundle = TempPath::new("txt");
+    let distributed = run(&[
+        "form",
+        "distribute",
+        form.arg(),
+        "--out",
+        bundle.arg(),
+        "--form-id",
+        "order-form",
+        "--title",
+        "Order",
+        "--version",
+        "3",
+        "--json",
+    ]);
+    assert!(
+        distributed.status.success(),
+        "stderr: {}",
+        stderr(&distributed)
+    );
+    let value: Value = serde_json::from_str(&stdout(&distributed)).expect("valid JSON");
+    assert_eq!(value["form_id"], "order-form");
+    assert_eq!(value["title"], "Order");
+    assert_eq!(value["version"], 3);
+    assert_eq!(value["field_count"], 2);
+    let fields = value["fields"].as_array().expect("fields");
+    assert_eq!(fields[0]["name"], "customer");
+    assert_eq!(fields[0]["kind"], "text");
+    assert_eq!(fields[0]["required"], false);
+    assert_eq!(fields[1]["name"], "agree");
+
+    let written = fs::read_to_string(&bundle.path).expect("bundle text");
+    assert!(written.starts_with("PDFXI-BUNDLE-1\n"), "{written}");
+    assert!(written.contains("ID\torder-form"), "{written}");
+    assert!(written.contains("TITLE\tOrder"), "{written}");
+    assert!(written.contains("FIELD\tcustomer\ttext\t0\t"), "{written}");
+    assert!(written.contains("FIELD\tagree\ttext\t0\t"), "{written}");
+
+    let again = TempPath::new("txt");
+    let repeated = run(&[
+        "form",
+        "distribute",
+        form.arg(),
+        "--out",
+        again.arg(),
+        "--form-id",
+        "order-form",
+        "--title",
+        "Order",
+        "--version",
+        "3",
+    ]);
+    assert!(repeated.status.success(), "stderr: {}", stderr(&repeated));
+    assert_eq!(
+        fs::read(&bundle.path).expect("first"),
+        fs::read(&again.path).expect("second"),
+        "bundle export is deterministic"
+    );
+
+    let empty_id = run(&[
+        "form",
+        "distribute",
+        form.arg(),
+        "--out",
+        TempPath::new("txt").arg(),
+        "--form-id",
+        " ",
+    ]);
+    assert!(!empty_id.status.success());
+    assert!(
+        stderr(&empty_id).contains("--form-id must not be empty"),
+        "{}",
+        stderr(&empty_id)
+    );
+
+    let no_form = run(&[
+        "form",
+        "distribute",
+        root_fixture("minimal.pdf").to_str().expect("utf-8"),
+        "--out",
+        TempPath::new("txt").arg(),
+    ]);
+    assert!(!no_form.status.success());
+    assert!(
+        stderr(&no_form).contains("has no /AcroForm"),
+        "{}",
+        stderr(&no_form)
+    );
+}
+
+#[test]
+fn form_collect_merges_responses_and_reports_conflicts() {
+    let form = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        form.arg(),
+        "--field",
+        "text:customer:72,700,200,20",
+        "--field",
+        "text:agree:72,660,200,20",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+
+    let alice = TempPath::new("fdf");
+    alice.write(
+        b"%FDF-1.7\n1 0 obj\n<< /FDF << /Fields [\n<< /T (customer) /V (Ada) >>\n<< /T (agree) /V (yes) >>\n] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+    );
+    let bob = TempPath::new("fdf");
+    bob.write(
+        b"%FDF-1.7\n1 0 obj\n<< /FDF << /Fields [\n<< /T (customer) /V (Bob) >>\n] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+    );
+    let carol = TempPath::new("xfdf");
+    carol.write(
+        b"<?xml version=\"1.0\"?>\n<xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"customer\"><value>Ada</value></field></fields></xfdf>",
+    );
+
+    let alice_arg = format!("alice={}", alice.arg());
+    let bob_arg = format!("bob={}", bob.arg());
+    let carol_arg = format!("carol={}", carol.arg());
+    let collected = run(&[
+        "form",
+        "collect",
+        form.arg(),
+        "--response",
+        &alice_arg,
+        "--response",
+        &bob_arg,
+        "--response",
+        &carol_arg,
+        "--json",
+    ]);
+    assert!(collected.status.success(), "stderr: {}", stderr(&collected));
+    let value: Value = serde_json::from_str(&stdout(&collected)).expect("valid JSON");
+    assert_eq!(value["pdf_fields"], 2);
+    assert_eq!(value["summary"]["responses_received"], 3);
+    assert_eq!(value["summary"]["responses_accepted"], 3);
+    assert_eq!(value["summary"]["responses_rejected"], 0);
+    assert_eq!(value["summary"]["fields_merged"], 2);
+    assert_eq!(value["summary"]["conflicts"], 1);
+    let fields = value["fields"].as_array().expect("fields");
+    let customer = fields
+        .iter()
+        .find(|field| field["name"] == "customer")
+        .expect("customer row");
+    assert_eq!(customer["value"], "Ada");
+    assert_eq!(customer["conflict"], true);
+    assert_eq!(
+        customer["contributors"],
+        serde_json::json!(["alice", "bob", "carol"])
+    );
+    let conflicts = value["conflicts"].as_array().expect("conflicts");
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["name"], "customer");
+    assert_eq!(conflicts[0]["values"].as_array().expect("values").len(), 3);
+    assert_eq!(value["missing_required"], serde_json::json!([]));
+
+    let reversed = run(&[
+        "form",
+        "collect",
+        form.arg(),
+        "--response",
+        &carol_arg,
+        "--response",
+        &bob_arg,
+        "--response",
+        &alice_arg,
+        "--json",
+    ]);
+    assert!(reversed.status.success(), "stderr: {}", stderr(&reversed));
+    assert_eq!(
+        stdout(&collected),
+        stdout(&reversed),
+        "collection is deterministic under input reordering"
+    );
+
+    let bad = TempPath::new("fdf");
+    bad.write(b"not an fdf");
+    let bad_arg = format!("bad={}", bad.arg());
+    let partial = run(&[
+        "form",
+        "collect",
+        form.arg(),
+        "--response",
+        &alice_arg,
+        "--response",
+        &bad_arg,
+        "--json",
+    ]);
+    assert!(partial.status.success(), "stderr: {}", stderr(&partial));
+    let value: Value = serde_json::from_str(&stdout(&partial)).expect("valid JSON");
+    assert_eq!(value["summary"]["responses_received"], 2);
+    assert_eq!(value["summary"]["responses_accepted"], 1);
+    assert_eq!(value["summary"]["responses_rejected"], 1);
+    let rejected = value["rejected"].as_array().expect("rejected");
+    assert_eq!(rejected.len(), 1);
+    assert!(
+        rejected[0]["reason"].as_str().unwrap_or("").len() > 4,
+        "{}",
+        stdout(&partial)
+    );
+
+    let ghost = TempPath::new("fdf");
+    ghost.write(
+        b"%FDF-1.7\n1 0 obj\n<< /FDF << /Fields [\n<< /T (ghost) /V (x) >>\n] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+    );
+    let unknown = run(&["form", "collect", form.arg(), "--response", ghost.arg()]);
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("does not define"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    let empty = run(&["form", "collect", form.arg()]);
+    assert!(
+        !empty.status.success(),
+        "at least one --response is required"
+    );
+}
+
+#[test]
 fn form_reader_enable_writes_rights_and_fill_save_decisions() {
     let source = root_fixture("minimal.pdf");
     let out = TempOut::new("pdf");
