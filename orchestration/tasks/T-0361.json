@@ -1,0 +1,16 @@
+{
+  "id": "T-0361",
+  "lane": "convert",
+  "title": "Retire the print-test skip (W-2)",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0360"],
+  "owns": [
+    "docs/evidence/convert/T-0361.md",
+    "orchestration/tasks/T-0361.json",
+    "orchestration/blockers/ENV-gui-session-wedged.md"
+  ],
+  "acceptance": "The print-to-PDF test runs and passes in the standard gate (`cargo xtask verify`) and in `cargo test --workspace --all-features` with no --skip; the blocker records the resolved print path; evidence pasted.",
+  "notes": "W-2 test debt. No code change was needed: the test is green in both commands. The ad-hoc skip is retired and future evidence transcripts must not use it.",
+  "evidence": "docs/evidence/convert/T-0361.md"
+}
