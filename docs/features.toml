@@ -4003,14 +4003,48 @@ tests = [
 title = "Custom toolsets and commands"
 
 [[feature]]
-docs = "crates/pdfxi-automation/src/plugin_output.rs, docs/evidence/automation/T-0170.md"
+docs = [
+    "crates/pdfxi-cli/src/plugin.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0311.md",
+]
 domain = "Automation"
-evidence = "docs/evidence/automation/T-0170.md"
+evidence = "docs/evidence/cli/T-0311.md"
 id = "AUTO-008"
-notes = "Typed bounded plugin outputs and a deterministic non-executing execution plan with capability and budget gating; a WASM runtime is a host boundary."
+notes = """
+Verified through `pdfxi plugin plan <MANIFEST> --operation NAME [--grant CAP ...]
+[--expect TYPE] [budget flags] [--json]` and `pdfxi plugin output --type TYPE
+[value flags] [--expect TYPE] [budget flags] [--json]`.
+
+plan parses a real manifest with PluginManifest::parse_json, registers it, maps
+--grant into a deny-by-default CapabilityGrants and the budget flags into
+InvocationBudget, then calls build_execution_plan. It prints the six fixed steps
+(registration, api_version, capabilities, budgets, output_budget, execute) with
+sorted deny codes and a stable summary, executes no plugin code and performs no
+I/O beyond reading the manifest. A denied plan prints its report and exits 2.
+output builds one PluginValue (text, generated text length, integer, boolean or
+opaque bytes length) and validates type and size against OutputBudget.
+
+Evidence: a text.plugin manifest requiring document-text plans allowed with the
+grant (all six steps allow) and denied without it (capabilities
+deny(capability_not_granted), execute deny(upstream_denied), exit 2); repeated
+plans are byte-identical. An over-limit invocation budget, a zero output budget
+(invalid_budget), a filesystem capability, malformed JSON and a missing manifest
+fail. Outputs text hello (encoded_len 5, summary host.plugin\toutput\ttext),
+int -3, bool true, bytes(16) and null succeed; a text/int mismatch, 70000-byte
+text, 1048577-byte bytes, empty text, empty plugin id and a missing value fail.
+
+Gates: cargo test -p pdfxi-cli --test cli plugin_ = 2 passed; whole workspace
+fmt/clippy/tests green.
+
+Scope: no WebAssembly is loaded or executed; the plan is the host gate and the
+output validator is the ABI boundary. Capabilities are the closed four-item set.
+"""
 priority = "P3"
-status = "model"
+status = "verified"
 tests = [
+    "cli::plugin_plan_reports_capability_and_budget_gates",
+    "cli::plugin_output_validates_types_and_budgets",
     "plugin_output::tests::execution_plan_is_byte_for_byte_deterministic",
     "plugin_output::tests::oversized_text_and_bytes_are_rejected_with_typed_errors",
 ]

@@ -66,6 +66,8 @@ mod action;
 mod api;
 /// pdfxi ops: enumerate and resolve scriptable automation operations.
 mod ops;
+/// pdfxi plugin: plan plugin invocations and validate typed outputs.
+mod plugin;
 /// pdfxi toolset: parse, inspect and run named tool aliases.
 mod toolset;
 /// pdfxi watch: one host-driven poll of a watched folder.
@@ -719,6 +721,12 @@ enum Command {
         #[command(subcommand)]
         command: OpsCommand,
     },
+    /// Plan a plugin invocation or validate a typed plugin output.
+    Plugin {
+        /// The plugin operation to perform.
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
     /// Manage named toolsets that map aliases to saved actions.
     Toolset {
         /// The toolset operation to perform.
@@ -760,6 +768,88 @@ enum Command {
         /// Number of host ticks to advance (default: 1).
         #[arg(long, default_value_t = 1)]
         ticks: u64,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi plugin` command group.
+#[derive(Debug, Subcommand)]
+enum PluginCommand {
+    /// Build a deterministic, non-executing execution plan from a manifest.
+    Plan {
+        /// Path to the plugin manifest JSON.
+        manifest: PathBuf,
+        /// Operation to plan.
+        #[arg(long, value_name = "NAME")]
+        operation: String,
+        /// Grant a capability; repeat for several.
+        #[arg(long = "grant", value_name = "CAP")]
+        grants: Vec<String>,
+        /// Expected output type: null, bool, int, text or bytes.
+        #[arg(long, default_value = "text")]
+        expect: String,
+        /// Invocation step budget.
+        #[arg(long, default_value_t = 1_000_000)]
+        max_steps: u64,
+        /// Invocation memory budget in bytes.
+        #[arg(long, default_value_t = 16_777_216)]
+        max_memory_bytes: u64,
+        /// Invocation wall-clock budget in milliseconds.
+        #[arg(long, default_value_t = 5_000)]
+        max_wall_clock_ms: u64,
+        /// Output text budget in bytes.
+        #[arg(long, default_value_t = 65_536)]
+        max_text_bytes: usize,
+        /// Output byte budget in bytes.
+        #[arg(long, default_value_t = 1_048_576)]
+        max_bytes: usize,
+        /// Output total budget in bytes.
+        #[arg(long, default_value_t = 2_097_152)]
+        max_total_bytes: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate one typed, size-bounded plugin output.
+    Output {
+        /// Value type: null, bool, int, text or bytes.
+        #[arg(long)]
+        r#type: String,
+        /// Producing plugin id.
+        #[arg(long, default_value = "host.plugin")]
+        plugin_id: String,
+        /// Operation that produced the value.
+        #[arg(long, default_value = "output")]
+        operation: String,
+        /// Text value.
+        #[arg(long, value_name = "TEXT")]
+        text: Option<String>,
+        /// Generate a text value of this many bytes.
+        #[arg(long, value_name = "N")]
+        text_len: Option<usize>,
+        /// Integer value.
+        #[arg(long, allow_hyphen_values = true)]
+        int: Option<i64>,
+        /// Boolean value.
+        #[arg(long, value_name = "true|false")]
+        bool: Option<bool>,
+        /// Generate an opaque bytes value of this length.
+        #[arg(long, value_name = "N")]
+        bytes_len: Option<usize>,
+        /// Expected type; defaults to the produced type.
+        #[arg(long)]
+        expect: Option<String>,
+        /// Output text budget in bytes.
+        #[arg(long, default_value_t = 65_536)]
+        max_text_bytes: usize,
+        /// Output byte budget in bytes.
+        #[arg(long, default_value_t = 1_048_576)]
+        max_bytes: usize,
+        /// Output total budget in bytes.
+        #[arg(long, default_value_t = 2_097_152)]
+        max_total_bytes: usize,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -2643,6 +2733,65 @@ fn main() -> anyhow::Result<()> {
             ticks,
             json,
         ),
+        Command::Plugin { command } => match command {
+            PluginCommand::Plan {
+                manifest,
+                operation,
+                grants,
+                expect,
+                max_steps,
+                max_memory_bytes,
+                max_wall_clock_ms,
+                max_text_bytes,
+                max_bytes,
+                max_total_bytes,
+                json,
+            } => plugin::run_plan(
+                &manifest,
+                &operation,
+                &grants,
+                &expect,
+                max_steps,
+                max_memory_bytes,
+                max_wall_clock_ms,
+                max_text_bytes,
+                max_bytes,
+                max_total_bytes,
+                json,
+            ),
+            PluginCommand::Output {
+                r#type,
+                plugin_id,
+                operation,
+                text,
+                text_len,
+                int,
+                bool,
+                bytes_len,
+                expect,
+                max_text_bytes,
+                max_bytes,
+                max_total_bytes,
+                json,
+            } => {
+                let expected = expect.unwrap_or_else(|| r#type.clone());
+                plugin::run_output(
+                    &plugin_id,
+                    &operation,
+                    &r#type,
+                    text.as_deref(),
+                    text_len,
+                    int,
+                    bool,
+                    bytes_len,
+                    &expected,
+                    max_text_bytes,
+                    max_bytes,
+                    max_total_bytes,
+                    json,
+                )
+            }
+        },
         Command::Toolset { command } => match command {
             ToolsetCommand::List { file, json } => toolset::run_list(&file, json),
             ToolsetCommand::Validate { file, json } => toolset::run_validate(&file, json),

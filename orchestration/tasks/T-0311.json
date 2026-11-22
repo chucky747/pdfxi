@@ -1,0 +1,19 @@
+{
+  "id": "T-0311",
+  "lane": "automation",
+  "title": "Plugin execution plan host",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0310"],
+  "owns": [
+    "crates/pdfxi-cli/src/plugin.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0311.md",
+    "orchestration/feature-updates/T-0311.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli plugin_ passes; pdfxi plugin plan builds and reports gated execution plans from real manifests and pdfxi plugin output validates typed bounded values; AUTO-008 moves to verified.",
+  "notes": "Adds the CLI plan/output surface over pdfxi_automation plugin manifests, grants, budgets and typed outputs; no WASM runtime.",
+  "evidence": "docs/evidence/cli/T-0311.md"
+}

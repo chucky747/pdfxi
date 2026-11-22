@@ -29,6 +29,8 @@ pdfxi <COMMAND> --help
 | `toolset validate <FILE> [--json]` | Validate a toolset document | verified (`AUTO-007`) |
 | `toolset show <FILE> <ALIAS> [--json]` | Show one alias's action and defaults | verified (`AUTO-007`) |
 | `toolset run <FILE> <ALIAS> --input PATH ... [--output-dir DIR] [--json]` | Run an alias with defaults applied | verified (`AUTO-007`) |
+| `plugin plan <MANIFEST> --operation NAME [--grant CAP ...] [--expect TYPE] [--json]` | Build a non-executing gated execution plan | verified (`AUTO-008`) |
+| `plugin output --type TYPE [--text T\|--text-len N\|--int N\|--bool B\|--bytes-len N] [--expect TYPE] [--json]` | Validate a typed, size-bounded plugin output | verified (`AUTO-008`) |
 | `portfolio <FILE> [--json] [--extract DIR]` | List or extract a portfolio collection | verified (`VIEW-014`) |
 | `compare <LEFT> <RIGHT> [--json] [--lines] [--fail-on-difference]` | Text compare of two revisions | verified (`VIEW-015`) |
 | `reflow <FILE> [--width N] [--page N] [--json]` | Reading-order text column | verified (`VIEW-013`) |
@@ -140,7 +142,13 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `toolset` reads a JSON toolset (`version`, `name`, `tools` mapping aliases to
+- `plugin plan` parses a real manifest, registers it, maps `--grant` into a
+  deny-by-default capability set and the budget flags into `InvocationBudget`,
+  then prints the fixed six-step plan (registration, api_version, capabilities,
+  budgets, output_budget, execute) with sorted deny codes. It executes no
+  WebAssembly and exits 2 when the plan is denied. `plugin output` builds one
+  typed `PluginValue` and validates its type and size against `OutputBudget`,
+  rejecting type mismatches, empty text, and over-budget text/bytes.- `toolset` reads a JSON toolset (`version`, `name`, `tools` mapping aliases to
   an action file, an action name and optional defaults). `list`, `validate` and
   `show` are deterministic; `run` resolves a relative action file against the
   toolset's directory, rejects `..` escapes, refuses aliases whose target

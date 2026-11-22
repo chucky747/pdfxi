@@ -3751,6 +3751,240 @@ fn ops_resolve_builds_typed_plans_and_rejects_bad_arguments() {
 }
 
 #[test]
+fn plugin_plan_reports_capability_and_budget_gates() {
+    let manifest = TempPath::new("json");
+    manifest.write(
+        br#"{"id":"text.plugin","name":"Text helper","version":"1.0.0","api_version":1,"capabilities":["document-text"]}"#,
+    );
+    let path = manifest.arg();
+
+    let allowed = run(&[
+        "plugin",
+        "plan",
+        path,
+        "--operation",
+        "extract",
+        "--grant",
+        "document-text",
+        "--json",
+    ]);
+    assert!(allowed.status.success(), "stderr: {}", stderr(&allowed));
+    let value: Value = serde_json::from_str(&stdout(&allowed)).expect("valid JSON");
+    assert_eq!(value["plugin_id"], "text.plugin");
+    assert_eq!(value["name"], "Text helper");
+    assert_eq!(value["api_version"], 1);
+    assert_eq!(value["capabilities"], serde_json::json!(["document-text"]));
+    assert_eq!(value["operation"], "extract");
+    assert_eq!(value["expected"], "text");
+    assert_eq!(value["allowed"], true);
+    let steps = value["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 6);
+    assert_eq!(steps[0]["kind"], "registration");
+    assert_eq!(steps[5]["kind"], "execute");
+    assert!(steps.iter().all(|step| step["allowed"] == true));
+    assert!(
+        value["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("execute:allow"),
+        "{}",
+        value["summary"]
+    );
+
+    let repeated = run(&[
+        "plugin",
+        "plan",
+        path,
+        "--operation",
+        "extract",
+        "--grant",
+        "document-text",
+        "--json",
+    ]);
+    assert_eq!(stdout(&allowed), stdout(&repeated), "plan is deterministic");
+
+    let denied = run(&["plugin", "plan", path, "--operation", "extract", "--json"]);
+    assert_eq!(denied.status.code(), Some(2), "denied plans exit 2");
+    let value: Value = serde_json::from_str(&stdout(&denied)).expect("valid JSON");
+    assert_eq!(value["allowed"], false);
+    let steps = value["steps"].as_array().expect("steps");
+    let capabilities = steps
+        .iter()
+        .find(|step| step["kind"] == "capabilities")
+        .expect("capabilities step");
+    assert_eq!(capabilities["allowed"], false);
+    assert_eq!(
+        capabilities["codes"],
+        serde_json::json!(["capability_not_granted"])
+    );
+    assert!(
+        stdout(&denied).contains("upstream_denied"),
+        "{}",
+        stdout(&denied)
+    );
+
+    let budget = run(&[
+        "plugin",
+        "plan",
+        path,
+        "--operation",
+        "extract",
+        "--grant",
+        "document-text",
+        "--max-steps",
+        "10000001",
+    ]);
+    assert!(!budget.status.success());
+    assert!(
+        stderr(&budget).contains("invocation budget"),
+        "{}",
+        stderr(&budget)
+    );
+
+    let output_budget = run(&[
+        "plugin",
+        "plan",
+        path,
+        "--operation",
+        "extract",
+        "--grant",
+        "document-text",
+        "--max-text-bytes",
+        "0",
+        "--json",
+    ]);
+    assert_eq!(output_budget.status.code(), Some(2));
+    let value: Value = serde_json::from_str(&stdout(&output_budget)).expect("valid JSON");
+    assert_eq!(value["allowed"], false);
+    assert!(
+        stdout(&output_budget).contains("invalid_budget"),
+        "{}",
+        stdout(&output_budget)
+    );
+
+    let forbidden = TempPath::new("json");
+    forbidden.write(
+        br#"{"id":"bad.plugin","name":"Bad","version":"1.0.0","api_version":1,"capabilities":["filesystem"]}"#,
+    );
+    let rejected = run(&["plugin", "plan", forbidden.arg(), "--operation", "extract"]);
+    assert!(!rejected.status.success());
+    assert!(
+        stderr(&rejected).contains("invalid manifest"),
+        "{}",
+        stderr(&rejected)
+    );
+
+    let broken = TempPath::new("json");
+    broken.write(b"not json");
+    assert!(
+        !run(&["plugin", "plan", broken.arg(), "--operation", "x"])
+            .status
+            .success()
+    );
+    assert!(
+        !run(&[
+            "plugin",
+            "plan",
+            TempPath::new("json").arg(),
+            "--operation",
+            "x"
+        ])
+        .status
+        .success()
+    );
+}
+
+#[test]
+fn plugin_output_validates_types_and_budgets() {
+    let text = run(&[
+        "plugin", "output", "--type", "text", "--text", "hello", "--json",
+    ]);
+    assert!(text.status.success(), "stderr: {}", stderr(&text));
+    let value: Value = serde_json::from_str(&stdout(&text)).expect("valid JSON");
+    assert_eq!(value["ty"], "text");
+    assert_eq!(value["expected"], "text");
+    assert_eq!(value["encoded_len"], 5);
+    assert_eq!(value["value"], "hello");
+    assert_eq!(value["summary"], "host.plugin\toutput\ttext");
+    assert_eq!(value["valid"], true);
+
+    let int = run(&["plugin", "output", "--type", "int", "--int", "-3"]);
+    assert!(int.status.success(), "stderr: {}", stderr(&int));
+    assert!(stdout(&int).contains("value: -3"), "{}", stdout(&int));
+
+    let boolean = run(&[
+        "plugin", "output", "--type", "bool", "--bool", "true", "--json",
+    ]);
+    assert!(boolean.status.success(), "stderr: {}", stderr(&boolean));
+    let value: Value = serde_json::from_str(&stdout(&boolean)).expect("valid JSON");
+    assert_eq!(value["value"], "true");
+    assert_eq!(value["encoded_len"], 5);
+
+    let bytes = run(&[
+        "plugin",
+        "output",
+        "--type",
+        "bytes",
+        "--bytes-len",
+        "16",
+        "--json",
+    ]);
+    assert!(bytes.status.success(), "stderr: {}", stderr(&bytes));
+    let value: Value = serde_json::from_str(&stdout(&bytes)).expect("valid JSON");
+    assert_eq!(value["value"], "bytes(16)");
+    assert_eq!(value["encoded_len"], 16);
+
+    let null = run(&["plugin", "output", "--type", "null"]);
+    assert!(null.status.success(), "stderr: {}", stderr(&null));
+
+    let mismatch = run(&[
+        "plugin", "output", "--type", "text", "--text", "hello", "--expect", "int",
+    ]);
+    assert!(!mismatch.status.success());
+    assert!(
+        stderr(&mismatch).contains("does not match expected type"),
+        "{}",
+        stderr(&mismatch)
+    );
+
+    let too_long = run(&["plugin", "output", "--type", "text", "--text-len", "70000"]);
+    assert!(!too_long.status.success());
+    assert!(
+        stderr(&too_long).contains("maximum is 65536"),
+        "{}",
+        stderr(&too_long)
+    );
+
+    let bytes_long = run(&[
+        "plugin",
+        "output",
+        "--type",
+        "bytes",
+        "--bytes-len",
+        "1048577",
+    ]);
+    assert!(!bytes_long.status.success());
+
+    let empty = run(&["plugin", "output", "--type", "text", "--text", ""]);
+    assert!(!empty.status.success());
+
+    let empty_id = run(&[
+        "plugin",
+        "output",
+        "--type",
+        "text",
+        "--text",
+        "x",
+        "--plugin-id",
+        " ",
+    ]);
+    assert!(!empty_id.status.success());
+
+    let missing_value = run(&["plugin", "output", "--type", "int"]);
+    assert!(!missing_value.status.success());
+}
+
+#[test]
 fn toolset_lists_validates_and_shows_tools() {
     let dir = TempDir::new();
     fs::write(
