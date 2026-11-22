@@ -52,6 +52,7 @@ pdfxi <COMMAND> --help
 | `form calculate <FILE> [--set NAME=VALUE] ... [--sum\|--product\|--average\|--min\|--max TARGET=SOURCES] ... [--decimals N] [--json]` | Evaluate calculations | verified (`FORMS-003`) |
 | `form tabs <FILE> [--policy rows\|columns\|structure\|annotations] [--include-read-only] [--no-wrap] [--json]` | Show tab order and navigation | verified (`FORMS-004`) |
 | `form actions <FILE> [--json]` | Show accepted and rejected field actions | verified (`FORMS-004`) |
+| `accessibility check <FILE> [--title T] [--lang TAG] [--json]` | Check accessibility metadata and PDF/UA-1 structure | verified (`ACCESS-003`) |
 
 Commands are integration-tested by invoking the real binary; see
 `crates/pdfxi-cli/tests/cli.rs`.
@@ -120,7 +121,14 @@ Commands are integration-tested by invoking the real binary; see
   the root list and an omitted `--index` appends. `outline list` prints the tree
   with one-based page destinations and reports items whose destination could not
   be represented.
-- `form tabs` reads the AcroForm `/Tabs` policy (`R`, `C`, `S` or `A`) and the
+- `accessibility check` runs two deterministic checks and merges them: the
+  accessibility checker over a tree derived from recovered page text (document,
+  page and paragraph nodes) with the document title and `/Lang`, and the
+  PDF/UA-1 preflight profile over the file's real catalog and structure. It
+  prints stable `UA-nnnn` and `PDFUA1.*` findings, a prioritized fix plan for
+  the accessibility findings, and exits `2` when either check reports an error,
+  `0` when neither does. `--title`/`--lang` override the values used by the
+  checker, not the file. No conformance certification is claimed.- `form tabs` reads the AcroForm `/Tabs` policy (`R`, `C`, `S` or `A`) and the
   real widget rectangles and pages through the document-form model, orders the
   widgets, and reports each field's next and previous target. `--policy`
   overrides the file, `--include-read-only` keeps read-only widgets, and

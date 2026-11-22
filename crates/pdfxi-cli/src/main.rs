@@ -81,6 +81,8 @@ mod printer;
 // merge and split (`pages`).
 mod pages;
 // Link annotations and embedded-file attachments (`links`, `attachments`).
+/// `pdfxi accessibility check`: run the accessibility and PDF/UA-1 checkers.
+mod accessibility;
 /// `pdfxi annotate`: add and list drawing annotations.
 mod annotate;
 /// `pdfxi compare`: side-by-side revision compare of two PDFs.
@@ -380,6 +382,17 @@ enum Command {
         /// The form operation to perform.
         #[command(subcommand)]
         command: FormCommand,
+    },
+    /// Check accessibility metadata and PDF/UA-1 structure.
+    ///
+    /// Runs the accessibility checker over a tree derived from recovered page
+    /// text and the PDF/UA-1 preflight profile over the file's real catalog and
+    /// structure, then merges both reports. No conformance certification is
+    /// claimed.
+    Accessibility {
+        /// The accessibility operation to perform.
+        #[command(subcommand)]
+        command: AccessibilityCommand,
     },
     /// Append an incremental revision with updated document information.
     ///
@@ -1088,6 +1101,25 @@ enum FormCommand {
     },
 }
 
+/// Operations on the `pdfxi accessibility` command group.
+#[derive(Debug, Subcommand)]
+enum AccessibilityCommand {
+    /// Check document accessibility metadata and PDF/UA-1 structure.
+    Check {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Override the document title used by the checker.
+        #[arg(long, value_name = "TEXT")]
+        title: Option<String>,
+        /// Override the natural language used by the checker.
+        #[arg(long, value_name = "TAG")]
+        lang: Option<String>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// Operations on the `pdfxi create` command group.
 #[derive(Debug, Subcommand)]
 enum CreateCommand {
@@ -1744,6 +1776,14 @@ fn main() -> anyhow::Result<()> {
                 form::run_tabs(&file, policy.as_deref(), nav, json)
             }
             FormCommand::Actions { file, json } => form::run_actions(&file, json),
+        },
+        Command::Accessibility { command } => match command {
+            AccessibilityCommand::Check {
+                file,
+                title,
+                lang,
+                json,
+            } => accessibility::run_check(&file, title.as_deref(), lang.as_deref(), json),
         },
         Command::Update {
             file,

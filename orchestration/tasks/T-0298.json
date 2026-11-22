@@ -1,0 +1,19 @@
+{
+  "id": "T-0298",
+  "lane": "author",
+  "title": "Accessibility and PDF/UA checker host",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0297"],
+  "owns": [
+    "crates/pdfxi-cli/src/accessibility.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "crates/pdfxi-cli/tests/cli.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0298.md",
+    "orchestration/feature-updates/T-0298.toml"
+  ],
+  "acceptance": "cargo test -p pdfxi-cli --test cli accessibility and cargo test -p pdfxi-cli --bin pdfxi accessibility pass; pdfxi accessibility check reports accessibility findings, a fix plan and PDF/UA-1 structure findings on real bytes with exit 0/2; ACCESS-003 moves to verified.",
+  "notes": "Runs the accessibility checker over a tree derived from page text and the PDF/UA-1 profile over real catalog/structure, merges both reports, emits a fix plan and honest non-certification scope.",
+  "evidence": "docs/evidence/cli/T-0298.md"
+}

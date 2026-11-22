@@ -3381,6 +3381,104 @@ fn form_validate_and_calculate_use_typed_values() {
 }
 
 #[test]
+fn accessibility_check_reports_metadata_and_pdfua_gaps() {
+    let source = root_fixture("minimal.pdf");
+    let first = run(&[
+        "accessibility",
+        "check",
+        source.to_str().expect("utf-8"),
+        "--json",
+    ]);
+    assert_eq!(first.status.code(), Some(2));
+    let value: Value = serde_json::from_str(&stdout(&first)).expect("valid JSON");
+    assert_eq!(value["valid"], false);
+    assert_eq!(value["certification_claimed"], false);
+    assert_eq!(value["pages"], 1);
+    assert!(value["errors"].as_u64().unwrap_or(0) >= 2);
+    let findings = value["findings"].as_array().expect("findings");
+    let codes: Vec<&str> = findings
+        .iter()
+        .map(|finding| finding["code"].as_str().expect("code"))
+        .collect();
+    assert!(codes.contains(&"UA-0001"), "{codes:?}");
+    assert!(codes.contains(&"UA-0002"), "{codes:?}");
+    assert!(codes.contains(&"PDFUA1.NO_STRUCT_TREE_ROOT"), "{codes:?}");
+    assert!(
+        findings.iter().any(|finding| finding["source"] == "pdfua"),
+        "{}",
+        stdout(&first)
+    );
+    assert!(
+        !value["fix_plan"].as_array().expect("fix plan").is_empty(),
+        "{}",
+        stdout(&first)
+    );
+
+    let repeated = run(&[
+        "accessibility",
+        "check",
+        source.to_str().expect("utf-8"),
+        "--json",
+    ]);
+    assert_eq!(stdout(&first), stdout(&repeated), "report is deterministic");
+
+    let overridden = run(&[
+        "accessibility",
+        "check",
+        source.to_str().expect("utf-8"),
+        "--title",
+        "Minimal",
+        "--lang",
+        "en-US",
+        "--json",
+    ]);
+    assert_eq!(overridden.status.code(), Some(2));
+    let value: Value = serde_json::from_str(&stdout(&overridden)).expect("valid JSON");
+    assert_eq!(value["title"], "Minimal");
+    assert_eq!(value["lang"], "en-US");
+    let codes: Vec<&str> = value["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|finding| finding["code"].as_str().expect("code"))
+        .collect();
+    assert!(!codes.contains(&"UA-0001"), "{codes:?}");
+    assert!(!codes.contains(&"UA-0002"), "{codes:?}");
+    assert!(codes.contains(&"PDFUA1.NO_STRUCT_TREE_ROOT"), "{codes:?}");
+
+    let missing = run(&["accessibility", "check", "no-such-file.pdf"]);
+    assert!(!missing.status.success());
+    assert_eq!(missing.status.code(), Some(1));
+}
+
+#[test]
+fn accessibility_check_accepts_a_form_document() {
+    let out = TempOut::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        out.arg(),
+        "--field",
+        "text:patient:72,700,200,24",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let checked = run(&["accessibility", "check", out.arg(), "--json"]);
+    assert_eq!(checked.status.code(), Some(2));
+    let value: Value = serde_json::from_str(&stdout(&checked)).expect("valid JSON");
+    assert_eq!(value["pages"], 1);
+    assert_eq!(value["valid"], false);
+    assert!(
+        value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["code"] == "UA-0001"),
+        "{}",
+        stdout(&checked)
+    );
+}
+
+#[test]
 fn form_tabs_orders_widgets_and_navigates() {
     let out = TempOut::new("pdf");
     let created = run(&[

@@ -3331,14 +3331,51 @@ tests = [
 title = "Alt text and table editor"
 
 [[feature]]
-docs = "crates/pdfxi-accessibility/src/checker.rs, docs/evidence/app/T-0171.md"
+docs = [
+    "crates/pdfxi-cli/src/accessibility.rs",
+    "docs/book/src/cli.md",
+    "docs/evidence/cli/T-0298.md",
+]
 domain = "Accessibility"
-evidence = "docs/evidence/app/T-0171.md"
+evidence = "docs/evidence/cli/T-0298.md"
 id = "ACCESS-003"
-notes = "Deterministic severity/rule-ordered fix plan built from checker findings with typed errors; independent external validation remains out of scope."
+notes = """
+Verified through a new pdfxi accessibility check host.
+
+The command builds an A11yTree from recovered page text (document root, page
+nodes, paragraph nodes per non-empty line), runs
+pdfxi_accessibility::checker::check with the document title, catalog /Lang and
+page count (--title/--lang override those checker inputs), and prints a
+prioritized FixPlan built from the findings. It also runs the PDF/UA-1 profile
+through pdfxi-convert's byte-level adapter, which reads the real catalog,
+/MarkInfo, /StructTreeRoot, language, title, annotations and structure facts via
+pdfxi-core. Both finding sets are merged with stable UA-nnnn and PDFUA1.* codes;
+the command exits 2 when either reports an error, 0 otherwise. The report always
+states certification_claimed=false with the scope note.
+
+Evidence: minimal.pdf reports UA-0001 (no title), UA-0002 (no /Lang),
+PDFUA1.NOT_MARKED, PDFUA1.NO_LANG and PDFUA1.NO_STRUCT_TREE_ROOT, 5 errors, a
+fix step for UA-0002 and exit 2. With --title Minimal --lang en-US the two tree
+metadata findings disappear but the real PDF/UA structure findings remain
+(PDFUA1.NO_LANG still comes from the unchanged catalog). A form create output is
+also accepted, reporting one page and the missing-title finding. Repeated runs
+are byte-identical; a missing file exits 1.
+
+Gates: cargo test -p pdfxi-cli --test cli accessibility = 2 passed; cargo test
+-p pdfxi-cli --bin pdfxi accessibility = 1 passed; whole workspace fmt/clippy/
+tests green.
+
+Scope: the checker and PDF/UA profile are reachable on real bytes with a fix
+plan; the tree is derived from page text because the accessibility crate models
+a tree rather than reading /StructTreeRoot, while the embedded PDF/UA-1 profile
+checks real structure. External validator certification is not claimed.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
+    "cli::accessibility_check_reports_metadata_and_pdfua_gaps",
+    "cli::accessibility_check_accepts_a_form_document",
+    "accessibility::tests::non_accessible_exit_code_is_distinct",
     "checker::tests::fix_plan_from_dirty_report_is_deterministic",
     "checker::tests::fix_plan_rejects_unknown_node_with_typed_error",
 ]
