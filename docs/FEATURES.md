@@ -4,11 +4,20 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 143 verified, 0 library, 0 model, 2 replaced, 0 in-progress
+Current status: 130 verified, 4 library, 8 model, 1 deferred, 2 replaced
 (145 rows; see ADR 0009). A `verified` row runs on real document bytes and a
-user can reach it through the GUI or the CLI. The two `replaced` rows
-(`CREATE-011`, `CREATE-012`) are accepted terminal states under ADR 0008/0009,
-so every row is terminal and no row is `library` or `model`.
+user can reach it through the GUI or the CLI. `library` rows are real
+byte-level implementations with tests but no GUI or CLI caller; `model` rows
+are in-memory models, plans or host-boundary stubs; `deferred` is a P3 row with
+a recorded blocker. The two `replaced` rows (`CREATE-011`, `CREATE-012`) are
+accepted terminal states under ADR 0008/0009.
+
+This matrix is deliberately honest rather than green. `cargo xtask
+goal-verify --all` fails while any row is `library`, `model` or `deferred`;
+that is the intended result of ADR 0009, not a regression to suppress. The
+2026-11-23 review corrected rows that overstated reachability, including
+REVIEW-001, EXPORT-006, VIEW-002, VIEW-006, VIEW-012, CREATE-007, CREATE-008,
+STD-007, ACCESS-006, REVIEW-007, AUTO-008, SEC-003 and PLAT-002.
 
 ## Detailed feature pages
 
@@ -32,6 +41,8 @@ Task-oriented M2 chapters live in the [mdBook](book/src/README.md):
 | `planned` | Scoped, not started |
 | `in-progress` | Claimed and being implemented |
 | `verified` | End-user reachable on real documents through the GUI or CLI; tested, documented, evidence recorded |
+| `library` | Real byte-level implementation with tests, but no GUI or CLI caller |
+| `model` | In-memory model, plan, contract or host-boundary stub, or reachable only with demo data |
 | `replaced` | Adobe cloud/proprietary behavior replaced by a local equivalent |
 | `deferred` | P3 only, with a note and an ADR |
 

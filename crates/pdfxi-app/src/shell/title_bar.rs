@@ -167,7 +167,7 @@ impl PdfxiApp {
                         TabAction::Close => close_tab = Some(*id),
                     }
                 }
-                if title_icon_button(ui, palette, Icon::Plus, 26.0)
+                if title_icon_button(ui, palette, Icon::Plus, 26.0, "New tab")
                     .on_hover_text("Open a PDF")
                     .clicked()
                 {
@@ -186,7 +186,7 @@ impl PdfxiApp {
                         self.identity_open = !self.identity_open;
                     }
                     let unread = self.notification_badge_count();
-                    if title_icon_button(ui, palette, Icon::Bell, 26.0)
+                    if title_icon_button(ui, palette, Icon::Bell, 26.0, "Notifications")
                         .on_hover_text("Notifications")
                         .clicked()
                     {
@@ -201,7 +201,7 @@ impl PdfxiApp {
                         )
                         .on_hover_text("Unread notifications");
                     }
-                    if title_icon_button(ui, palette, Icon::Help, 26.0)
+                    if title_icon_button(ui, palette, Icon::Help, 26.0, "Help")
                         .on_hover_text("Help")
                         .clicked()
                     {
@@ -211,14 +211,14 @@ impl PdfxiApp {
                         ThemeMode::Light => Icon::Moon,
                         ThemeMode::Dark => Icon::Sun,
                     };
-                    if title_icon_button(ui, palette, theme_glyph, 26.0)
+                    if title_icon_button(ui, palette, theme_glyph, 26.0, "Switch theme")
                         .on_hover_text("Switch light/dark")
                         .clicked()
                     {
                         self.dispatch(AppCommand::ToggleTheme, Some(ui.ctx()));
                     }
-                    let gear =
-                        title_icon_button(ui, palette, Icon::Gear, 26.0).on_hover_text("Settings");
+                    let gear = title_icon_button(ui, palette, Icon::Gear, 26.0, "Settings")
+                        .on_hover_text("Settings");
                     let mut theme_choice = None;
                     let mut controls_choice = None;
                     let mut choose_shared = false;
@@ -316,6 +316,7 @@ impl PdfxiApp {
         let width = (galley.size().x + 54.0).clamp(132.0, 232.0);
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
         if active {
             ui.painter().rect_filled(rect, 8.0, palette.surface);
             ui.painter().rect_stroke(
@@ -466,6 +467,9 @@ impl PdfxiApp {
 /// Small circular avatar showing the local initials.
 fn avatar_button(ui: &mut egui::Ui, palette: TitlePalette, initials: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Local display name")
+    });
     ui.painter()
         .circle_filled(rect.center(), 13.0, palette.surface);
     ui.painter().text(

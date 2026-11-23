@@ -51,7 +51,7 @@ impl fmt::Display for FieldType {
 /// A set of AcroForm field flags.
 ///
 /// This is a thin, dependency-free bit set over the `u32` field-flag value
-/// stored in a PDF's `/Ff` entry. Bits 0–2 are common to all field types
+/// stored in a PDF's `/Ff` entry. Bit positions 1-3 are common to all field types
 /// ([`FieldFlags::REQUIRED`], [`FieldFlags::READ_ONLY`],
 /// [`FieldFlags::NO_EXPORT`]); the remaining named bits are the commonly used
 /// text- and choice-specific flags. Unknown bits are preserved so a flag word
@@ -62,10 +62,10 @@ pub struct FieldFlags(u32);
 impl FieldFlags {
     /// No flags set.
     pub const NONE: Self = Self(0);
-    /// The field is required (PDF `/Ff` bit 1).
-    pub const REQUIRED: Self = Self(1 << 0);
-    /// The field is read-only (PDF `/Ff` bit 2).
-    pub const READ_ONLY: Self = Self(1 << 1);
+    /// The field is required (PDF `/Ff` bit position 2, mask `1 << 1`).
+    pub const REQUIRED: Self = Self(1 << 1);
+    /// The field is read-only (PDF `/Ff` bit position 1, mask `1 << 0`).
+    pub const READ_ONLY: Self = Self(1 << 0);
     /// The field must not be exported (PDF `/Ff` bit 3).
     pub const NO_EXPORT: Self = Self(1 << 2);
     /// A text field accepts multiple lines (PDF `/Ff` bit 13).

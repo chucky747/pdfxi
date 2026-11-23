@@ -473,15 +473,18 @@ pub fn apply_redaction(
             &mut removed_widgets,
         )?;
 
-        if contents_change.is_some() || annots_change.is_some() {
-            stage_page_dictionary(
-                document,
-                &effective,
-                work.page.id,
-                contents_change,
-                annots_change,
-            )?;
-        }
+        // Every page in `page_work` carries at least one redaction mark. Its
+        // `/Thumb` is a pre-rendered image of the page before the redaction,
+        // and leaving it in place can reveal the redacted content in any
+        // viewer that draws page thumbnails, so drop it even when the content
+        // stream itself did not change.
+        stage_page_dictionary(
+            document,
+            &effective,
+            work.page.id,
+            contents_change,
+            annots_change,
+        )?;
     }
 
     if request.remove_form_fields && !removed_widgets.is_empty() {
@@ -540,6 +543,12 @@ pub fn verify_redaction(
         if secret.is_empty() {
             continue;
         }
+        // Only the UTF-8 form is scanned over the whole file. A raw UTF-16
+        // match is not evidence by itself: font /ToUnicode CMaps legitimately
+        // contain UTF-16 ranges such as 0041 0042 0043..., and the same bytes
+        // also match the UTF-16LE needle one byte later. Text-bearing streams
+        // are scanned for both UTF-16 encodings below, and form values and
+        // bookmark titles are decoded structurally.
         if let Some(offset) = find_subslice(&saved_bytes, secret.as_bytes()) {
             survivors.push(Survivor {
                 kind: SurvivorKind::RawStream,
@@ -559,7 +568,7 @@ pub fn verify_redaction(
             if secret.is_empty() {
                 continue;
             }
-            let needles = [secret.as_bytes().to_vec(), utf16le(secret)];
+            let needles = [secret.as_bytes().to_vec(), utf16le(secret), utf16be(secret)];
             let mut found = false;
             for needle in &needles {
                 if contains_bytes(&region.stored, needle) {
@@ -633,7 +642,8 @@ pub fn verify_redaction(
         }
     }
 
-    check_surviving_fields(&saved, &page_ids, report, &mut survivors)?;
+    check_surviving_fields(&saved, &page_ids, report, secrets, &mut survivors)?;
+    check_outline_titles(&saved, secrets, &mut survivors);
 
     Ok(RedactionVerification {
         clean: survivors.is_empty(),
@@ -678,6 +688,14 @@ fn stage_page_dictionary(
             }
         }
     }
+    // The thumbnail is an image of the page as it looked before redaction.
+    // Remove the entry and null its stream so the payload is gone too.
+    if let Some(thumb) = dictionary.get("Thumb")
+        && let Some(id) = thumb.as_reference()
+    {
+        document.set_object(id, Object::Null)?;
+    }
+    dictionary.remove("Thumb");
     document.set_object(page_id, Object::Dictionary(dictionary))?;
     Ok(())
 }
@@ -3576,6 +3594,7 @@ fn check_surviving_fields(
     document: &Document,
     page_ids: &BTreeMap<ObjectId, usize>,
     report: &RedactionReport,
+    secrets: &[&str],
     survivors: &mut Vec<Survivor>,
 ) -> Result<(), RedactionError> {
     let root = document.root()?;
@@ -3642,16 +3661,33 @@ fn check_surviving_fields(
                 _ => {}
             }
         }
+        let page = dictionary
+            .get("P")
+            .and_then(Object::as_reference)
+            .and_then(|id| page_ids.get(&id).copied());
+        // A field's value can survive outside the page rectangle: an ancestor
+        // field can keep `/V`, `/DV` or `/RV` after its widget was removed, and
+        // a surviving field can hold the same text as a mark. Scan every value
+        // that is still present; a match fails verification closed.
+        for key in ["V", "DV", "RV"] {
+            let Some(value) = dictionary.get(key) else {
+                continue;
+            };
+            let value = match value {
+                Object::Reference(reference) => match document.object(*reference) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                },
+                other => other.clone(),
+            };
+            scan_form_value(&value, secrets, survivors, page, id);
+        }
         if dictionary.get("Subtype").and_then(Object::as_name) != Some("Widget") {
             continue;
         }
         let Some(rect) = rect_from_dictionary(&dictionary) else {
             continue;
         };
-        let page = dictionary
-            .get("P")
-            .and_then(Object::as_reference)
-            .and_then(|id| page_ids.get(&id).copied());
         let intersects = match page {
             Some(page) => marks_for_page(report, page)
                 .iter()
@@ -3669,6 +3705,79 @@ fn check_surviving_fields(
         }
     }
     Ok(())
+}
+
+/// Report a bookmark title that still contains a redacted secret.
+///
+/// Titles are decoded by the outline reader, so a UTF-16BE or hex-encoded
+/// title is checked as text rather than as raw bytes.
+fn check_outline_titles(document: &Document, secrets: &[&str], survivors: &mut Vec<Survivor>) {
+    let Ok(read) = crate::navigation::read_outline(document) else {
+        return;
+    };
+    scan_outline_titles(&read.outline.roots, secrets, survivors);
+}
+
+fn scan_outline_titles(
+    bookmarks: &[crate::navigation::Bookmark],
+    secrets: &[&str],
+    survivors: &mut Vec<Survivor>,
+) {
+    for bookmark in bookmarks {
+        let title = bookmark.title.to_lowercase();
+        for secret in secrets {
+            if !secret.is_empty() && title.contains(&secret.to_lowercase()) {
+                survivors.push(Survivor {
+                    kind: SurvivorKind::ExtractedText,
+                    page: None,
+                    object: None,
+                    stream_offset: None,
+                    detail: format!("a bookmark title still contains {secret:?}"),
+                });
+            }
+        }
+        scan_outline_titles(&bookmark.children, secrets, survivors);
+    }
+}
+
+/// Report a surviving form value that still contains a redacted secret.
+///
+/// Values are decoded with the same PDFDocEncoding/UTF-16 rule the rest of the
+/// crate uses, so a UTF-16BE `/V` cannot hide behind its byte encoding.
+fn scan_form_value(
+    value: &Object,
+    secrets: &[&str],
+    survivors: &mut Vec<Survivor>,
+    page: Option<usize>,
+    object: Option<ObjectId>,
+) {
+    match value {
+        Object::String(bytes) => {
+            let text = pdfxi_core::decode_text_string(bytes).to_lowercase();
+            for secret in secrets {
+                if !secret.is_empty() && text.contains(&secret.to_lowercase()) {
+                    survivors.push(Survivor {
+                        kind: SurvivorKind::FormField,
+                        page,
+                        object,
+                        stream_offset: None,
+                        detail: format!("a form value still contains {secret:?}"),
+                    });
+                }
+            }
+        }
+        Object::Array(items) => {
+            for item in items {
+                scan_form_value(item, secrets, survivors, page, object);
+            }
+        }
+        Object::Dictionary(dictionary) => {
+            for value in dictionary.values() {
+                scan_form_value(value, secrets, survivors, page, object);
+            }
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3789,6 +3898,15 @@ fn utf16le(text: &str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(text.len() * 2);
     for unit in text.encode_utf16() {
         bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
+/// Encode one string as UTF-16BE bytes.
+fn utf16be(text: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(text.len() * 2);
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_be_bytes());
     }
     bytes
 }

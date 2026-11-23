@@ -7,7 +7,8 @@ use crate::raster::RasterKey;
 use crate::ui::LiveTexture;
 use crate::ui::*;
 use crate::{
-    CanvasLayout, CanvasPoint, CanvasSize, FindMatch, Rotation, Toolset, uv_quad_for_rotation,
+    CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, FindMatch, Rotation, Toolset,
+    uv_quad_for_rotation,
 };
 
 /// Paint a cached page texture into `rect`, rotating the texture UVs so the
@@ -205,7 +206,10 @@ impl PdfxiApp {
                     let pressed = pointer.primary_pressed();
                     (
                         input.smooth_scroll_delta,
-                        pointer.hover_pos(),
+                        // `interact_pos` is present on the frame of a press
+                        // even when `hover_pos` is not; using both makes a
+                        // drag anchor reliably on the first frame.
+                        pointer.interact_pos().or_else(|| pointer.hover_pos()),
                         pressed,
                         pointer.primary_released(),
                         pointer.primary_down() && !pressed,
@@ -260,6 +264,13 @@ impl PdfxiApp {
                         self.selection.begin_at(point, &layout, &self.text_pages);
                     } else if dragging {
                         self.selection.update_to(point, &layout, &self.text_pages);
+                    }
+                    if released {
+                        let selected = self.selected_text();
+                        if !selected.is_empty() {
+                            self.status =
+                                format!("Selected {} characters", selected.chars().count());
+                        }
                     }
                 }
 
@@ -377,6 +388,16 @@ impl PdfxiApp {
                     }
                 }
 
+                // Text selection: paint the selected span boxes above the
+                // rasters and find highlights, below the interactive overlays.
+                for rect in self.selection_screen_rects(&layout, origin, pad_x) {
+                    painter.rect_filled(
+                        rect,
+                        2.0,
+                        egui::Color32::from_rgba_unmultiplied(40, 110, 200, 95),
+                    );
+                }
+
                 // Edit PDF selection rectangle and resize handles, above the
                 // page rasters and find highlights.
                 self.edit_tool_overlay(painter, &layout, origin, pad_x);
@@ -400,6 +421,68 @@ impl PdfxiApp {
                     tab.set_scroll_offset(CanvasPoint::new(self.scroll_x, self.scroll_y));
                 }
             });
+    }
+
+    /// Map the current text selection into screen rectangles for painting.
+    ///
+    /// Text spans are stored top-down in page points (the same frame as the
+    /// page geometry), so a span box goes straight through
+    /// [`CanvasLayout::page_rect_to_canvas`] and then through the origin,
+    /// scroll and centring transform the page rasters use.
+    fn selection_screen_rects(
+        &self,
+        layout: &CanvasLayout,
+        origin: egui::Pos2,
+        pad_x: f32,
+    ) -> Vec<egui::Rect> {
+        let Some(selection) = self.selection.selection() else {
+            return Vec::new();
+        };
+        if selection.is_empty() {
+            return Vec::new();
+        }
+        let mut rects = Vec::new();
+        for page_index in selection.start.page..=selection.end.page {
+            let Some(page) = self
+                .text_pages
+                .iter()
+                .find(|page| page.page_number() == page_index)
+            else {
+                continue;
+            };
+            let start = if page_index == selection.start.page {
+                selection.start.offset
+            } else {
+                0
+            };
+            let end = if page_index == selection.end.page {
+                selection.end.offset
+            } else {
+                usize::MAX
+            };
+            let mut cursor = 0usize;
+            for span in page.spans() {
+                let span_start = cursor;
+                let span_end = cursor + span.text.chars().count();
+                cursor = span_end;
+                if span_end <= start || span_start >= end || span.width <= 0.0 || span.height <= 0.0
+                {
+                    continue;
+                }
+                let local = CanvasRect::new(span.x, span.y, span.width, span.height);
+                let Some(mapped) = layout.page_rect_to_canvas(page_index, local) else {
+                    continue;
+                };
+                rects.push(egui::Rect::from_min_size(
+                    egui::pos2(
+                        origin.x + mapped.x - self.scroll_x + pad_x,
+                        origin.y + mapped.y - self.scroll_y,
+                    ),
+                    egui::vec2(mapped.width, mapped.height),
+                ));
+            }
+        }
+        rects
     }
 
     #[allow(dead_code)]

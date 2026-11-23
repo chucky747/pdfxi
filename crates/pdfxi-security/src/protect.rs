@@ -445,6 +445,9 @@ pub fn protect_document(source: &Document, options: ProtectOptions) -> Result<Ve
 /// - [`SecurityError::WrongPassword`] when the password matches neither role.
 ///   An empty slice is a real password: it succeeds only when the document was
 ///   written with an empty user password.
+/// - [`SecurityError::OwnerPasswordRequired`] when only the user (open)
+///   password matches: unlocking reading must not strip the owner's
+///   permission restrictions.
 /// - [`SecurityError::EncryptedDocumentInvalid`] for a malformed encryption
 ///   dictionary.
 /// - [`SecurityError::DocumentRewriteFailed`] when the final full rewrite fails.
@@ -454,7 +457,12 @@ pub fn remove_protection(bytes: &[u8], password: &[u8]) -> Result<Vec<u8>> {
     if !has_encrypt_entry(bytes) {
         return Err(SecurityError::DocumentNotEncrypted);
     }
-    let (document, _report) = open_encrypted(bytes, Some(password))?;
+    let (document, report) = open_encrypted(bytes, Some(password))?;
+    // An open (user) password unlocks reading but must not remove the owner's
+    // permission mask. Acrobat also requires the permissions password here.
+    if report.role != crate::permissions::PasswordRole::Owner {
+        return Err(SecurityError::OwnerPasswordRequired);
+    }
     document
         .save()
         .map_err(|error| SecurityError::DocumentRewriteFailed(error.to_string()))

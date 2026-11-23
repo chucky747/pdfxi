@@ -36,8 +36,8 @@ use std::fmt;
 
 use hkdf::Hkdf;
 use p256::ecdh::diffie_hellman;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{PublicKey, SecretKey};
+use rand::RngCore;
 use sha2::Sha256;
 
 use crate::crypto::aes::{decrypt_cbc, encrypt_cbc};
@@ -370,19 +370,35 @@ impl fmt::Debug for EcdhKeyWrapProvider {
     }
 }
 
+/// Generate a fresh P-256 private key from the OS random source.
+///
+/// `p256` 0.14 draws scalars through `rand_core` 0.9 while the workspace RNG is
+/// `rand` 0.8, so this fills 32 bytes and retries the astronomically rare
+/// invalid scalar instead of introducing a second `rand_core` version.
+fn random_secret_key() -> Result<SecretKey> {
+    let mut rng = rand::rngs::OsRng;
+    let mut bytes = [0u8; 32];
+    for _ in 0..8 {
+        rng.fill_bytes(&mut bytes);
+        if let Ok(key) = SecretKey::from_slice(&bytes) {
+            return Ok(key);
+        }
+    }
+    Err(SecurityError::CertificateEncryptionKeyWrapFailed)
+}
+
 impl KeyWrapProvider for EcdhKeyWrapProvider {
     fn wrap_key(&self, cek: &[u8], recipient: &Recipient) -> Result<Vec<u8>> {
         let recipient_public = Self::recipient_public_key(recipient)?;
-        let ephemeral = SecretKey::random(&mut rand::rngs::OsRng);
+        let ephemeral =
+            random_secret_key().map_err(|_| SecurityError::CertificateEncryptionKeyWrapFailed)?;
         let shared = diffie_hellman(ephemeral.to_nonzero_scalar(), recipient_public.as_affine());
         let kek = Self::derive_kek(shared.raw_secret_bytes())?;
         let wrapped = aes_key_wrap(&kek, cek)
             .map_err(|_| SecurityError::CertificateEncryptionKeyWrapFailed)?;
-        let mut out = ephemeral
-            .public_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec();
+        // NIST P-256 points are written uncompressed (SEC1 `0x04 || X || Y`),
+        // which is what every certificate consumer expects here.
+        let mut out = ephemeral.public_key().to_sec1_bytes().to_vec();
         out.extend_from_slice(&wrapped);
         Ok(out)
     }
@@ -909,7 +925,7 @@ mod tests {
 
     /// Builds one self-describing certificate whose SPKI carries a real P-256 key.
     fn ec_certificate(public: &PublicKey) -> Certificate {
-        let point = public.to_encoded_point(false);
+        let point = public.to_sec1_bytes();
         let subject = name("EC Recipient");
         let signature_algorithm =
             encode_sequence(&encode_oid(&[1, 2, 840, 10045, 4, 3, 2]).expect("sig oid"));
@@ -923,7 +939,7 @@ mod tests {
         let mut ec_algorithm = encode_oid(&[1, 2, 840, 10045, 2, 1]).expect("oid");
         ec_algorithm.extend_from_slice(&encode_oid(&[1, 2, 840, 10045, 3, 1, 7]).expect("curve"));
         let mut spki = encode_sequence(&ec_algorithm);
-        spki.extend_from_slice(&bit_string(point.as_bytes()));
+        spki.extend_from_slice(&bit_string(&point));
         tbs.extend_from_slice(&encode_sequence(&spki));
         let tbs = encode_sequence(&tbs);
         let mut cert = tbs.clone();
@@ -934,7 +950,7 @@ mod tests {
 
     #[test]
     fn ecdh_key_wrap_round_trips_with_a_certificate() {
-        let private = SecretKey::random(&mut rand::rngs::OsRng);
+        let private = random_secret_key().expect("EC private key");
         let certificate = ec_certificate(&private.public_key());
         let recipients = RecipientList::new()
             .with(Recipient::new("alice", certificate).expect("recipient"))
@@ -965,7 +981,7 @@ mod tests {
         assert_eq!(opened.plaintext, b"certificate-addressed bytes");
 
         // A different private key cannot open the same envelope.
-        let other = SecretKey::random(&mut rand::rngs::OsRng);
+        let other = random_secret_key().expect("EC private key");
         assert!(matches!(
             open_envelope(
                 &envelope,

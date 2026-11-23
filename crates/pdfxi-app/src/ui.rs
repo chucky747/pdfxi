@@ -407,20 +407,23 @@ pub fn active_page_from_canvas_scroll(layout: &CanvasLayout, scroll_y: f32) -> u
     best_page
 }
 
-/// Locate the bundled user-guide folder, if the build includes one.
-fn bundled_docs_dir() -> Option<PathBuf> {
+/// Locate the bundled curated user guide (a single rendered HTML page).
+///
+/// The previous Help action opened the whole guide folder, which is a set of
+/// raw Markdown files and internal design notes. The installer now ships one
+/// readable page and Help opens that file.
+fn bundled_user_guide() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(executable) = std::env::current_exe()
         && let Some(directory) = executable.parent()
     {
-        candidates.push(directory.join("docs"));
-        candidates.push(directory.join("docs").join("book"));
+        candidates.push(directory.join("docs").join("user-guide.html"));
         if let Some(parent) = directory.parent() {
-            candidates.push(parent.join("docs"));
+            candidates.push(parent.join("docs").join("user-guide.html"));
         }
     }
-    candidates.push(PathBuf::from("docs"));
-    candidates.into_iter().find(|path| path.is_dir())
+    candidates.push(PathBuf::from("docs").join("user-guide.html"));
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 /// Build the application icon shown by the OS window switcher.
@@ -603,6 +606,10 @@ pub struct PdfxiApp {
     pub(super) password_prompt: Option<shell::session::PasswordPrompt>,
     /// Open unsaved-changes prompt, if any.
     pub(super) pending_close: Option<shell::session::PendingClose>,
+    /// The user asked to close the whole window and a prompt is resolving it.
+    pub(super) close_window_after_resolve: bool,
+    /// Set when every dirty tab is resolved and the window may close.
+    pub(super) request_window_close: bool,
     /// Open external-modification dialog, if any.
     pub(super) save_conflict: Option<shell::session::SaveConflict>,
     /// Comments list, rail badge, note draft and thread popup.
@@ -1036,6 +1043,35 @@ impl PdfxiApp {
                 false
             }
         }
+    }
+
+    /// Cancel a window close while any tab has unsaved changes and prompt for
+    /// each one. Closing a tab already prompted; the window path did not, so
+    /// Alt+F4 or the title-bar close silently discarded every unsaved change.
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        let requested = ctx.input(|input| input.viewport().close_requested());
+        if !requested || self.request_window_close {
+            return;
+        }
+        let Some(id) = self.dirty_tab_ids().first().copied() else {
+            return;
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        self.close_window_after_resolve = true;
+        if self.presentation {
+            self.presentation = false;
+        }
+        let title = self.state.tab_title(id).unwrap_or_default();
+        self.pending_close = Some(shell::session::PendingClose { id, title });
+    }
+
+    /// Ids of every open session with unsaved changes, in tab order.
+    fn dirty_tab_ids(&self) -> Vec<TabId> {
+        self.sessions
+            .iter()
+            .filter(|(_, session)| session.is_dirty())
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// Close a tab immediately, ignoring unsaved changes.
@@ -1707,8 +1743,12 @@ impl PdfxiApp {
 
     /// Apply keyboard shortcuts for the main find, copy, and view commands.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        // Plain letter keys select a canvas tool, but only when no text field
+        // or dialog has keyboard focus.
+        let text_focus = ctx.wants_keyboard_input();
         let (
             open,
+            tool,
             next_tab,
             prev_tab,
             close,
@@ -1752,8 +1792,24 @@ impl PdfxiApp {
             });
             // Pane commands use Ctrl+Shift and are resolved through the
             // shared map so the toolbar and keyboard paths cannot drift.
+            let tool = if text_focus || ctrl || shift || input.modifiers.alt {
+                None
+            } else {
+                [
+                    (Key::V, Toolset::Select),
+                    (Key::T, Toolset::TextSelection),
+                    (Key::H, Toolset::Hand),
+                    (Key::Y, Toolset::Highlight),
+                    (Key::F, Toolset::FormFill),
+                    (Key::M, Toolset::Measure),
+                ]
+                .into_iter()
+                .find(|(key, _)| input.key_pressed(*key))
+                .map(|(_, tool)| tool)
+            };
             (
-                ctrl && input.key_pressed(Key::N),
+                ctrl && (input.key_pressed(Key::N) || input.key_pressed(Key::O)),
+                tool,
                 ctrl && !shift && input.key_pressed(Key::Tab),
                 ctrl && shift && input.key_pressed(Key::Tab),
                 ctrl && !shift && input.key_pressed(Key::W),
@@ -1762,7 +1818,7 @@ impl PdfxiApp {
                 ctrl && input.key_pressed(Key::F),
                 !shift && input.key_pressed(Key::F3),
                 shift && input.key_pressed(Key::F3),
-                ctrl && input.key_pressed(Key::C),
+                copy_requested(&input.events, ctrl && input.key_pressed(Key::C), text_focus),
                 ctrl && !shift && input.key_pressed(Key::S),
                 ctrl && shift && input.key_pressed(Key::S),
                 ctrl && !shift && input.key_pressed(Key::Z),
@@ -1774,6 +1830,9 @@ impl PdfxiApp {
 
         if open {
             self.dispatch(AppCommand::OpenDialog, Some(ctx));
+        }
+        if let Some(tool) = tool {
+            self.dispatch(AppCommand::SelectTool(tool), Some(ctx));
         }
         if next_tab {
             self.dispatch(AppCommand::ActivateNextTab, Some(ctx));
@@ -1840,6 +1899,21 @@ impl PdfxiApp {
             }
         }
     }
+}
+
+/// Whether this frame asks to copy the document selection.
+///
+/// `egui-winit` translates the platform copy chord into [`egui::Event::Copy`]
+/// and deliberately drops the `C` key event, so the viewer must listen for the
+/// clipboard event. The key check keeps synthetic input (and platforms that
+/// report the chord as a key) working. A focused text field owns copy itself;
+/// its selection must win over the canvas selection.
+fn copy_requested(events: &[egui::Event], ctrl_c: bool, text_focus: bool) -> bool {
+    !text_focus
+        && (ctrl_c
+            || events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Copy)))
 }
 
 impl PdfxiApp {
@@ -2102,6 +2176,7 @@ impl PdfxiApp {
 
 impl eframe::App for PdfxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_close_request(ctx);
         if self.presentation {
             self.presentation_update(ctx);
             return;
@@ -2141,6 +2216,10 @@ impl eframe::App for PdfxiApp {
         self.edit_tool_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
+        if self.request_window_close {
+            self.request_window_close = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         self.save_conflict_ui(ctx);
         self.identity_window_ui(ctx);
         self.help_window_ui(ctx);
@@ -2333,6 +2412,16 @@ impl PdfxiApp {
                 });
         }
 
+        if !self.status.is_empty() {
+            // A real status line: every command writes its result here, so
+            // errors, Highlight arming and mode changes are visible even when
+            // no dialog is open.
+            egui::TopBottomPanel::bottom("shell_status")
+                .exact_height(metrics::STATUS_LINE)
+                .frame(shell_panel_frame(palette, 12))
+                .show(ctx, |ui| self.status_line_ui(ui, palette));
+        }
+
         if self.state.active_tab().is_some() {
             egui::TopBottomPanel::bottom("shell_bottom")
                 .exact_height(metrics::STATUS_BAR)
@@ -2452,7 +2541,7 @@ impl PdfxiApp {
     /// Open the library folder in the platform file manager.
     fn open_storage_folder(&mut self) {
         if let Some(root) = self.settings.library_root_or_default() {
-            self.open_in_file_manager(&root);
+            self.open_with_system(&root);
         }
     }
 
@@ -2465,18 +2554,19 @@ impl PdfxiApp {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| path.to_path_buf())
         };
-        self.open_in_file_manager(&target);
+        self.open_with_system(&target);
     }
 
-    /// Open the bundled user-guide folder when it exists.
-    fn open_docs_folder(&mut self) {
-        if let Some(directory) = bundled_docs_dir() {
-            self.open_in_file_manager(&directory);
+    /// Open the bundled, rendered user guide in the default browser.
+    fn open_user_guide(&mut self) {
+        match bundled_user_guide() {
+            Some(guide) => self.open_with_system(&guide),
+            None => self.status = "The user guide is not installed with this build".to_owned(),
         }
     }
 
-    /// Spawn the platform file manager for `path`.
-    fn open_in_file_manager(&mut self, path: &Path) {
+    /// Spawn the platform opener (Explorer, Finder, `xdg-open`) for `path`.
+    fn open_with_system(&mut self, path: &Path) {
         #[cfg(windows)]
         let command = "explorer";
         #[cfg(target_os = "macos")]
@@ -3163,5 +3253,23 @@ mod tests {
         );
         assert!(!app.is_presenting());
         assert!(app.presentation_model.is_none());
+    }
+
+    #[test]
+    fn copy_event_is_recognized_from_the_platform_chord() {
+        // egui-winit delivers Ctrl+C as `Event::Copy` and drops `Key::C`.
+        assert!(copy_requested(&[egui::Event::Copy], false, false));
+    }
+
+    #[test]
+    fn a_focused_text_field_keeps_its_own_copy() {
+        assert!(!copy_requested(&[egui::Event::Copy], true, true));
+    }
+
+    #[test]
+    fn unrelated_events_do_not_copy() {
+        assert!(!copy_requested(&[], false, false));
+        assert!(!copy_requested(&[egui::Event::Copy], false, true));
+        assert!(copy_requested(&[], true, false));
     }
 }

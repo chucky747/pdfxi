@@ -674,6 +674,11 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
     let mut extra_objects: Vec<(u32, Object)> = Vec::new();
     let mut font_counter = 0usize;
     let mut graphics_counter = 0usize;
+    // Old page object number -> new page object number, for references that
+    // appear outside the page tree (outlines, destinations, form widgets).
+    let mut kept_page_maps: Vec<BTreeMap<u32, u32>> = vec![BTreeMap::new(); sources.len()];
+    // Old zero-based page index -> new zero-based position (first occurrence).
+    let mut kept_indices: BTreeMap<usize, usize> = BTreeMap::new();
     for (position, entry) in selection.iter().enumerate() {
         let source = sources[entry.source];
         let structure = source.supported_structure()?;
@@ -682,7 +687,7 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
             .get(entry.page)
             .ok_or(Error::PageNotFound(entry.page))?;
         let original = load_object(source.bytes(), &structure.xref, page.id)?;
-        let rewritten = remap_object(entry.source, &original, &remap, 0)?;
+        let rewritten = remap_object(entry.source, &original, &remap, &kept_page_maps, 0)?;
         let mut dictionary = match rewritten {
             Object::Dictionary(dictionary) => dictionary,
             _ => {
@@ -813,6 +818,12 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
         let number = *page_numbers.get(position).ok_or(Error::CannotSerialize(
             "page number allocation is inconsistent".to_owned(),
         ))?;
+        if let Some(map) = kept_page_maps.get_mut(entry.source) {
+            map.entry(page.id.number).or_insert(number);
+        }
+        if entry.source == 0 {
+            kept_indices.entry(entry.page).or_insert(position);
+        }
         new_pages.push((number, Object::Dictionary(dictionary)));
     }
 
@@ -832,12 +843,48 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
         ),
     );
 
+    // Carry the primary document's catalog entries (bookmarks, form fields,
+    // metadata, language, viewer preferences, named destinations, ...) into the
+    // new catalog. References to kept pages are retargeted at the new page
+    // objects; references to removed pages become null and the entry that owns
+    // them is either pruned below or dropped rather than written broken.
+    let primary_structure = sources[0].supported_structure()?;
+    let primary_catalog = load_object(
+        sources[0].bytes(),
+        &primary_structure.xref,
+        primary_structure.root_id,
+    )?
+    .as_dictionary()
+    .cloned()
+    .ok_or_else(|| Error::MalformedPageTree("catalog is not a dictionary".to_owned()))?;
+    let old_pages_root = primary_catalog
+        .get("Pages")
+        .and_then(Object::as_reference)
+        .ok_or(Error::MissingPages)?;
+    let primary_structural = structural.first().ok_or(Error::EmptyPageSelection)?;
+    let carry = CatalogCarry {
+        source: 0,
+        remap: &remap,
+        kept_pages: kept_page_maps.first().ok_or(Error::EmptyPageSelection)?,
+        structural: primary_structural,
+        old_root: primary_structure.root_id.number,
+        new_root: catalog_number,
+        old_pages_root: old_pages_root.number,
+        new_pages_root: pages_number,
+    };
     let mut catalog = Dictionary::new();
     catalog.insert("Type".to_owned(), Object::Name("Catalog".to_owned()));
     catalog.insert(
         "Pages".to_owned(),
         Object::Reference(ObjectId::new(pages_number, 0)),
     );
+    for (key, value) in &primary_catalog {
+        if matches!(key.as_str(), "Type" | "Pages") {
+            continue;
+        }
+        let remapped = carry.value(value, 0)?;
+        catalog.insert(key.clone(), remapped);
+    }
 
     // Assemble every output object, keyed by its new object number.
     let mut output: BTreeMap<u32, Object> = BTreeMap::new();
@@ -855,10 +902,11 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
                 .get(source_index)
                 .and_then(|map| map.get(number))
                 .ok_or_else(|| Error::CannotSerialize("object remap is inconsistent".to_owned()))?;
-            let rewritten = remap_object(source_index, object, &remap, 0)?;
+            let rewritten = remap_object(source_index, object, &remap, &kept_page_maps, 0)?;
             output.insert(new_number, rewritten);
         }
     }
+    finalize_catalog(&mut output, catalog_number, &kept_indices)?;
 
     // Rebuild the trailer from the primary source, dropping revision-specific
     // keys and overriding /Size and /Root for the freshly written xref.
@@ -880,7 +928,7 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
         ) {
             continue;
         }
-        trailer.insert(key, remap_object(0, &value, &remap, 0)?);
+        trailer.insert(key, remap_object(0, &value, &remap, &kept_page_maps, 0)?);
     }
     let highest = output
         .keys()
@@ -914,6 +962,519 @@ fn render(sources: &[&Document], selection: &[SelectionEntry]) -> Result<Vec<u8>
     write_xref_section(&mut out, &offsets, true);
     write_trailer(&mut out, &trailer, xref_offset)?;
     Ok(out)
+}
+
+/// Page-aware reference remapping for primary-catalog entries.
+struct CatalogCarry<'a> {
+    source: usize,
+    remap: &'a [BTreeMap<u32, u32>],
+    kept_pages: &'a BTreeMap<u32, u32>,
+    structural: &'a HashSet<u32>,
+    old_root: u32,
+    new_root: u32,
+    old_pages_root: u32,
+    new_pages_root: u32,
+}
+
+impl CatalogCarry<'_> {
+    fn value(&self, object: &Object, depth: usize) -> Result<Object> {
+        if depth > MAX_REMAP_DEPTH {
+            return Err(Error::NestingTooDeep(MAX_REMAP_DEPTH));
+        }
+        match object {
+            Object::Reference(id) => {
+                if let Some(number) = self.kept_pages.get(&id.number) {
+                    return Ok(reference(*number));
+                }
+                if id.number == self.old_root {
+                    return Ok(reference(self.new_root));
+                }
+                if id.number == self.old_pages_root {
+                    return Ok(reference(self.new_pages_root));
+                }
+                if self.structural.contains(&id.number) {
+                    return Ok(Object::Null);
+                }
+                Ok(
+                    match self
+                        .remap
+                        .get(self.source)
+                        .and_then(|map| map.get(&id.number))
+                        .copied()
+                    {
+                        Some(number) => reference(number),
+                        None => Object::Null,
+                    },
+                )
+            }
+            Object::Array(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.value(item, depth + 1)?);
+                }
+                Ok(Object::Array(out))
+            }
+            Object::Dictionary(dictionary) => {
+                Ok(Object::Dictionary(self.dictionary(dictionary, depth)?))
+            }
+            Object::Stream { dictionary, data } => Ok(Object::Stream {
+                dictionary: self.dictionary(dictionary, depth)?,
+                data: data.clone(),
+            }),
+            other => Ok(other.clone()),
+        }
+    }
+
+    fn dictionary(&self, dictionary: &Dictionary, depth: usize) -> Result<Dictionary> {
+        let mut out = Dictionary::new();
+        for (key, value) in dictionary {
+            out.insert(key.clone(), self.value(value, depth + 1)?);
+        }
+        Ok(out)
+    }
+}
+
+/// Build an indirect reference object.
+fn reference(number: u32) -> Object {
+    Object::Reference(ObjectId::new(number, 0))
+}
+
+/// Prune catalog entries and the objects they own after the page tree is built.
+fn finalize_catalog(
+    output: &mut BTreeMap<u32, Object>,
+    catalog_number: u32,
+    kept_indices: &BTreeMap<usize, usize>,
+) -> Result<()> {
+    let Some(Object::Dictionary(mut catalog)) = output.remove(&catalog_number) else {
+        return Ok(());
+    };
+    if let Some(id) = catalog.get("Outlines").and_then(Object::as_reference)
+        && !prune_outline(output, id.number)?
+    {
+        catalog.remove("Outlines");
+    }
+    if let Some(id) = catalog.get("AcroForm").and_then(Object::as_reference)
+        && !prune_acroform(output, id.number)?
+    {
+        catalog.remove("AcroForm");
+    }
+    remap_page_labels(output, &mut catalog, kept_indices);
+    for key in ["StructTreeRoot", "OpenAction", "OCProperties"] {
+        let Some(value) = catalog.get(key).cloned() else {
+            continue;
+        };
+        let mut visited = HashSet::new();
+        if reachable_contains_null(output, &value, 0, &mut visited) {
+            catalog.remove(key);
+        }
+    }
+    output.insert(catalog_number, Object::Dictionary(catalog));
+    Ok(())
+}
+
+/// Remove outline items whose destination page is not in the output, and
+/// rebuild the sibling/child links and `/Count` values of the items that stay.
+fn prune_outline(output: &mut BTreeMap<u32, Object>, root: u32) -> Result<bool> {
+    let Some(first) = output
+        .get(&root)
+        .and_then(Object::as_dictionary)
+        .and_then(|dictionary| dictionary.get("First"))
+        .and_then(Object::as_reference)
+    else {
+        return Ok(false);
+    };
+    let mut visited = HashSet::new();
+    let kept = prune_outline_level(output, Some(first), root, &mut visited, 0)?;
+    if kept.is_empty() {
+        output.remove(&root);
+        return Ok(false);
+    }
+    let Some(Object::Dictionary(mut dictionary)) = output.remove(&root) else {
+        return Ok(false);
+    };
+    let first_number = kept.first().copied().unwrap_or(root);
+    let last_number = kept.last().copied().unwrap_or(root);
+    dictionary.insert("First".to_owned(), reference(first_number));
+    dictionary.insert("Last".to_owned(), reference(last_number));
+    dictionary.insert(
+        "Count".to_owned(),
+        Object::Integer(visible_descendants(output, &kept)),
+    );
+    output.insert(root, Object::Dictionary(dictionary));
+    Ok(true)
+}
+
+/// Prune one sibling chain of outline items and their subtrees.
+fn prune_outline_level(
+    output: &mut BTreeMap<u32, Object>,
+    first: Option<ObjectId>,
+    parent: u32,
+    visited: &mut HashSet<u32>,
+    depth: usize,
+) -> Result<Vec<u32>> {
+    if depth > MAX_REMAP_DEPTH {
+        return Err(Error::NestingTooDeep(MAX_REMAP_DEPTH));
+    }
+    let mut kept = Vec::new();
+    let mut cursor = first;
+    while let Some(id) = cursor {
+        if !visited.insert(id.number) {
+            break;
+        }
+        let Some(Object::Dictionary(dictionary)) = output.get(&id.number).cloned() else {
+            break;
+        };
+        cursor = dictionary.get("Next").and_then(Object::as_reference);
+        if !outline_destination_is_kept(output, &dictionary) {
+            continue;
+        }
+        let children = prune_outline_level(
+            output,
+            dictionary.get("First").and_then(Object::as_reference),
+            id.number,
+            visited,
+            depth + 1,
+        )?;
+        let mut dictionary = dictionary;
+        dictionary.insert("Parent".to_owned(), reference(parent));
+        dictionary.remove("Prev");
+        dictionary.remove("Next");
+        if children.is_empty() {
+            dictionary.remove("First");
+            dictionary.remove("Last");
+            dictionary.insert("Count".to_owned(), Object::Integer(0));
+        } else {
+            let first_child = children.first().copied().unwrap_or(id.number);
+            let last_child = children.last().copied().unwrap_or(id.number);
+            dictionary.insert("First".to_owned(), reference(first_child));
+            dictionary.insert("Last".to_owned(), reference(last_child));
+            let open = dictionary
+                .get("Count")
+                .and_then(Object::as_i64)
+                .unwrap_or(1)
+                >= 0;
+            let total = visible_descendants(output, &children);
+            dictionary.insert(
+                "Count".to_owned(),
+                Object::Integer(if open { total } else { -total }),
+            );
+        }
+        output.insert(id.number, Object::Dictionary(dictionary));
+        kept.push(id.number);
+    }
+    for (index, number) in kept.iter().copied().enumerate() {
+        let Some(Object::Dictionary(mut dictionary)) = output.remove(&number) else {
+            continue;
+        };
+        if index > 0 {
+            dictionary.insert("Prev".to_owned(), reference(kept[index - 1]));
+        }
+        if index + 1 < kept.len() {
+            dictionary.insert("Next".to_owned(), reference(kept[index + 1]));
+        }
+        output.insert(number, Object::Dictionary(dictionary));
+    }
+    Ok(kept)
+}
+
+/// Number of visible descendants represented by a list of kept outline items.
+fn visible_descendants(output: &BTreeMap<u32, Object>, items: &[u32]) -> i64 {
+    let mut total = 0i64;
+    for number in items {
+        total += 1;
+        let children = output
+            .get(number)
+            .and_then(Object::as_dictionary)
+            .and_then(|dictionary| dictionary.get("Count"))
+            .and_then(Object::as_i64)
+            .unwrap_or(0);
+        total += children.abs();
+    }
+    total
+}
+
+/// Whether an outline item's destination still names a page in the output.
+fn outline_destination_is_kept(output: &BTreeMap<u32, Object>, dictionary: &Dictionary) -> bool {
+    let destination = match dictionary.get("Dest") {
+        Some(value) => Some(value.clone()),
+        None => action_destination(output, dictionary.get("A")),
+    };
+    match destination {
+        None => true,
+        Some(Object::Null) => false,
+        Some(Object::Array(items)) => match items.first() {
+            Some(Object::Null) => false,
+            Some(Object::Reference(id)) => is_page_object(output, id.number),
+            Some(_) => true,
+            None => true,
+        },
+        Some(Object::Reference(id)) => output.contains_key(&id.number),
+        Some(_) => true,
+    }
+}
+
+/// Extract the destination of a `/GoTo` action object.
+fn action_destination(output: &BTreeMap<u32, Object>, action: Option<&Object>) -> Option<Object> {
+    let action = resolve_output(output, action?, 0)?;
+    let dictionary = action.as_dictionary()?;
+    if dictionary.get("S").and_then(Object::as_name) != Some("GoTo") {
+        return None;
+    }
+    dictionary.get("D").cloned()
+}
+
+/// Resolve indirect references through an output object map.
+fn resolve_output<'a>(
+    output: &'a BTreeMap<u32, Object>,
+    object: &'a Object,
+    depth: usize,
+) -> Option<&'a Object> {
+    if depth > MAX_REMAP_DEPTH {
+        return None;
+    }
+    match object {
+        Object::Reference(id) => resolve_output(output, output.get(&id.number)?, depth + 1),
+        other => Some(other),
+    }
+}
+
+/// Whether an object number is a page dictionary in the output.
+fn is_page_object(output: &BTreeMap<u32, Object>, number: u32) -> bool {
+    output
+        .get(&number)
+        .and_then(Object::as_dictionary)
+        .and_then(|dictionary| dictionary.get("Type"))
+        .and_then(Object::as_name)
+        == Some("Page")
+}
+
+/// Drop form fields whose widgets are no longer on any kept page.
+fn prune_acroform(output: &mut BTreeMap<u32, Object>, number: u32) -> Result<bool> {
+    let widgets = collect_page_widgets(output);
+    let Some(Object::Dictionary(acroform)) = output.remove(&number) else {
+        return Ok(false);
+    };
+    let fields = acroform
+        .get("Fields")
+        .and_then(Object::as_array)
+        .map(<[Object]>::to_vec)
+        .unwrap_or_default();
+    let mut kept = Vec::new();
+    let mut visited = HashSet::new();
+    for field in &fields {
+        let Some(id) = field.as_reference() else {
+            continue;
+        };
+        if prune_form_field(output, id.number, &widgets, &mut visited, 0)? {
+            kept.push(reference(id.number));
+        }
+    }
+    if kept.is_empty() {
+        output.remove(&number);
+        return Ok(false);
+    }
+    let kept_numbers: HashSet<u32> = kept
+        .iter()
+        .filter_map(Object::as_reference)
+        .map(|id| id.number)
+        .collect();
+    let mut acroform = acroform;
+    acroform.insert("Fields".to_owned(), Object::Array(kept));
+    if let Some(co) = acroform
+        .get("CO")
+        .and_then(Object::as_array)
+        .map(<[Object]>::to_vec)
+    {
+        let filtered: Vec<Object> = co
+            .iter()
+            .filter(|object| {
+                object
+                    .as_reference()
+                    .is_some_and(|id| kept_numbers.contains(&id.number))
+            })
+            .cloned()
+            .collect();
+        if filtered.is_empty() {
+            acroform.remove("CO");
+        } else {
+            acroform.insert("CO".to_owned(), Object::Array(filtered));
+        }
+    }
+    output.insert(number, Object::Dictionary(acroform));
+    Ok(true)
+}
+
+/// Keep a field only when one of its widgets remains on a kept page.
+fn prune_form_field(
+    output: &mut BTreeMap<u32, Object>,
+    number: u32,
+    widgets: &HashSet<u32>,
+    visited: &mut HashSet<u32>,
+    depth: usize,
+) -> Result<bool> {
+    if depth > MAX_REMAP_DEPTH {
+        return Err(Error::NestingTooDeep(MAX_REMAP_DEPTH));
+    }
+    if !visited.insert(number) {
+        return Ok(false);
+    }
+    let Some(Object::Dictionary(dictionary)) = output.get(&number).cloned() else {
+        return Ok(false);
+    };
+    let kids = dictionary
+        .get("Kids")
+        .and_then(Object::as_array)
+        .map(<[Object]>::to_vec);
+    match kids {
+        Some(kids) if !kids.is_empty() => {
+            let mut kept = Vec::new();
+            for kid in &kids {
+                if let Some(id) = kid.as_reference()
+                    && prune_form_field(output, id.number, widgets, visited, depth + 1)?
+                {
+                    kept.push(reference(id.number));
+                }
+            }
+            if kept.is_empty() {
+                output.remove(&number);
+                return Ok(false);
+            }
+            let mut dictionary = dictionary;
+            dictionary.insert("Kids".to_owned(), Object::Array(kept));
+            output.insert(number, Object::Dictionary(dictionary));
+            Ok(true)
+        }
+        _ => {
+            if widgets.contains(&number) {
+                Ok(true)
+            } else {
+                output.remove(&number);
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// Object numbers of widget annotations referenced from kept pages.
+fn collect_page_widgets(output: &BTreeMap<u32, Object>) -> HashSet<u32> {
+    let mut widgets = HashSet::new();
+    for object in output.values() {
+        let Some(dictionary) = object.as_dictionary() else {
+            continue;
+        };
+        if dictionary.get("Type").and_then(Object::as_name) != Some("Page") {
+            continue;
+        }
+        let Some(annots) = dictionary.get("Annots").and_then(Object::as_array) else {
+            continue;
+        };
+        for annot in annots {
+            let Some(id) = annot.as_reference() else {
+                continue;
+            };
+            let is_widget = output
+                .get(&id.number)
+                .and_then(Object::as_dictionary)
+                .and_then(|annot| annot.get("Subtype"))
+                .and_then(Object::as_name)
+                == Some("Widget");
+            if is_widget {
+                widgets.insert(id.number);
+            }
+        }
+    }
+    widgets
+}
+
+/// Re-key `/PageLabels` number trees after pages are removed or reordered.
+fn remap_page_labels(
+    output: &mut BTreeMap<u32, Object>,
+    catalog: &mut Dictionary,
+    kept_indices: &BTreeMap<usize, usize>,
+) {
+    let Some(value) = catalog.get("PageLabels").cloned() else {
+        return;
+    };
+    let number = value.as_reference().map(|id| id.number);
+    let dictionary = match &value {
+        Object::Dictionary(dictionary) => Some(dictionary.clone()),
+        Object::Reference(id) => output
+            .get(&id.number)
+            .and_then(Object::as_dictionary)
+            .cloned(),
+        _ => None,
+    };
+    let Some(dictionary) = dictionary else {
+        catalog.remove("PageLabels");
+        return;
+    };
+    if dictionary.contains_key("Kids") {
+        // Nested number trees cannot be re-keyed without walking every child;
+        // dropping the labels is safer than labelling the wrong pages.
+        catalog.remove("PageLabels");
+        return;
+    }
+    let Some(Object::Array(numbers)) = dictionary.get("Nums") else {
+        return;
+    };
+    let mut remapped = Vec::new();
+    let mut index = 0usize;
+    while index + 1 < numbers.len() {
+        if let Some(old) = numbers[index]
+            .as_i64()
+            .and_then(|value| usize::try_from(value).ok())
+            && let Some(new) = kept_indices.get(&old)
+            && let Ok(new) = i64::try_from(*new)
+        {
+            remapped.push(Object::Integer(new));
+            remapped.push(numbers[index + 1].clone());
+        }
+        index += 2;
+    }
+    let mut dictionary = dictionary;
+    dictionary.insert("Nums".to_owned(), Object::Array(remapped));
+    match number {
+        Some(number) => {
+            output.insert(number, Object::Dictionary(dictionary));
+        }
+        None => {
+            catalog.insert("PageLabels".to_owned(), Object::Dictionary(dictionary));
+        }
+    }
+}
+
+/// Whether an object graph reachable from `object` contains a null reference.
+fn reachable_contains_null(
+    output: &BTreeMap<u32, Object>,
+    object: &Object,
+    depth: usize,
+    visited: &mut HashSet<u32>,
+) -> bool {
+    if depth > MAX_REMAP_DEPTH {
+        return true;
+    }
+    match object {
+        Object::Null => true,
+        Object::Reference(id) => {
+            if !visited.insert(id.number) {
+                return false;
+            }
+            match output.get(&id.number) {
+                Some(target) => reachable_contains_null(output, target, depth + 1, visited),
+                None => true,
+            }
+        }
+        Object::Array(items) => items
+            .iter()
+            .any(|item| reachable_contains_null(output, item, depth + 1, visited)),
+        Object::Dictionary(dictionary) => dictionary
+            .values()
+            .any(|value| reachable_contains_null(output, value, depth + 1, visited)),
+        Object::Stream { dictionary, .. } => dictionary
+            .values()
+            .any(|value| reachable_contains_null(output, value, depth + 1, visited)),
+        _ => false,
+    }
 }
 
 /// Collect the object numbers of a document's catalog and entire page tree.
@@ -960,6 +1521,7 @@ fn remap_object(
     source: usize,
     object: &Object,
     remap: &[BTreeMap<u32, u32>],
+    page_maps: &[BTreeMap<u32, u32>],
     depth: usize,
 ) -> Result<Object> {
     if depth > MAX_REMAP_DEPTH {
@@ -967,6 +1529,9 @@ fn remap_object(
     }
     match object {
         Object::Reference(id) => {
+            if let Some(number) = page_maps.get(source).and_then(|map| map.get(&id.number)) {
+                return Ok(reference(*number));
+            }
             let new_number = remap
                 .get(source)
                 .and_then(|map| map.get(&id.number))
@@ -979,15 +1544,15 @@ fn remap_object(
         Object::Array(items) => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(remap_object(source, item, remap, depth + 1)?);
+                out.push(remap_object(source, item, remap, page_maps, depth + 1)?);
             }
             Ok(Object::Array(out))
         }
         Object::Dictionary(dictionary) => Ok(Object::Dictionary(remap_dictionary(
-            source, dictionary, remap, depth,
+            source, dictionary, remap, page_maps, depth,
         )?)),
         Object::Stream { dictionary, data } => Ok(Object::Stream {
-            dictionary: remap_dictionary(source, dictionary, remap, depth)?,
+            dictionary: remap_dictionary(source, dictionary, remap, page_maps, depth)?,
             data: data.clone(),
         }),
         other => Ok(other.clone()),
@@ -999,11 +1564,15 @@ fn remap_dictionary(
     source: usize,
     dictionary: &Dictionary,
     remap: &[BTreeMap<u32, u32>],
+    page_maps: &[BTreeMap<u32, u32>],
     depth: usize,
 ) -> Result<Dictionary> {
     let mut out = Dictionary::new();
     for (key, value) in dictionary {
-        out.insert(key.clone(), remap_object(source, value, remap, depth + 1)?);
+        out.insert(
+            key.clone(),
+            remap_object(source, value, remap, page_maps, depth + 1)?,
+        );
     }
     Ok(out)
 }
@@ -1592,6 +2161,212 @@ mod tests {
             })
             .collect();
         assert_eq!(parents.len(), 1, "all pages must share one /Pages parent");
+    }
+
+    /// A three-page PDF whose catalog carries bookmarks, a form, page labels,
+    /// language, viewer preferences and XMP metadata.
+    fn catalog_pdf() -> Vec<u8> {
+        let metadata = "<x:xmpmeta>catalog test</x:xmpmeta>";
+        let objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 10 0 R /AcroForm 11 0 R \
+             /PageLabels 14 0 R /Lang (en-US) /Metadata 15 0 R \
+             /ViewerPreferences << /HideToolbar true >> >>"
+                .to_owned(),
+            "<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+             /Annots [12 0 R] /Resources << /Font << /F1 9 0 R >> >> >>"
+                .to_owned(),
+            "<< /Length 38 >>\nstream\nBT /F1 24 Tf 72 720 Td (Page 1) Tj ET\nendstream".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R \
+             /Annots [13 0 R] /Resources << /Font << /F1 9 0 R >> >> >>"
+                .to_owned(),
+            "<< /Length 38 >>\nstream\nBT /F1 24 Tf 72 720 Td (Page 2) Tj ET\nendstream".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 8 0 R \
+             /Resources << /Font << /F1 9 0 R >> >> >>"
+                .to_owned(),
+            "<< /Length 38 >>\nstream\nBT /F1 24 Tf 72 720 Td (Page 3) Tj ET\nendstream".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Outlines /First 16 0 R /Last 17 0 R /Count 2 >>".to_owned(),
+            "<< /Fields [12 0 R 13 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 9 0 R >> >> >>"
+                .to_owned(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (first) /V (one) /P 3 0 R \
+             /Rect [72 700 200 720] >>"
+                .to_owned(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (second) /V (two) /P 5 0 R \
+             /Rect [72 700 200 720] >>"
+                .to_owned(),
+            "<< /Nums [0 << /S /D >> 2 << /S /r >>] >>".to_owned(),
+            format!(
+                "<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{metadata}\nendstream",
+                metadata.len()
+            ),
+            "<< /Title (First page) /Parent 10 0 R /Next 17 0 R /Dest [3 0 R /XYZ 0 792 0] >>"
+                .to_owned(),
+            "<< /Title (Second page) /Parent 10 0 R /Prev 16 0 R /Dest [5 0 R /XYZ 0 792 0] >>"
+                .to_owned(),
+        ];
+        assemble(&objects)
+    }
+
+    fn catalog_entry(document: &Document, key: &str) -> Option<Object> {
+        let root = document.root().ok()?;
+        let catalog = document.object(root).ok()?;
+        catalog.as_dictionary()?.get(key).cloned()
+    }
+
+    fn resolve_object(document: &Document, object: &Object) -> Option<Object> {
+        match object {
+            Object::Reference(id) => document.object(*id).ok(),
+            other => Some(other.clone()),
+        }
+    }
+
+    fn outline_titles(document: &Document, root: &Object) -> Vec<Vec<u8>> {
+        let Some(outlines) = resolve_object(document, root) else {
+            return Vec::new();
+        };
+        let Some(dictionary) = outlines.as_dictionary() else {
+            return Vec::new();
+        };
+        let mut titles = Vec::new();
+        let mut cursor = dictionary.get("First").and_then(Object::as_reference);
+        while let Some(id) = cursor {
+            let Some(item) = document.object(id).ok() else {
+                break;
+            };
+            let Some(item) = item.as_dictionary() else {
+                break;
+            };
+            if let Some(Object::String(title)) = item.get("Title") {
+                titles.push(title.clone());
+            }
+            cursor = item.get("Next").and_then(Object::as_reference);
+        }
+        titles
+    }
+
+    fn form_titles(document: &Document, root: &Object) -> Vec<Vec<u8>> {
+        let Some(acroform) = resolve_object(document, root) else {
+            return Vec::new();
+        };
+        let Some(dictionary) = acroform.as_dictionary() else {
+            return Vec::new();
+        };
+        let Some(fields) = dictionary.get("Fields").and_then(Object::as_array) else {
+            return Vec::new();
+        };
+        let mut titles = Vec::new();
+        for field in fields {
+            let Some(field) = resolve_object(document, field) else {
+                continue;
+            };
+            let Some(field) = field.as_dictionary() else {
+                continue;
+            };
+            if let Some(Object::String(title)) = field.get("T") {
+                titles.push(title.clone());
+            }
+        }
+        titles
+    }
+
+    #[test]
+    fn rotation_preserves_bookmarks_forms_labels_and_metadata() {
+        let source = catalog_pdf();
+        let document = Document::from_bytes(source).expect("catalog source");
+        let plan = PagePlan::rotate(RotationTarget::All, 1).expect("rotate plan");
+        let saved = document.apply_page_plan(&plan).expect("apply rotate");
+        let reparsed = Document::from_bytes(saved).expect("rotated PDF parses");
+        assert_eq!(reparsed.page_count().expect("pages"), 3);
+
+        let outlines = catalog_entry(&reparsed, "Outlines").expect("outlines kept");
+        let titles: Vec<Vec<u8>> = outline_titles(&reparsed, &outlines);
+        assert_eq!(
+            titles,
+            vec![b"First page".to_vec(), b"Second page".to_vec()]
+        );
+
+        let acroform = catalog_entry(&reparsed, "AcroForm").expect("form kept");
+        let fields = form_titles(&reparsed, &acroform);
+        assert_eq!(fields, vec![b"first".to_vec(), b"second".to_vec()]);
+
+        assert_eq!(
+            catalog_entry(&reparsed, "Lang")
+                .and_then(|value| match value {
+                    Object::String(lang) => Some(lang),
+                    _ => None,
+                })
+                .as_deref(),
+            Some(b"en-US".as_slice())
+        );
+        assert!(catalog_entry(&reparsed, "ViewerPreferences").is_some());
+        assert!(catalog_entry(&reparsed, "Metadata").is_some());
+        let labels = catalog_entry(&reparsed, "PageLabels").expect("labels kept");
+        let labels = resolve_object(&reparsed, &labels).expect("labels dictionary");
+        let numbers = labels
+            .as_dictionary()
+            .and_then(|dictionary| dictionary.get("Nums"))
+            .and_then(Object::as_array)
+            .expect("label numbers");
+        assert_eq!(numbers.len(), 4, "both label ranges must survive");
+        assert_eq!(reparsed.page_text(0).expect("text"), "Page 1");
+    }
+
+    #[test]
+    fn removed_pages_prune_outlines_forms_and_page_labels() {
+        let source = catalog_pdf();
+        let document = Document::from_bytes(source).expect("catalog source");
+
+        let first_plan = PagePlan::extract(&[0]).expect("extract plan");
+        let first = Document::from_bytes(
+            document
+                .apply_page_plan(&first_plan)
+                .expect("extract first page"),
+        )
+        .expect("extracted PDF parses");
+        assert_eq!(first.page_count().expect("pages"), 1);
+        let outlines = catalog_entry(&first, "Outlines").expect("first bookmark kept");
+        assert_eq!(
+            outline_titles(&first, &outlines),
+            vec![b"First page".to_vec()]
+        );
+        let acroform = catalog_entry(&first, "AcroForm").expect("first field kept");
+        assert_eq!(form_titles(&first, &acroform), vec![b"first".to_vec()]);
+        let labels = catalog_entry(&first, "PageLabels").expect("label range kept");
+        let labels = resolve_object(&first, &labels).expect("labels dictionary");
+        assert_eq!(
+            labels
+                .as_dictionary()
+                .and_then(|dictionary| dictionary.get("Nums"))
+                .and_then(Object::as_array)
+                .map(<[Object]>::len),
+            Some(2)
+        );
+
+        let last_plan = PagePlan::extract(&[2]).expect("extract plan");
+        let last = Document::from_bytes(
+            document
+                .apply_page_plan(&last_plan)
+                .expect("extract last page"),
+        )
+        .expect("extracted PDF parses");
+        assert!(
+            catalog_entry(&last, "Outlines").is_none(),
+            "dead bookmarks dropped"
+        );
+        assert!(
+            catalog_entry(&last, "AcroForm").is_none(),
+            "dead fields dropped"
+        );
+        let labels = catalog_entry(&last, "PageLabels").expect("third-page labels kept");
+        let labels = resolve_object(&last, &labels).expect("labels dictionary");
+        let numbers = labels
+            .as_dictionary()
+            .and_then(|dictionary| dictionary.get("Nums"))
+            .and_then(Object::as_array)
+            .expect("label numbers");
+        assert_eq!(numbers.len(), 2);
+        assert_eq!(numbers[0].as_i64(), Some(0), "old index 2 becomes index 0");
     }
 
     #[test]

@@ -6,6 +6,20 @@ use crate::ui::{AppCommand, PdfxiApp};
 use super::widgets::{shell_divider, shell_icon_button};
 
 impl PdfxiApp {
+    /// Draw the one-line status message reported by the last action.
+    pub(crate) fn status_line_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.horizontal_centered(|ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&self.status)
+                        .size(11.5)
+                        .color(palette.text),
+                )
+                .truncate(),
+            );
+        });
+    }
+
     /// Draw the document bar that replaces the old floating page pill.
     pub(crate) fn bottom_bar_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         let Some(tab) = self.state.active_tab() else {
@@ -22,7 +36,7 @@ impl PdfxiApp {
             .input(|input| input.viewport().fullscreen.unwrap_or(false));
 
         ui.horizontal_centered(|ui| {
-            if shell_icon_button(ui, palette, Icon::ChevronLeft, 24.0)
+            if shell_icon_button(ui, palette, Icon::ChevronLeft, 24.0, "Previous page")
                 .on_hover_text("Previous page")
                 .clicked()
             {
@@ -50,7 +64,7 @@ impl PdfxiApp {
             );
             ui.add_space(6.0);
 
-            if shell_icon_button(ui, palette, Icon::ChevronRight, 24.0)
+            if shell_icon_button(ui, palette, Icon::ChevronRight, 24.0, "Next page")
                 .on_hover_text("Next page")
                 .clicked()
             {
@@ -80,19 +94,19 @@ impl PdfxiApp {
                     }
                 });
 
-            if shell_icon_button(ui, palette, Icon::Minus, 22.0)
+            if shell_icon_button(ui, palette, Icon::Minus, 22.0, "Zoom out")
                 .on_hover_text("Zoom out")
                 .clicked()
             {
                 self.dispatch(AppCommand::ZoomOut, Some(ui.ctx()));
             }
-            if shell_icon_button(ui, palette, Icon::Plus, 22.0)
+            if shell_icon_button(ui, palette, Icon::Plus, 22.0, "Zoom in")
                 .on_hover_text("Zoom in")
                 .clicked()
             {
                 self.dispatch(AppCommand::ZoomIn, Some(ui.ctx()));
             }
-            if shell_icon_button(ui, palette, Icon::Fullscreen, 22.0)
+            if shell_icon_button(ui, palette, Icon::Fullscreen, 22.0, "Full screen")
                 .on_hover_text(if fullscreen {
                     "Exit full screen"
                 } else {

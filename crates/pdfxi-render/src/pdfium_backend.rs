@@ -70,6 +70,7 @@ use std::{
 
 use pdfium_render::prelude::{
     PdfDocumentMetadataTagType, PdfRenderConfig, PdfSecurityHandlerRevision, Pdfium, PdfiumError,
+    PdfiumInternalError,
 };
 
 use pdfxi_text::{
@@ -77,8 +78,32 @@ use pdfxi_text::{
     TextPage,
 };
 
-use crate::PageDimensions;
 use crate::text_extract::{RawChar, chars_to_text_page};
+
+/// A short, user-facing description of a PDFium failure.
+///
+/// `pdfium-render` implements `Display` for [`PdfiumError`] as a pretty-printed
+/// debug dump, which leaked text such as `PdfiumLibraryInternalError(\n
+/// Unknown,\n)` into the status line and error banner. Map the library's typed
+/// outcome to one sentence instead.
+fn describe_pdfium_error(error: &PdfiumError) -> &'static str {
+    match error {
+        PdfiumError::PdfiumLibraryInternalError(inner) => match inner {
+            PdfiumInternalError::FileError => "the file could not be read",
+            PdfiumInternalError::FormatError => "the file is not a valid PDF",
+            PdfiumInternalError::PasswordError => "the document needs a password",
+            PdfiumInternalError::SecurityError => {
+                "the document security settings are not supported"
+            }
+            PdfiumInternalError::PageError => "the page could not be read",
+            PdfiumInternalError::Unknown => "the PDF engine could not read this document",
+        },
+        PdfiumError::PageIndexOutOfBounds => "the page number is outside this document",
+        PdfiumError::UnrecognizedPath => "the file path could not be used",
+        _ => "the PDF engine could not complete the operation",
+    }
+}
+use crate::PageDimensions;
 use crate::{
     CancellationToken, MAX_RASTER_PIXELS, PageIndex, Progress, RenderError, RenderedPage, Renderer,
     clamp_render_scale,
@@ -371,7 +396,12 @@ impl PdfiumRenderer {
         let pdfium = lock_pdfium()?;
         let document = pdfium
             .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
+            .map_err(|error| {
+                RenderError::Backend(format!(
+                    "cannot open document: {}",
+                    describe_pdfium_error(&error)
+                ))
+            })?;
         // Touch the page tree so a structurally broken PDF fails at open time.
         let _page_count = document.pages().len();
         // `document` borrows `bytes`, so release it before taking ownership.
@@ -398,14 +428,22 @@ impl PdfiumRenderer {
         let pdfium = lock_pdfium()?;
         let document = pdfium
             .load_pdf_from_byte_slice(&self.bytes, None)
-            .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
+            .map_err(|error| {
+                RenderError::Backend(format!(
+                    "cannot open document: {}",
+                    describe_pdfium_error(&error)
+                ))
+            })?;
         let pages = document.pages();
         if page.get() >= pages.len() as usize {
             return Err(RenderError::PageOutOfRange(page.get()));
         }
-        let pdf_page = pages
-            .get(page.get() as i32)
-            .map_err(|error| RenderError::Backend(format!("cannot load page {page}: {error}")))?;
+        let pdf_page = pages.get(page.get() as i32).map_err(|error| {
+            RenderError::Backend(format!(
+                "cannot load page {page}: {}",
+                describe_pdfium_error(&error)
+            ))
+        })?;
         Ok(PageDimensions {
             width_pt: pdf_page.width().value,
             height_pt: pdf_page.height().value,
@@ -423,7 +461,12 @@ impl PdfiumRenderer {
         let pdfium = lock_pdfium()?;
         let document = pdfium
             .load_pdf_from_byte_slice(&self.bytes, None)
-            .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
+            .map_err(|error| {
+                RenderError::Backend(format!(
+                    "cannot open document: {}",
+                    describe_pdfium_error(&error)
+                ))
+            })?;
         let page_count = document.pages().len() as usize;
         let title = document
             .metadata()
@@ -469,7 +512,12 @@ impl Renderer for PdfiumRenderer {
         let pdfium = lock_pdfium()?;
         let document = pdfium
             .load_pdf_from_byte_slice(&self.bytes, None)
-            .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
+            .map_err(|error| {
+                RenderError::Backend(format!(
+                    "cannot open document: {}",
+                    describe_pdfium_error(&error)
+                ))
+            })?;
 
         progress(Progress::new(1, 4));
         cancellation.check()?;
@@ -480,9 +528,12 @@ impl Renderer for PdfiumRenderer {
             return Err(RenderError::PageOutOfRange(page.get()));
         }
 
-        let pdf_page = pages
-            .get(page.get() as i32)
-            .map_err(|error| RenderError::Backend(format!("cannot load page {page}: {error}")))?;
+        let pdf_page = pages.get(page.get() as i32).map_err(|error| {
+            RenderError::Backend(format!(
+                "cannot load page {page}: {}",
+                describe_pdfium_error(&error)
+            ))
+        })?;
 
         progress(Progress::new(2, 4));
         cancellation.check()?;
@@ -497,9 +548,12 @@ impl Renderer for PdfiumRenderer {
             MAX_RASTER_PIXELS,
         );
         let config = PdfRenderConfig::new().scale_page_by_factor(scale);
-        let bitmap = pdf_page
-            .render_with_config(&config)
-            .map_err(|error| RenderError::Backend(format!("cannot render page {page}: {error}")))?;
+        let bitmap = pdf_page.render_with_config(&config).map_err(|error| {
+            RenderError::Backend(format!(
+                "cannot render page {page}: {}",
+                describe_pdfium_error(&error)
+            ))
+        })?;
 
         let width = u32::try_from(bitmap.width()).map_err(|_| {
             RenderError::Backend("render produced an invalid raster width".to_owned())
@@ -536,7 +590,12 @@ impl Renderer for PdfiumRenderer {
         let pdfium = lock_pdfium()?;
         let document = pdfium
             .load_pdf_from_byte_slice(&self.bytes, None)
-            .map_err(|error| RenderError::Backend(format!("cannot open document: {error}")))?;
+            .map_err(|error| {
+                RenderError::Backend(format!(
+                    "cannot open document: {}",
+                    describe_pdfium_error(&error)
+                ))
+            })?;
         Ok(document.pages().len() as usize)
     }
 }
@@ -565,7 +624,12 @@ impl TextExtractor for PdfiumRenderer {
         let pdfium = lock_pdfium().map_err(|error| TextError::Backend(error.to_string()))?;
         let document = pdfium
             .load_pdf_from_byte_slice(&self.bytes, None)
-            .map_err(|error| TextError::Backend(format!("cannot open document: {error}")))?;
+            .map_err(|error| {
+                TextError::Backend(format!(
+                    "cannot open document: {}",
+                    describe_pdfium_error(&error)
+                ))
+            })?;
 
         progress(TextProgress::new(1, 3));
         cancellation.check()?;
@@ -575,10 +639,18 @@ impl TextExtractor for PdfiumRenderer {
             return Err(TextError::PageOutOfRange(page));
         }
         let pdf_page = pages.get(page as i32).map_err(|error| {
-            TextError::Backend(format!("cannot load page {page} for text: {error}"))
+            TextError::Backend(format!(
+                "cannot load page {} for text: {}",
+                page + 1,
+                describe_pdfium_error(&error)
+            ))
         })?;
         let text = pdf_page.text().map_err(|error| {
-            TextError::Backend(format!("cannot read text on page {page}: {error}"))
+            TextError::Backend(format!(
+                "cannot read text on page {}: {}",
+                page + 1,
+                describe_pdfium_error(&error)
+            ))
         })?;
 
         progress(TextProgress::new(2, 3));

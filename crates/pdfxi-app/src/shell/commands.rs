@@ -211,8 +211,8 @@ pub enum AppCommand {
     OpenStorageFolder,
     /// Reveal a path in the file manager.
     RevealInExplorer(PathBuf),
-    /// Open the bundled user-guide folder.
-    OpenDocsFolder,
+    /// Open the bundled rendered user guide.
+    OpenUserGuide,
     /// Re-read the library folder and storage total.
     RefreshLibrary,
     /// Save the active document through its session.
@@ -442,7 +442,7 @@ impl AppCommand {
             Self::RemoveRecent(_) => "remove-recent",
             Self::OpenStorageFolder => "open-storage-folder",
             Self::RevealInExplorer(_) => "reveal-in-explorer",
-            Self::OpenDocsFolder => "open-docs-folder",
+            Self::OpenUserGuide => "open-user-guide",
             Self::RefreshLibrary => "refresh-library",
             Self::Save => "save",
             Self::SaveAs => "save-as",
@@ -661,7 +661,7 @@ impl crate::ui::PdfxiApp {
             }
             AppCommand::OpenStorageFolder => self.open_storage_folder(),
             AppCommand::RevealInExplorer(path) => self.reveal_path(&path),
-            AppCommand::OpenDocsFolder => self.open_docs_folder(),
+            AppCommand::OpenUserGuide => self.open_user_guide(),
             AppCommand::RefreshLibrary => self.refresh_library(),
             AppCommand::Save => {
                 if let Err(error) = self.save_active_document() {

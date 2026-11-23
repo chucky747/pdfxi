@@ -257,12 +257,18 @@ impl PdfxiApp {
         let Some(id) = self.state.active_tab_id() else {
             return Err("Open a document to redact".to_owned());
         };
-        let mut candidate = self
+        let session = self
             .sessions
             .get(&id)
-            .ok_or_else(|| "The document has no open session".to_owned())?
-            .document()
-            .clone();
+            .ok_or_else(|| "The document has no open session".to_owned())?;
+        if session.decryption_report().is_some() {
+            return Err(
+                "Redacting a password-protected document is not supported: the redacted copy \
+                 would be saved without encryption. Remove protection first and redact the copy."
+                    .to_owned(),
+            );
+        }
+        let mut candidate = session.document().clone();
         let request = RedactionRequest {
             marks,
             keep_images: self.redact.keep_images,
@@ -275,6 +281,20 @@ impl PdfxiApp {
             apply_redaction(&mut candidate, &request).map_err(|error| error.to_string())?;
         let verification =
             verify_redaction(&candidate, secrets, &report).map_err(|error| error.to_string())?;
+        if !verification.clean {
+            // Fail closed: a file that still contains the removed content must
+            // never be written and presented as a finished redaction.
+            let details = verification
+                .survivors
+                .iter()
+                .map(|survivor| survivor.detail.clone())
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(format!(
+                "Redaction verification found {} survivor(s): {details}. No file was written.",
+                verification.survivors.len()
+            ));
+        }
         let bytes = candidate.save().map_err(|error| error.to_string())?;
         if let Some(parent) = path
             .parent()
@@ -289,27 +309,11 @@ impl PdfxiApp {
         let mut pages: Vec<usize> = report.marks.iter().map(|mark| mark.page).collect();
         pages.sort_unstable();
         pages.dedup();
-        let summary = if verification.clean {
-            format!(
-                "Redacted {} area(s) on {} page(s); verification: clean",
-                report.marks.len(),
-                pages.len()
-            )
-        } else {
-            let details = verification
-                .survivors
-                .iter()
-                .map(|survivor| survivor.detail.clone())
-                .collect::<Vec<_>>()
-                .join("; ");
-            format!(
-                "Redacted {} area(s) on {} page(s); {} survivor(s): {details}",
-                report.marks.len(),
-                pages.len(),
-                verification.survivors.len()
-            )
-        };
-        self.redact.verified = Some(summary);
+        self.redact.verified = Some(format!(
+            "Redacted {} area(s) on {} page(s); verification: clean",
+            report.marks.len(),
+            pages.len()
+        ));
         Ok(report)
     }
 
@@ -355,6 +359,13 @@ impl PdfxiApp {
             .sessions
             .get(&id)
             .ok_or_else(|| "The document has no open session".to_owned())?;
+        if session.decryption_report().is_some() {
+            return Err(
+                "Sanitizing a password-protected document is not supported: the sanitized copy \
+                 would be saved without encryption. Remove protection first and sanitize the copy."
+                    .to_owned(),
+            );
+        }
         let sanitized = sanitize_document_full(session.document(), &SanitizeRequest::all())
             .map_err(|error| error.to_string())?;
         if let Some(parent) = path
@@ -479,6 +490,37 @@ mod tests {
         assert_eq!(error, "Select text to redact");
         assert!(!output.exists());
         assert!(app.status().starts_with("Redaction failed:"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_verification_writes_no_file() {
+        let dir = temp_dir("survivor");
+        let output = dir.join("must-not-exist.pdf");
+        let mut app = PdfxiApp::new();
+        app.open_document(&fixture());
+        let id = app.state.active_tab_id().expect("the fixture opens");
+        let document = app.sessions.get(&id).expect("session").document();
+        let secret = document
+            .page_text(0)
+            .expect("page text")
+            .split_whitespace()
+            .map(|word| word.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
+            .filter(|word| word.len() >= 6)
+            .max_by_key(|word| word.len())
+            .expect("a distinctive page word")
+            .to_owned();
+        // A tiny mark in an empty corner removes nothing, so the verifier must
+        // still find the secret and the card must refuse to write a file.
+        let corner = Rect::new(0.0, 0.0, 2.0, 2.0).expect("a tiny rect");
+        let error = app
+            .redact_quads_to_path(&[(0, vec![corner])], &[secret.as_str()], &output)
+            .expect_err("a surviving secret must fail closed");
+        assert!(
+            error.contains("No file was written"),
+            "unexpected error: {error}"
+        );
+        assert!(!output.exists(), "a failed redaction must not write output");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

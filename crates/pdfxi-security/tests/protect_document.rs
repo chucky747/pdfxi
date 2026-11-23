@@ -149,7 +149,9 @@ fn real_world_aes256_protect_opens_with_password_and_round_trips() {
 
     let protected = protect_document(
         &source,
-        ProtectOptions::new(USER_PASSWORD).with_permissions(restricted()),
+        ProtectOptions::new(USER_PASSWORD)
+            .with_owner_password(b"owner-protect")
+            .with_permissions(restricted()),
     )
     .expect("protect with AES-256");
 
@@ -193,9 +195,15 @@ fn real_world_aes256_protect_opens_with_password_and_round_trips() {
         Some(SecurityError::WrongPassword)
     );
 
-    // Removing protection writes plaintext with no /Encrypt entry.
-    let unprotected = remove_protection(&protected, USER_PASSWORD)
-        .expect("remove protection with the user password");
+    // The open password must not strip the owner restrictions.
+    assert_eq!(
+        remove_protection(&protected, USER_PASSWORD).err(),
+        Some(SecurityError::OwnerPasswordRequired)
+    );
+
+    // Removing protection with the owner password writes plaintext.
+    let unprotected = remove_protection(&protected, b"owner-protect")
+        .expect("remove protection with the owner password");
     assert!(
         !unprotected
             .windows(b"/Encrypt".len())
@@ -256,9 +264,13 @@ fn owner_password_only_opens_without_a_prompt_and_keeps_read_only_rights() {
     assert!(owner.permissions.allows(Permission::MODIFY));
     assert!(owner.permissions.allows(Permission::COPY));
 
-    // Either password can remove protection; the empty open password works.
+    // Only the owner password removes protection; the open password is refused.
+    assert_eq!(
+        remove_protection(&protected, b"").err(),
+        Some(SecurityError::OwnerPasswordRequired)
+    );
     let unprotected =
-        remove_protection(&protected, b"").expect("remove with the empty user password");
+        remove_protection(&protected, b"owner-pdfxi-test").expect("remove with the owner password");
     assert!(
         !unprotected
             .windows(b"/Encrypt".len())
@@ -395,7 +407,11 @@ fn aes256_key_material_is_random_and_info_is_preserved() {
     );
 
     // Removing protection preserves the Info dictionary as well.
-    let unprotected = remove_protection(&first, USER_PASSWORD).expect("remove protection");
+    assert_eq!(
+        remove_protection(&first, USER_PASSWORD).err(),
+        Some(SecurityError::OwnerPasswordRequired)
+    );
+    let unprotected = remove_protection(&first, b"owner-t0256").expect("remove protection");
     assert!(
         !unprotected
             .windows(b"/Encrypt".len())
@@ -423,7 +439,9 @@ fn non_ascii_password_round_trips() {
 
     let protected = protect_document(
         &source,
-        ProtectOptions::new(password.as_bytes()).with_permissions(restricted()),
+        ProtectOptions::new(password.as_bytes())
+            .with_owner_password(b"owner-nonascii")
+            .with_permissions(restricted()),
     )
     .expect("protect with a non-ASCII password");
     assert!(
@@ -451,8 +469,12 @@ fn non_ascii_password_round_trips() {
         Some(SecurityError::WrongPassword)
     );
 
+    assert_eq!(
+        remove_protection(&protected, password.as_bytes()).err(),
+        Some(SecurityError::OwnerPasswordRequired)
+    );
     let unprotected =
-        remove_protection(&protected, password.as_bytes()).expect("remove with the password");
+        remove_protection(&protected, b"owner-nonascii").expect("remove with the owner password");
     assert!(
         !unprotected
             .windows(b"/Encrypt".len())
@@ -475,6 +497,7 @@ fn explicit_aes128_and_rc4_revisions_are_covered() {
         let protected = protect_document(
             &source,
             ProtectOptions::new(USER_PASSWORD)
+                .with_owner_password(b"owner-revisions")
                 .with_encryption(method)
                 .with_permissions(restricted()),
         )
@@ -506,4 +529,14 @@ fn explicit_aes128_and_rc4_revisions_are_covered() {
         ),
         Err(SecurityError::Configuration(_))
     ));
+}
+
+#[test]
+fn a_single_password_grants_the_owner_role() {
+    let source = fs::read(fixture(FIXTURE)).expect("fixture");
+    let document = Document::from_bytes(source).expect("parse");
+    let protected =
+        protect_document(&document, ProtectOptions::new(USER_PASSWORD)).expect("protect");
+    let (_, report) = open_encrypted(&protected, Some(USER_PASSWORD)).expect("open");
+    assert_eq!(report.role, PasswordRole::Owner);
 }

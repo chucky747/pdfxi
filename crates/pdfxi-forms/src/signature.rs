@@ -1752,7 +1752,7 @@ mod tests {
 
         let entries = field.field_dictionary().unwrap();
         let entries = entries.as_dict().unwrap();
-        assert_eq!(entries.get("Ff"), Some(&PdfValue::Number(1.0)));
+        assert_eq!(entries.get("Ff"), Some(&PdfValue::Number(2.0)));
         let v = entries.get("V").unwrap().as_dict().unwrap();
 
         let lock_value = v.get("Lock").unwrap().as_dict().unwrap();

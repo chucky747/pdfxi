@@ -388,23 +388,22 @@ pub(crate) fn run_create(out: &Path, descriptions: &[String], json: bool) -> any
 /// `pdfxi form list`.
 pub(crate) fn run_list(file: &Path, json: bool) -> anyhow::Result<()> {
     let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
-    let document =
-        parse_pdf(&bytes).map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
-    let source = ParsedSource(&document);
-    let load = load_acroform(&source).map_err(|error| anyhow::anyhow!("load form: {error}"))?;
-    let present = !load.is_no_form();
-    let fields = load
-        .into_form()
-        .map(|form| {
-            form.fields()
-                .map(|field| LoadedRow {
-                    name: field.name().to_owned(),
-                    kind: field.field_type().to_string(),
-                    value: render_value(field.value()),
-                })
-                .collect::<Vec<_>>()
+    // Read the real AcroForm from the parsed document. The writer-subset
+    // `parse_pdf` reader cannot open cross-reference-stream or object-stream
+    // files, which includes PDFXI's own `pack` output and most real PDFs.
+    let document = pdfxi_core::Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let model = read_acroform(&document).map_err(|error| anyhow::anyhow!("load form: {error}"))?;
+    let present = model.present;
+    let fields = model
+        .fields
+        .iter()
+        .map(|field| LoadedRow {
+            name: field.name.clone(),
+            kind: field.kind.as_str().to_owned(),
+            value: render_value(&field.value),
         })
-        .unwrap_or_default();
+        .collect::<Vec<_>>();
     let report = ListReport {
         file: file.display().to_string(),
         present,
@@ -841,15 +840,35 @@ struct CalculateReport {
     results: Vec<CalculationRow>,
 }
 
-/// Load the terminal form model of a PDF written in the classic layout.
+/// Load the terminal form model of any readable PDF.
 fn load_form(file: &Path) -> anyhow::Result<Form> {
     let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
-    let document =
-        parse_pdf(&bytes).map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
-    let source = ParsedSource(&document);
-    let load = load_acroform(&source).map_err(|error| anyhow::anyhow!("load form: {error}"))?;
-    load.into_form()
-        .with_context(|| format!("{} has no /AcroForm", file.display()))
+    let document = pdfxi_core::Document::from_bytes(bytes)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", file.display()))?;
+    let model = read_acroform(&document).map_err(|error| anyhow::anyhow!("load form: {error}"))?;
+    if !model.present {
+        bail!("{} has no /AcroForm", file.display());
+    }
+    let mut form = Form::new();
+    for field in model.fields {
+        let kind = match field.kind {
+            pdfxi_forms::FormFieldKind::Text => FieldType::Text,
+            pdfxi_forms::FormFieldKind::Checkbox => FieldType::CheckBox,
+            pdfxi_forms::FormFieldKind::Radio => FieldType::Radio,
+            pdfxi_forms::FormFieldKind::Choice => FieldType::Choice,
+            pdfxi_forms::FormFieldKind::Signature => FieldType::Signature,
+            pdfxi_forms::FormFieldKind::Button => FieldType::Button,
+        };
+        let mut loaded = Field::new(field.name.clone(), kind)
+            .with_flags(field.flags)
+            .with_value(field.value);
+        if matches!(kind, FieldType::Choice | FieldType::Radio) {
+            loaded = loaded.with_choices(field.options);
+        }
+        form.add_field(loaded)
+            .with_context(|| format!("load field {:?}", field.name))?;
+    }
+    Ok(form)
 }
 
 /// Parse `NAME=VALUE`.

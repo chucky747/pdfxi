@@ -43,7 +43,7 @@ evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passe
 id = "VIEW-002"
 notes = "Canvas layout uses real page sizes from the renderer for every page; no Letter fallback."
 priority = "P0"
-status = "verified"
+status = "model"
 tests = [
     "canvas::tests::quarter_turns_swap_layout_extents",
     "canvas::tests::hit_test_transform_is_correct_at_every_rotation",
@@ -135,7 +135,7 @@ evidence = "docs/evidence/app/T-0126.md"
 id = "VIEW-006"
 notes = "Single-window split/tile panes with independent view state and deterministic layout; OS-level multi-window remains out of scope."
 priority = "P2"
-status = "verified"
+status = "model"
 tests = [
     "split::tests::split_geometry_panes_and_divider_tile_the_viewport",
     "split::tests::per_pane_scroll_and_zoom_are_isolated",
@@ -349,7 +349,7 @@ timer thread, slide rendering and animation transitions remain the GUI host
 boundary and are not claimed.
 """
 priority = "P2"
-status = "verified"
+status = "model"
 tests = [
     "presentation::tests::new_builds_document_order_and_rejects_empty_document",
     "presentation::tests::from_slides_honours_document_order_and_rejects_reordering",
@@ -823,7 +823,7 @@ Scope: the TWAIN/WIA device adapter remains host-side; only rendered PNG pages
 are accepted, with no OCR, deskew or orientation inference.
 """
 priority = "P2"
-status = "verified"
+status = "model"
 tests = [
     "cli::create_scan_assembles_simplex_png_pages",
     "cli::create_scan_orders_duplex_and_rejects_bad_inputs",
@@ -875,7 +875,7 @@ Scope: no OCR engine or process is bundled; one image page per command; Latin-1
 invisible text; no deskew, rotation detection or language auto-detection.
 """
 priority = "P1"
-status = "verified"
+status = "model"
 tests = [
     "cli::create_ocr_overlays_invisible_searchable_text",
     "cli::create_ocr_rejects_bad_words_and_inputs",
@@ -2065,7 +2065,7 @@ On the Excel fixture page 1 (612x792 pt) the measured output is 612x792 px at
 72 DPI and 1224x1584 px at 144 DPI, and the rendered page is not uniform.
 """
 priority = "P0"
-status = "verified"
+status = "library"
 tests = [
     "pdf_export::tests::image_export_from_real_fixture_matches_geometry_and_is_not_blank",
     "pdf_export::tests::implemented_formats_match_the_build_features",
@@ -2693,13 +2693,15 @@ and reports [a b c d], the covered byte count, placeholder size and the
 /Filter//SubFilter from the file. verify computes the same plan, reconstructs
 signed_bytes, rejects an all-zero placeholder and runs StructureOnlyVerifier on
 the covered bytes and provided hex, always reporting authenticity
-structure-only.
+structure-only. Its JSON field is named structure_valid, never valid, so a
+caller cannot mistake it for an authenticity result; `pdfxi sign verify`
+performs the real CMS/RSA check over a signed PDF.
 
 Evidence: create with signer Ada Lovelace and a reason writes a 9,030-byte
 one-page PDF that the core reader parses; plan reports [0, 302, 8496, 534],
 836 signed bytes, 8192 placeholder chars, Adobe.PPKLite/adbe.pkcs7.detached;
-verify with deadbeef01020304 reports valid true, authenticity structure-only,
-detail structure-ok:...:836:8. An all-zero placeholder, an off-page rectangle,
+verify with deadbeef01020304 reports structure_valid true, authenticity
+structure-only, detail structure-ok:...:836:8. An all-zero placeholder, an off-page rectangle,
 an odd placeholder size, a three-value rectangle, a document without a
 placeholder and non-hex contents all fail with typed errors.
 
@@ -2717,6 +2719,8 @@ tests = [
     "cli::signature_create_plans_and_verifies_a_real_field",
     "cli::signature_create_rejects_bad_rects_and_sizes",
     "cli::signature_plan_rejects_documents_without_a_placeholder",
+    "cli::sign_creates_a_cms_signature_and_verifies_it",
+    "cli::sign_rejects_bad_identity_options_and_unsigned_input",
     "signing::tests::signed_bytes_rejects_overlapping_ranges",
     "signing::tests::signed_bytes_rejects_empty_first_range",
     "signing::tests::signed_bytes_rejects_empty_second_range",
@@ -2890,7 +2894,7 @@ user-reachable. Certificate-chain/revocation trust decisions, hardware keystores
 and PDF attachment integration remain host/CA boundaries and are not claimed.
 """
 priority = "P3"
-status = "verified"
+status = "library"
 tests = [
     "crypto::keywrap::tests::rfc3394_wrap_vector_128_bit_kek",
     "crypto::keywrap::tests::rfc3394_unwrap_rejects_tampered_ciphertext",
@@ -3496,7 +3500,10 @@ instruction, an <untrusted-document-text> fence whose forged terminator is
 neutralized, explicit included pages and a truncation marker. The excerpt is
 built only at Ask time; opening the panel or typing sends nothing. BudgetedTools
 and the MCP attach remain library capabilities in pdfxi-assistant that the app
-does not call.
+does not call. The live MCP lockdown test
+(crates/pdfxi-assistant/tests/lockdown_live.rs) is #[ignore]d because it starts
+a real OpenCode session; it is not a gate test, and the shipped excerpt path is
+covered by the unit tests above.
 """
 priority = "P0"
 status = "verified"
@@ -3504,7 +3511,6 @@ tests = [
     "crates/pdfxi-assistant/tests/service.rs::locked_session_is_read_back_and_verified",
     "crates/pdfxi-assistant/tests/service.rs::locked_session_refuses_an_incompatible_service_before_creating_a_session",
     "crates/pdfxi-assistant/tests/service.rs::widened_read_back_deletes_the_session_and_fails_closed",
-    "crates/pdfxi-assistant/tests/lockdown_live.rs::hostile_document_cannot_escape_the_five_read_only_tools",
     "shell::assistant_tools::tests::a_hostile_terminator_cannot_escape_the_excerpt_fence",
     "shell::assistant_tools::tests::the_excerpt_cap_truncates_mid_page_and_names_the_pages",
     "shell::assistant_tools::tests::a_page_past_the_snapshot_cap_is_not_silently_included_in_the_excerpt",
@@ -3532,7 +3538,7 @@ the real fixture, that an app shell can call. Underline/strikeout/squiggly/
 ink/shape/stamp writes remain model-only.
 """
 priority = "P0"
-status = "verified"
+status = "model"
 tests = [
     "note_highlight_reply_and_resolve_survive_a_full_rewrite",
     "annotations_survive_the_incremental_save_the_session_uses",
@@ -3741,7 +3747,7 @@ registry only; shared/email synchronisation and a tracker UI remain future work.
 No unsafe/new deps/panics.
 """
 priority = "P3"
-status = "verified"
+status = "library"
 tests = [
     "review::report::tests::participants_are_sorted_and_count_replies_threads_and_transitions",
     "review::report::tests::participant_status_summary_is_stable_and_includes_zero_entries",
@@ -4478,7 +4484,7 @@ Scope: no window, AccessKit call or platform screen reader. The CLI publishes
 the deterministic tree a platform bridge consumes.
 """
 priority = "P2"
-status = "verified"
+status = "model"
 tests = [
     "cli::accessibility_tree_reflects_real_pages_and_focus",
     "cli::accessibility_tree_rejects_bad_pages_and_regions",
@@ -4947,7 +4953,7 @@ Scope: no WebAssembly is loaded or executed; the plan is the host gate and the
 output validator is the ABI boundary. Capabilities are the closed four-item set.
 """
 priority = "P3"
-status = "verified"
+status = "model"
 tests = [
     "cli::plugin_plan_reports_capability_and_budget_gates",
     "cli::plugin_output_validates_types_and_budgets",
@@ -5489,9 +5495,14 @@ exit 0 with 79 green suites (print test skipped).
 macOS remains CI-only (macos-14); no macOS host exists in this workspace and none
 is claimed. Linux-specific shell/registry/installer behaviour stays the
 PLAT-001/005/006 host boundary.
+
+Status: deferred. Windows (x86_64-pc-windows-msvc) is the only verified support
+target for 0.1.3. The Linux and macOS checks above are developer host probes,
+not supported builds, and GitHub CI is not used by this campaign. No macOS or
+Linux user support is claimed.
 """
 priority = "P3"
-status = "verified"
+status = "deferred"
 tests = ["cargo check --workspace --all-targets"]
 title = "macOS and Linux desktop builds"
 
@@ -6117,7 +6128,7 @@ ICC tag payload semantics are not claimed, and veraPDF is a CI oracle rather
 than a runtime dependency.
 """
 priority = "P2"
-status = "verified"
+status = "library"
 tests = [
     "icc::tests::minimal_profile_is_accepted_with_extracted_facts",
     "icc::tests::one_tag_profile_is_accepted",

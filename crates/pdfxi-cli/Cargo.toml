@@ -52,7 +52,7 @@ rsa = { version = "0.9", features = ["sha2"] }
 sha2 = "0.10"
 # Ephemeral ECDH for certificate-addressed key wrap, and OS randomness for
 # fresh content keys and IVs. Both are already in the workspace lock graph.
-p256 = { version = "0.13", features = ["ecdh"] }
+p256 = { version = "0.14", features = ["ecdh"] }
 getrandom = "0.2"
 
 [features]

@@ -7,11 +7,11 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Toolset {
     /// Select and manipulate page objects.
-    #[default]
     Select,
     /// Pan the canvas by dragging.
     Hand,
     /// Select and copy text.
+    #[default]
     TextSelection,
     /// Add highlight annotations.
     Highlight,
@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn toolset_selection_and_labels() {
-        assert_eq!(Toolset::default(), Toolset::Select);
+        assert_eq!(Toolset::default(), Toolset::TextSelection);
         assert_eq!(Toolset::ALL.len(), 6);
         assert_eq!(Toolset::Hand.label(), "Hand");
         assert_eq!(Toolset::Measure.keyboard_hint(), "M");

@@ -36,7 +36,7 @@ sha1 = "0.10"
 # Ephemeral ECDH key agreement for certificate-addressed key wrap (SEC-003).
 # RustCrypto, MIT OR Apache-2.0. RSA decryption stays out of this crate, so the
 # scoped RUSTSEC-2023-0071 ignore remains honest.
-p256 = { version = "0.13", features = ["ecdh"] }
+p256 = { version = "0.14", features = ["ecdh"] }
 hkdf = "0.12"
 rand = "0.8"
 

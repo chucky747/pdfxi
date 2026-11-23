@@ -21,8 +21,10 @@ pub(crate) fn shell_icon_button(
     palette: Palette,
     glyph: Icon,
     size: f32,
+    label: &str,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     if response.hovered() {
         ui.painter().rect_filled(rect, 7.0, palette.surface);
     }
@@ -46,6 +48,7 @@ pub(crate) fn traffic_light(
     hover_text: &str,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, hover_text));
     let center = rect.center();
     let lit = if response.hovered() {
         fill.gamma_multiply(1.08)
@@ -189,8 +192,10 @@ pub(crate) fn title_icon_button(
     palette: TitlePalette,
     glyph: Icon,
     size: f32,
+    label: &str,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     if response.hovered() {
         ui.painter().rect_filled(rect, 7.0, palette.hover);
     }
@@ -217,6 +222,7 @@ pub(crate) fn shell_tool_button(
         .layout_no_wrap(label.to_owned(), font.clone(), palette.text);
     let width = galley.size().x + 40.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let background = if active {
         palette.accent_soft
     } else if response.hovered() {

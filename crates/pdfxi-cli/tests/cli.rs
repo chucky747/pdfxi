@@ -3795,13 +3795,27 @@ fn protection_applies_a_policy_and_a_watermark() {
     );
 
     let plain = dir.child("plain.pdf");
-    let unprotect = run(&[
+    let user_only = run(&[
         "unprotect",
         out.to_str().expect("out"),
         "--out",
         plain.to_str().expect("plain"),
         "--password",
         "test-password",
+    ]);
+    assert!(!user_only.status.success());
+    assert!(
+        stderr(&user_only).contains("owner (permissions) password"),
+        "{}",
+        stderr(&user_only)
+    );
+    let unprotect = run(&[
+        "unprotect",
+        out.to_str().expect("out"),
+        "--out",
+        plain.to_str().expect("plain"),
+        "--password",
+        "owner-password",
     ]);
     assert!(unprotect.status.success(), "stderr: {}", stderr(&unprotect));
     let document =
@@ -5435,6 +5449,35 @@ fn form_create_writes_typed_fields_and_reloads_them() {
     let info = run(&["info", first.arg()]);
     assert!(info.status.success(), "stderr: {}", stderr(&info));
     assert!(stdout(&info).contains("pages: 1"), "{}", stdout(&info));
+}
+
+#[test]
+fn form_list_reads_object_and_xref_stream_files() {
+    let plain = TempPath::new("pdf");
+    let packed = TempPath::new("pdf");
+    let created = run(&[
+        "form",
+        "create",
+        plain.arg(),
+        "--field",
+        "text:name:72,700,200,24",
+    ]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let packed_output = run(&["pack", plain.arg(), "--out", packed.arg()]);
+    assert!(
+        packed_output.status.success(),
+        "pack stderr: {}",
+        stderr(&packed_output)
+    );
+    let listed = run(&["form", "list", packed.arg()]);
+    assert!(
+        listed.status.success(),
+        "form list must read its own packed output; stderr: {}",
+        stderr(&listed)
+    );
+    let text = stdout(&listed);
+    assert!(text.contains("present: true"), "stdout: {text}");
+    assert!(text.contains("name  [text]"), "stdout: {text}");
 }
 
 #[test]
@@ -9104,7 +9147,7 @@ fn structure_apply_writes_a_tagged_tree_on_a_real_page() {
         .iter()
         .filter_map(|finding| finding["code"].as_str())
         .collect();
-    assert_eq!(codes, ["UA-0001"], "tagging clears the structure findings");
+    assert!(codes.contains(&"UA-0001"), "title finding stays: {codes:?}");
     for cleared in [
         "PDFUA1.NOT_MARKED",
         "PDFUA1.NO_LANG",
@@ -9112,6 +9155,12 @@ fn structure_apply_writes_a_tagged_tree_on_a_real_page() {
     ] {
         assert!(!codes.contains(&cleared), "{cleared} should be cleared");
     }
+    // The raster fixture's Helvetica has no font program. Tagging cannot embed
+    // it, and the check now reports that instead of hiding it.
+    assert!(
+        codes.contains(&"PDFUA1.FONT_NOT_EMBEDDED"),
+        "non-embedded fonts are reported honestly: {codes:?}"
+    );
 }
 
 #[test]
@@ -14025,7 +14074,7 @@ fn signature_create_plans_and_verifies_a_real_field() {
     assert!(verified.status.success(), "stderr: {}", stderr(&verified));
     let value: Value = serde_json::from_str(&stdout(&verified)).expect("valid JSON");
     assert_eq!(value["field"], "Signature1");
-    assert_eq!(value["valid"], true);
+    assert_eq!(value["structure_valid"], true);
     assert_eq!(value["authenticity"], "structure-only");
     assert_eq!(value["contents_bytes"], 8);
     assert!(
@@ -14156,13 +14205,30 @@ fn protect_and_unprotect_round_trip() {
     );
 
     let unprotect_out = dir.child("unprotected.pdf");
-    let unproteced = run(&[
+    // The open password must not strip the owner's permission restrictions.
+    let user_only = run(&[
         "unprotect",
         out.to_str().expect("out"),
         "--out",
         unprotect_out.to_str().expect("out"),
         "--password",
         "test-password",
+    ]);
+    assert!(!user_only.status.success());
+    assert!(
+        stderr(&user_only).contains("owner (permissions) password"),
+        "{}",
+        stderr(&user_only)
+    );
+    assert!(!unprotect_out.exists(), "a refused removal writes no file");
+
+    let unproteced = run(&[
+        "unprotect",
+        out.to_str().expect("out"),
+        "--out",
+        unprotect_out.to_str().expect("out"),
+        "--password",
+        "owner-password",
         "--json",
     ]);
     assert!(
@@ -15209,26 +15275,51 @@ fn write_test_identity(dir: &TempDir, common_name: &str) -> (PathBuf, PathBuf) {
 }
 
 /// Writes one P-256 identity for certificate-addressed encryption tests.
+///
+/// `p256` 0.14 speaks `spki` 0.8, while the `x509-cert` 0.2 test builder speaks
+/// `spki` 0.7. The certificate therefore carries a hand-built P-256
+/// `SubjectPublicKeyInfo` and is signed with an RSA key: the recipient tools
+/// only read the subject key, so the signature algorithm is irrelevant here.
 fn write_ec_test_identity(dir: &TempDir, common_name: &str) -> (PathBuf, PathBuf) {
     use std::str::FromStr;
 
-    use der::EncodePem;
-    use der::asn1::UtcTime;
+    use der::asn1::{BitString, ObjectIdentifier, UtcTime};
     use der::pem::LineEnding;
-    use p256::ecdsa::{DerSignature, SigningKey};
-    use p256::pkcs8::EncodePrivateKey;
-    use spki::SubjectPublicKeyInfoOwned;
+    use der::{Any, EncodePem};
+    use p256::pkcs8::{EncodePrivateKey, LineEnding as Pkcs8LineEnding};
+    use rand::RngCore;
+    use rsa::pkcs1v15::Signature as RsaRawSignature;
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::Keypair;
+    use sha2::Sha256;
+    use spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
     use x509_cert::builder::{Builder as _, CertificateBuilder, Profile};
     use x509_cert::name::Name;
     use x509_cert::serial_number::SerialNumber;
     use x509_cert::time::{Time, Validity};
 
     let mut rng = rand::rngs::OsRng;
-    let key = SigningKey::random(&mut rng);
+    let mut scalar = [0u8; 32];
+    let key = loop {
+        rng.fill_bytes(&mut scalar);
+        if let Ok(key) = p256::SecretKey::from_slice(&scalar) {
+            break key;
+        }
+    };
+    let point = key.public_key().to_sec1_bytes();
+    let spki = SubjectPublicKeyInfoOwned {
+        algorithm: AlgorithmIdentifierOwned {
+            oid: ObjectIdentifier::new_unwrap("1.2.840.10045.2.1"),
+            parameters: Some(Any::from(&ObjectIdentifier::new_unwrap(
+                "1.2.840.10045.3.1.7",
+            ))),
+        },
+        subject_public_key: BitString::from_bytes(&point).expect("public key bits"),
+    };
+    let signer = SigningKey::<Sha256>::new(
+        rsa::RsaPrivateKey::new(&mut rng, 2048).expect("generate test RSA key"),
+    );
     let subject = Name::from_str(&format!("CN={common_name},O=PDFXI")).expect("subject name");
-    let point = key.verifying_key().to_encoded_point(false);
-    let public = p256::PublicKey::from_sec1_bytes(point.as_bytes()).expect("public key");
-    let spki = SubjectPublicKeyInfoOwned::from_key(public).expect("public key info");
     let builder = CertificateBuilder::new(
         Profile::Leaf {
             issuer: subject.clone(),
@@ -15248,17 +15339,18 @@ fn write_ec_test_identity(dir: &TempDir, common_name: &str) -> (PathBuf, PathBuf
         },
         subject,
         spki,
-        &key,
+        &signer,
     )
     .expect("certificate builder");
     let certificate = builder
-        .build::<DerSignature>()
+        .build::<RsaRawSignature>()
         .expect("self-signed EC certificate");
+    let _ = signer.verifying_key();
     let key_path = dir.child("ec-key.pem");
     let cert_path = dir.child("ec-cert.pem");
     fs::write(
         &key_path,
-        key.to_pkcs8_pem(LineEnding::LF)
+        key.to_pkcs8_pem(Pkcs8LineEnding::LF)
             .expect("encode key")
             .as_bytes(),
     )

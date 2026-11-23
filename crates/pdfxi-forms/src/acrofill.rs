@@ -53,8 +53,8 @@ use std::fmt;
 
 /// Maximum field-tree depth accepted during a fill, matching the loader.
 const MAX_DEPTH: usize = 128;
-/// PDF `/Ff` required bit, common to all field types.
-const FF_REQUIRED: u32 = 1 << 0;
+/// PDF `/Ff` required bit (bit position 2), common to all field types.
+const FF_REQUIRED: u32 = 1 << 1;
 
 /// One requested write to a named field.
 ///

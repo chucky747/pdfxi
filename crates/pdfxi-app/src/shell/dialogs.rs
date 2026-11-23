@@ -97,18 +97,35 @@ impl PdfxiApp {
                 });
                 response.request_focus();
             });
+        if submit.is_some() || cancel {
+            self.apply_password_dialog(ctx, prompt, submit, cancel);
+            return;
+        }
+        self.password_prompt = Some(prompt);
+    }
+
+    /// Apply the password modal's outcome.
+    ///
+    /// The prompt is put back before dispatching: `submit_password` and
+    /// `cancel_password_prompt` read the pending path from `password_prompt`,
+    /// and a wrong password must leave the modal open with its error. Without
+    /// this the prompt was dropped first, so every submit closed the dialog
+    /// without opening anything.
+    pub(crate) fn apply_password_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        prompt: super::session::PasswordPrompt,
+        submit: Option<String>,
+        cancel: bool,
+    ) {
+        self.password_prompt = Some(prompt);
         if let Some(password) = submit {
             self.dispatch(AppCommand::SubmitPassword(password), Some(ctx));
             return;
         }
         if cancel {
-            // Put the prompt back so the cancel path can report which document
-            // was skipped, then dispatch the command that clears it.
-            self.password_prompt = Some(prompt);
             self.dispatch(AppCommand::CancelPasswordPrompt, Some(ctx));
-            return;
         }
-        self.password_prompt = Some(prompt);
     }
 
     /// Modal save / discard / cancel prompt for a dirty tab.

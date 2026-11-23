@@ -925,6 +925,8 @@ pub mod metrics {
     pub const TOOLS: f32 = 206.0;
     /// Bottom document bar height.
     pub const STATUS_BAR: f32 = 44.0;
+    /// Status message strip above the document bar.
+    pub const STATUS_LINE: f32 = 26.0;
     /// Minimum canvas width before panels collapse.
     pub const MIN_CANVAS: f32 = 320.0;
 }

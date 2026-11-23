@@ -72,8 +72,11 @@ struct VerifyReport {
     filter: String,
     /// `/SubFilter`.
     subfilter: String,
-    /// Structure-only validity.
-    valid: bool,
+    /// Whether the byte range and signature envelope are structurally valid.
+    ///
+    /// This is not a cryptographic verification; run `pdfxi sign verify` for
+    /// that.
+    structure_valid: bool,
     /// Authenticity token (always `structure-only`).
     authenticity: String,
     /// Verifier detail.
@@ -373,7 +376,7 @@ pub(crate) fn verify(file: &Path, contents: &str, json: bool) -> anyhow::Result<
         field,
         filter,
         subfilter,
-        valid: outcome.is_valid(),
+        structure_valid: outcome.is_valid(),
         authenticity: outcome.authenticity().as_str().to_owned(),
         detail: outcome.detail().to_owned(),
         byte_range: ranged,
@@ -388,9 +391,10 @@ pub(crate) fn verify(file: &Path, contents: &str, json: bool) -> anyhow::Result<
         report.file, report.field, report.filter, report.subfilter
     );
     println!(
-        "valid: {}  authenticity: {}  contents: {} bytes",
-        report.valid, report.authenticity, report.contents_bytes
+        "structure-valid: {}  authenticity: {}  contents: {} bytes",
+        report.structure_valid, report.authenticity, report.contents_bytes
     );
+    println!("note: structure only; run `pdfxi sign verify` for cryptography");
     println!("detail: {}", report.detail);
     println!(
         "byte-range: [{}, {}, {}, {}]",

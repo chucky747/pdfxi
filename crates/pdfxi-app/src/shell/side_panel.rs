@@ -93,7 +93,7 @@ impl PdfxiApp {
                     .color(palette.text_muted),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if shell_icon_button(ui, palette, Icon::Recent, 22.0)
+                if shell_icon_button(ui, palette, Icon::Recent, 22.0, "Refresh")
                     .on_hover_text("Refresh the library")
                     .clicked()
                 {
@@ -448,13 +448,13 @@ impl PdfxiApp {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.capabilities.contains(Capability::Export) {
-                    if shell_icon_button(ui, palette, Icon::More, 22.0)
+                    if shell_icon_button(ui, palette, Icon::More, 22.0, "Page options")
                         .on_hover_text("Page options")
                         .clicked()
                     {
                         self.dispatch(AppCommand::PageMenu, Some(ui.ctx()));
                     }
-                    if shell_icon_button(ui, palette, Icon::Plus, 22.0)
+                    if shell_icon_button(ui, palette, Icon::Plus, 22.0, "Add page")
                         .on_hover_text("Add page")
                         .clicked()
                     {
@@ -466,7 +466,7 @@ impl PdfxiApp {
                 } else {
                     Icon::Grid
                 };
-                if shell_icon_button(ui, palette, glyph, 22.0)
+                if shell_icon_button(ui, palette, glyph, 22.0, "Toggle page layout")
                     .on_hover_text("Grid or list view")
                     .clicked()
                 {
@@ -479,8 +479,23 @@ impl PdfxiApp {
             ui.label(egui::RichText::new("Open a document to see pages").color(palette.text_muted));
             return;
         }
+        // The bookmark section is its own bottom panel above the storage meter.
+        // Drawing it after the thumbnail scroll area clipped it entirely and
+        // let "Add bookmark" overlap the storage meter in short windows.
+        if self.capabilities.contains(Capability::Bookmarks) && self.state.active_tab_id().is_some()
+        {
+            egui::TopBottomPanel::bottom("pages_bookmarks")
+                .resizable(true)
+                .default_height(220.0)
+                .height_range(96.0..=360.0)
+                .frame(egui::Frame::new())
+                .show_inside(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("pages_bookmarks_scroll")
+                        .show(ui, |ui| self.bookmarks_section_ui(ui, palette));
+                });
+        }
         self.thumbnails_ui(ui);
-        self.bookmarks_section_ui(ui, palette);
     }
 
     /// Home panel: a short recent hint, no second open action.
@@ -557,6 +572,14 @@ impl PdfxiApp {
                     .vertical_centered(|ui| {
                         let (rect, response) =
                             ui.allocate_exact_size(tile_size, egui::Sense::click());
+                        let page_label = format!("Page {}", page + 1);
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                page_label.as_str(),
+                            )
+                        });
                         let fill = if is_active {
                             egui::Color32::from_rgb(214, 231, 252)
                         } else {
@@ -577,8 +600,16 @@ impl PdfxiApp {
                                 egui::pos2(0.0, 0.0),
                                 egui::pos2(1.0, 1.0),
                             );
-                            ui.painter()
-                                .image(texture.id(), rect, full_uv, egui::Color32::WHITE);
+                            // Keep the page's own aspect ratio inside the tile;
+                            // stretching a landscape page into a fixed box
+                            // distorted it.
+                            let image_rect = fit_inside(texture.size_vec2(), rect.shrink(3.0));
+                            ui.painter().image(
+                                texture.id(),
+                                image_rect,
+                                full_uv,
+                                egui::Color32::WHITE,
+                            );
                         }
 
                         if response.clicked() {
@@ -620,6 +651,14 @@ impl PdfxiApp {
                 for page in 0..page_count {
                     let is_active = page == active;
                     let (rect, response) = ui.allocate_exact_size(tile, egui::Sense::click());
+                    let page_label = format!("Page {}", page + 1);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            true,
+                            page_label.as_str(),
+                        )
+                    });
                     let fill = if is_active {
                         egui::Color32::from_rgb(214, 231, 252)
                     } else {
@@ -636,10 +675,11 @@ impl PdfxiApp {
 
                     #[cfg(feature = "pdfium")]
                     if let Some(texture) = self.thumbnail_texture(ui.ctx(), page, &spec) {
-                        let image_rect = egui::Rect::from_min_max(
+                        let available = egui::Rect::from_min_max(
                             egui::pos2(rect.left() + 6.0, rect.top() + 6.0),
                             egui::pos2(rect.right() - 6.0, rect.bottom() - 18.0),
                         );
+                        let image_rect = fit_inside(texture.size_vec2(), available);
                         if image_rect.width() > 0.0 && image_rect.height() > 0.0 {
                             let full_uv = egui::Rect::from_min_max(
                                 egui::pos2(0.0, 0.0),
@@ -710,6 +750,19 @@ impl PdfxiApp {
         }
         self.thumb_textures.get(&page).cloned()
     }
+}
+
+/// Fit a texture of `size` inside `available`, preserving its aspect ratio.
+///
+/// The thumbnail renderer already honours the page's aspect; the panel used to
+/// stretch the texture to a fixed tile, which squashed landscape pages.
+#[cfg(feature = "pdfium")]
+fn fit_inside(size: egui::Vec2, available: egui::Rect) -> egui::Rect {
+    if size.x <= 0.0 || size.y <= 0.0 || available.width() <= 0.0 || available.height() <= 0.0 {
+        return available;
+    }
+    let scale = (available.width() / size.x).min(available.height() / size.y);
+    egui::Rect::from_center_size(available.center(), size * scale)
 }
 
 /// Shorten a title for a narrow panel row, adding an ellipsis when clipped.

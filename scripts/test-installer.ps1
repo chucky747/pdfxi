@@ -284,9 +284,7 @@ foreach ($relative in @(
     'NOTICE',
     'THIRD_PARTY.md',
     'pdfium-licenses\LICENSE.txt',
-    'docs\README.md',
-    'docs\security.md',
-    'docs\privacy.md',
+    'docs\user-guide.html',
     'unins000.exe'
 )) {
     $full = Join-Path $installDir $relative
@@ -297,7 +295,7 @@ foreach ($relative in @(
     }
 }
 
-foreach ($relative in @('docs\README.md', 'docs\security.md', 'docs\privacy.md')) {
+foreach ($relative in @('docs\user-guide.html')) {
     $installedDoc = Join-Path $installDir $relative
     $stagedDoc = Join-Path (Join-Path $staging 'docs') $relative.Substring('docs\'.Length)
     if ((Test-Path -LiteralPath $installedDoc -PathType Leaf) -and (Test-Path -LiteralPath $stagedDoc -PathType Leaf)) {

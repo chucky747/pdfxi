@@ -1,6 +1,6 @@
 # T-0281 — presentation mode: implementation complete, visual evidence blocked by the host
 
-Status: open. `VIEW-012` stays `model`. The host code is now the planned design;
+Status: open (evidence gap). `VIEW-012` is `model` in `docs/features.toml`, matching this blocker note. The host code is now the planned design;
 only the full-screen capture is missing, and this machine can no longer create a
 window (see `ENV-gui-session-wedged.md`).
 
@@ -73,3 +73,10 @@ paste the four captures and add the VIEW-012 fragment.
 
 No feature row changes: `cargo xtask features verify` still reports
 `FEATURES OK: 145 rows, 63 verified`.
+
+## Matrix alignment (2026-11-23)
+
+docs/features.toml row VIEW-012 was still erified when the 2026-11-23
+review read it, contradicting this blocker. The row is now model: the
+presentation layout code exists, but the full-screen visual evidence was never
+captured on this host, so the capability is not end-user verified.

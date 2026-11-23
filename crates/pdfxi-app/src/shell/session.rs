@@ -452,18 +452,39 @@ impl PdfxiApp {
         let Some(pending) = self.pending_close.take() else {
             return;
         };
+        let mut closed = false;
         match plan_close(true, Some(choice)) {
             ClosePlan::CloseNow => {
-                let _ = self.force_close_tab(pending.id);
+                closed = self.force_close_tab(pending.id);
             }
             ClosePlan::SaveThenClose => {
                 if self.save_tab_by_id(pending.id).is_ok() {
-                    let _ = self.force_close_tab(pending.id);
+                    closed = self.force_close_tab(pending.id);
                 } else {
                     self.pending_close = Some(pending);
                 }
             }
             ClosePlan::KeepOpen | ClosePlan::Prompt => {}
+        }
+        if !self.close_window_after_resolve {
+            return;
+        }
+        if choice == CloseChoice::Cancel || !closed {
+            self.close_window_after_resolve = false;
+            return;
+        }
+        // The window was closing: prompt for the next dirty tab, or finish.
+        let mut dirty = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.is_dirty())
+            .map(|(id, _)| *id);
+        if let Some(id) = dirty.next() {
+            let title = self.state.tab_title(id).unwrap_or_default();
+            self.pending_close = Some(PendingClose { id, title });
+        } else {
+            self.close_window_after_resolve = false;
+            self.request_window_close = true;
         }
     }
 
@@ -608,6 +629,73 @@ mod tests {
             plan_close(true, Some(CloseChoice::Cancel)),
             ClosePlan::KeepOpen
         );
+    }
+
+    /// Closing the window after a dirty tab asks about every dirty tab before
+    /// the window is allowed to close.
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn window_close_prompts_for_each_dirty_tab() {
+        let mut app = PdfxiApp::new();
+        app.open_document(&fixture("../../fixtures/minimal.pdf"));
+        app.set_active_document_title("first dirty")
+            .expect("dirty first tab");
+        app.open_document(&fixture("../../fixtures/text.pdf"));
+        app.set_active_document_title("second dirty")
+            .expect("dirty second tab");
+        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.dirty_tab_ids().len(), 2);
+
+        app.close_window_after_resolve = true;
+        let ids: Vec<_> = app.sessions.keys().copied().collect();
+        app.pending_close = Some(PendingClose {
+            id: ids[0],
+            title: "first".to_owned(),
+        });
+        app.resolve_close(CloseChoice::Discard);
+        assert!(
+            app.pending_close.is_some(),
+            "the second dirty tab must still prompt"
+        );
+        assert!(!app.request_window_close);
+
+        app.resolve_close(CloseChoice::Discard);
+        assert!(app.pending_close.is_none());
+        assert!(
+            app.request_window_close,
+            "the window may close after every dirty tab is resolved"
+        );
+        assert!(!app.close_window_after_resolve);
+    }
+
+    /// The password modal must put the prompt back before it dispatches, or
+    /// the command cannot find the document and every submit closes the modal
+    /// without opening anything.
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn dialog_submission_restores_the_prompt_before_opening() {
+        let path = fixture("../../fixtures/realworld/pdfxi-encrypted-selfmade.pdf");
+        let mut app = PdfxiApp::new();
+        let _ = app.open_document(&path);
+        assert!(app.password_prompt_open());
+
+        let prompt = app.password_prompt.take().expect("pending prompt");
+        let ctx = egui::Context::default();
+        app.apply_password_dialog(&ctx, prompt, Some("not-it".to_owned()), false);
+        assert!(app.password_prompt_open(), "wrong password keeps the modal");
+        assert_eq!(
+            app.password_prompt_error(),
+            Some(SessionError::WrongPassword.to_string().as_str())
+        );
+        assert_eq!(app.state().tab_count(), 0);
+
+        let prompt = app
+            .password_prompt
+            .take()
+            .expect("prompt after a wrong try");
+        app.apply_password_dialog(&ctx, prompt, Some("pdfxi-test".to_owned()), false);
+        assert!(!app.password_prompt_open());
+        assert_eq!(app.state().tab_count(), 1);
     }
 
     /// Only an external modification offers "Save As"; other errors do not.

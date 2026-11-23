@@ -50,3 +50,9 @@ executable.
 - SmartScreen warnings are expected and must not be described as a bug.
 - Do not add `signtool` calls that no-op silently: a missing certificate must be
   a recorded blocker, not a green check.
+## Accepted for 0.1.3 (2026-11-23)
+
+The 0.1.3 build and installer are unsigned and remain so. Release notes and the
+installer's final report must state that Windows SmartScreen may warn and that
+the publisher is unknown. This blocker is not a reason to withhold the build;
+it is a reason not to claim a signed or trusted publisher.

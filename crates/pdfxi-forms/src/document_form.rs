@@ -192,7 +192,7 @@ pub struct FormField {
     pub flags: FieldFlags,
     /// `true` when the read-only flag (bit 2) is set.
     pub read_only: bool,
-    /// `true` when the required flag (bit 1) is set.
+    /// `true` when the required flag (bit position 2) is set.
     pub required: bool,
     /// `/Q` quadding (`0` left, `1` centre, `2` right).
     pub alignment: i64,

@@ -510,6 +510,7 @@ fn transform_value(
     object: &Object,
     decryptor: &Decryptor,
     encrypt: bool,
+    encrypt_metadata: bool,
 ) -> Result<Object> {
     let transform = |data: &[u8]| {
         if encrypt {
@@ -535,21 +536,40 @@ fn transform_value(
         Object::Array(items) => {
             let mut output = Vec::with_capacity(items.len());
             for item in items {
-                output.push(transform_value(id, item, decryptor, encrypt)?);
+                output.push(transform_value(
+                    id,
+                    item,
+                    decryptor,
+                    encrypt,
+                    encrypt_metadata,
+                )?);
             }
             Ok(Object::Array(output))
         }
         Object::Dictionary(dictionary) => {
             let mut output = Dictionary::new();
             for (key, value) in dictionary {
-                output.insert(key.clone(), transform_value(id, value, decryptor, encrypt)?);
+                output.insert(
+                    key.clone(),
+                    transform_value(id, value, decryptor, encrypt, encrypt_metadata)?,
+                );
             }
             Ok(Object::Dictionary(output))
         }
         Object::Stream { dictionary, data } => {
+            // `/EncryptMetadata false` means metadata streams stay in the
+            // clear. Encrypting them anyway made the XMP unreadable in every
+            // reader while the dictionary promised the opposite.
+            let is_metadata = dictionary.get("Type").and_then(Object::as_name) == Some("Metadata");
+            if !encrypt_metadata && is_metadata {
+                return Ok(object.clone());
+            }
             let mut output = Dictionary::new();
             for (key, value) in dictionary {
-                output.insert(key.clone(), transform_value(id, value, decryptor, encrypt)?);
+                output.insert(
+                    key.clone(),
+                    transform_value(id, value, decryptor, encrypt, encrypt_metadata)?,
+                );
             }
             let payload = transform(data)?;
             let length =
@@ -568,10 +588,16 @@ fn transform_objects(
     objects: &[(ObjectId, Object)],
     decryptor: &Decryptor,
     encrypt: bool,
+    encrypt_metadata: bool,
 ) -> Result<Vec<(ObjectId, Object)>> {
     objects
         .iter()
-        .map(|(id, object)| Ok((*id, transform_value(*id, object, decryptor, encrypt)?)))
+        .map(|(id, object)| {
+            Ok((
+                *id,
+                transform_value(*id, object, decryptor, encrypt, encrypt_metadata)?,
+            ))
+        })
         .collect()
 }
 
@@ -816,25 +842,22 @@ pub fn encrypt_document(
     let revision = options
         .revision
         .unwrap_or_else(|| default_revision(options.method));
-    let id_first = trailer_id(source.bytes())
-        .or_else(|| {
-            options.id_seed.as_deref().map(derive_id).or_else(|| {
-                let mut seed = Vec::new();
-                seed.extend_from_slice(&options.user_password);
-                seed.push(0);
-                seed.extend_from_slice(&options.owner_password);
-                seed.push(0);
-                seed.extend_from_slice(options.method.as_id().as_bytes());
-                Some(derive_id(&seed))
-            })
-        })
-        .ok_or(SecurityError::EncryptionFailed)?;
+    // Reuse the source /ID when it has one. Otherwise draw a fresh random
+    // identifier. Deriving it from the passwords (the previous behaviour) put a
+    // fast, salt-free password oracle into every output file.
+    let id_first = match trailer_id(source.bytes()) {
+        Some(id) => id,
+        None => match options.id_seed.as_deref() {
+            Some(seed) => derive_id(seed),
+            None => random_array::<16>()?,
+        },
+    };
 
     let params = build_parameters(options, revision, &id_first)?;
     let handler = StandardSecurityHandler::new(params.clone())?;
     let decryptor = handler.authenticate(&options.user_password)?;
 
-    let mut encrypted = transform_objects(&objects, &decryptor, true)?;
+    let mut encrypted = transform_objects(&objects, &decryptor, true, options.encrypt_metadata)?;
     let encrypt_number = encrypted
         .iter()
         .map(|(id, _)| id.number)
@@ -1008,6 +1031,7 @@ pub fn open_encrypted(
     })?;
     let params = parameters_from_encrypt(&encrypt_dictionary, id_first)?;
     let revision = params.revision;
+    let encrypt_metadata = params.encrypt_metadata;
     let handler = StandardSecurityHandler::new(params)?;
     let decryptor = handler.authenticate(password)?;
     let permissions = decryptor.permissions_of_session();
@@ -1016,7 +1040,7 @@ pub fn open_encrypted(
 
     let mut objects = load_objects(&document)?;
     objects.retain(|(id, _)| *id != encrypt_id);
-    let decrypted = transform_objects(&objects, &decryptor, false)?;
+    let decrypted = transform_objects(&objects, &decryptor, false, encrypt_metadata)?;
 
     let mut trailer = Dictionary::new();
     let second = derive_second_id(&id_first);
@@ -1568,6 +1592,80 @@ mod tests {
         );
         let (opened, _) = open(&encrypted, b"user-secret");
         assert_eq!(opened.page_text(0).expect("text"), "Secret payload");
+    }
+
+    #[test]
+    fn metadata_streams_follow_the_encrypt_metadata_flag() {
+        let metadata = "<x:xmpmeta>metadata must stay readable</x:xmpmeta>";
+        let stream = format!(
+            "<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{metadata}\nendstream",
+            metadata.len()
+        );
+        let source = Document::from_bytes(build_pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+                "<< /Length 25 >>\nstream\nBT (Secret payload) Tj ET\nendstream",
+                "<< /Title (PDFXI Metadata Test) >>",
+                "<< /Producer (PDFXI fixture) >>",
+                &stream,
+            ],
+            true,
+        ))
+        .expect("metadata fixture");
+
+        let plain_options = EncryptOptions::new(
+            EncryptionMethod::Aes256,
+            b"user-secret",
+            b"owner-secret",
+            Permission::ALL,
+        )
+        .expect("options")
+        .with_id_seed(b"metadata-seed".to_vec())
+        .with_encrypt_metadata(false);
+        let (plain_metadata, _) =
+            encrypt_document(&source, &plain_options).expect("encrypt without metadata");
+        assert!(
+            plain_metadata
+                .windows(metadata.len())
+                .any(|window| window == metadata.as_bytes()),
+            "EncryptMetadata false must leave the XMP readable"
+        );
+        let (opened, _) = open(&plain_metadata, b"user-secret");
+        assert_eq!(opened.page_text(0).expect("text"), "Secret payload");
+
+        let encrypted_options = plain_options.clone().with_encrypt_metadata(true);
+        let (encrypted_metadata, _) =
+            encrypt_document(&source, &encrypted_options).expect("encrypt with metadata");
+        assert!(
+            !encrypted_metadata
+                .windows(metadata.len())
+                .any(|window| window == metadata.as_bytes()),
+            "EncryptMetadata true must encrypt the XMP"
+        );
+        let (opened, _) = open(&encrypted_metadata, b"user-secret");
+        assert_eq!(opened.page_text(0).expect("text"), "Secret payload");
+    }
+
+    #[test]
+    fn a_source_without_an_id_gets_a_random_identifier() {
+        let source = Document::from_bytes(fixture(false)).expect("source without /ID");
+        let options = EncryptOptions::new(
+            EncryptionMethod::Aes256,
+            b"user-secret",
+            b"owner-secret",
+            Permission::ALL,
+        )
+        .expect("options");
+        let (first, _) = encrypt_document(&source, &options).expect("first encryption");
+        let (second, _) = encrypt_document(&source, &options).expect("second encryption");
+        let first_id = trailer_id(&first).expect("first /ID");
+        let second_id = trailer_id(&second).expect("second /ID");
+        assert_ne!(
+            first_id, second_id,
+            "a fresh /ID must not be derived from the passwords"
+        );
     }
 
     #[test]

@@ -12,10 +12,12 @@
 //!
 //! This is a deterministic *subset* adapter. The snapshot carries version,
 //! catalog metadata (XMP, output intents, prohibited entries, tagging flags),
-//! page-tree counts and per-page box **presence** flags. Font programs, ICC
-//! payloads, colour spaces, transparency and annotation appearance streams are
-//! not derived from bytes here, so the corresponding profile rules have nothing
-//! to fire on; they remain reported-only constraints. [`BytePreflightReport`]
+//! page-tree counts, per-page box **presence** flags and every font resource's
+//! embeddedness (descriptor `/FontFile`, `/FontFile2` or `/FontFile3`, with
+//! Type 0 descending into `/DescendantFonts`). ICC payloads, colour spaces,
+//! transparency and annotation appearance streams are not derived from bytes
+//! here, so the corresponding profile rules have nothing to fire on; they
+//! remain reported-only constraints. [`BytePreflightReport`]
 //! states exactly which checks were enforced in emitted bytes and which are
 //! reported only, and [`BytePreflightReport::certification_claimed`] is always
 //! `false`. A passing report means "no decidable rule in this subset fired",
@@ -32,8 +34,8 @@
 use pdfxi_core::{BoxKind, Document, Object};
 use pdfxi_standards::PageBoxes as StandardsPageBoxes;
 use pdfxi_standards::{
-    CatalogInfo, ConformanceProfile, Fixup, FixupPolicy, FixupReport, OutputIntent, PageInfo,
-    PdfVersion, PreflightInput, Standard,
+    CatalogInfo, ConformanceProfile, Fixup, FixupPolicy, FixupReport, FontInfo, FontType,
+    OutputIntent, PageInfo, PdfVersion, PreflightInput, Standard,
 };
 use thiserror::Error;
 
@@ -321,16 +323,125 @@ fn read_catalog(doc: &Document) -> Result<CatalogInfo, BytePreflightError> {
     Ok(info)
 }
 
-/// Best-effort encryption detection from raw bytes.
+/// Encryption detection from the parsed trailer.
 ///
-/// The core handle does not expose trailer keys, so this adapter checks for an
-/// `/Encrypt` token in the source bytes. It is intentionally conservative: a
-/// false positive yields an `ENCRYPTED` finding, never silent acceptance of an
-/// encrypted file.
+/// A byte scan produced false `ENCRYPTED` findings for any file that merely
+/// mentioned `/Encrypt` in a comment or stream.
 fn detect_encryption(doc: &Document) -> bool {
-    doc.bytes()
-        .windows(b"/Encrypt".len())
-        .any(|window| window == &b"/Encrypt"[..])
+    pdfxi_core::is_encrypted(doc.bytes()).unwrap_or(false)
+}
+
+/// Whether a font dictionary's program is embedded in the file.
+fn font_is_embedded(
+    doc: &Document,
+    font: &pdfxi_core::Dictionary,
+    font_type: FontType,
+) -> Result<bool, BytePreflightError> {
+    // Type 3 glyphs are procedures stored in the file's /CharProcs, so every
+    // Type 3 font is embedded by construction.
+    if font_type == FontType::Type3 {
+        return Ok(true);
+    }
+    let descriptor_value = if font_type == FontType::Type0 {
+        let descendant = font
+            .get("DescendantFonts")
+            .and_then(Object::as_array)
+            .and_then(|fonts| fonts.first());
+        let Some(descendant) = descendant else {
+            return Ok(false);
+        };
+        let descendant = resolve(doc, descendant)?;
+        descendant
+            .as_dictionary()
+            .and_then(|dictionary| dictionary.get("FontDescriptor"))
+            .cloned()
+    } else {
+        font.get("FontDescriptor").cloned()
+    };
+    let Some(descriptor_value) = descriptor_value else {
+        return Ok(false);
+    };
+    let descriptor = resolve(doc, &descriptor_value)?;
+    let Some(descriptor) = descriptor.as_dictionary() else {
+        return Ok(false);
+    };
+    Ok(descriptor.contains_key("FontFile")
+        || descriptor.contains_key("FontFile2")
+        || descriptor.contains_key("FontFile3"))
+}
+
+/// Read every font resource reachable from the page resource dictionaries.
+fn read_fonts(doc: &Document, page_count: usize) -> Result<Vec<FontInfo>, BytePreflightError> {
+    let mut fonts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for index in 0..page_count {
+        let page = doc
+            .page(index)
+            .map_err(|error| BytePreflightError::PageBoxes {
+                index,
+                reason: error.to_string(),
+            })?;
+        // `/Resources` may be direct on the page or inherited from any
+        // `/Pages` ancestor, so walk the page dictionary and its parent chain.
+        let mut resources_value = None;
+        let mut current = page.id;
+        for _ in 0..64 {
+            let object = doc
+                .object(current)
+                .map_err(|error| BytePreflightError::Catalog {
+                    reason: error.to_string(),
+                })?;
+            let Some(dictionary) = object.as_dictionary() else {
+                break;
+            };
+            if let Some(value) = dictionary.get("Resources") {
+                resources_value = Some(value.clone());
+                break;
+            }
+            match dictionary.get("Parent").and_then(Object::as_reference) {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        let Some(resources_value) = resources_value else {
+            continue;
+        };
+        let resources = resolve(doc, &resources_value)?;
+        let Some(resources) = resources.as_dictionary() else {
+            continue;
+        };
+        let Some(font_value) = resources.get("Font") else {
+            continue;
+        };
+        let font_dictionary = resolve(doc, font_value)?;
+        let Some(font_dictionary) = font_dictionary.as_dictionary() else {
+            continue;
+        };
+        for (name, value) in font_dictionary {
+            let font = resolve(doc, value)?;
+            let Some(font) = font.as_dictionary() else {
+                continue;
+            };
+            let font_type = match font.get("Subtype").and_then(Object::as_name) {
+                Some("Type1") => FontType::Type1,
+                Some("TrueType") => FontType::TrueType,
+                Some("Type0") => FontType::Type0,
+                Some("Type3") => FontType::Type3,
+                Some("MMType1") => FontType::MmType1,
+                _ => FontType::Other,
+            };
+            let embedded = font_is_embedded(doc, font, font_type)?;
+            if !seen.insert(format!("{name}|{font_type}|{embedded}")) {
+                continue;
+            }
+            fonts.push(FontInfo {
+                name: name.clone(),
+                font_type,
+                embedded,
+            });
+        }
+    }
+    Ok(fonts)
 }
 
 /// Build a [`PreflightInput`] snapshot from a parsed document.
@@ -393,6 +504,7 @@ pub fn build_preflight_input(doc: &Document) -> Result<PreflightInput, BytePrefl
         catalog: read_catalog(doc)?,
         page_count,
         pages,
+        fonts: read_fonts(doc, page_count)?,
         ..Default::default()
     })
 }
@@ -524,6 +636,25 @@ mod tests {
         assert!(!REPORTED_ONLY_CHECKS.is_empty());
         assert!(REPORTED_ONLY_CHECKS.contains(&"icc_profile_validity"));
         assert!(BYTE_PREFLIGHT_SCOPE_NOTE.contains("no conformance certification"));
+    }
+
+    #[test]
+    fn non_embedded_fonts_are_reported_from_real_bytes() {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/minimal.pdf");
+        let bytes = std::fs::read(path).expect("minimal fixture");
+        let report =
+            preflight_bytes(&bytes, "PDF/A-1b", &PreflightOptions::default()).expect("preflight");
+        let codes: Vec<&str> = report
+            .before()
+            .findings()
+            .iter()
+            .map(|finding| finding.code())
+            .collect();
+        assert!(
+            codes.iter().any(|code| code.ends_with("FONT_NOT_EMBEDDED")),
+            "a non-embedded Helvetica must be reported, got {codes:?}"
+        );
     }
 
     #[test]

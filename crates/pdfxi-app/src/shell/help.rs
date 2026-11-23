@@ -50,10 +50,8 @@ impl PdfxiApp {
                     ui.label(body);
                     ui.add_space(6.0);
                 }
-                if crate::ui::bundled_docs_dir().is_some()
-                    && ui.button("Open user guide").clicked()
-                {
-                    self.dispatch(AppCommand::OpenDocsFolder, Some(ui.ctx()));
+                if ui.button("Open user guide").clicked() {
+                    self.dispatch(AppCommand::OpenUserGuide, Some(ui.ctx()));
                 }
             });
         self.help_open = open;

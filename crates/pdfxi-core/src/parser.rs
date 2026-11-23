@@ -25,6 +25,10 @@ use crate::{Error, Result};
 const MAX_REFERENCE_DEPTH: usize = 32;
 /// Maximum number of leaf pages accepted before treating the tree as hostile.
 const MAX_PAGES: usize = 1_000_000;
+/// Upper bound on page-tree nesting. Real documents nest a handful of levels;
+/// a deeper chain is malformed and would otherwise recurse until the stack
+/// overflows (an abort the panic hook cannot catch).
+const MAX_PAGE_TREE_DEPTH: usize = 64;
 /// Maximum number of chained `/Prev` xref sections.
 const MAX_XREF_SECTIONS: usize = 64;
 /// Maximum number of entries in one classic xref subsection, relative to file size.
@@ -276,9 +280,14 @@ pub(crate) fn parse_document(data: &[u8]) -> Result<Structure> {
     let pages_dict = as_dictionary(&pages_root, "page tree root")?;
     let declared_page_count = non_negative_u32(pages_dict.get("Count"));
 
-    let mut pages = Vec::new();
-    let mut visited = HashSet::new();
-    walk_pages(data, &xref, pages_id, None, None, &mut visited, &mut pages)?;
+    let mut walker = PageTreeWalker {
+        data,
+        xref: &xref,
+        visited: HashSet::new(),
+        pages: Vec::new(),
+    };
+    walker.walk(pages_id, InheritedPage::default(), 0)?;
+    let pages = walker.pages;
 
     Ok(Structure {
         root_id,
@@ -1062,77 +1071,105 @@ fn as_dictionary<'a>(value: &'a Object, context: &str) -> Result<&'a Dictionary>
     }
 }
 
-/// Recursively walk one `/Pages` node, collecting leaf pages in order.
-fn walk_pages(
-    data: &[u8],
-    xref: &XrefTable,
-    id: ObjectId,
-    inherited_media: Option<Rectangle>,
-    inherited_resources: Option<ObjectId>,
-    visited: &mut HashSet<u32>,
-    pages: &mut Vec<Page>,
-) -> Result<()> {
-    if !visited.insert(id.number) {
-        return Err(Error::MalformedPageTree(format!(
-            "cycle in page tree at object {}",
-            id.number
-        )));
-    }
+/// Page attributes inherited from `/Pages` ancestors.
+#[derive(Clone, Copy, Default)]
+struct InheritedPage {
+    /// `/MediaBox` inherited from the nearest ancestor that declares one.
+    media_box: Option<Rectangle>,
+    /// `/Resources` inherited from the nearest ancestor that declares one.
+    resources: Option<ObjectId>,
+}
 
-    let node = resolve_id(data, xref, id)?;
-    let dictionary = as_dictionary(&node, "page tree node")?;
+/// Collects the leaf pages of one document's `/Pages` tree in order.
+struct PageTreeWalker<'a> {
+    /// Document bytes used to load objects.
+    data: &'a [u8],
+    /// Cross-reference table for the document.
+    xref: &'a XrefTable,
+    /// Object numbers already visited, used to reject cycles.
+    visited: HashSet<u32>,
+    /// Leaf pages collected so far.
+    pages: Vec<Page>,
+}
 
-    let media_box = match dictionary.get("MediaBox") {
-        Some(value) => Some(parse_media_box(value, id.number)?),
-        None => inherited_media,
-    };
-    let resources = match dictionary.get("Resources") {
-        Some(Object::Reference(reference)) => Some(*reference),
-        _ => inherited_resources,
-    };
-
-    let node_type = dictionary
-        .get("Type")
-        .and_then(Object::as_name)
-        .unwrap_or("");
-    let kids = dictionary.get("Kids").and_then(Object::as_array);
-
-    let is_branch = node_type == "Pages" || kids.is_some();
-    if is_branch {
-        let kids = kids.ok_or_else(|| {
-            Error::MalformedPageTree(format!("/Pages node {} has no /Kids array", id.number))
-        })?;
-        for kid in kids {
-            let kid_id = kid.as_reference().ok_or_else(|| {
-                Error::MalformedPageTree(format!(
-                    "non-reference /Kids entry in object {}",
-                    id.number
-                ))
-            })?;
-            walk_pages(data, xref, kid_id, media_box, resources, visited, pages)?;
+impl PageTreeWalker<'_> {
+    /// Recursively walk one `/Pages` node, collecting leaf pages in order.
+    fn walk(&mut self, id: ObjectId, inherited: InheritedPage, depth: usize) -> Result<()> {
+        if depth > MAX_PAGE_TREE_DEPTH {
+            return Err(Error::MalformedPageTree(format!(
+                "page tree is nested deeper than {MAX_PAGE_TREE_DEPTH} levels at object {}",
+                id.number
+            )));
         }
-        return Ok(());
-    }
+        if !self.visited.insert(id.number) {
+            return Err(Error::MalformedPageTree(format!(
+                "cycle in page tree at object {}",
+                id.number
+            )));
+        }
 
-    if pages.len() >= MAX_PAGES {
-        return Err(Error::MalformedPageTree("too many pages".to_owned()));
+        let node = resolve_id(self.data, self.xref, id)?;
+        let dictionary = as_dictionary(&node, "page tree node")?;
+
+        let media_box = match dictionary.get("MediaBox") {
+            Some(value) => Some(parse_media_box(value, id.number)?),
+            None => inherited.media_box,
+        };
+        let resources = match dictionary.get("Resources") {
+            Some(Object::Reference(reference)) => Some(*reference),
+            _ => inherited.resources,
+        };
+
+        let node_type = dictionary
+            .get("Type")
+            .and_then(Object::as_name)
+            .unwrap_or("");
+        let kids = dictionary.get("Kids").and_then(Object::as_array);
+
+        let is_branch = node_type == "Pages" || kids.is_some();
+        if is_branch {
+            let kids = kids.ok_or_else(|| {
+                Error::MalformedPageTree(format!("/Pages node {} has no /Kids array", id.number))
+            })?;
+            for kid in kids {
+                let kid_id = kid.as_reference().ok_or_else(|| {
+                    Error::MalformedPageTree(format!(
+                        "non-reference /Kids entry in object {}",
+                        id.number
+                    ))
+                })?;
+                self.walk(
+                    kid_id,
+                    InheritedPage {
+                        media_box,
+                        resources,
+                    },
+                    depth + 1,
+                )?;
+            }
+            return Ok(());
+        }
+
+        if self.pages.len() >= MAX_PAGES {
+            return Err(Error::MalformedPageTree("too many pages".to_owned()));
+        }
+        let contents = match dictionary.get("Contents") {
+            Some(Object::Reference(reference)) => vec![*reference],
+            Some(Object::Array(items)) => items
+                .iter()
+                .filter_map(Object::as_reference)
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        self.pages.push(Page {
+            index: self.pages.len(),
+            id,
+            media_box: media_box.unwrap_or_default(),
+            contents,
+            resources,
+        });
+        Ok(())
     }
-    let contents = match dictionary.get("Contents") {
-        Some(Object::Reference(reference)) => vec![*reference],
-        Some(Object::Array(items)) => items
-            .iter()
-            .filter_map(Object::as_reference)
-            .collect::<Vec<_>>(),
-        _ => Vec::new(),
-    };
-    pages.push(Page {
-        index: pages.len(),
-        id,
-        media_box: media_box.unwrap_or_default(),
-        contents,
-        resources,
-    });
-    Ok(())
 }
 
 fn parse_media_box(value: &Object, page_id: u32) -> Result<Rectangle> {
@@ -1161,6 +1198,21 @@ fn parse_decimal(token: &[u8], context: &str) -> Result<usize> {
         .map_err(|_| Error::MalformedXref(format!("{context} is not UTF-8")))?;
     text.parse::<usize>()
         .map_err(|_| Error::MalformedXref(format!("invalid {context}: {text}")))
+}
+
+/// Whether the newest trailer names an `/Encrypt` dictionary.
+///
+/// Reads only the cross-reference layer and the merged trailer, so it works on
+/// encrypted files whose object streams cannot be decoded without a password.
+/// A `/Encrypt` name that appears inside a content stream or comment is never
+/// consulted.
+pub(crate) fn trailer_encryption_reference(data: &[u8]) -> Result<Option<ObjectId>> {
+    let start = find_startxref(data)?;
+    let table = load_xref(data, start)?;
+    Ok(table
+        .trailer()
+        .get("Encrypt")
+        .and_then(Object::as_reference))
 }
 
 /// Return the byte offset recorded by the final `startxref` marker.

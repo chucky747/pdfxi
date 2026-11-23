@@ -161,7 +161,7 @@ fn inherits_field_attributes_from_ancestors_and_overrides_them() {
         20,
         dict(&[
             ("FT", name("Tx")),
-            ("Ff", number(1.0)),
+            ("Ff", number(2.0)),
             ("TU", text("Your name")),
             ("Q", number(2.0)),
             ("DA", text("/Helv 12 Tf")),

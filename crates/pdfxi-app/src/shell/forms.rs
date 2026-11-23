@@ -546,11 +546,11 @@ impl PdfxiApp {
     /// session error variant that does not describe it.
     pub(crate) fn set_form_text(&mut self, name: &str, value: &str) {
         if let Some(blocker) = self.form_edit_blocker() {
-            self.forms.hint = Some(blocker.to_owned());
-            self.status = blocker.to_owned();
+            self.reject_form_draft(blocker.to_owned());
             return;
         }
         if !self.form_field_is_mutable(name, FormFieldKind::Text) {
+            self.discard_form_draft();
             return;
         }
         let Some(id) = self.state.active_tab_id() else {
@@ -561,8 +561,7 @@ impl PdfxiApp {
         };
         let mut candidate = session.document().clone();
         if let Err(error) = set_text(&mut candidate, name, value) {
-            self.forms.hint = Some(error.to_string());
-            self.status = error.to_string();
+            self.reject_form_draft(error.to_string());
             return;
         }
         let result = self
@@ -585,10 +584,26 @@ impl PdfxiApp {
                 self.status = format!("Filled {name}");
             }
             Err(error) => {
-                self.forms.hint = Some(error.to_string());
-                self.status = error.to_string();
+                self.reject_form_draft(error.to_string());
             }
         }
+    }
+
+    /// Report a refused edit and drop the draft.
+    ///
+    /// The canvas then paints the committed field value again; a rejected
+    /// value is never left on screen as if it had been applied.
+    fn reject_form_draft(&mut self, message: String) {
+        self.forms.hint = Some(message.clone());
+        self.status = message;
+        self.discard_form_draft();
+    }
+
+    /// Leave the focused field and forget its uncommitted draft.
+    fn discard_form_draft(&mut self) {
+        self.forms.active = None;
+        self.forms.draft.clear();
+        self.forms.focus_index = 0;
     }
 
     /// Toggle one checkbox through a single undoable session edit.
@@ -1664,6 +1679,10 @@ impl PdfxiApp {
             let response = ui.put(
                 rect,
                 egui::TextEdit::singleline(&mut self.forms.draft)
+                    // Bind the editor to the widget id so the click that opened
+                    // it also gives it keyboard focus; without this the first
+                    // click only painted the editor and typing was swallowed.
+                    .id(id)
                     .font(font)
                     .text_color(FIELD_INK)
                     .margin(egui::Margin::symmetric(2, 1)),

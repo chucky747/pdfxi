@@ -45,6 +45,7 @@ fn rail_item(
     badge: Option<usize>,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(56.0, 50.0), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let background = if selected {
         palette.accent_soft
     } else if response.hovered() {

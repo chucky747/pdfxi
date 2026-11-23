@@ -431,8 +431,18 @@ mod tests {
         app.protect.owner_password = "owner-secret".to_owned();
         app.protect_to_path(&protected).expect("protect");
 
-        app.remove_protection_from(&protected, "open-secret", &decrypted)
-            .expect("remove protection");
+        // The open password unlocks reading but must not strip the owner's
+        // permission restrictions; that requires the owner password.
+        let user_only = dir.join("user-only.pdf");
+        assert!(
+            app.remove_protection_from(&protected, "open-secret", &user_only)
+                .is_err(),
+            "the user password must not remove owner restrictions"
+        );
+        assert!(!user_only.exists(), "a refused removal writes no file");
+
+        app.remove_protection_from(&protected, "owner-secret", &decrypted)
+            .expect("remove protection with the owner password");
         assert!(
             app.protect
                 .result

@@ -663,7 +663,7 @@ mod tests {
     #[test]
     fn tool_selection_is_global_and_independent_of_tabs() {
         let mut state = AppState::new();
-        assert_eq!(state.active_tool(), Toolset::Select);
+        assert_eq!(state.active_tool(), Toolset::TextSelection);
         state.select_tool(Toolset::Highlight);
         assert_eq!(state.active_tool(), Toolset::Highlight);
 

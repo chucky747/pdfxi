@@ -381,8 +381,11 @@ fn verify_perms(file_key: &[u8], params: &SecurityParameters) -> Result<()> {
 
 /// Validate a password and produce a usable object decryptor.
 ///
-/// The user password is tried first, then the owner password. Both checks use
-/// constant-time comparisons, and a failed authentication returns
+/// The owner password is tried first, then the user password. Checking the
+/// owner entry first matters when both passwords are the same (the usual
+/// "open password only" convention): that password must grant the owner role,
+/// otherwise the session could not remove the very restrictions it owns. Both
+/// checks use constant-time comparisons, and a failed authentication returns
 /// [`SecurityError::WrongPassword`] regardless of which entry failed.
 #[derive(Clone)]
 pub struct StandardSecurityHandler {
@@ -417,7 +420,7 @@ impl StandardSecurityHandler {
         self.params.method().unwrap_or(EncryptionMethod::None)
     }
 
-    /// Try the supplied password as a user password, then as an owner password.
+    /// Try the supplied password as an owner password, then as a user password.
     pub fn authenticate(&self, password: &[u8]) -> Result<Decryptor> {
         if self.params.revision >= 5 {
             self.authenticate_r5_r6(password)
@@ -427,14 +430,14 @@ impl StandardSecurityHandler {
     }
 
     fn authenticate_r2_r4(&self, password: &[u8]) -> Result<Decryptor> {
-        let user_file_key = self.try_user_password_r2_r4(password);
-        if let Ok(file_key) = user_file_key {
-            return Ok(self.decryptor(file_key, self.params.user_permissions()));
-        }
         let owner_file_key = self.try_owner_password_r2_r4(password);
         if let Ok(file_key) = owner_file_key {
             let permissions = Permissions::new(Permission::ALL, PasswordRole::Owner);
             return Ok(self.decryptor(file_key, permissions));
+        }
+        let user_file_key = self.try_user_password_r2_r4(password);
+        if let Ok(file_key) = user_file_key {
+            return Ok(self.decryptor(file_key, self.params.user_permissions()));
         }
         Err(SecurityError::WrongPassword)
     }
@@ -461,12 +464,12 @@ impl StandardSecurityHandler {
 
     fn authenticate_r5_r6(&self, password: &[u8]) -> Result<Decryptor> {
         let pwd = trunc_127(password);
-        if let Ok(file_key) = self.try_user_password_r5_r6(pwd) {
-            return Ok(self.decryptor(file_key, self.params.user_permissions()));
-        }
         if let Ok(file_key) = self.try_owner_password_r5_r6(pwd) {
             let permissions = Permissions::new(Permission::ALL, PasswordRole::Owner);
             return Ok(self.decryptor(file_key, permissions));
+        }
+        if let Ok(file_key) = self.try_user_password_r5_r6(pwd) {
+            return Ok(self.decryptor(file_key, self.params.user_permissions()));
         }
         Err(SecurityError::WrongPassword)
     }

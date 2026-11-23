@@ -78,11 +78,11 @@ $script:AllowList = @(
     'THIRD_PARTY.md', 'deny.toml', 'install.ps1', 'manifest.json'
 )
 # PDFium's own licence texts ship in a subdirectory so the notice is complete.
-# The user guide ships under docs\ so the installed viewer's Help window can open
-# it from `exe\docs` (bundled_docs_dir()).
+# The rendered user guide ships under docs\ so the installed viewer's Help window
+# opens one readable page (bundled_user_guide()).
 $script:AllowListPrefixes = @('pdfium-licenses\', 'docs\')
-# Help needs at least these guide pages; -Check fails when one is missing.
-$script:RequiredDocs = @('docs\README.md', 'docs\SUMMARY.md', 'docs\security.md', 'docs\privacy.md')
+# Help needs the rendered guide; -Check fails when it is missing.
+$script:RequiredDocs = @('docs\user-guide.html')
 # Pinned PDFium release; scripts/fetch-pdfium.ps1 downloads exactly this build.
 $script:PdfiumTag = 'chromium/8165'
 $script:PdfiumDllSha256 = '31d249b8535dd5f351ae7f4b714dc4bb1d76b6069b321a309bc99271dd65f566'
@@ -556,23 +556,15 @@ function New-Staging {
         Copy-Item -LiteralPath $src -Destination (Join-Path $StagingDir $name) -Force
     }
     Copy-PdfiumLicences -SourceDir (Resolve-PdfiumDir $PdfiumDir) -StagingDir $StagingDir
-    # Help reads the guide from `exe\docs`; stage the mdBook sources flat, without
-    # unrelated docs/evidence or docs/decisions trees.
-    $guideSrc = Join-Path $root 'docs\book\src'
-    if (-not (Test-Path -LiteralPath $guideSrc -PathType Container)) {
-        throw "user guide source missing: $guideSrc"
+    # Help opens one rendered page from `exe\docs`. Raw Markdown sources and
+    # internal design notes are not user documentation and are not shipped.
+    $guide = Join-Path $root 'docs\user-guide.html'
+    if (-not (Test-Path -LiteralPath $guide -PathType Leaf)) {
+        throw "user guide missing: $guide"
     }
     $guideDst = Join-Path $StagingDir 'docs'
     New-Item -ItemType Directory -Force -Path $guideDst | Out-Null
-    foreach ($file in @(Get-ChildItem -LiteralPath $guideSrc -Recurse -File)) {
-        $rel = $file.FullName.Substring((Resolve-Path -LiteralPath $guideSrc).Path.Length).TrimStart([char[]]@('\', '/'))
-        $dst = Join-Path $guideDst $rel
-        $dstDir = Split-Path -Parent $dst
-        if (-not (Test-Path -LiteralPath $dstDir -PathType Container)) {
-            New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
-        }
-        Copy-Item -LiteralPath $file.FullName -Destination $dst -Force
-    }
+    Copy-Item -LiteralPath $guide -Destination (Join-Path $guideDst 'user-guide.html') -Force
 }
 
 function New-Archive {

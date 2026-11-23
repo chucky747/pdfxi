@@ -627,8 +627,8 @@ const PENDING_COVERAGE: &[(&str, &str)] = &[
         "T-0221 host side effect: opens the OS file manager; must not run in a fast headless test",
     ),
     (
-        "OpenDocsFolder",
-        "T-0221 host side effect: opens the OS file manager; must not run in a fast headless test",
+        "OpenUserGuide",
+        "T-0221 host side effect: opens the browser; must not run in a fast headless test",
     ),
     (
         "RefreshLibrary",
@@ -2141,6 +2141,10 @@ struct Function {
 /// Allowing them by name (rather than by return type) keeps the exemption
 /// narrow: a new factory needs an explicit entry and a reason.
 const FUNCTION_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "password_dialog_ui",
+        "password modal: Open and Cancel only set submit/cancel flags; apply_password_dialog puts the prompt back first (B2) and dispatches SubmitPassword or CancelPasswordPrompt. The dialog_submission_restores_the_prompt_before_opening regression test drives the prompt state directly",
+    ),
     (
         "redact_card_ui",
         "redact and sanitize window: the checkbox state is read by the redaction request and the two buttons call redact_quads_to_path and sanitize_to_path, which are unit-tested without a window",

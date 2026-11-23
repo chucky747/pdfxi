@@ -15,6 +15,11 @@ use crate::sanitization::SanitizationCategory;
 pub enum SecurityError {
     /// The supplied password matched neither the user nor the owner password.
     WrongPassword,
+    /// Removing protection requires the owner (permissions) password.
+    ///
+    /// A user/open password unlocks the document but must not strip the
+    /// owner's permission restrictions.
+    OwnerPasswordRequired,
     /// A password was required but none was supplied.
     MissingPassword,
     /// The requested encryption method is not supported by the active backend.
@@ -402,6 +407,10 @@ impl fmt::Display for SecurityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WrongPassword => write!(f, "the supplied password is incorrect"),
+            Self::OwnerPasswordRequired => write!(
+                f,
+                "removing protection requires the owner (permissions) password"
+            ),
             Self::MissingPassword => write!(f, "a password is required but none was supplied"),
             Self::UnsupportedMethod(method) => {
                 write!(f, "unsupported encryption method: {method}")

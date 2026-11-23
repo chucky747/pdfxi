@@ -37,13 +37,19 @@ impl PdfxiApp {
             }
             ui.add_space(8.0);
             ui.add_enabled_ui(has_document, |ui| {
-                if shell_icon_button(ui, palette, Icon::ArrowLeft, 30.0)
-                    .on_hover_text("Rotate counter-clockwise")
-                    .clicked()
+                if shell_icon_button(
+                    ui,
+                    palette,
+                    Icon::ArrowLeft,
+                    30.0,
+                    "Rotate counter-clockwise",
+                )
+                .on_hover_text("Rotate counter-clockwise")
+                .clicked()
                 {
                     self.dispatch(AppCommand::RotateCounterclockwise, Some(ui.ctx()));
                 }
-                if shell_icon_button(ui, palette, Icon::ArrowRight, 30.0)
+                if shell_icon_button(ui, palette, Icon::ArrowRight, 30.0, "Rotate clockwise")
                     .on_hover_text("Rotate clockwise")
                     .clicked()
                 {

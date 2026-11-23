@@ -442,6 +442,20 @@ fn decode_to_unicode(dictionary: &Dictionary, data: &[u8]) -> Option<crate::ToUn
     crate::ToUnicodeMap::parse(&decoded).ok()
 }
 
+/// Report whether a PDF's newest trailer names an encryption dictionary.
+///
+/// Unlike opening the document, this reads only the cross-reference layer and
+/// the merged trailer. It therefore still works when the file's object streams
+/// are encrypted and cannot be decoded without the password. A `/Encrypt` name
+/// inside page content, a comment or metadata is not an encryption dictionary.
+///
+/// # Errors
+///
+/// Returns the cross-reference error when the trailer chain cannot be read.
+pub fn is_encrypted(bytes: &[u8]) -> Result<bool> {
+    Ok(parser::trailer_encryption_reference(bytes)?.is_some())
+}
+
 impl Document {
     /// Load a document from an in-memory byte buffer.
     ///

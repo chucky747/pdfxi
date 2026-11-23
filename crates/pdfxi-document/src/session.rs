@@ -21,12 +21,6 @@ use crate::identity::{self, FileIdentity};
 /// lost.
 pub const MAX_REVISIONS: usize = 50;
 
-/// How many trailing bytes are scanned for an `/Encrypt` name token.
-const ENCRYPTION_SCAN_BYTES: usize = 64 * 1024;
-
-/// The name token that marks an encrypted document in its newest trailer.
-const ENCRYPT_KEY: &[u8] = b"/Encrypt";
-
 /// One incremental revision: where it starts, what it appended, and the hashes
 /// of the bytes on either side.
 struct Revision {
@@ -153,7 +147,10 @@ impl DocumentSession {
         path: Option<PathBuf>,
         password: Option<&[u8]>,
     ) -> Result<Self, SessionError> {
-        let encrypted = has_encrypt_token(&source);
+        // Ask the parser for the trailer's `/Encrypt` reference. A byte scan
+        // produced false positives whenever the final 64 KiB mentioned
+        // `/Encrypt` in a comment, stream or metadata.
+        let encrypted = pdfxi_core::is_encrypted(&source).unwrap_or(false);
         let (document, decryption) = if encrypted {
             let supplied = password.ok_or(SessionError::PasswordRequired)?;
             match pdfxi_security::open_encrypted(&source, Some(supplied)) {
@@ -647,48 +644,50 @@ impl<'a> DocumentSnapshot<'a> {
     }
 }
 
-/// Return `true` when the trailing bytes contain an `/Encrypt` name token.
-///
-/// Only the last [`ENCRYPTION_SCAN_BYTES`] are inspected because that is where
-/// the newest trailer lives. The token must not be followed by an ASCII
-/// alphanumeric character: that keeps `/EncryptMetadata` (a key inside the
-/// encryption dictionary) from being mistaken for the trailer's `/Encrypt`
-/// reference. A literal `/Encrypt` inside a stream payload in the final 64 KiB
-/// can still produce a false positive; the security layer then reports a
-/// missing encryption dictionary instead of silently treating the file as
-/// plaintext.
-fn has_encrypt_token(bytes: &[u8]) -> bool {
-    let start = bytes.len().saturating_sub(ENCRYPTION_SCAN_BYTES);
-    let window = &bytes[start..];
-    window
-        .windows(ENCRYPT_KEY.len())
-        .enumerate()
-        .any(|(index, candidate)| {
-            candidate == ENCRYPT_KEY
-                && !window
-                    .get(index + ENCRYPT_KEY.len())
-                    .is_some_and(u8::is_ascii_alphanumeric)
-        })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::has_encrypt_token;
+    use std::path::PathBuf;
+
+    /// A one-page PDF with an optional trailer entry and a trailing comment.
+    fn tiny_pdf(trailer_extra: &str, comment: &str) -> Vec<u8> {
+        let mut out = String::from("%PDF-1.7\n");
+        let mut offsets = Vec::new();
+        for body in [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+        ] {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", offsets.len()));
+        }
+        let xref = out.len();
+        out.push_str("xref\n0 4\n0000000000 65535 f \n");
+        for offset in &offsets {
+            out.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size 4 /Root 1 0 R {trailer_extra}>>\nstartxref\n{xref}\n%%EOF\n% {comment}\n"
+        ));
+        out.into_bytes()
+    }
 
     #[test]
-    fn encrypt_detection_ignores_the_metadata_key() {
-        assert!(!has_encrypt_token(
-            b"%PDF-1.7\ntrailer\n<< /EncryptMetadata false >>"
-        ));
-        assert!(!has_encrypt_token(b"%PDF-1.7\nsome stream bytes"));
+    fn encrypt_detection_ignores_the_name_in_comments() {
+        let bytes = tiny_pdf("", "this file has no /Encrypt dictionary");
+        assert!(!pdfxi_core::is_encrypted(&bytes).expect("xref parses"));
     }
 
     #[test]
     fn encrypt_detection_finds_the_trailer_reference() {
-        assert!(has_encrypt_token(
-            b"%PDF-1.7\ntrailer\n<< /Size 5 /Encrypt 4 0 R >>"
-        ));
-        assert!(has_encrypt_token(b"/Encrypt"));
-        assert!(has_encrypt_token(b"/Encrypt\n4 0 R"));
+        let bytes = tiny_pdf("/Encrypt 9 0 R ", "");
+        assert!(pdfxi_core::is_encrypted(&bytes).expect("xref parses"));
+    }
+
+    #[test]
+    fn the_committed_encrypted_fixture_is_detected() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/realworld/pdfxi-encrypted-selfmade.pdf");
+        let bytes = std::fs::read(path).expect("encrypted fixture");
+        assert!(pdfxi_core::is_encrypted(&bytes).expect("xref parses"));
     }
 }
