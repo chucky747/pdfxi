@@ -4,13 +4,19 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 130 verified, 4 library, 8 model, 1 deferred, 2 replaced
-(145 rows; see ADR 0009). A `verified` row runs on real document bytes and a
-user can reach it through the GUI or the CLI. `library` rows are real
-byte-level implementations with tests but no GUI or CLI caller; `model` rows
-are in-memory models, plans or host-boundary stubs; `deferred` is a P3 row with
-a recorded blocker. The two `replaced` rows (`CREATE-011`, `CREATE-012`) are
-accepted terminal states under ADR 0008/0009.
+Current status: 130 verified (51 `gui`, 79 `cli`), 4 library, 8 model, 1
+deferred, 2 replaced (145 rows; see ADR 0009). A `verified` row runs on real
+document bytes and a user can reach it through the GUI or the CLI, and it names
+that host in `docs/features.toml`. `library` rows are real byte-level
+implementations with tests but no GUI or CLI caller; `model` rows are in-memory
+models, plans or host-boundary stubs; `deferred` is a P3 row with a recorded
+blocker. The two `replaced` rows (`CREATE-011`, `CREATE-012`) are accepted
+terminal states under ADR 0008/0009.
+
+`cargo xtask features verify` enforces the honest matrix: every verified row
+needs an existing repository evidence path, a `gui`/`cli` host, and test
+citations that resolve and are not `#[ignore]`. CI is not used; the local
+Windows gate is the verified one.
 
 This matrix is deliberately honest rather than green. `cargo xtask
 goal-verify --all` fails while any row is `library`, `model` or `deferred`;

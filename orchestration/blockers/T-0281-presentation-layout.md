@@ -1,8 +1,11 @@
 # T-0281 — presentation mode: implementation complete, visual evidence blocked by the host
 
-Status: open (evidence gap). `VIEW-012` is `model` in `docs/features.toml`, matching this blocker note. The host code is now the planned design;
-only the full-screen capture is missing, and this machine can no longer create a
-window (see `ENV-gui-session-wedged.md`).
+Status: open (evidence gap). `VIEW-012` is `model` in
+`docs/features.toml`, matching this blocker note. The host code is the planned
+design; the remaining item is a committed full-screen capture and an interactive
+run from the current renderer. The ENV window wedge recorded on 2026-11-22 is
+resolved (see `ENV-gui-session-wedged.md`), so the capture can be produced on
+this host again.
 
 ## What changed from the earlier attempts
 
@@ -55,16 +58,15 @@ cargo clippy -p pdfxi-app --features ui,pdfium --all-targets -- -D warnings -> 0
 that a `Next` command advances to the model's next page, that the shell's tab
 follows it, and that `Exit` clears the model and leaves the mode.
 
-## Blocked only on the capture
+## Capture pending
 
-`ENV-gui-session-wedged.md`: no GUI process on this machine creates a top-level
-window any more, so `PrintWindow` reports `window not found` and
-`CopyFromScreen` never returns. The last capture from the previous design
-(`docs/evidence/ui/final/presentation-mode.png`) shows the slide fully visible
-but right-aligned; it predates the direct-paint rewrite.
+The 2026-11-22 GUI wedge is resolved; the viewer creates windows and the
+installed-build UI smoke runs again. The last committed presentation capture
+(`docs/evidence/ui/final/presentation-mode.png`) predates the direct-paint
+rewrite.
 
-When the session is healthy the remaining work is: launch
-`target\lanes\core\debug\pdfxi-ui.exe --present --light
+When the next capture window is available: launch
+`target\integration\debug\pdfxi-ui.exe --present --light
 fixtures\realworld\powerpoint-slides.pdf`, capture page 1, send two Right
 presses, capture pages 2 and 3, send Left, capture page 2 again, then `Escape`;
 paste the four captures and add the VIEW-012 fragment.

@@ -106,15 +106,35 @@ if (-not $NoShortcut) {
     # Environment.SpecialFolder.Programs is the per-user Start Menu Programs
     # folder, so no administrator token is required.
     $programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+    $group = Join-Path $programs 'PDFXI'
     $installedUi = Join-Path $target 'pdfxi-ui.exe'
+
+    # Older portable installs wrote root-level links. Remove only those that
+    # point into this target so a setup install and a portable install share the
+    # same Start Menu group instead of showing duplicate entries.
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($legacyLink in @(
+        (Join-Path $programs 'PDFXI.lnk'),
+        (Join-Path $programs 'PDFXI CLI.lnk')
+    )) {
+        if (-not (Test-Path -LiteralPath $legacyLink -PathType Leaf)) { continue }
+        $legacy = $shell.CreateShortcut($legacyLink)
+        if (-not $legacy.TargetPath) { continue }
+        $legacyTarget = [System.IO.Path]::GetFullPath($legacy.TargetPath)
+        if ($legacyTarget.StartsWith($target, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -LiteralPath $legacyLink -Force
+            Write-Output "REMOVED $legacyLink"
+        }
+    }
+
     if (Test-Path -LiteralPath $installedUi -PathType Leaf) {
-        New-ShellLink -Directory $programs -FileName 'PDFXI.lnk' `
+        New-ShellLink -Directory $group -FileName 'PDFXI.lnk' `
             -Executable $installedUi -WorkingDirectory $target -Description 'PDFXI viewer'
     } else {
-        New-ShellLink -Directory $programs -FileName 'PDFXI.lnk' `
+        New-ShellLink -Directory $group -FileName 'PDFXI.lnk' `
             -Executable (Join-Path $target 'pdfxi.exe') -WorkingDirectory $target -Description 'PDFXI portable CLI'
     }
-    New-ShellLink -Directory $programs -FileName 'PDFXI CLI.lnk' `
+    New-ShellLink -Directory $group -FileName 'PDFXI CLI.lnk' `
         -Executable (Join-Path $target 'pdfxi.exe') -WorkingDirectory $target -Description 'PDFXI portable CLI'
 
     if ($DesktopShortcut) {

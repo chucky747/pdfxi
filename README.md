@@ -58,8 +58,11 @@ powershell -NoProfile -File scripts/package.ps1 -SkipBuild
 
 Artefacts are written under `target/package/`:
 
-- `pdfxi-setup-0.1.0-windows-x86_64.exe` — per-user installer;
-- `pdfxi-portable-0.1.0-windows-x86_64.zip` — portable payload.
+- `pdfxi-setup-0.1.4-windows-x86_64.exe` — per-user installer;
+- `pdfxi-portable-0.1.4-windows-x86_64.zip` — portable payload.
+
+Release notes and known limits are in
+[docs/releases/0.1.4.md](docs/releases/0.1.4.md).
 
 The installer needs no elevation and creates a Start Menu group, an optional
 desktop icon, and an uninstall entry under

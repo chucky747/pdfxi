@@ -5,7 +5,7 @@
 
 mod bench;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
@@ -44,6 +44,7 @@ const ALLOWED_STATUS: &[&str] = &[
     "replaced",
     "deferred",
 ];
+const ALLOWED_HOSTS: &[&str] = &["gui", "cli"];
 
 #[derive(Debug, Parser)]
 #[command(name = "xtask", about = "PDFXI workspace automation")]
@@ -164,6 +165,8 @@ struct FeatureRow {
     title: String,
     priority: String,
     status: String,
+    #[serde(default)]
+    host: String,
     #[serde(default)]
     tests: Vec<String>,
     #[serde(default)]
@@ -587,9 +590,18 @@ fn fn_item_name(text: &str) -> Option<String> {
 /// The scanner is line based so a commented-out or quoted `#[test]` does not
 /// create an entry. Multi-line attributes between `#[test]` and `fn` are
 /// tracked with a bracket depth so feature-gated tests still resolve.
+#[cfg(test)]
 fn test_fn_names(source: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut pending_test = false;
+    test_fn_sites(source)
+        .into_iter()
+        .map(|(name, _ignored)| name)
+        .collect()
+}
+
+/// Collect test functions and whether they carry `#[ignore]`.
+fn test_fn_sites(source: &str) -> Vec<(String, bool)> {
+    let mut sites = Vec::new();
+    let mut attributes: Vec<String> = Vec::new();
     let mut attribute_depth = 0usize;
     for line in source.lines() {
         let line = line.trim();
@@ -597,6 +609,7 @@ fn test_fn_names(source: &str) -> Vec<String> {
             continue;
         }
         if attribute_depth > 0 {
+            attributes.push(line.to_owned());
             attribute_depth += line.matches('[').count();
             attribute_depth = attribute_depth.saturating_sub(line.matches(']').count());
             continue;
@@ -605,13 +618,17 @@ fn test_fn_names(source: &str) -> Vec<String> {
             continue;
         }
         if line.starts_with("#[") {
-            if let Some(stripped) = line.strip_prefix("#[test]") {
-                pending_test = true;
-                let remainder = stripped.trim_start();
-                if let Some(name) = fn_item_name(remainder) {
-                    names.push(name);
-                    pending_test = false;
-                }
+            attributes.push(line.to_owned());
+            if let Some(stripped) = line.strip_prefix("#[test]")
+                && let Some(name) = fn_item_name(stripped.trim_start())
+            {
+                sites.push((
+                    name,
+                    attributes
+                        .iter()
+                        .any(|attribute| attribute.contains("#[ignore")),
+                ));
+                attributes.clear();
             }
             let opens = line.matches('[').count();
             let closes = line.matches(']').count();
@@ -620,14 +637,22 @@ fn test_fn_names(source: &str) -> Vec<String> {
             }
             continue;
         }
-        if pending_test {
-            if let Some(name) = fn_item_name(line) {
-                names.push(name);
+        if let Some(name) = fn_item_name(line) {
+            let is_test = attributes
+                .iter()
+                .any(|attribute| attribute.starts_with("#[test]"));
+            if is_test {
+                let ignored = attributes
+                    .iter()
+                    .any(|attribute| attribute.contains("#[ignore"));
+                sites.push((name, ignored));
             }
-            pending_test = false;
+            attributes.clear();
+        } else if !line.starts_with('#') {
+            attributes.clear();
         }
     }
-    names
+    sites
 }
 
 /// Recursively collect `*.rs` files below `directory`.
@@ -644,17 +669,38 @@ fn collect_rust_sources(directory: &Path, out: &mut Vec<PathBuf>) -> Result<()> 
     Ok(())
 }
 
-/// Index every `#[test]` function name under `crates/` exactly once.
-fn workspace_test_index() -> Result<BTreeSet<String>> {
+/// One resolved `#[test]` site: its crate and whether it is ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestSite {
+    ignored: bool,
+    crate_name: String,
+}
+
+/// Index every `#[test]` function under `crates/` with its crate and ignore
+/// state. Duplicate names are kept as separate sites so a citation can name a
+/// test in more than one crate without hiding an ignored copy.
+fn workspace_test_sites() -> Result<BTreeMap<String, Vec<TestSite>>> {
+    let crates = root().join("crates");
     let mut sources = Vec::new();
-    collect_rust_sources(&root().join("crates"), &mut sources)?;
-    let mut index = BTreeSet::new();
+    collect_rust_sources(&crates, &mut sources)?;
+    let mut sites: BTreeMap<String, Vec<TestSite>> = BTreeMap::new();
     for source in sources {
         let text =
             fs::read_to_string(&source).with_context(|| format!("read {}", source.display()))?;
-        index.extend(test_fn_names(&text));
+        let crate_name = source
+            .strip_prefix(&crates)
+            .ok()
+            .and_then(|relative| relative.components().next())
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for (name, ignored) in test_fn_sites(&text) {
+            sites.entry(name).or_default().push(TestSite {
+                ignored,
+                crate_name: crate_name.clone(),
+            });
+        }
     }
-    Ok(index)
+    Ok(sites)
 }
 
 /// Locate a PDFium shared library using the same candidates as the renderer.
@@ -725,10 +771,15 @@ fn features_verify() -> Result<()> {
     if rows.is_empty() {
         bail!("docs/features.toml has no [[feature]] rows");
     }
-    let test_index = workspace_test_index()?;
+    let sites = workspace_test_sites()?;
     let mut ids = BTreeSet::new();
     let mut verified = 0usize;
+    let mut gui = 0usize;
+    let mut cli = 0usize;
     let mut unresolved = Vec::new();
+    let mut ignored_tests = Vec::new();
+    let mut bad_evidence = Vec::new();
+    let mut bad_hosts = Vec::new();
     let mut non_test_entries = Vec::new();
     for row in &rows {
         if !ids.insert(row.id.clone()) {
@@ -742,6 +793,18 @@ fn features_verify() -> Result<()> {
         }
         if row.status == "verified" {
             verified += 1;
+            if !ALLOWED_HOSTS.contains(&row.host.as_str()) {
+                bail!(
+                    "verified feature {} has host '{}'; expected gui or cli",
+                    row.id,
+                    row.host
+                );
+            }
+            if row.host == "gui" {
+                gui += 1;
+            } else {
+                cli += 1;
+            }
             if row.tests.is_empty() {
                 bail!("verified feature {} has no tests", row.id);
             }
@@ -751,14 +814,27 @@ fn features_verify() -> Result<()> {
             if row.evidence.trim().is_empty() {
                 bail!("verified feature {} has no evidence", row.id);
             }
+            if !evidence_has_existing_path(&row.evidence) {
+                bad_evidence.push(format!("{}: {}", row.id, row.evidence.trim()));
+            }
         }
+        let mut app_tests = false;
+        let mut cli_tests = false;
         for citation in &row.tests {
             match citation_symbol(citation) {
-                Some(symbol) if test_index.contains(symbol) => {}
-                Some(symbol) => unresolved.push(format!(
-                    "{}: {} (no `#[test] fn {symbol}` in crates/)",
-                    row.id, citation
-                )),
+                Some(symbol) => match sites.get(symbol) {
+                    Some(found) => {
+                        if found.iter().all(|site| site.ignored) {
+                            ignored_tests.push(format!("{}: {}", row.id, citation));
+                        }
+                        app_tests |= found.iter().any(|site| site.crate_name == "pdfxi-app");
+                        cli_tests |= found.iter().any(|site| site.crate_name == "pdfxi-cli");
+                    }
+                    None => unresolved.push(format!(
+                        "{}: {} (no `#[test] fn {symbol}` in crates/)",
+                        row.id, citation
+                    )),
+                },
                 // A path-like entry with `::` still claims to name a test, so an
                 // invalid leaf is a matrix error. Entries with no `::` that are
                 // not identifiers are commands or prose in the `tests` array;
@@ -768,6 +844,19 @@ fn features_verify() -> Result<()> {
                     row.id, citation
                 )),
                 None => non_test_entries.push(format!("{}: {}", row.id, citation)),
+            }
+        }
+        if row.status == "verified" && (app_tests || cli_tests) {
+            let host_matches = match row.host.as_str() {
+                "gui" => app_tests,
+                "cli" => cli_tests,
+                _ => false,
+            };
+            if !host_matches {
+                bad_hosts.push(format!(
+                    "{}: host '{}' but cited tests are gui={app_tests} cli={cli_tests}",
+                    row.id, row.host
+                ));
             }
         }
     }
@@ -780,6 +869,27 @@ fn features_verify() -> Result<()> {
             eprintln!("  {entry}");
         }
     }
+    if !bad_evidence.is_empty() {
+        bail!(
+            "{} verified feature(s) have no existing repo evidence path:\n{}",
+            bad_evidence.len(),
+            bad_evidence.join("\n")
+        );
+    }
+    if !ignored_tests.is_empty() {
+        bail!(
+            "{} cited test(s) are marked `#[ignore]`:\n{}",
+            ignored_tests.len(),
+            ignored_tests.join("\n")
+        );
+    }
+    if !bad_hosts.is_empty() {
+        bail!(
+            "{} verified feature(s) name a host their cited tests do not cover:\n{}",
+            bad_hosts.len(),
+            bad_hosts.join("\n")
+        );
+    }
     if !unresolved.is_empty() {
         bail!(
             "{} cited test(s) do not resolve to a `#[test]` function:\n{}",
@@ -787,8 +897,44 @@ fn features_verify() -> Result<()> {
             unresolved.join("\n")
         );
     }
-    println!("FEATURES OK: {} rows, {} verified", rows.len(), verified);
+    println!(
+        "FEATURES OK: {} rows, {} verified ({} gui, {} cli)",
+        rows.len(),
+        verified,
+        gui,
+        cli
+    );
     Ok(())
+}
+
+/// Whether `evidence` names at least one repository path that exists.
+///
+/// Evidence may be prose around the path, but command output alone is no
+/// longer accepted for a verified row: the reviewer must be able to open the
+/// cited record.
+fn evidence_has_existing_path(evidence: &str) -> bool {
+    let root = root();
+    for raw in evidence.split_whitespace() {
+        let token = raw.trim_matches(|character: char| {
+            matches!(
+                character,
+                '`' | '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':' | '.' | '*'
+            )
+        });
+        let token = token.strip_prefix("./").unwrap_or(token).replace('\\', "/");
+        let token = token.trim_start_matches('/');
+        if token.contains("..") {
+            continue;
+        }
+        if ["docs/", "fixtures/", "crates/", "scripts/"]
+            .iter()
+            .any(|prefix| token.starts_with(prefix))
+            && root.join(token).exists()
+        {
+            return true;
+        }
+    }
+    false
 }
 fn docs_present(docs: &Option<toml::Value>) -> bool {
     match docs {
@@ -865,7 +1011,7 @@ fn merge_feature_row(target: &mut toml::Value, source: &toml::Value) -> Result<(
     let target = target
         .as_table_mut()
         .context("feature row is not a table")?;
-    for key in ["status", "tests", "docs", "evidence", "notes"] {
+    for key in ["status", "host", "tests", "docs", "evidence", "notes"] {
         if let Some(value) = source.get(key) {
             target.insert(key.to_owned(), value.clone());
         }
@@ -1085,6 +1231,27 @@ fn docs() -> Result<()> {
             bail!("missing docs page: {path}");
         }
     }
+    let book = root().join("docs/book");
+    for path in ["book.toml", "src/SUMMARY.md"] {
+        if !book.join(path).exists() {
+            bail!("missing mdBook page: docs/book/{path}");
+        }
+    }
+    let mdbook = std::env::var_os("MDBOOK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("mdbook"));
+    match ProcessCommand::new(&mdbook)
+        .args(["build", "docs/book", "-d", "target/tmp/mdbook-book"])
+        .current_dir(root())
+        .status()
+    {
+        Ok(status) if status.success() => println!("MDBOOK OK"),
+        Ok(status) => bail!("mdbook build failed with {status}"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("warning: mdbook is not installed; book build skipped");
+        }
+        Err(error) => return Err(error).context("run mdbook"),
+    }
     println!("DOCS OK");
     Ok(())
 }
@@ -1241,5 +1408,28 @@ mod tests {
         let source =
             "fn plain() {}\n// #[test]\n// fn commented() {}\nconst TEXT: &str = \"#[test]\";\n";
         assert!(test_fn_names(source).is_empty());
+    }
+
+    #[test]
+    fn test_sites_record_ignore_attributes() {
+        let source =
+            "#[test]\nfn fast() {}\n\n#[test]\n#[ignore = \"slow on purpose\"]\nfn slow() {}\n";
+        assert_eq!(
+            test_fn_sites(source),
+            vec![("fast".to_owned(), false), ("slow".to_owned(), true)]
+        );
+    }
+
+    #[test]
+    fn evidence_paths_must_exist_in_the_repo() {
+        assert!(evidence_has_existing_path(
+            "see docs/evidence/review/2026-11-23-finish.md for the run"
+        ));
+        assert!(!evidence_has_existing_path(
+            "cargo test --workspace: 3891 passed"
+        ));
+        assert!(!evidence_has_existing_path(
+            "docs/evidence/does-not-exist.md"
+        ));
     }
 }

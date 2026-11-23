@@ -3,6 +3,9 @@
 - Task: T-0260A (qa) - fuzz targets for the redaction and edit paths
 - Recorded: 2026-11-21
 - Status: open, host-level, pre-existing for the whole fuzz harness
+- Current as of 0.1.4: `cargo-fuzz` is still absent and the bundled C++ runtime
+  still does not compile here. The 0.1.4 release notes list the missing
+  24-hour campaign as a known limit; no release claim treats fuzzing as done.
 - Owned paths: `fuzz/**`, `docs/evidence/acceptance/T-0260A.md`,
   `orchestration/feature-updates/T-0260A.toml`, `orchestration/blockers/**`
 

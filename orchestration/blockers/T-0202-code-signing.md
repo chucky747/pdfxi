@@ -1,7 +1,8 @@
 # Blocker: code signing (T-0202)
 
 Status: open. No certificate exists in this workspace, so nothing built by this
-campaign is signed. No task, document, or report may claim otherwise.
+campaign is signed. The 0.1.4 setup and payload remain unsigned. No task,
+document, or report may claim otherwise.
 
 ## What is unsigned
 

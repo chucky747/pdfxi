@@ -152,9 +152,26 @@ impl PdfxiApp {
                     }
                 });
             });
-        match choice {
-            Some(choice) => self.dispatch(AppCommand::ResolveClose(choice), Some(ctx)),
-            None => self.pending_close = Some(pending),
+        if choice.is_none() {
+            // Keyboard access to the modal: D discards, S saves and Escape
+            // cancels. The buttons remain the primary pointer targets.
+            choice = ctx.input(|input| {
+                if input.key_pressed(egui::Key::D) {
+                    Some(CloseChoice::Discard)
+                } else if input.key_pressed(egui::Key::S) {
+                    Some(CloseChoice::Save)
+                } else if input.key_pressed(egui::Key::Escape) {
+                    Some(CloseChoice::Cancel)
+                } else {
+                    None
+                }
+            });
+        }
+        // `resolve_close` consumes the pending prompt; put it back before
+        // dispatching or every choice becomes a silent no-op.
+        self.pending_close = Some(pending);
+        if let Some(choice) = choice {
+            self.dispatch(AppCommand::ResolveClose(choice), Some(ctx));
         }
     }
 

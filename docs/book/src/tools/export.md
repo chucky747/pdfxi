@@ -28,7 +28,7 @@ export path are shown in the card.
 Choosing a format opens a native save dialog filtered to that extension and
 pre-filled with the document's stem. Export writes one file, or one file per
 page part named `<stem>-<part.name>.<ext>`, creates missing parent directories,
-and reports "Exported N page(s) to <path>". Typed failures are shown as
+and reports "Exported N page(s) to `<path>`". Typed failures are shown as
 "Export failed: ...".
 
 ## Office caveat

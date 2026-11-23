@@ -3,6 +3,10 @@
 - Task: T-0260B (qa) - open, edit and save budgets on the real corpus
 - Recorded: 2026-11-21
 - Status: open, budget-calibration issue, no user-visible slowdown measured
+- Current as of 0.1.4: the deterministic in-memory harness
+  (`cargo xtask bench --report`) passes 18/18 metrics with 0 breaches and 0
+  regressions. The open item remains the real-corpus save durability
+  measurements below.
 - Evidence: `docs/evidence/acceptance/T-0260B.md` (section 3)
 
 ## Summary

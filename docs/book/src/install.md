@@ -1,6 +1,6 @@
 # Installing PDFXI
 
-PDFXI `0.1.2` is a Windows x64 build. Two delivery forms exist: a per-user
+PDFXI `0.1.4` is a Windows x64 build. Two delivery forms exist: a per-user
 Inno Setup installer and a portable zip. Both are unsigned; read
 [Unsigned builds](#unsigned-builds) before you run one.
 
@@ -10,7 +10,7 @@ The installer is built by `scripts/package.ps1` when Inno Setup 6's `ISCC.exe`
 is available. The output is:
 
 ```text
-target/package/pdfxi-setup-0.1.2-windows-x86_64.exe
+target/package/pdfxi-setup-0.1.4-windows-x86_64.exe
 ```
 
 It installs **for the current user only** (`PrivilegesRequired=lowest`): no
@@ -38,12 +38,23 @@ application directory and the shortcuts it created. It does **not** remove
 `%APPDATA%\PDFXI`, so viewer settings survive a reinstall. Delete that folder
 yourself to reset the viewer.
 
+If an older uninstaller is broken (the 0.1.2 setup's uninstaller exits 1 after a
+portable overlay), run the checked-in recovery script:
+
+```powershell
+powershell -NoProfile -File .\scripts\uninstall.ps1
+```
+
+It removes only `%LOCALAPPDATA%\Programs\PDFXI`, the matching HKCU uninstall
+entry, and shortcuts that point into that directory. Add `-RemoveSettings` to
+delete `%APPDATA%\PDFXI` as well.
+
 ## Portable zip
 
 The portable archive is:
 
 ```text
-target/package/pdfxi-portable-0.1.2-windows-x86_64.zip
+target/package/pdfxi-portable-0.1.4-windows-x86_64.zip
 ```
 
 It contains the viewer, the CLI, the pinned `pdfium.dll` with its licences, the
@@ -51,8 +62,10 @@ notices, `install.ps1`, and a SHA-256 `manifest.json`. Extract it anywhere and
 run `pdfxi-ui.exe`; keep `pdfium.dll` and `pdfium-licenses\` next to the
 executable.
 
-The bundled `install.ps1` copies the payload to a directory and creates Start
-Menu shortcuts, without elevation or registry writes:
+The bundled `install.ps1` copies the payload to a directory and creates a Start
+Menu group **PDFXI** with viewer and CLI shortcuts, without elevation or
+registry writes. It also removes the pre-0.1.4 root-level links that pointed at
+the same target, so setup and portable installs no longer duplicate entries:
 
 ```powershell
 powershell -NoProfile -File .\install.ps1 `
@@ -160,6 +173,9 @@ cargo xtask docs            # documentation page presence check
 cache, the workspace root, the current directory, and `Path`, and fails with a
 message pointing at `scripts/fetch-pdfium.ps1` when none is present.
 
-`cargo xtask goal-verify --all` is green in `0.1.2`: 145 rows, 143 `verified`
-and 2 `replaced` under ADR 0008/0009. See the
-[feature matrix](../../FEATURES.md) and ADR 0009.
+`cargo xtask goal-verify --all` is expected to stay red in `0.1.4` while rows
+are honestly `library`, `model` or `deferred` under ADR 0009. `cargo xtask
+features verify` is green: 145 rows, 130 `verified` (51 `gui`, 79 `cli`), 4
+`library`, 8 `model`, 1 `deferred` and 2 `replaced`. See the
+[feature matrix](../../FEATURES.md), [release notes](../../releases/0.1.4.md)
+and ADR 0009.

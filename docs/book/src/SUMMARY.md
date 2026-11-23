@@ -53,3 +53,7 @@
 - [Testing and performance](testing.md)
 - [Project memory](memory.md)
 - [CLI reference (authoritative)](../../CLI.md)
+
+# Releases
+
+- [0.1.4 release notes](releases/0.1.4.md)

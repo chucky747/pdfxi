@@ -1,6 +1,8 @@
 # T-0253 grounding blocker: MCP tools attach but the model never sees them
 
 Status: open (A-16 document grounding blocked; Round A chat UI is unaffected).
+Current as of 0.1.4: the assistant runs on local model tools without external
+MCP grounding. The 0.1.4 release notes list this limitation.
 
 ## Exact evidence (2026-11-20, OpenCode 2.3.2, hy4-flash-free)
 

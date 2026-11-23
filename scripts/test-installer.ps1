@@ -285,6 +285,7 @@ foreach ($relative in @(
     'THIRD_PARTY.md',
     'pdfium-licenses\LICENSE.txt',
     'docs\user-guide.html',
+    'uninstall.ps1',
     'unins000.exe'
 )) {
     $full = Join-Path $installDir $relative
@@ -369,6 +370,30 @@ if (Test-Path -LiteralPath $installedViewer -PathType Leaf) {
         $viewerProcess.Kill()
         $viewerProcess.WaitForExit(10000) | Out-Null
     }
+}
+
+# --- installed-build UI smoke ----------------------------------------------
+# The smoke identity is a real install at a temporary path. Drive it through
+# UI Automation for the behaviours a headless test cannot prove, and fail the
+# installer test on any unnamed invokable control.
+$uiSmoke = Join-Path $root 'scripts\ui-smoke.ps1'
+$uiOut = Join-Path $work 'ui-smoke'
+$uiArgs = @(
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', $uiSmoke,
+    '-Exe', $installedViewer,
+    '-Cli', (Join-Path $installDir 'pdfxi.exe'),
+    '-FixtureDir', (Join-Path $root 'fixtures\ui-smoke'),
+    '-OutDir', $uiOut,
+    '-PdfiumPath', (Join-Path $installDir 'pdfium.dll')
+)
+Write-Output ("UI SMOKE {0}" -f ($uiArgs -join ' '))
+& powershell @uiArgs
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "ui-smoke.ps1 exited $LASTEXITCODE (log: $(Join-Path $uiOut 'ui-smoke.log'))"
+} else {
+    Write-Pass 'installed-build UI smoke passed'
 }
 
 # --- silent uninstall ------------------------------------------------------

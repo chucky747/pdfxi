@@ -2019,8 +2019,13 @@ fn viewport_commands_reach_the_egui_context() {
 
     let close = viewport_commands(&mut app, AppCommand::Caption(CaptionAction::Close));
     assert!(
-        close.contains(&egui::ViewportCommand::Close),
-        "caption(Close) produced {close:?}, expected ViewportCommand::Close"
+        close.is_empty(),
+        "caption(Close) must not rely on the root ViewportCommand::Close, \
+         which is a no-op in eframe 0.33; produced {close:?}"
+    );
+    assert!(
+        app.platform_close_requested(),
+        "caption(Close) must request the platform close"
     );
 
     let drag = viewport_commands(&mut app, AppCommand::StartWindowDrag);

@@ -1,0 +1,12 @@
+[book]
+title = "PDFXI Guide"
+authors = ["PDFXI contributors"]
+description = "A performant Rust PDF workbench for Windows"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/chucky747/pdfxi"

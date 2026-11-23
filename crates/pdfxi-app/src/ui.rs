@@ -610,6 +610,8 @@ pub struct PdfxiApp {
     pub(super) close_window_after_resolve: bool,
     /// Set when every dirty tab is resolved and the window may close.
     pub(super) request_window_close: bool,
+    /// Set when the app must post a real platform close request.
+    pub(super) request_platform_close: bool,
     /// Open external-modification dialog, if any.
     pub(super) save_conflict: Option<shell::session::SaveConflict>,
     /// Comments list, rail badge, note draft and thread popup.
@@ -908,6 +910,16 @@ impl PdfxiApp {
         &self.status
     }
 
+    /// Whether a platform close request is pending (test accessor).
+    ///
+    /// eframe 0.33 cannot close the root viewport with
+    /// [`egui::ViewportCommand::Close`], so the shell records the intent and
+    /// finishes the close at the next frame boundary. See ADR 0010.
+    #[must_use]
+    pub fn platform_close_requested(&self) -> bool {
+        self.request_platform_close
+    }
+
     /// Whether the right tools panel is currently open.
     #[must_use]
     pub fn tools_open(&self) -> bool {
@@ -1053,16 +1065,26 @@ impl PdfxiApp {
         if !requested || self.request_window_close {
             return;
         }
+        if self.begin_window_close_prompt() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+    }
+
+    /// Open the unsaved-changes prompt for the first dirty tab.
+    ///
+    /// Returns `false` when every tab is clean, which lets the caller finish
+    /// the close without a prompt.
+    pub(crate) fn begin_window_close_prompt(&mut self) -> bool {
         let Some(id) = self.dirty_tab_ids().first().copied() else {
-            return;
+            return false;
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         self.close_window_after_resolve = true;
         if self.presentation {
             self.presentation = false;
         }
         let title = self.state.tab_title(id).unwrap_or_default();
         self.pending_close = Some(shell::session::PendingClose { id, title });
+        true
     }
 
     /// Ids of every open session with unsaved changes, in tab order.
@@ -1916,6 +1938,24 @@ fn copy_requested(events: &[egui::Event], ctrl_c: bool, text_focus: bool) -> boo
                 .any(|event| matches!(event, egui::Event::Copy)))
 }
 
+/// Finish the window close after all dirty tabs are resolved.
+///
+/// eframe 0.33 turns `ViewportCommand::Close` into an app event for the root
+/// viewport instead of a platform close, so the window would stay open on the
+/// Home screen after the last prompt. At this point every document is saved or
+/// explicitly discarded, so terminating the process is the same observable
+/// result as a platform close; `WindowEvent::CloseRequested` still takes the
+/// normal prompt path. Non-Windows keeps the viewport command as a fallback.
+fn request_platform_close(ctx: &egui::Context, _frame: &eframe::Frame) {
+    #[cfg(windows)]
+    {
+        let _ = ctx;
+        std::process::exit(0);
+    }
+    #[cfg(not(windows))]
+    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+}
+
 impl PdfxiApp {
     /// Record a typed document-open error for display in the shell.
     pub fn record_open_error(&mut self, error: OpenError) {
@@ -2175,7 +2215,19 @@ impl PdfxiApp {
 }
 
 impl eframe::App for PdfxiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Resolve the app-level close flag into a real platform close request.
+        // `ViewportCommand::Close` only posts an app event for the root
+        // viewport in eframe 0.33, so the window would stay open after the last
+        // dirty tab was resolved.
+        if self.request_window_close {
+            self.request_window_close = false;
+            self.request_platform_close = true;
+        }
+        if self.request_platform_close {
+            self.request_platform_close = false;
+            request_platform_close(ctx, frame);
+        }
         self.handle_close_request(ctx);
         if self.presentation {
             self.presentation_update(ctx);
@@ -2216,10 +2268,6 @@ impl eframe::App for PdfxiApp {
         self.edit_tool_ui(ctx);
         self.password_dialog_ui(ctx);
         self.close_prompt_ui(ctx);
-        if self.request_window_close {
-            self.request_window_close = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
         self.save_conflict_ui(ctx);
         self.identity_window_ui(ctx);
         self.help_window_ui(ctx);
@@ -2609,6 +2657,9 @@ impl PdfxiApp {
         }
     }
 }
+
+#[cfg(all(test, feature = "ui", feature = "pdfium"))]
+mod widget_tests;
 
 #[cfg(test)]
 mod tests {

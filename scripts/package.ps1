@@ -75,7 +75,7 @@ $script:PackageRoot = if ($OutputDir) {
 # is therefore in the allowlist but not in the source map.
 $script:AllowList = @(
     'pdfxi.exe', 'pdfxi-ui.exe', 'pdfium.dll', 'LICENSE', 'NOTICE', 'README.md',
-    'THIRD_PARTY.md', 'deny.toml', 'install.ps1', 'manifest.json'
+    'THIRD_PARTY.md', 'deny.toml', 'install.ps1', 'uninstall.ps1', 'manifest.json'
 )
 # PDFium's own licence texts ship in a subdirectory so the notice is complete.
 # The rendered user guide ships under docs\ so the installed viewer's Help window
@@ -241,6 +241,7 @@ function Get-PayloadMap {
     $map['THIRD_PARTY.md'] = Join-Path $root 'docs\THIRD_PARTY.md'
     $map['deny.toml']      = Join-Path $root 'deny.toml'
     $map['install.ps1']    = Join-Path $PSScriptRoot 'install.ps1'
+    $map['uninstall.ps1']  = Join-Path $PSScriptRoot 'uninstall.ps1'
     return $map
 }
 

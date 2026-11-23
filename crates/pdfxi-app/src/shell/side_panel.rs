@@ -72,6 +72,9 @@ impl PdfxiApp {
         );
         let (rect, bar) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::click());
+        bar.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Open storage folder")
+        });
         let used = self.storage_bytes as f32;
         let scale = used.max(1024.0 * 1024.0 * 1024.0);
         let fraction = (used / scale).clamp(0.0, 1.0);

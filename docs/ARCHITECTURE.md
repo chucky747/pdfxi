@@ -106,26 +106,34 @@ pub trait Signer {
 
 - `pdfxi-app` owns the eframe application, document tabs, dock layout, and
   commands.
-- The canvas is a virtualized tile surface: visible tiles render off-thread,
-  cached by `(page, scale, rotation)`, and uploaded to `wgpu`.
+- The canvas is a virtualized tile surface: visible tiles are rendered through
+  the bounded raster cache and uploaded as `egui` textures. Rendering is
+  synchronous on the UI thread today; off-thread rendering is planned work, not
+  a current guarantee.
 - Selection, annotations, links, and form widgets are overlay layers in page
   coordinates.
 - Commands are typed actions with undo/redo; the UI never mutates a document
   directly.
-- Accessibility uses `accesskit`; every tool has a keyboard path.
+- Accessibility uses `accesskit`; shell controls publish accessible names and
+  every modal has a keyboard path.
 
 ## Concurrency
 
-- One render pool per process, sized to available parallelism minus one.
-- OCR and conversion use separate bounded pools.
-- Long jobs return a `JobHandle` with progress, cancel, and result channels.
-- UI threads never block on I/O; all I/O returns through channels.
+- There is no render pool or `JobHandle` in the viewer yet. The assistant chat,
+  assistant connect, and print flows use dedicated worker threads with
+  `mpsc` channels and poll their receivers from the UI.
+- OCR, conversion, and long document jobs remain synchronous in this release;
+  they are the next candidates for bounded worker pools.
+- UI threads never block on network or print waits; those runs return through
+  channels.
 
 ## Persistence
 
 - User settings: `%APPDATA%\PDFXI\settings.toml` (TOML, versioned).
-- Recent documents and favorites: SQLite (`rusqlite`, bundled).
-- Autosave: sidecar `.pdfxi-autosave` files, cleaned on successful save.
+- Recent documents, stars, and the local library: `%APPDATA%\PDFXI\library.toml`
+  (TOML, atomic replace). No SQLite database is used.
+- There is no autosave sidecar in this release. Unsaved work is held in memory
+  and protected by the close prompt.
 - No telemetry by default.
 
 ## Error model
@@ -134,8 +142,9 @@ pub trait Signer {
 - The app maps errors to user-facing messages and structured logs.
 - `tracing` is the logging facade; logs never contain document contents or
   secrets.
-- Panics are reserved for proven invariants; `catch_unwind` at UI/job boundaries
-  converts unexpected panics into recoverable errors.
+- Panics are reserved for proven invariants. The UI does not install a
+  `catch_unwind` boundary; an unexpected panic terminates the viewer process and
+  is recorded in the per-user log.
 
 ## Clean-room and dependencies
 

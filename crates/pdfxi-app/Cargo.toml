@@ -79,3 +79,5 @@ required-features = ["ui"]
 [dev-dependencies]
 # Unit tests parse pinned service JSON into the T-0251 model types. Test-only.
 serde_json.workspace = true
+# Widget-level tests drive real egui widgets and AccessKit names. Test-only.
+egui_kittest = "0.33"

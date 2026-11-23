@@ -1,4 +1,5 @@
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/ui.rs",
     "crates/pdfxi-app/src/raster.rs",
@@ -52,13 +53,14 @@ tests = [
 title = "Single page continuous and two-page layouts"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/canvas.rs",
     "crates/pdfxi-app/src/raster.rs",
     "crates/pdfxi-app/src/ui.rs",
 ]
 domain = "View & Navigate"
-evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passed, 0 failed. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed (raster::tests::zoom_and_rotation_changes_invalidate_the_previous_raster and raster::tests::caching_avoids_a_second_render ok)."
+evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passed, 0 failed. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed (raster::tests::zoom_and_rotation_changes_invalidate_the_previous_raster and raster::tests::caching_avoids_a_second_render ok). See docs/evidence/M1.md."
 id = "VIEW-003"
 notes = """
 CanvasLayout resolves Zoom::FitWidth/FitPage against the widest row and custom
@@ -82,6 +84,7 @@ tests = [
 title = "Zoom pan loupe and fit modes"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/view.rs",
     "crates/pdfxi-app/src/tabs.rs",
@@ -109,6 +112,7 @@ tests = [
 title = "Rotate view and page display"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/state.rs",
     "crates/pdfxi-app/src/tabs.rs",
@@ -144,6 +148,7 @@ tests = [
 title = "Split and tile document windows"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/thumbs.rs",
     "crates/pdfxi-app/src/ui.rs",
@@ -158,6 +163,7 @@ cargo test -p pdfxi-app --features ui,pdfium 2>&1: 97 unit tests passed, 0 faile
 cargo fmt -p pdfxi-app -- --check: EXIT=0.
 cargo clippy -p pdfxi-app --all-targets --all-features -- -D warnings: EXIT=0 (no warnings).
 All three test configurations compiled with zero warnings; default and ui-only builds do not link PDFium.
+See docs/evidence/app/T-0046.md for the thumbnail-panel checks.
 '''
 id = "VIEW-007"
 notes = "The thumbnail panel is shown only for a real open document and renders real page rasters."
@@ -171,13 +177,14 @@ tests = [
 title = "Page thumbnails and navigation pane"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-edit/src/navigation/outline.rs",
     "crates/pdfxi-edit/src/navigation/mod.rs",
     "crates/pdfxi-edit/src/navigation/error.rs",
 ]
 domain = "View & Navigate"
-evidence = "cargo test -p pdfxi-edit navigation::outline navigation::tests navigation::error (CARGO_TARGET_DIR=target/lanes/author): all 16 bookmark/destination/error tests passed. cargo clippy -p pdfxi-edit --all-targets -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps: clean."
+evidence = "cargo test -p pdfxi-edit navigation::outline navigation::tests navigation::error (CARGO_TARGET_DIR=target/lanes/author): all 16 bookmark/destination/error tests passed. cargo clippy -p pdfxi-edit --all-targets -- -D warnings: clean. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-edit --no-deps: clean. See docs/evidence/app/T-0130.md."
 id = "VIEW-008"
 notes = "Bookmark tree with sibling order, closed/open signed counts, cycle and orphan rejection, and all destination fit variants. Article threads remain out of scope for this row; the bookmark/destination portion is delivered."
 priority = "P1"
@@ -200,6 +207,7 @@ tests = [
 title = "Bookmarks destinations and article threads"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-edit/src/navigation/attachment.rs",
     "crates/pdfxi-edit/src/navigation/mod.rs",
@@ -234,6 +242,7 @@ tests = [
 title = "Attachments and embedded files"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/layers.rs",
     "crates/pdfxi-core/src/lib.rs",
@@ -264,6 +273,7 @@ tests = [
 title = "Optional content layers"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-edit/src/navigation/link.rs",
     "crates/pdfxi-edit/src/navigation/mod.rs",
@@ -376,6 +386,7 @@ tests = [
 title = "Full screen and presentation mode"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/reflow.rs",
     "crates/pdfxi-cli/src/read_aloud.rs",
@@ -437,6 +448,7 @@ tests = [
 title = "Reflow and read aloud"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/links.rs",
     "crates/pdfxi-cli/src/portfolio.rs",
@@ -492,6 +504,7 @@ tests = [
 title = "PDF Portfolio browsing"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/compare.rs",
     "docs/book/src/cli.md",
@@ -548,6 +561,7 @@ tests = [
 title = "Side-by-side compare view"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-convert/src/create_assembly.rs",
     "crates/pdfxi-convert/src/print_capture.rs",
@@ -593,6 +607,7 @@ tests = [
 title = "Create PDF from any printable application"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-convert/src/create_assembly.rs",
     "crates/pdfxi-convert/src/print_job.rs",
@@ -634,6 +649,7 @@ tests = [
 title = "Virtual PDF printer"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/create.rs",
     "crates/pdfxi-cli/src/main.rs",
@@ -670,6 +686,7 @@ tests = [
 title = "Create PDF from images"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/create.rs",
     "crates/pdfxi-cli/src/main.rs",
@@ -705,6 +722,7 @@ tests = [
 title = "Create PDF from plain text and Markdown"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-convert/src/create/html.rs",
     "crates/pdfxi-convert/src/convert_to_pdf.rs",
@@ -736,6 +754,7 @@ tests = [
 title = "Create PDF from HTML"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/office.rs",
     "docs/book/src/authoring.md",
@@ -895,13 +914,14 @@ tests = [
 title = "OCR scanned pages to searchable PDF"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-core/src/lib.rs",
     "crates/pdfxi-core/src/parser.rs",
 ]
 domain = "Create"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 94 unit + 6 integration passed; TEST_EXIT=0. Merge assigns disjoint deterministic object-number ranges to every source, rewrites all indirect references, and produces a fresh catalog/page tree whose /Kids order follows the source order."
+evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 94 unit + 6 integration passed; TEST_EXIT=0. Merge assigns disjoint deterministic object-number ranges to every source, rewrites all indirect references, and produces a fresh catalog/page tree whose /Kids order follows the source order. See docs/evidence/core/T-0041.md."
 id = "CREATE-009"
 notes = """
 Document::apply_page_plan now accepts PagePlan::merge(vec![Document, ...]) (or
@@ -921,6 +941,7 @@ tests = [
 title = "Combine multiple files into one PDF"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/create_portfolio.rs",
     "docs/book/src/authoring.md",
@@ -1044,6 +1065,7 @@ tests = [
 title = "Email-to-PDF capture"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-convert/src/postscript_pdf.rs",
     "crates/pdfxi-cli/src/create.rs",
@@ -1105,6 +1127,7 @@ tests = [
 title = "PostScript and Distiller-compatible ingestion"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/watch.rs",
     "docs/book/src/authoring.md",
@@ -1156,6 +1179,7 @@ tests = [
 title = "Watched-folder conversion"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-edit/src/paragraph_edit.rs",
     "crates/pdfxi-edit/src/content_edit.rs",
@@ -1221,6 +1245,7 @@ tests = [
 title = "Edit text with paragraph reflow"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-edit/src/content_edit.rs",
     "crates/pdfxi-cli/src/restyle.rs",
@@ -1274,6 +1299,7 @@ tests = [
 title = "Edit fonts size spacing and color"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/replace.rs",
     "docs/book/src/cli.md",
@@ -1338,6 +1364,7 @@ tests = [
 title = "Find and replace text across a document"
 
 [[feature]]
+host = "gui"
 docs = "docs/evidence/hardening/T-0265.md"
 domain = "Edit"
 evidence = "docs/evidence/hardening/T-0265.md"
@@ -1391,6 +1418,7 @@ tests = [
 title = "Add move resize and replace images"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-core/src/lib.rs",
@@ -1427,6 +1455,7 @@ tests = [
 title = "Insert delete extract and replace pages"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-core/src/lib.rs",
@@ -1474,6 +1503,7 @@ tests = [
 title = "Reorder rotate crop and resize pages"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-core/src/lib.rs",
@@ -1504,6 +1534,7 @@ tests = [
 title = "Split and merge documents"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-cli/src/decorate.rs",
@@ -1557,6 +1588,7 @@ tests = [
 title = "Headers footers and page numbering"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/pages.rs",
     "crates/pdfxi-cli/src/decorate.rs",
@@ -1602,6 +1634,7 @@ tests = [
 title = "Watermarks and backgrounds"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/decorate.rs",
     "docs/book/src/cli.md",
@@ -1647,6 +1680,7 @@ tests = [
 title = "Bates numbering"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-edit/src/navigation/document_navigation.rs",
     "crates/pdfxi-cli/src/navigation.rs",
@@ -1742,6 +1776,7 @@ tests = [
 title = "Bookmarks links and attachments editing"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-edit/src/flatten.rs",
     "crates/pdfxi-edit/src/lib.rs",
@@ -1807,6 +1842,7 @@ tests = [
 title = "Flatten annotations and form fields"
 
 [[feature]]
+host = "gui"
 docs = "docs/evidence/hardening/T-0268.md"
 domain = "Edit"
 evidence = "docs/evidence/hardening/T-0268.md"
@@ -1847,6 +1883,7 @@ tests = [
 title = "Redaction marks and permanent removal"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/optimize.rs",
     "docs/book/src/cli.md",
@@ -1902,6 +1939,7 @@ tests = [
 title = "Optimize and compress documents"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/repair.rs",
     "crates/pdfxi-cli/src/main.rs",
@@ -1947,6 +1985,7 @@ tests = [
 title = "Repair malformed documents"
 
 [[feature]]
+host = "gui"
 docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
 evidence = "docs/evidence/hardening/T-0239.md"
@@ -1969,6 +2008,7 @@ tests = [
 title = "Export PDF to editable Word"
 
 [[feature]]
+host = "gui"
 docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
 evidence = "docs/evidence/hardening/T-0239.md"
@@ -1990,6 +2030,7 @@ tests = [
 title = "Export PDF to editable Excel"
 
 [[feature]]
+host = "gui"
 docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
 evidence = "docs/evidence/hardening/T-0239.md"
@@ -2012,6 +2053,7 @@ tests = [
 title = "Export PDF to editable PowerPoint"
 
 [[feature]]
+host = "gui"
 docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
 evidence = "docs/evidence/hardening/T-0239.md"
@@ -2031,6 +2073,7 @@ tests = [
 title = "Export PDF to HTML"
 
 [[feature]]
+host = "gui"
 docs = "docs/evidence/hardening/T-0239.md"
 domain = "Export"
 evidence = "docs/evidence/hardening/T-0239.md"
@@ -2074,6 +2117,7 @@ tests = [
 title = "Export pages to JPEG PNG and TIFF"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-convert/src/tagged_text.rs",
     "crates/pdfxi-cli/src/export.rs",
@@ -2111,6 +2155,7 @@ tests = [
 title = "Export accessible text and tagged content"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/conformance.rs",
     "docs/book/src/cli.md",
@@ -2176,6 +2221,7 @@ tests = [
 title = "Export to PDF/A PDF/X and PDF/E"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/export_postscript.rs",
     "docs/book/src/authoring.md",
@@ -2219,6 +2265,7 @@ tests = [
 title = "Export to PostScript"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-forms/src/appearance.rs",
     "crates/pdfxi-forms/src/document_form.rs",
@@ -2264,6 +2311,7 @@ tests = [
 title = "Fill existing AcroForm fields"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/form.rs",
     "docs/book/src/cli.md",
@@ -2335,6 +2383,7 @@ tests = [
 title = "Create text checkbox radio choice and button fields"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/form.rs",
     "docs/book/src/cli.md",
@@ -2389,6 +2438,7 @@ tests = [
 title = "Field properties calculations and validation"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/form.rs",
     "docs/book/src/cli.md",
@@ -2455,6 +2505,7 @@ tests = [
 title = "Form field actions and tab order"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/form.rs",
     "docs/book/src/authoring.md",
@@ -2501,6 +2552,7 @@ tests = [
 title = "Automatically recognize static form fields"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-forms/src/document_form.rs",
     "crates/pdfxi-forms/src/xfdf.rs",
@@ -2523,6 +2575,7 @@ tests = ["xfdf_round_trips_values_into_a_fresh_copy"]
 title = "Import and export FDF and XFDF"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-forms/src/document_form.rs",
     "crates/pdfxi-forms/src/matrix.rs",
@@ -2554,6 +2607,7 @@ tests = [
 title = "Flatten forms and preserve appearance"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/form.rs",
     "crates/pdfxi-forms/src/serialize.rs",
@@ -2614,6 +2668,7 @@ tests = [
 title = "Reader-enable form filling and saving"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/form.rs",
     "docs/book/src/cli.md",
@@ -2668,6 +2723,7 @@ tests = [
 title = "Distribute and collect forms locally"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/signature.rs",
     "docs/book/src/authoring.md",
@@ -2737,6 +2793,7 @@ tests = [
 title = "Electronic signature fields and workflows"
 
 [[feature]]
+host = "gui"
 docs = "crates/pdfxi-security/src/authorization.rs, docs/evidence/security/T-0158.md"
 domain = "Security"
 evidence = "docs/evidence/security/T-0158.md"
@@ -2751,6 +2808,7 @@ tests = [
 title = "Open password and permissions password"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-security/src/crypto/aes.rs",
     "crates/pdfxi-security/src/crypto/rc4.rs",
@@ -2905,6 +2963,7 @@ tests = [
 title = "Certificate encryption"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-security/src/digital_id_lifecycle.rs",
     "crates/pdfxi-security/src/lib.rs",
@@ -2978,6 +3037,7 @@ tests = [
 title = "Digital IDs and certificate management"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-security/src/cms.rs",
     "crates/pdfxi-security/src/der.rs",
@@ -3040,6 +3100,7 @@ tests = [
 title = "Sign and certify documents"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-security/src/timestamp_authority.rs",
     "crates/pdfxi-security/src/timestamp.rs",
@@ -3132,6 +3193,7 @@ tests = [
 title = "Timestamp and signature validation"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-security/src/trust_manager.rs",
     "crates/pdfxi-security/src/trust_anchors.rs",
@@ -3191,6 +3253,7 @@ tests = [
 title = "Trust manager and revocation checks"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-security/src/sanitize_document.rs",
     "crates/pdfxi-security/src/error.rs",
@@ -3239,6 +3302,7 @@ tests = [
 title = "Sanitize document and remove hidden information"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-security/src/xmp_scrub.rs",
     "crates/pdfxi-security/src/scrub.rs",
@@ -3287,6 +3351,7 @@ tests = [
 title = "Metadata and XMP scrubbing"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-security/src/security_envelope.rs",
     "crates/pdfxi-security/src/crypto/sha.rs",
@@ -3361,6 +3426,7 @@ tests = [
 title = "Security envelopes and attachment encryption"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-security/src/policy.rs",
     "crates/pdfxi-security/src/protect.rs",
@@ -3429,6 +3495,7 @@ tests = [
 title = "Policy-based protection replacement"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-security/src/protect.rs",
     "crates/pdfxi-security/src/encryption_writer.rs",
@@ -3471,6 +3538,7 @@ tests = [
 title = "Protect PDF: apply and remove password protection"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-assistant/src/lockdown.rs",
     "crates/pdfxi-assistant/src/client.rs",
@@ -3547,6 +3615,7 @@ tests = [
 title = "Sticky note highlight underline strikeout and squiggly"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-edit/src/document_annotations.rs",
     "crates/pdfxi-cli/src/annotate.rs",
@@ -3609,6 +3678,7 @@ tests = [
 title = "Free text callout line arrow shape and cloud"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-edit/src/document_annotations.rs",
     "crates/pdfxi-cli/src/annotate.rs",
@@ -3664,6 +3734,7 @@ tests = [
 title = "Pencil stamp and file attachment annotations"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-edit/src/document_annotations.rs",
     "docs/evidence/hardening/T-0230.md",
@@ -3688,6 +3759,7 @@ tests = [
 title = "Comment threads replies and status"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-edit/src/document_annotations.rs",
     "docs/evidence/hardening/T-0230.md",
@@ -3714,6 +3786,7 @@ tests = [
 title = "Import export and print comments"
 
 [[feature]]
+host = "gui"
 docs = "crates/pdfxi-edit/src/review/report.rs, docs/evidence/author/T-0114.md"
 domain = "Review"
 evidence = "docs/evidence/author/T-0114.md"
@@ -3758,6 +3831,7 @@ tests = [
 title = "Review tracker and participant status"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/compare.rs",
     "docs/book/src/cli.md",
@@ -3802,6 +3876,7 @@ tests = [
 title = "Compare two PDFs and summarize changes"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/measure.rs",
     "crates/pdfxi-edit/src/measurement.rs",
@@ -3852,6 +3927,7 @@ tests = [
 title = "Measurement distance area and perimeter"
 
 [[feature]]
+host = "gui"
 docs = "crates/pdfxi-convert/src/preflight.rs, docs/evidence/convert/T-0131.md"
 domain = "Print Production"
 evidence = "docs/evidence/convert/T-0131.md"
@@ -3866,6 +3942,7 @@ tests = [
 title = "Preflight profiles checks and fixups"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-standards/src/document_profile.rs",
     "crates/pdfxi-standards/src/standard.rs",
@@ -3932,6 +4009,7 @@ tests = [
 title = "PDF/A PDF/X PDF/E and PDF/VT validation"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/color.rs",
     "docs/book/src/authoring.md",
@@ -3990,6 +4068,7 @@ tests = [
 title = "ICC color management and output intents"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/separations.rs",
     "docs/book/src/authoring.md",
@@ -4039,6 +4118,7 @@ tests = [
 title = "Output preview and separations"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/separations.rs",
     "docs/book/src/authoring.md",
@@ -4087,6 +4167,7 @@ tests = [
 title = "Ink manager and overprint preview"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/print.rs",
     "crates/pdfxi-app/src/lib.rs",
@@ -4143,6 +4224,7 @@ tests = [
 title = "Trapping presets and transparency flattening"
 
 [[feature]]
+host = "cli"
 docs = "crates/pdfxi-cli/src/marks.rs, docs/evidence/convert/T-0131.md"
 domain = "Print Production"
 evidence = "docs/evidence/convert/T-0131.md"
@@ -4157,6 +4239,7 @@ tests = [
 title = "Page boxes bleed crop and printer marks"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/print.rs",
     "crates/pdfxi-app/src/lib.rs",
@@ -4219,6 +4302,7 @@ tests = [
 title = "Droplets hot folders and batch preflight"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/a11y_edit.rs",
     "docs/book/src/authoring.md",
@@ -4265,6 +4349,7 @@ tests = [
 title = "Tag tree and reading order editor"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/a11y_edit.rs",
     "docs/book/src/authoring.md",
@@ -4311,6 +4396,7 @@ tests = [
 title = "Alt text and table editor"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/accessibility.rs",
     "docs/book/src/cli.md",
@@ -4362,6 +4448,7 @@ tests = [
 title = "Accessibility and PDF/UA checker"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/a11y_nav.rs",
     "docs/book/src/authoring.md",
@@ -4406,6 +4493,7 @@ tests = [
 title = "Reflow high contrast and keyboard navigation"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/read_aloud.rs",
     "docs/book/src/authoring.md",
@@ -4493,6 +4581,7 @@ tests = [
 title = "Screen reader and accesskit integration"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/action.rs",
     "docs/book/src/authoring.md",
@@ -4557,6 +4646,7 @@ tests = [
 title = "Action Wizard create edit import export"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-automation/src/sequence_batch.rs",
     "crates/pdfxi-automation/src/action_wizard.rs",
@@ -4635,6 +4725,7 @@ tests = [
 title = "Batch processing and command sequences"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/watch.rs",
     "docs/book/src/cli.md",
@@ -4686,6 +4777,7 @@ tests = [
 title = "Droplets and watched folders"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/script.rs",
     "docs/book/src/authoring.md",
@@ -4745,6 +4837,7 @@ tests = [
 title = "Sandboxed Acrobat-compatible JavaScript subset"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/ops.rs",
     "docs/book/src/cli.md",
@@ -4807,6 +4900,7 @@ tests = [
 title = "CLI for every scriptable operation"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/api.rs",
     "crates/pdfxi-automation/src/api.rs",
@@ -4859,6 +4953,7 @@ tests = [
 title = "Local JSON API for automation"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/toolset.rs",
     "crates/pdfxi-cli/src/action.rs",
@@ -4963,9 +5058,10 @@ tests = [
 title = "WASM plugin host"
 
 [[feature]]
+host = "gui"
 docs = "crates/pdfxi-core/src/metadata.rs"
 domain = "Document Management"
-evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 16 new metadata tests pass; 110 unit + 6 integration total, 0 failed, EXIT=0. cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps: EXIT=0."
+evidence = "cargo test -p pdfxi-core (CARGO_TARGET_DIR=target/lanes/core): 16 new metadata tests pass; 110 unit + 6 integration total, 0 failed, EXIT=0. cargo clippy -p pdfxi-core --all-targets --all-features -- -D warnings: EXIT=0. RUSTDOCFLAGS=-D warnings cargo doc -p pdfxi-core --no-deps: EXIT=0. See docs/evidence/hardening/T-0255A.md."
 id = "MANAGE-001"
 notes = "Core implementation of document properties and XMP metadata: DocumentInfo reads/writes the classic /Info dictionary through the trailer and set_object with tolerant PdfDate parsing and UTF-16BE/PDFDocEncoding text strings; XmpMetadata parses and writes the catalog /Metadata stream with a namespace-prefix-tolerant RDF/XML reader, Flate decode, deterministic XML output, and structured Error::MalformedXmp. This is the headless core layer; a UI properties panel remains a separate app-lane concern."
 priority = "P1"
@@ -4991,6 +5087,7 @@ tests = [
 title = "Document properties and XMP metadata"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/home.rs",
     "docs/book/src/authoring.md",
@@ -5045,6 +5142,7 @@ tests = [
 title = "Home recents favorites and collections"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/find_files.rs",
     "docs/book/src/authoring.md",
@@ -5096,6 +5194,7 @@ tests = [
 title = "Cross-file search and index"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/portfolio.rs",
     "docs/book/src/authoring.md",
@@ -5142,6 +5241,7 @@ tests = [
 title = "PDF Portfolio management"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-cli/src/versions.rs",
     "docs/book/src/cli.md",
@@ -5198,6 +5298,7 @@ tests = [
 title = "Version compare and history"
 
 [[feature]]
+host = "gui"
 docs = "crates/pdfxi-app/src/shared_folder.rs, docs/evidence/app/T-0179.md"
 domain = "Document Management"
 evidence = "docs/evidence/app/T-0179.md"
@@ -5213,6 +5314,7 @@ tests = [
 title = "Network and SharePoint-style integration"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/media.rs",
     "docs/book/src/authoring.md",
@@ -5256,6 +5358,7 @@ tests = [
 title = "Audio and video annotations"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/media.rs",
     "docs/book/src/authoring.md",
@@ -5296,6 +5399,7 @@ tests = [
 title = "HTML5 media replacement for Flash"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/media3d.rs",
     "docs/book/src/authoring.md",
@@ -5343,6 +5447,7 @@ tests = [
 title = "U3D and PRC 3D viewing"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/geo.rs",
     "docs/book/src/authoring.md",
@@ -5393,6 +5498,7 @@ tests = [
 title = "Geospatial PDF support"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/interactions.rs",
     "docs/book/src/authoring.md",
@@ -5442,6 +5548,7 @@ tests = [
 title = "Interactive actions and triggers"
 
 [[feature]]
+host = "gui"
 docs = "scripts/package.ps1, scripts/install.ps1, docs/evidence/release/T-0192.md"
 domain = "Platform"
 evidence = "docs/evidence/release/T-0192.md"
@@ -5497,7 +5604,7 @@ is claimed. Linux-specific shell/registry/installer behaviour stays the
 PLAT-001/005/006 host boundary.
 
 Status: deferred. Windows (x86_64-pc-windows-msvc) is the only verified support
-target for 0.1.3. The Linux and macOS checks above are developer host probes,
+target for 0.1.4. The Linux and macOS checks above are developer host probes,
 not supported builds, and GitHub CI is not used by this campaign. No macOS or
 Linux user support is claimed.
 """
@@ -5507,6 +5614,7 @@ tests = ["cargo check --workspace --all-targets"]
 title = "macOS and Linux desktop builds"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/office_roundtrip.rs",
     "docs/book/src/authoring.md",
@@ -5571,6 +5679,7 @@ tests = [
 title = "Microsoft Office integration"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/handoff.rs",
     "docs/book/src/authoring.md",
@@ -5623,6 +5732,7 @@ tests = [
 title = "Browser integration"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/shell.rs",
     "docs/book/src/authoring.md",
@@ -5677,6 +5787,7 @@ tests = [
 title = "Shell integration and file associations"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/policy.rs",
     "docs/book/src/authoring.md",
@@ -5731,6 +5842,7 @@ tests = [
 title = "Deployment preferences and customization"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/unicode.rs",
     "docs/book/src/authoring.md",
@@ -5777,6 +5889,7 @@ tests = [
 title = "Unicode CJK and right-to-left text"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/compatibility.rs",
     "crates/pdfxi-core/src/lib.rs",
@@ -5821,6 +5934,7 @@ tests = [
 title = "PDF 1.0 through 2.0 compatibility"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-core/src/xref_stream.rs",
     "crates/pdfxi-core/src/lib.rs",
@@ -5881,6 +5995,7 @@ tests = [
 title = "Cross-reference tables and streams"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/layout.rs",
     "docs/book/src/cli.md",
@@ -5942,6 +6057,7 @@ tests = [
 title = "Object streams and linearization"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/font.rs",
     "docs/book/src/cli.md",
@@ -5995,6 +6111,7 @@ tests = [
 title = "Font embedding and CID fonts"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/transparency.rs",
     "docs/book/src/authoring.md",
@@ -6040,6 +6157,7 @@ tests = [
 title = "Transparency and blend modes"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/structure.rs",
     "docs/book/src/cli.md",
@@ -6154,6 +6272,7 @@ tests = [
 title = "PDF/A conformance"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-standards/src/icc.rs",
     "crates/pdfxi-standards/src/document_profile.rs",
@@ -6190,6 +6309,7 @@ tests = [
 title = "PDF/X conformance"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-standards/src/structure.rs",
     "crates/pdfxi-standards/src/input.rs",
@@ -6236,6 +6356,7 @@ tests = [
 title = "PDF/UA conformance"
 
 [[feature]]
+host = "cli"
 docs = [
     "crates/pdfxi-cli/src/update.rs",
     "docs/book/src/cli.md",
@@ -6289,6 +6410,7 @@ tests = [
 title = "Incremental update and digital preservation"
 
 [[feature]]
+host = "cli"
 docs = "docs/evidence/core/T-0008.md"
 domain = "Standards"
 evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
@@ -6306,6 +6428,7 @@ tests = [
 title = "Classic xref table and startxref parser"
 
 [[feature]]
+host = "cli"
 docs = "docs/evidence/core/T-0008.md"
 domain = "Standards"
 evidence = "cargo test -p pdfxi-core: 9 passed; docs/evidence/core/T-0008.md"
@@ -6321,6 +6444,7 @@ tests = [
 title = "Page tree traversal with inherited attributes"
 
 [[feature]]
+host = "cli"
 docs = "docs/evidence/core/T-0010.md"
 domain = "Automation"
 evidence = "cargo test -p pdfxi-cli: 9 passed; docs/evidence/core/T-0010.md"
@@ -6335,6 +6459,7 @@ tests = [
 title = "CLI info command with stable JSON output"
 
 [[feature]]
+host = "cli"
 docs = "docs/evidence/hardening/T-0216.md"
 domain = "Automation"
 evidence = "docs/evidence/hardening/T-0216.md"
@@ -6367,6 +6492,7 @@ tests = [
 title = "CLI text extraction for uncompressed content streams"
 
 [[feature]]
+host = "gui"
 docs = "crates/pdfxi-render/src/lib.rs, crates/pdfxi-app/src/raster.rs, crates/pdfxi-app/src/ui.rs, docs/evidence/app/T-0191.md"
 domain = "View & Navigate"
 evidence = "docs/evidence/app/T-0191.md"
@@ -6382,6 +6508,7 @@ tests = [
 title = "Open PDF and render pages in the viewer"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-render/src/lib.rs",
     "crates/pdfxi-render/src/pdfium_backend.rs",
@@ -6415,6 +6542,7 @@ tests = ["ui::tests::real_document_uses_real_page_geometry_and_text"]
 title = "Find text in a document and select copy text"
 
 [[feature]]
+host = "gui"
 docs = [
     "crates/pdfxi-app/src/loupe.rs",
     "crates/pdfxi-app/src/lib.rs",
@@ -6483,6 +6611,7 @@ tests = [
 title = "Loupe magnifier and gesture navigation"
 
 [[feature]]
+host = "gui"
 docs = ["docs/evidence/ui/T-0201.md"]
 domain = "View & Navigate"
 evidence = "docs/evidence/ui/T-0201.md"
@@ -6510,6 +6639,7 @@ tests = [
 title = "Window controls, title bar settings, and persisted theme"
 
 [[feature]]
+host = "gui"
 docs = [
     "docs/evidence/release/T-0202.md",
     "docs/THIRD_PARTY.md",
@@ -6539,6 +6669,7 @@ tests = [
 title = "Shippable viewer package: GUI subsystem, icon, version resource, DPI manifest, bundled PDFium"
 
 [[feature]]
+host = "cli"
 docs = [
     "installer/pdfxi.iss",
     "docs/evidence/release/T-0202.md",

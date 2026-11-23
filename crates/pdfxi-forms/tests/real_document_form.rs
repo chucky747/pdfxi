@@ -278,6 +278,58 @@ fn flatten_paints_widgets_removes_acroform_and_keeps_page_text() {
 }
 
 #[test]
+fn flatten_preserves_resources_inherited_from_the_page_tree() {
+    let mut doc = fill_fixture();
+    let page = doc.page(0).expect("page");
+    let mut page_dictionary = dictionary(&doc, page.id);
+    let resources = page_dictionary
+        .remove("Resources")
+        .expect("fixture page has resources");
+    let resources_id = ObjectId::new(900, 0);
+    doc.set_object(resources_id, resources)
+        .expect("stage inherited resources");
+    let parent_id = page_dictionary
+        .get("Parent")
+        .and_then(Object::as_reference)
+        .expect("page parent");
+    let mut parent = dictionary(&doc, parent_id);
+    parent.insert("Resources".to_owned(), Object::Reference(resources_id));
+    doc.set_object(parent_id, Object::Dictionary(parent))
+        .expect("stage page-tree resources");
+    doc.set_object(page.id, Object::Dictionary(page_dictionary))
+        .expect("stage page without direct resources");
+
+    // Reopen so the page-tree walker resolves `/Resources` through the parent,
+    // exactly as it does for an authored PDF.
+    let mut doc = save_and_reopen(&doc);
+    let page = doc.page(0).expect("page");
+    assert_eq!(
+        page.resources,
+        Some(resources_id),
+        "resources must be inherited from the page tree"
+    );
+
+    let report = flatten(&mut doc).expect("flatten");
+    assert!(report.widgets >= 1);
+
+    let flattened = save_and_reopen(&doc);
+    let page = flattened.page(0).expect("page");
+    let page_dictionary = dictionary(&flattened, page.id);
+    let resources = page_dictionary
+        .get("Resources")
+        .and_then(Object::as_dictionary)
+        .expect("flattened page resources");
+    assert!(
+        resources.get("Font").is_some(),
+        "inherited fonts must survive flattening"
+    );
+    assert!(
+        resources.get("XObject").is_some(),
+        "widget appearances must be added to the inherited resources"
+    );
+}
+
+#[test]
 fn radio_group_fills_widget_states_on_a_derived_fixture() {
     let mut doc = load();
     add_radio_group(&mut doc);

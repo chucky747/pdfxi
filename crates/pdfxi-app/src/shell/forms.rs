@@ -1721,6 +1721,13 @@ impl PdfxiApp {
             return;
         }
         let response = ui.interact(rect, id, egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::TextEdit,
+                true,
+                format!("Form field {}: {value}", field.name),
+            )
+        });
         if response.clicked() {
             self.forms.active = Some(field.name.clone());
             self.forms.focus_index = widget_index;
@@ -1754,6 +1761,13 @@ impl PdfxiApp {
                 egui::Sense::hover()
             },
         );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Checkbox,
+                editable,
+                format!("Form field {}", field.name),
+            )
+        });
         let painter = ui.painter();
         painter.rect_filled(rect, 1.0, palette.paper);
         let stroke = if focused || (response.hovered() && editable) {
@@ -1863,6 +1877,13 @@ impl PdfxiApp {
         ui.painter()
             .line_segment([caret, caret + egui::vec2(3.0, -1.5)], caret_stroke);
         let response = ui.interact(rect, id, egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::ComboBox,
+                true,
+                format!("Form field {}: {value}", field.name),
+            )
+        });
         if response.clicked() {
             let anchor = rect.right_top();
             self.dispatch(
@@ -1911,6 +1932,13 @@ impl PdfxiApp {
                 egui::Sense::hover()
             },
         );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::RadioButton,
+                editable,
+                format!("Form field {}", field.name),
+            )
+        });
         let painter = ui.painter();
         let center = rect.center();
         let radius = rect.width().min(rect.height()) * 0.4;

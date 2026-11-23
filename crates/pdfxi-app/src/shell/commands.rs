@@ -568,7 +568,14 @@ impl crate::ui::PdfxiApp {
                 self.set_theme_preference(preference);
             }
             AppCommand::Caption(action) => {
-                if let Some(ctx) = ctx {
+                if action == crate::ui::CaptionAction::Close {
+                    // A dirty document still has to reach the prompt; a clean
+                    // document can finish immediately. `ViewportCommand::Close`
+                    // is a no-op for the root viewport in eframe 0.33.
+                    if !self.begin_window_close_prompt() {
+                        self.request_platform_close = true;
+                    }
+                } else if let Some(ctx) = ctx {
                     let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
                     ctx.send_viewport_cmd(crate::ui::caption_command(action, maximized));
                 }

@@ -1825,7 +1825,20 @@ pub fn flatten(doc: &mut Document) -> Result<FlattenFormReport, AcroFormError> {
                 .ok_or(AcroFormError::Malformed(
                     "page Resources is not a dictionary",
                 ))?,
-            None => Dictionary::new(),
+            // `/Resources` is an inheritable page attribute. Use the value the
+            // page-tree walker resolved so flattening a widget does not drop
+            // the fonts and XObjects that existing page content relies on.
+            None => match page.resources {
+                Some(id) => {
+                    doc.object(id)?
+                        .as_dictionary()
+                        .cloned()
+                        .ok_or(AcroFormError::Malformed(
+                            "inherited page Resources is not a dictionary",
+                        ))?
+                }
+                None => Dictionary::new(),
+            },
         };
         let mut xobjects = match resources.get("XObject") {
             Some(Object::Reference(id)) => {

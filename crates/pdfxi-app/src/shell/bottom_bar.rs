@@ -51,6 +51,9 @@ impl PdfxiApp {
                 egui::TextEdit::singleline(&mut self.page_box)
                     .horizontal_align(egui::Align::Center),
             );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Page number")
+            });
             self.page_box_focused = response.has_focus();
             if response.lost_focus() {
                 let text = self.page_box.clone();
@@ -73,7 +76,7 @@ impl PdfxiApp {
 
             shell_divider(ui, palette);
 
-            egui::ComboBox::from_id_salt("shell-zoom")
+            let zoom = egui::ComboBox::from_id_salt("shell-zoom")
                 .selected_text(egui::RichText::new(zoom_label).size(10.5))
                 .width(78.0)
                 .show_ui(ui, |ui| {
@@ -93,6 +96,9 @@ impl PdfxiApp {
                         self.dispatch(AppCommand::ActualSize, Some(ui.ctx()));
                     }
                 });
+            zoom.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Zoom")
+            });
 
             if shell_icon_button(ui, palette, Icon::Minus, 22.0, "Zoom out")
                 .on_hover_text("Zoom out")

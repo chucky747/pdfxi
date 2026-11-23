@@ -1,0 +1,94 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 4 0 R >> >> /NeedAppearances true >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 4 0 R >> >> /Annots [5 0 R 6 0 R 7 0 R] /Contents 8 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /P 3 0 R /F 4 /DA (/Helv 12 Tf 0 g) /T (readonly_ff1) /Ff 1 /V (locked value) /Rect [72 700 300 720] >>
+endobj
+6 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /P 3 0 R /F 4 /DA (/Helv 12 Tf 0 g) /T (required_ff2) /Ff 2 /Rect [72 660 300 680] >>
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /P 3 0 R /F 4 /DA (/Helv 12 Tf 0 g) /T (plain_ff0) /Rect [72 620 300 640] >>
+endobj
+8 0 obj
+<< /Length 45 >>
+stream
+BT /Helv 12 Tf 72 740 Td (Ff test form) Tj ET
+endstream
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000180 00000 n 
+0000000237 00000 n 
+0000000393 00000 n 
+0000000463 00000 n 
+0000000623 00000 n 
+0000000765 00000 n 
+0000000898 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+993
+%%EOF
+
+5 0 obj
+<< /AP << /N 11 0 R >> /DA <2F48656C7620313220546620302067> /F 4 /FT /Tx /Ff 1 /P 3 0 R /Rect [ 72 700 300 720 ] /Subtype /Widget /T <726561646F6E6C795F666631> /Type /Annot /V <6C6F636B65642076616C75652D4841434B4544> >>
+endobj
+11 0 obj
+<< /BBox [ 0 0 228 20 ] /FormType 1 /Length 50 /Resources << /Font << /Helv 4 0 R >> >> /Subtype /Form /Type /XObject >>
+stream
+BT
+/Helv 12 Tf
+3 5 Td
+(locked value-HACKED) Tj
+ET
+
+endstream
+endobj
+xref
+5 1
+0000001237 00000 n 
+11 1
+0000001472 00000 n 
+trailer
+<< /ID [ <FA051BF0A39783FBAF1DE5E030DE0BD0> <960070865B466DFD175B8083B141E9F1> ] /Prev 993 /Root 1 0 R /Size 12 >>
+startxref
+1677
+%%EOF
+
+7 0 obj
+<< /AP << /N 20 0 R >> /DA <2F48656C7620313220546620302067> /F 4 /FT /Tx /P 3 0 R /Rect [ 72 620 300 640 ] /Subtype /Widget /T <706C61696E5F666630> /Type /Annot /V <706C61696E2D76616C7565> >>
+endobj
+20 0 obj
+<< /BBox [ 0 0 228 20 ] /FormType 1 /Length 42 /Resources << /Font << /Helv 4 0 R >> >> /Subtype /Form /Type /XObject >>
+stream
+BT
+/Helv 12 Tf
+3 5 Td
+(plain-value) Tj
+ET
+
+endstream
+endobj
+xref
+7 1
+0000001876 00000 n 
+20 1
+0000002083 00000 n 
+trailer
+<< /ID [ <FA051BF0A39783FBAF1DE5E030DE0BD0> <55F3FEBBE7E3313077C2937681403CDA> ] /Prev 1677 /Root 1 0 R /Size 21 >>
+startxref
+2280
+%%EOF

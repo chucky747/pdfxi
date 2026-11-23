@@ -35,6 +35,9 @@ impl PdfxiApp {
             egui::Id::new("shell-title-drag"),
             egui::Sense::click_and_drag(),
         );
+        drag.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Window drag area")
+        });
         let pointer_y = ui
             .ctx()
             .input(|input| input.pointer.hover_pos())
@@ -64,6 +67,15 @@ impl PdfxiApp {
                     egui::Id::new(("caption-button", action)),
                     egui::Sense::click(),
                 );
+                let caption_label = match action {
+                    CaptionAction::Minimize => "Minimize",
+                    CaptionAction::ToggleMaximize if maximized => "Restore",
+                    CaptionAction::ToggleMaximize => "Maximize",
+                    CaptionAction::Close => "Close",
+                };
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, caption_label)
+                });
                 let close = *action == CaptionAction::Close;
                 let hovered = response.hovered();
                 if hovered {
@@ -362,6 +374,13 @@ impl PdfxiApp {
                 egui::Id::new(("tab-close", index)),
                 egui::Sense::click(),
             );
+            close_response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    format!("Close tab {title}"),
+                )
+            });
             if close_response.hovered() {
                 ui.painter()
                     .circle_filled(close_rect.center(), 7.0, palette.hover);

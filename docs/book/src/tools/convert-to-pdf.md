@@ -33,7 +33,7 @@ set. An unknown extension names the missing Office extractor.
 - **Convert**, enabled only with at least one source and an output.
 
 Conversion writes the result, reports "Converted N file(s) to a PDF with M
-page(s) at <path>", and records a PDF converted notification. Failures are
+page(s) at `<path>`", and records a PDF converted notification. Failures are
 shown as "Convert failed: ..." and keep the source list.
 
 ## Office is unavailable

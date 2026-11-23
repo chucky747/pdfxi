@@ -38,11 +38,14 @@ impl PdfxiApp {
                     .color(palette.text_muted),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add(
+                let search = ui.add(
                     egui::TextEdit::singleline(&mut self.tools_search)
                         .hint_text("Search tools")
                         .desired_width(112.0),
                 );
+                search.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search tools")
+                });
             });
         });
         ui.add_space(8.0);
