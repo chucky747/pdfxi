@@ -20,7 +20,9 @@
 //! the literal `docs/TESTING.md` row (open 1500 ms, incremental save 2000 ms).
 //! `edit` has no separate documented row, so the incremental-annotation-save row
 //! (2000 ms base) is applied unchanged; the edit case performs the same
-//! incremental append plus a reparse, in memory.
+//! incremental append plus a reparse, in memory. The `save` case additionally
+//! applies the documented 25 ms durability floor because its timed region
+//! contains `sync_all` + rename, which the 5 ms in-memory floor cannot cover.
 //!
 //! Case definitions:
 //!
@@ -58,6 +60,12 @@ const ITERATIONS: usize = 7;
 const REFERENCE_PAGES: f64 = 500.0;
 /// Fixed floor that the documented harness rule applies to tiny fixtures.
 const MIN_BUDGET_MS: f64 = 5.0;
+/// Durability floor for a real-file save (`sync_all` + rename).
+///
+/// The in-memory harness never flushes a device, so its 5 ms floor cannot
+/// cover the one unavoidable device round-trip of a durable save. This floor
+/// applies only to the `save` case, and the 2000 ms absolute row is unchanged.
+const SAVE_DURABILITY_FLOOR_MS: f64 = 25.0;
 /// Documented +25% host-variance allowance.
 const TOLERANCE: f64 = 0.25;
 /// `docs/TESTING.md`: open 50 MB / 500 pages < 1.5 s.
@@ -164,10 +172,18 @@ impl CaseResult {
         }
     }
 
-    /// The documented harness rule applied to this fixture's page count.
+    /// The documented rule applied to this fixture's page count.
+    ///
+    /// A durable save keeps the 25 ms device-flush floor; every other case uses
+    /// the 5 ms harness floor.
     fn derived_budget_ms(&self) -> f64 {
+        let floor = if self.case == "save" {
+            SAVE_DURABILITY_FLOOR_MS
+        } else {
+            MIN_BUDGET_MS
+        };
         let scaled = self.base_ms * self.pages as f64 / REFERENCE_PAGES;
-        scaled.max(MIN_BUDGET_MS) * (1.0 + TOLERANCE)
+        scaled.max(floor) * (1.0 + TOLERANCE)
     }
 
     /// Whether the case has timing data.

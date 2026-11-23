@@ -57,7 +57,9 @@ try {
         Sort-Object -Unique
     if (-not $searchDirs) { throw "no rlibs found under $release" }
 
-    $rsp = Join-Path $env:TEMP ("opencode\t0260b-rustc-{0}.rsp" -f $PID)
+    $rspDir = Join-Path $env:TEMP 'opencode'
+    New-Item -ItemType Directory -Force -Path $rspDir | Out-Null
+    $rsp = Join-Path $rspDir ("t0260b-rustc-{0}.rsp" -f $PID)
     # rustc reads one argument per line from a response file and performs no
     # quote stripping, so each line below is a complete argument.
     $argsList = @(

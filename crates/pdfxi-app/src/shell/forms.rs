@@ -1664,6 +1664,28 @@ impl PdfxiApp {
         }
     }
 
+    /// Read the latest AccessKit `SetValue` request for a custom-painted widget.
+    ///
+    /// The on-page form widgets are painted by hand, so egui's built-in
+    /// `TextEdit`/`ComboBox` handlers never see their `SetValue` action. The
+    /// platform adapter leaves the request on the node id; apply it through the
+    /// same typed command the keyboard editor uses.
+    fn accesskit_set_value(ui: &egui::Ui, id: egui::Id) -> Option<String> {
+        let mut requested = None;
+        ui.input_mut(|input| {
+            input.consume_accesskit_action_requests(id, |request| {
+                if request.action == egui::accesskit::Action::SetValue
+                    && let Some(egui::accesskit::ActionData::Value(value)) = &request.data
+                {
+                    requested = Some(value.to_string());
+                    return true;
+                }
+                false
+            });
+        });
+        requested
+    }
+
     fn form_text_widget_ui(&mut self, ui: &mut egui::Ui, view: &WidgetView<'_>, editable: bool) {
         let WidgetView {
             palette,
@@ -1722,12 +1744,24 @@ impl PdfxiApp {
         }
         let response = ui.interact(rect, id, egui::Sense::click());
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::TextEdit,
-                true,
-                format!("Form field {}: {value}", field.name),
-            )
+            let mut info =
+                egui::WidgetInfo::text_edit(true, value.clone(), value.clone(), String::new());
+            info.label = Some(format!("Form field {}", field.name));
+            info
         });
+        ui.ctx().accesskit_node_builder(id, |builder| {
+            builder.add_action(egui::accesskit::Action::SetValue);
+        });
+        if let Some(requested) = Self::accesskit_set_value(ui, id) {
+            self.dispatch(
+                AppCommand::SetFormText {
+                    name: field.name.clone(),
+                    value: requested,
+                },
+                Some(ui.ctx()),
+            );
+            return;
+        }
         if response.clicked() {
             self.forms.active = Some(field.name.clone());
             self.forms.focus_index = widget_index;
@@ -1762,9 +1796,10 @@ impl PdfxiApp {
             },
         );
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(
+            egui::WidgetInfo::selected(
                 egui::WidgetType::Checkbox,
                 editable,
+                checked,
                 format!("Form field {}", field.name),
             )
         });
@@ -1878,12 +1913,27 @@ impl PdfxiApp {
             .line_segment([caret, caret + egui::vec2(3.0, -1.5)], caret_stroke);
         let response = ui.interact(rect, id, egui::Sense::click());
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(
+            let mut info = egui::WidgetInfo::labeled(
                 egui::WidgetType::ComboBox,
                 true,
-                format!("Form field {}: {value}", field.name),
-            )
+                format!("Form field {}", field.name),
+            );
+            info.current_text_value = Some(value.clone());
+            info
         });
+        ui.ctx().accesskit_node_builder(id, |builder| {
+            builder.add_action(egui::accesskit::Action::SetValue);
+        });
+        if let Some(requested) = Self::accesskit_set_value(ui, id) {
+            self.dispatch(
+                AppCommand::SetFormChoice {
+                    name: field.name.clone(),
+                    value: Some(requested),
+                },
+                Some(ui.ctx()),
+            );
+            return;
+        }
         if response.clicked() {
             let anchor = rect.right_top();
             self.dispatch(
@@ -1933,9 +1983,10 @@ impl PdfxiApp {
             },
         );
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(
+            egui::WidgetInfo::selected(
                 egui::WidgetType::RadioButton,
                 editable,
+                selected,
                 format!("Form field {}", field.name),
             )
         });
@@ -2132,6 +2183,166 @@ mod tests {
             }],
             field_object: None,
         }
+    }
+
+    #[test]
+    fn canvas_text_widget_applies_accesskit_set_value() {
+        use egui_kittest::Harness;
+
+        let mut app = PdfxiApp::new();
+        app.open_document(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/ui-smoke/ff-test-gui.pdf"),
+        );
+        let field = app
+            .forms
+            .model
+            .as_ref()
+            .expect("the form fixture loads a model")
+            .fields()
+            .iter()
+            .find(|field| field.name == "plain_ff0")
+            .expect("plain_ff0 is present")
+            .clone();
+        let id = egui::Id::new(("accesskit-form-test", "plain_ff0"));
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_state(
+                |ctx, app| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let palette = Palette::for_mode(app.theme);
+                        let view = WidgetView {
+                            palette: &palette,
+                            rect: egui::Rect::from_min_size(
+                                egui::pos2(20.0, 20.0),
+                                egui::vec2(200.0, 24.0),
+                            ),
+                            id,
+                            field: &field,
+                            widget: field.widgets.first(),
+                            widget_index: 0,
+                            focused: false,
+                        };
+                        app.form_text_widget_ui(ui, &view, true);
+                    });
+                },
+                app,
+            );
+        harness.run();
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::AccessKitActionRequest(
+                egui::accesskit::ActionRequest {
+                    action: egui::accesskit::Action::SetValue,
+                    target: egui::accesskit::NodeId::from(id.value()),
+                    data: Some(egui::accesskit::ActionData::Value(
+                        "set by assistive tech".to_owned().into(),
+                    )),
+                },
+            ));
+        harness.run();
+
+        assert!(
+            harness.state().status().contains("Filled plain_ff0"),
+            "status after SetValue: {}",
+            harness.state().status()
+        );
+        let updated = harness
+            .state()
+            .forms
+            .model
+            .as_ref()
+            .expect("model")
+            .fields()
+            .iter()
+            .find(|field| field.name == "plain_ff0")
+            .expect("plain_ff0");
+        assert_eq!(
+            updated.value,
+            FieldValue::Text("set by assistive tech".to_owned())
+        );
+    }
+
+    #[test]
+    fn canvas_choice_widget_applies_accesskit_set_value() {
+        use egui_kittest::Harness;
+
+        let mut app = PdfxiApp::new();
+        app.open_document(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/realworld/pdfxi-forms-selfmade.pdf"),
+        );
+        let field = app
+            .forms
+            .model
+            .as_ref()
+            .expect("the form fixture loads a model")
+            .fields()
+            .iter()
+            .find(|field| field.name == "choice-field")
+            .expect("choice-field is present")
+            .clone();
+        let id = egui::Id::new(("accesskit-form-test", "choice-field"));
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_state(
+                |ctx, app| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let palette = Palette::for_mode(app.theme);
+                        let view = WidgetView {
+                            palette: &palette,
+                            rect: egui::Rect::from_min_size(
+                                egui::pos2(20.0, 20.0),
+                                egui::vec2(200.0, 24.0),
+                            ),
+                            id,
+                            field: &field,
+                            widget: field.widgets.first(),
+                            widget_index: 0,
+                            focused: false,
+                        };
+                        app.form_choice_widget_ui(ui, &view, true);
+                    });
+                },
+                app,
+            );
+        harness.run();
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::AccessKitActionRequest(
+                egui::accesskit::ActionRequest {
+                    action: egui::accesskit::Action::SetValue,
+                    target: egui::accesskit::NodeId::from(id.value()),
+                    data: Some(egui::accesskit::ActionData::Value(
+                        "three".to_owned().into(),
+                    )),
+                },
+            ));
+        harness.run();
+
+        assert!(
+            harness
+                .state()
+                .status()
+                .contains("Selected three for choice-field"),
+            "status after SetValue: {}",
+            harness.state().status()
+        );
+        let updated = harness
+            .state()
+            .forms
+            .model
+            .as_ref()
+            .expect("model")
+            .fields()
+            .iter()
+            .find(|field| field.name == "choice-field")
+            .expect("choice-field");
+        assert_eq!(updated.value, FieldValue::Choice(vec!["three".to_owned()]));
     }
 
     #[test]

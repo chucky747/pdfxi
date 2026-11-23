@@ -4,12 +4,12 @@
 # behaviours that unit tests cannot prove: the window opens, the accessibility
 # tree has no unnamed invokable controls, text search reaches real page text,
 # password-protected files unlock, page rotation keeps bookmarks, a dirty
-# window close prompts, a deep page tree does not crash, and form fields load.
-#
-# The script is self-contained: it generates the protected, rotated and deep
-# fixtures with the installed CLI and uses the bundled PDFium checker as an
-# independent reader. It writes screenshots and a log under -OutDir and exits
-# non-zero on the first failed group.
+# window close prompts, a deep page tree does not crash, form fields load and
+# accept a UI Automation SetValue, and a real drag-select + Ctrl+C reaches the
+# clipboard. It generates the protected, rotated, deep and selection fixtures
+# with the installed CLI and uses the bundled PDFium checker as an independent
+# reader. It writes screenshots and a log under -OutDir and exits non-zero on
+# the first failed group.
 #
 # Usage:
 #   powershell -NoProfile -File scripts/ui-smoke.ps1 `
@@ -240,6 +240,84 @@ function New-DeepPagesPdf {
     [System.IO.File]::WriteAllText($Path, $body.ToString(), (New-Object System.Text.ASCIIEncoding))
 }
 
+function New-SelectionPdf {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    # Twelve full-width-ish lines give the drag a known first and last
+    # character at any DPI; the marker makes a stale clipboard value fail.
+    $lines = @('B1SELECTIONPROBE alpha')
+    for ($i = 2; $i -le 12; $i++) { $lines += ("selection line {0:D2}" -f $i) }
+    $text = 'BT /F1 18 Tf 60 740 Td 18 TL '
+    foreach ($line in $lines) { $text += '(' + $line + ') Tj T* ' }
+    $text += 'ET'
+    $objects = @(
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        ("<< /Length $($text.Length) >>`nstream`n$text`nendstream"),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+    )
+    $body = New-Object System.Text.StringBuilder
+    [void]$body.Append("%PDF-1.4`n%PDFXI B1 selection probe`n")
+    $offsets = New-Object System.Collections.Generic.List[long]
+    $offsets.Add(0)
+    for ($i = 1; $i -le $objects.Count; $i++) {
+        $offsets.Add([long]$body.Length)
+        [void]$body.Append("$i 0 obj`n$($objects[$i - 1])`nendobj`n")
+    }
+    $xref = [long]$body.Length
+    [void]$body.Append("xref`n0 $($objects.Count + 1)`n")
+    [void]$body.Append("0000000000 65535 f `n")
+    for ($i = 1; $i -le $objects.Count; $i++) {
+        [void]$body.Append(("{0:0000000000} 00000 n `n" -f $offsets[$i]))
+    }
+    [void]$body.Append("trailer`n<< /Size $($objects.Count + 1) /Root 1 0 R >>`nstartxref`n$xref`n%%EOF`n")
+    [System.IO.File]::WriteAllText($Path, $body.ToString(), (New-Object System.Text.ASCIIEncoding))
+}
+
+function Get-PageWhiteBounds {
+    # Find the white page rectangle in a window screenshot so the selection
+    # drag stays inside the page at any DPI or window size.
+    param([Parameter(Mandatory = $true)][string]$Png)
+    Add-Type -AssemblyName System.Drawing
+    $bmp = [System.Drawing.Bitmap]::FromFile($Png)
+    try {
+        $w = $bmp.Width; $h = $bmp.Height
+        # Text lines can split one row into short white runs, so try several
+        # rows and keep the widest run; a row below the text spans the page.
+        $bestStart = -1; $bestLen = 0
+        foreach ($fraction in @(0.50, 0.60, 0.70, 0.80)) {
+            $row = [int]($h * $fraction)
+            $start = -1
+            for ($x = [int]($w * 0.25); $x -lt [int]($w * 0.85); $x++) {
+                $c = $bmp.GetPixel($x, $row)
+                $white = ($c.R -gt 230 -and $c.G -gt 230 -and $c.B -gt 230)
+                if ($white -and $start -lt 0) { $start = $x }
+                if ((-not $white) -and $start -ge 0) {
+                    if (($x - $start) -gt $bestLen) { $bestLen = $x - $start; $bestStart = $start }
+                    $start = -1
+                }
+            }
+            if ($start -ge 0 -and (($w - $start) -gt $bestLen)) { $bestLen = $w - $start; $bestStart = $start }
+        }
+        if ($bestLen -lt 300) { throw "no white page found in $Png (widest run $bestLen px)" }
+        $x1 = $bestStart; $x2 = $bestStart + $bestLen - 1
+        $col = $x1 + 8
+        $bestY1 = -1; $bestY2 = -1; $bestH = 0; $ystart = -1
+        for ($y = [int]($h * 0.15); $y -lt [int]($h * 0.95); $y++) {
+            $c = $bmp.GetPixel($col, $y)
+            $white = ($c.R -gt 230 -and $c.G -gt 230 -and $c.B -gt 230)
+            if ($white -and $ystart -lt 0) { $ystart = $y }
+            if ((-not $white) -and $ystart -ge 0) {
+                if (($y - $ystart) -gt $bestH) { $bestH = $y - $ystart; $bestY1 = $ystart; $bestY2 = $y - 1 }
+                $ystart = -1
+            }
+        }
+        if ($ystart -ge 0 -and (($h - $ystart) -gt $bestH)) { $bestH = $h - $ystart; $bestY1 = $ystart; $bestY2 = $h - 1 }
+        if ($bestH -lt 300) { throw "no white page column found in $Png (tallest run $bestH px)" }
+        @($x1, $bestY1, $x2, $bestY2)
+    } finally { $bmp.Dispose() }
+}
+
 # --- fixtures --------------------------------------------------------------
 $excel = Join-Path $root 'fixtures\realworld\microsoft-excel-2019-sample.pdf'
 $slides = Join-Path $root 'fixtures\realworld\powerpoint-slides.pdf'
@@ -382,6 +460,13 @@ try {
     if (Assert-TreePattern -Label 'Fill & Sign lists readonly_ff1' -Pattern 'readonly_ff1') {
         Assert-TreePattern -Label 'Fill & Sign lists required_ff2' -Pattern 'required_ff2' | Out-Null
         Assert-TreePattern -Label 'Fill & Sign lists plain_ff0' -Pattern 'plain_ff0' | Out-Null
+        $setValue = Set-ElValue -Name 'Form field plain_ff0' -Value 'uia-set-value'
+        if ($setValue -match "ok now='uia-set-value'") {
+            Write-SmokePass 'UI Automation SetValue writes plain_ff0'
+        } else {
+            Write-SmokeFail "UI Automation SetValue did not write plain_ff0: $setValue"
+        }
+        Assert-TreePattern -Label 'UIA SetValue reaches the form model' -Pattern 'Filled plain_ff0' | Out-Null
         Assert-NoUnnamedControls -Label 'forms shell'
         Shot -Name '06-forms' | Out-Null
     }
@@ -391,9 +476,55 @@ try {
     } else {
         Write-SmokeFail "form validate did not report required_ff2: $($validate.Text.Trim())"
     }
-    Close-SmokeUi -Tag 'forms'
+    # The SetValue edit above marks the document dirty, so the close must prompt.
+    $handle = Get-UiWin
+    [void][RvW]::PostMessage($handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+    if (Assert-TreePattern -Label 'dirty form edit prompts on close' -Pattern 'Unsaved changes') {
+        Real-Chord -Vk 0x44 | Out-Null
+        Start-Sleep -Milliseconds 1500
+        if (Test-UiAlive) {
+            Write-SmokeFail 'Discard did not close the dirty form viewer'
+            @(Get-UiProc) | Stop-Process -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-SmokePass 'Discard closed the dirty form viewer'
+        }
+    }
 } catch {
     Write-SmokeFail "forms session: $($_.Exception.Message)"
+    @(Get-UiProc) | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+# --- 7. B1: drag-select page text and copy it -----------------------------
+try {
+    $selection = Join-Path $OutDir 'selection-content.pdf'
+    New-SelectionPdf -Path $selection
+    Start-SmokeUi -Arguments @($selection) -Tag 'selection'
+    Assert-TreePattern -Label 'selection fixture opened' -Pattern 'selection-content' | Out-Null
+    Shot -Name '07-selection-before' | Out-Null
+    $bounds = Get-PageWhiteBounds -Png (Join-Path $OutDir '07-selection-before.png')
+    Add-Type -AssemblyName System.Windows.Forms
+    $savedClipboard = $null
+    try { $savedClipboard = [System.Windows.Forms.Clipboard]::GetText() } catch { }
+    [System.Windows.Forms.Clipboard]::SetText('PDFXI UI smoke clipboard sentinel')
+    try {
+        Real-Drag ($bounds[0] + 12) ($bounds[1] + 12) ($bounds[2] - 12) ($bounds[3] - 12) | Out-Null
+        if (Assert-TreePattern -Label 'page drag selects text without a tool switch' -Pattern 'Selected [1-9][0-9]* characters') {
+            Real-Chord -Vk 0x11, 0x43 | Out-Null
+            Start-Sleep -Milliseconds 700
+            $clip = [System.Windows.Forms.Clipboard]::GetText()
+            if ($clip -match 'B1SELECTIONPROBE' -and $clip -match 'selection line 11') {
+                Write-SmokePass "Ctrl+C copied $($clip.Length) selected characters to the clipboard"
+            } else {
+                Write-SmokeFail "clipboard did not receive the selection (length $($clip.Length))"
+            }
+        }
+    } finally {
+        if ($null -ne $savedClipboard) { [System.Windows.Forms.Clipboard]::SetText($savedClipboard) } else { [System.Windows.Forms.Clipboard]::Clear() }
+    }
+    Shot -Name '07-selection-after' | Out-Null
+    Close-SmokeUi -Tag 'selection'
+} catch {
+    Write-SmokeFail "selection session: $($_.Exception.Message)"
     @(Get-UiProc) | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 

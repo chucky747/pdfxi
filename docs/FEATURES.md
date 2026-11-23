@@ -1,11 +1,11 @@
 # FEATURES
 
-`docs/features.toml` is the canonical parity matrix. It contains 145 feature
+`docs/features.toml` is the canonical parity matrix. It contains 146 feature
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 130 verified (51 `gui`, 79 `cli`), 4 library, 8 model, 1
-deferred, 2 replaced (145 rows; see ADR 0009). A `verified` row runs on real
+Current status: 131 verified (52 `gui`, 79 `cli`), 4 library, 8 model, 1
+deferred, 2 replaced (146 rows; see ADR 0009). A `verified` row runs on real
 document bytes and a user can reach it through the GUI or the CLI, and it names
 that host in `docs/features.toml`. `library` rows are real byte-level
 implementations with tests but no GUI or CLI caller; `model` rows are in-memory
@@ -23,7 +23,8 @@ goal-verify --all` fails while any row is `library`, `model` or `deferred`;
 that is the intended result of ADR 0009, not a regression to suppress. The
 2026-11-23 review corrected rows that overstated reachability, including
 REVIEW-001, EXPORT-006, VIEW-002, VIEW-006, VIEW-012, CREATE-007, CREATE-008,
-STD-007, ACCESS-006, REVIEW-007, AUTO-008, SEC-003 and PLAT-002.
+STD-007, ACCESS-006, REVIEW-007, AUTO-008, SEC-003 and PLAT-002. `ACCESS-007`
+is new: canvas text and choice widgets now accept AccessKit `SetValue`.
 
 ## Detailed feature pages
 

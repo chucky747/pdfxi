@@ -1,0 +1,30 @@
+{
+  "id": "T-0370",
+  "lane": "integrator",
+  "title": "Finish-review residuals: UIA SetValue, B1 installed copy smoke, T-0260B policy, widget coverage",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0369"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "crates/pdfxi-forms/**",
+    "scripts/**",
+    "fixtures/ui-smoke/**",
+    "docs/TESTING.md",
+    "docs/ARCHITECTURE.md",
+    "docs/user-guide.html",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/**",
+    "docs/releases/**",
+    "docs/decisions/**",
+    "docs/evidence/review/**",
+    "docs/evidence/acceptance/T-0260B*",
+    "orchestration/blockers/T-0260B-budget.md",
+    "orchestration/tasks/T-0370.json",
+    "orchestration/BOARD.md"
+  ],
+  "acceptance": "custom canvas text/choice form widgets advertise and apply the AccessKit SetValue action, with a widget or harness test; the installed UI smoke exercises B1 selection/copy and reads the clipboard; widget tests cover the remaining dialogs/tool cards; the T-0260B save-budget policy is resolved with a disk-flush-aware rule and rerun evidence; the variant gate and installer-test pass; docs/releases/0.1.4.md and the evidence record the final limits.",
+  "notes": "Continuation of T-0369. CI stays out of scope by user instruction; Windows is the only verified target. Public-repo visibility, signing (T-0202) and the 24-hour fuzz campaign (T-0260A) remain owner/blocked items.",
+  "evidence": "docs/evidence/review/T-0370.md"
+}

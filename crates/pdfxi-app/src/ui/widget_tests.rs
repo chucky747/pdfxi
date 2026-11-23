@@ -183,6 +183,172 @@ fn document_properties_lists_file_facts_for_the_open_document() {
 }
 
 #[test]
+fn help_window_lists_getting_started_and_shortcuts() {
+    let mut app = PdfxiApp::new();
+    app.help_open = true;
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_state(|ctx, app| app.help_window_ui(ctx), app);
+    harness.run();
+    harness.get_by_label("Getting started");
+    harness.get_by_label("Keyboard shortcuts");
+    harness.get_by_label("Privacy: what leaves this machine");
+    harness.get_by_label("Open user guide");
+}
+
+#[test]
+fn place_signature_dialog_enables_typed_placement_after_a_name() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture("../../fixtures/minimal.pdf"));
+    app.open_place_signature_dialog();
+    assert!(app.signature_place.open);
+    app.signature_place.typed.clear();
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_state(|ctx, app| app.place_signature_dialog_ui(ctx), app);
+    harness.run();
+    harness.get_by_label("Place signature");
+    let button = harness.get_by_label("Place typed signature");
+    assert!(
+        button.accesskit_node().is_disabled(),
+        "an empty typed signature cannot be placed"
+    );
+    harness.state_mut().signature_place.typed = "Ada Lovelace".to_owned();
+    harness.run();
+    harness.get_by_label("Place typed signature").click();
+    harness.run();
+    assert!(harness.state().status().contains("Placed typed signature"));
+}
+
+#[test]
+fn combine_card_starts_empty_and_disables_combine() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture("../../fixtures/minimal.pdf"));
+    app.combine.open = true;
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_state(|ctx, app| app.combine_card_ui(ctx), app);
+    harness.run();
+    harness.get_by_label("Add files");
+    let button = harness.get_by_label("Combine");
+    assert!(
+        button.accesskit_node().is_disabled(),
+        "Combine needs at least two sources"
+    );
+    assert!(harness.state().combine.sources.is_empty());
+}
+
+#[test]
+fn export_card_lists_implemented_targets_for_an_open_document() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture(
+        "../../fixtures/realworld/microsoft-excel-2019-sample.pdf",
+    ));
+    app.export_ui.open = true;
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 800.0))
+        .build_state(
+            |ctx, app| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let palette = Palette::for_mode(app.theme);
+                    app.export_card_ui(ui, palette);
+                });
+            },
+            app,
+        );
+    harness.run();
+    let target = harness.get_by_role(egui::accesskit::Role::ComboBox);
+    assert_eq!(
+        target.accesskit_node().value(),
+        Some("Plain text (.txt)".to_owned())
+    );
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "Export")
+        .click();
+}
+
+#[test]
+fn print_panel_offers_pages_scale_and_orientation() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture(
+        "../../fixtures/realworld/microsoft-excel-2019-sample.pdf",
+    ));
+    app.open_print_panel();
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_state(|ctx, app| app.print_ui_ui(ctx), app);
+    harness.run();
+    harness.get_by_label("Print");
+    harness.get_by_label("Scale");
+    harness.get_by_label("Orientation");
+    harness.get_by_label("Print...");
+}
+
+#[test]
+fn page_menu_offers_insert_rotate_and_delete_for_an_open_document() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture(
+        "../../fixtures/realworld/microsoft-excel-2019-sample.pdf",
+    ));
+    app.page_menu.open = true;
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_state(|ctx, app| app.page_menu_ui(ctx), app);
+    harness.run();
+    harness.get_by_label("Page 1 of 2");
+    harness.get_by_label("Insert blank page before");
+    harness.get_by_label("Rotate left");
+    harness.get_by_label("Delete page");
+    harness.get_by_label("Extract page");
+}
+
+#[test]
+fn forms_panel_lists_the_fields_of_the_form_fixture() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture("../../fixtures/ui-smoke/ff-test-gui.pdf"));
+    app.forms.panel_open = true;
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 800.0))
+        .build_state(|ctx, app| app.forms_panel_ui(ctx), app);
+    harness.run();
+    harness.get_by_label("Fill & Sign");
+    harness.get_by_label("plain_ff0");
+    harness.get_by_label("required_ff2");
+    harness.get_by_label("readonly_ff1");
+}
+
+#[test]
+fn identity_window_edits_the_local_display_name() {
+    let mut app = PdfxiApp::new();
+    app.identity_open = true;
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_state(|ctx, app| app.identity_window_ui(ctx), app);
+    harness.run();
+    harness.get_by_label("Your name");
+    harness.get_by_label("Shown on comments and signatures. It stays on this machine.");
+    harness.state_mut().identity_name.clear();
+    harness.run();
+    harness
+        .get_by_role(egui::accesskit::Role::TextInput)
+        .focus();
+    harness.run();
+    harness
+        .get_by_role(egui::accesskit::Role::TextInput)
+        .type_text("Grace Hopper");
+    harness.run();
+    assert_eq!(harness.state().identity_name, "Grace Hopper");
+}
+
+#[test]
 fn signing_dialog_exposes_identity_controls_without_a_document() {
     let mut app = PdfxiApp::new();
     app.signing.open = true;

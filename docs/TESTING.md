@@ -120,6 +120,13 @@ scale linearly with page count, are floored at 5 ms for tiny fixtures, then get 
 documented **+25% host-variance allowance**. A metric passes when its tracked
 median is at or below its budget.
 
+The real-file save measurement in `docs/evidence/acceptance/T-0260B-measure.rs`
+adds a **25 ms durability floor** before the +25% allowance. That timed region is
+the whole Ctrl+S path including `sync_all` and the rename, so one device flush is
+unavoidable; the in-memory harness above never flushes and keeps the 5 ms floor.
+This is a floor for a different timed region, not a relaxation of the `save`
+metric in `cargo xtask bench`. The 2000 ms absolute row is unchanged.
+
 | Operation | Base @ 500 pages | small (1 p) | medium (100 p) | large (500 p) |
 |---|---:|---:|---:|---:|
 | open | 1500 ms | 6.25 ms | 375 ms | 1875 ms |

@@ -43,10 +43,16 @@ text. Producing tagged PDF itself belongs to the accessibility lane
 - `ACCESS-003` — Accessibility and PDF/UA checker: planned.
 - `STD-009` — PDF/UA conformance: in-progress at the profile level; see
   [Standards and preflight](standards.md).
-- `ACCESS-004`–`ACCESS-006` — reflow/high-contrast/keyboard navigation, read
+- `ACCESS-004`—`ACCESS-006` — reflow/high-contrast/keyboard navigation, read
   aloud, and screen-reader/`accesskit` integration: planned. The desktop shell
   keeps every tool on a keyboard path, but a screen-reader smoke test is not
   claimed yet.
+- `ACCESS-007` (verified) — canvas text and choice form widgets advertise the
+  AccessKit `SetValue` action and apply the requested value through the same
+  typed commands as the keyboard editor. UI Automation can therefore fill a
+  text field or select a choice without a mouse. Checkboxes and radios use the
+  standard Toggle/Select patterns. The gate still has no real screen-reader
+  session, so the broader `ACCESS-006` bridge claim stays `model`.
 
 ## Design rules
 

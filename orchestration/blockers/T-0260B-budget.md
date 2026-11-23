@@ -2,12 +2,14 @@
 
 - Task: T-0260B (qa) - open, edit and save budgets on the real corpus
 - Recorded: 2026-11-21
-- Status: open, budget-calibration issue, no user-visible slowdown measured
+- Status: **resolved 2026-11-23** - `docs/TESTING.md` now gives real-file saves
+  a 25 ms durability floor; the measurement records 0 derived-budget breaches.
+  The two original breaches and their samples stay on record in
+  `docs/evidence/acceptance/T-0260B.md` section 3.
 - Current as of 0.1.4: the deterministic in-memory harness
   (`cargo xtask bench --report`) passes 18/18 metrics with 0 breaches and 0
-  regressions. The open item remains the real-corpus save durability
-  measurements below.
-- Evidence: `docs/evidence/acceptance/T-0260B.md` (section 3)
+  regressions.
+- Evidence: `docs/evidence/acceptance/T-0260B.md` (sections 3 and 4)
 
 ## Summary
 
@@ -71,14 +73,17 @@ itself is not large.
 - Not concurrent build load: one calibration run during another lane's compile
   was slower for every save, but the five recorded rounds were quiescent.
 
-## Recommended resolution (owner: `docs/TESTING.md` / integrator)
+## Resolution (2026-11-23)
 
-Pick one, and record it as a budget change with its own evidence:
+The owner of `docs/TESTING.md` chose the disk-flush-aware floor:
 
-- give real-file saves a disk-flush-aware floor (for example 25 ms), keeping
-  the 2000 ms absolute row; or
-- report save as two metrics: bytes serialized (in memory, comparable to the
-  harness) and durability flush (device-dependent, informational only).
+- real-file saves use a **25 ms floor** before the +25% allowance, giving
+  31.25 ms at one page; the 2000 ms absolute row is unchanged;
+- the in-memory harness `save` metric keeps its 5 ms floor and 6.25 ms small
+  budget, because it never calls `sync_all`;
+- `docs/TESTING.md` documents both timed regions, and
+  `docs/evidence/acceptance/T-0260B-measure.rs` applies the floor only to the
+  `save` case.
 
 Do not raise the 2000 ms absolute budget: it is met with 100x margin.
 
@@ -86,8 +91,8 @@ Do not raise the 2000 ms absolute budget: it is met with 100x margin.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File docs\evidence\acceptance\T-0260B-measure.ps1
-# exits 1; "summary cases=15 derived_budget_breaches=1..4 unsupported=1"
-# (2 in each of the five tracked quiescent rounds, up to 4 when the host is busy)
+# before the policy change: exits 1; "summary cases=15 derived_budget_breaches=1..4 unsupported=1"
+# after the policy change: exits 0; the same cases report 0 derived-budget breaches
 ```
 
 Save output goes to `target/tmp/t0260b-save-r*`; committed fixtures are read
