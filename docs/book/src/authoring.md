@@ -334,33 +334,39 @@ process is opened; the extractor that produces the markup remains host-side.
 Searchable OCR layers are exposed as:
 
 ```text
-pdfxi create ocr <PAGE.png|jpg> --out <OUTPUT.pdf> --words <WORDS.json>
-    [--dpi 300] [--language TAG] [--json]
+pdfxi create ocr <PAGE.png|jpg> --out <OUTPUT.pdf> [--words <WORDS.json>]
+    [--engine auto|tesseract|windows] [--dpi 300] [--language TAG] [--json]
 ```
 
-`WORDS.json` is the caller-supplied recognition result for one page:
+With `--words` the recognition result is caller-supplied for one page:
 `{"language":"eng","words":[{"text":"Hello","x":10,"y":20,"width":40,"height":14,"confidence":95}]}`.
-Boxes are top-left pixel coordinates. The command feeds them through the
-`ocr_pipeline` model (confidence filtering, deterministic reading order,
-top-left to bottom-left mapping), embeds the image at `pixels / dpi * 72` points,
-and appends an invisible (`3 Tr`) text layer at the planned positions. It
-reopens the output and requires every kept word to extract. No OCR engine or
-process is bundled; any backend that can emit this JSON can drive it.
+Boxes are top-left pixel coordinates. Without `--words`, `--engine` recognizes
+the image itself: `tesseract` runs the installed Tesseract CLI and parses its
+TSV output, `windows` runs the bundled Windows.Media.Ocr sidecar, and `auto`
+prefers Tesseract and falls back to Windows OCR. The command feeds the words
+through the `ocr_pipeline` model (confidence filtering, deterministic reading
+order, top-left to bottom-left mapping), embeds the image at
+`pixels / dpi * 72` points, appends an invisible (`3 Tr`) text layer at the
+planned positions, and reopens the output requiring every kept word to extract.
+Rasterize a page first with `pdfxi render <FILE> --page N --scale 2 --format jpeg`.
+The Windows engine exposes no per-word confidence, so its words report 100.
 Scan assembly is exposed as:
 
 ```text
-pdfxi create scan --out <OUTPUT.pdf> --scan <PAGE.png> [--scan <PAGE.png> ...]
+pdfxi create scan --out <OUTPUT.pdf> (--scan <PAGE.png> [--scan <PAGE.png> ...] | --device [NAME])
     [--dpi 300] [--duplex simplex|front-first|back-first] [--json]
 ```
 
-Each `--scan` is a real PNG page in scanner order. The command reads the IHDR
-dimensions, describes every page to `ScanSource`, builds the deterministic
-`ScanAssemblyPlan` (which reuses the print-capture plan), embeds each image with
-`create_from_image` at the plan's exact page size, merges the pages in plan
-order, and reopens the output to verify the page count and geometry. Duplex
-modes pair consecutive images as front/back of each sheet and reject incomplete
-pairs. The TWAIN/WIA device adapter is still the caller's responsibility; any
-scanner that can emit PNG can drive this command.
+Each `--scan` is a real PNG page in scanner order. `--device` acquires those
+pages from an attached WIA scanner through the bundled `scripts/wia-scan.ps1`
+sidecar (the sidecar converts BMP transfers to PNG when a driver ignores the
+requested format); a machine with no scanner reports `no scanner is available`.
+The command reads the IHDR dimensions, describes every page to `ScanSource`,
+builds the deterministic `ScanAssemblyPlan` (which reuses the print-capture
+plan), embeds each image with `create_from_image` at the plan's exact page size,
+merges the pages in plan order, and reopens the output to verify the page count
+and geometry. Duplex modes pair consecutive images as front/back of each sheet
+and reject incomplete pairs.
 PostScript import is exposed as:
 
 ```text

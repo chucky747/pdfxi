@@ -1,0 +1,18 @@
+{
+  "id": "T-0375",
+  "lane": "integrator",
+  "title": "SEC-003: certificate encryption reachable from the CLI",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0374"],
+  "owns": [
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/authoring.md",
+    "docs/evidence/review/T-0375.md",
+    "orchestration/tasks/T-0375.json"
+  ],
+  "acceptance": "pdfxi recipient seal/open run end to end on real bytes with a real P-256 certificate; the permission gate refuses when denied; SEC-003 becomes verified on the cli host with evidence.",
+  "notes": "ADR 0009 row 2. No code change expected: the CLI path is real; only the promotion and evidence are missing.",
+  "evidence": "docs/evidence/review/T-0375.md"
+}

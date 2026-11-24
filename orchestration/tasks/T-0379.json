@@ -1,0 +1,19 @@
+{
+  "id": "T-0379",
+  "lane": "integrator",
+  "title": "VIEW-012: presentation mode reachable from the GUI",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0378"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/gui.md",
+    "docs/evidence/review/T-0379.md",
+    "orchestration/tasks/T-0379.json"
+  ],
+  "acceptance": "the bottom bar exposes a Present control that starts the existing full-screen presentation mode; a widget test drives the real control and asserts the mode is active; VIEW-012 becomes verified on the gui host.",
+  "notes": "ADR 0009 row 6. Presentation mode existed but was only reachable from the --present launch flag.",
+  "evidence": "docs/evidence/review/T-0379.md"
+}

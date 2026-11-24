@@ -4,8 +4,8 @@
 rows across 14 domains. This page is the human summary; the TOML is what
 `cargo xtask features verify` and `goal-verify --all` enforce.
 
-Current status: 132 verified (53 `gui`, 79 `cli`), 4 library, 7 model, 1
-deferred, 2 replaced (146 rows; see ADR 0009). A `verified` row runs on real
+Current status: 142 verified (58 `gui`, 84 `cli`), 0 library, 1 model, 1
+deferred, 3 replaced (146 rows; see ADR 0009). A `verified` row runs on real
 document bytes and a user can reach it through the GUI or the CLI, and it names
 that host in `docs/features.toml`. `library` rows are real byte-level
 implementations with tests but no GUI or CLI caller; `model` rows are in-memory

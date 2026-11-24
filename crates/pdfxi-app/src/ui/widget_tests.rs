@@ -272,6 +272,109 @@ fn export_card_lists_implemented_targets_for_an_open_document() {
 }
 
 #[test]
+fn bottom_bar_page_layout_switches_the_view_mode() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture("../../fixtures/realworld/powerpoint-slides.pdf"));
+    assert_eq!(
+        app.state().active_tab().map(crate::DocumentTab::view_mode),
+        Some(ViewMode::Continuous)
+    );
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 120.0))
+        .build_state(
+            |ctx, app| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let palette = Palette::for_mode(app.theme);
+                    app.bottom_bar_ui(ui, palette);
+                });
+            },
+            app,
+        );
+    harness.run();
+    harness.get_by_label("Page layout");
+    harness.get_by_label("Page layout").click();
+    harness.run();
+    harness.get_by_label("Two Page").click();
+    harness.run();
+    assert_eq!(
+        harness
+            .state()
+            .state()
+            .active_tab()
+            .map(crate::DocumentTab::view_mode),
+        Some(ViewMode::TwoPage),
+        "choosing a layout dispatches SetViewMode"
+    );
+    assert!(
+        harness.state().status.contains("Two Page"),
+        "status reports the mode: {}",
+        harness.state().status
+    );
+}
+
+#[test]
+fn bottom_bar_present_button_enters_presentation_mode() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture("../../fixtures/realworld/powerpoint-slides.pdf"));
+    assert!(!app.is_presenting());
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 120.0))
+        .build_state(
+            |ctx, app| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let palette = Palette::for_mode(app.theme);
+                    app.bottom_bar_ui(ui, palette);
+                });
+            },
+            app,
+        );
+    harness.run();
+    harness.get_by_label("Present").click();
+    harness.run();
+    assert!(
+        harness.state().is_presenting(),
+        "the Present control starts presentation mode"
+    );
+}
+
+#[test]
+fn bottom_bar_split_picker_creates_and_clears_two_panes() {
+    let mut app = PdfxiApp::new();
+    app.open_document(&fixture("../../fixtures/realworld/powerpoint-slides.pdf"));
+    assert!(!app.is_split());
+
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 120.0))
+        .build_state(
+            |ctx, app| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let palette = Palette::for_mode(app.theme);
+                    app.bottom_bar_ui(ui, palette);
+                });
+            },
+            app,
+        );
+    harness.run();
+    harness.get_by_label("Split view").click();
+    harness.run();
+    harness.get_by_label("Side by side").click();
+    harness.run();
+    assert!(
+        harness.state().is_split(),
+        "the split picker creates a split"
+    );
+    assert!(harness.state().status.contains("Side by side"));
+
+    harness.get_by_label("Split view").click();
+    harness.run();
+    harness.get_by_label("Single pane").click();
+    harness.run();
+    assert!(!harness.state().is_split(), "Single pane clears the split");
+}
+
+#[test]
 fn print_panel_offers_pages_scale_and_orientation() {
     let mut app = PdfxiApp::new();
     app.open_document(&fixture(

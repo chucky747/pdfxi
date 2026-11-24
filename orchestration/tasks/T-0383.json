@@ -1,0 +1,20 @@
+{
+  "id": "T-0383",
+  "lane": "integrator",
+  "title": "CREATE-007: WIA scanner acquisition reachable from the CLI",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0382"],
+  "owns": [
+    "crates/pdfxi-cli/**",
+    "scripts/wia-scan.ps1",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/authoring.md",
+    "docs/evidence/review/T-0383.md",
+    "orchestration/tasks/T-0383.json"
+  ],
+  "acceptance": "pdfxi create scan --device acquires pages from an attached WIA scanner through the bundled sidecar and assembles a verified PDF; the synthetic sidecar tests cover the plumbing and the no-scanner error; real hardware evidence is recorded; CREATE-007 becomes verified on the cli host.",
+  "notes": "ADR 0009 row 10. A real WIA scanner was present on this host, so the device-dependent end-to-end step is recorded with real hardware instead of a blocker.",
+  "evidence": "docs/evidence/review/T-0383.md"
+}

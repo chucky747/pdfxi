@@ -1,8 +1,9 @@
 # Installing PDFXI
 
-PDFXI `0.1.4` is a Windows x64 build. Two delivery forms exist: a per-user
-Inno Setup installer and a portable zip. Both are unsigned; read
-[Unsigned builds](#unsigned-builds) before you run one.
+PDFXI `0.1.5` is a Windows x64 build. Two delivery forms exist: a per-user
+Inno Setup installer and a portable zip. Both are signed with a local
+self-signed certificate; read [Signing and trust](#signing-and-trust) before you
+run one.
 
 ## Installer
 
@@ -10,7 +11,7 @@ The installer is built by `scripts/package.ps1` when Inno Setup 6's `ISCC.exe`
 is available. The output is:
 
 ```text
-target/package/pdfxi-setup-0.1.4-windows-x86_64.exe
+target/package/pdfxi-setup-0.1.5-windows-x86_64.exe
 ```
 
 It installs **for the current user only** (`PrivilegesRequired=lowest`): no
@@ -54,7 +55,7 @@ delete `%APPDATA%\PDFXI` as well.
 The portable archive is:
 
 ```text
-target/package/pdfxi-portable-0.1.4-windows-x86_64.zip
+target/package/pdfxi-portable-0.1.5-windows-x86_64.zip
 ```
 
 It contains the viewer, the CLI, the pinned `pdfium.dll` with its licences, the
@@ -64,7 +65,7 @@ executable.
 
 The bundled `install.ps1` copies the payload to a directory and creates a Start
 Menu group **PDFXI** with viewer and CLI shortcuts, without elevation or
-registry writes. It also removes the pre-0.1.4 root-level links that pointed at
+registry writes. It also removes the pre-0.1.5 root-level links that pointed at
 the same target, so setup and portable installs no longer duplicate entries:
 
 ```powershell
@@ -106,20 +107,24 @@ PDFium also enforces the input size cap: a document larger than 2 GiB is
 rejected before it is loaded. The same cap applies in the viewer and in the
 library.
 
-## Unsigned builds
+## Signing and trust
 
-Nothing produced by this project is code-signed. No certificate exists in the
-build environment; this is an open blocker, not a configuration mistake.
+Release binaries and the setup executable are signed with a **local self-signed
+certificate** generated on the build machine (`CN=PDFXI Local Build, O=PDFXI`).
+`scripts/new-signing-cert.ps1` creates it and `scripts/trust-signing-cert.ps1`
+trusts it in the current user's Root and TrustedPublisher stores, so the
+signature verifies on this machine.
 
-- Windows SmartScreen and Defender can warn on first run ("Windows protected
-  your PC"), and the publisher reads as unknown in file properties.
-- The per-user installer requests no elevation, so it raises no UAC prompt, but
-  SmartScreen still applies to a downloaded setup executable.
+- This is a local publisher, **not a publicly trusted one**. Other machines do
+  not trust the certificate, and Windows SmartScreen can still warn there.
+- A public OV/EV code-signing certificate is still required for distribution;
+  see `orchestration/blockers/T-0202-code-signing.md`.
+- The setup executable is signed too, before its `.sha256` sidecar is written.
 - `pdfium.dll` stays unsigned by design; it is shipped byte-identical to the
   pinned upstream archive.
 
-Verify a download against the `.sha256` sidecar or `manifest.json`; do not
-treat a SmartScreen warning as a bug report.
+Verify a download against the `.sha256` sidecar or `manifest.json`, and check
+`Get-AuthenticodeSignature` for `Valid` after trusting the certificate.
 
 ## Build from source
 
@@ -173,9 +178,9 @@ cargo xtask docs            # documentation page presence check
 cache, the workspace root, the current directory, and `Path`, and fails with a
 message pointing at `scripts/fetch-pdfium.ps1` when none is present.
 
-`cargo xtask goal-verify --all` is expected to stay red in `0.1.4` while rows
-are honestly `library`, `model` or `deferred` under ADR 0009. `cargo xtask
-features verify` is green: 145 rows, 130 `verified` (51 `gui`, 79 `cli`), 4
-`library`, 8 `model`, 1 `deferred` and 2 `replaced`. See the
-[feature matrix](../../FEATURES.md), [release notes](../../releases/0.1.4.md)
+`cargo xtask goal-verify --all` is green in `0.1.5`: every ADR 0009 row is
+`verified` or terminal, and PLAT-002 stays `deferred` because the project is
+Windows-only. `cargo xtask features verify` reports 146 rows, 142 `verified`
+(58 `gui`, 84 `cli`), 0 `library`, 1 `model`, 1 `deferred` and 3 `replaced`. See
+the [feature matrix](../../FEATURES.md), [release notes](../../releases/0.1.5.md)
 and ADR 0009.

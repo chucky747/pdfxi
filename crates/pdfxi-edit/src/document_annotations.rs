@@ -585,6 +585,33 @@ pub fn add_strikeout(
     )
 }
 
+/// Add a squiggly text-markup annotation covering every rectangle in `quads`.
+///
+/// Like [`add_underline`], but the appearance strokes a small zigzag along the
+/// bottom edge of each quad, which is the conventional wavy underline.
+///
+/// # Errors
+///
+/// Returns the same typed errors as [`add_underline`].
+pub fn add_squiggly(
+    document: &mut Document,
+    page_index: usize,
+    quads: &[Rect],
+    contents: &str,
+    author: &str,
+) -> Result<AnnotationRef, AnnotationEditError> {
+    add_text_markup_with(
+        document,
+        page_index,
+        quads,
+        contents,
+        author,
+        TextMarkup::Squiggly,
+        None,
+        None,
+    )
+}
+
 /// Add a freehand ink annotation built from `paths`.
 ///
 /// Each path is one stroke: at least two points draw a line, one point draws a
@@ -1918,6 +1945,8 @@ enum TextMarkup {
     Underline,
     /// `/Subtype /StrikeOut`.
     StrikeOut,
+    /// `/Subtype /Squiggly`.
+    Squiggly,
 }
 
 impl TextMarkup {
@@ -1925,6 +1954,7 @@ impl TextMarkup {
         match self {
             Self::Underline => "Underline",
             Self::StrikeOut => "StrikeOut",
+            Self::Squiggly => "Squiggly",
         }
     }
 
@@ -1933,6 +1963,7 @@ impl TextMarkup {
         match self {
             Self::Underline => "pdfxi-underline-",
             Self::StrikeOut => "pdfxi-strikeout-",
+            Self::Squiggly => "pdfxi-squiggly-",
         }
     }
 
@@ -1940,11 +1971,12 @@ impl TextMarkup {
     ///
     /// The underline sits half a stroke width above the bottom edge of the quad
     /// so it stays inside the appearance bounding box; the strikeout crosses
-    /// the vertical middle.
+    /// the vertical middle; the squiggly follows the same baseline as the
+    /// underline.
     fn line_offset(self, quad: Rect, rect: Rect) -> f64 {
         let half_stroke = f64::from(MARKUP_STROKE_WIDTH) / 2.0;
         match self {
-            Self::Underline => f64::from(quad.y0() - rect.y0()) + half_stroke,
+            Self::Underline | Self::Squiggly => f64::from(quad.y0() - rect.y0()) + half_stroke,
             Self::StrikeOut => f64::from((quad.y0() + quad.y1()) / 2.0 - rect.y0()),
         }
     }
@@ -3006,7 +3038,29 @@ fn text_markup_appearance(rect: Rect, quads: &[Rect], markup: TextMarkup) -> Obj
         let x0 = f64::from(quad.x0() - rect.x0());
         let x1 = f64::from(quad.x1() - rect.x0());
         let y = markup.line_offset(*quad, rect);
-        data.push_str(&format!("{x0:.3} {y:.3} m {x1:.3} {y:.3} l S\n"));
+        if markup == TextMarkup::Squiggly {
+            // A half-period-per-segment zigzag reads as a wavy underline at
+            // normal zoom and stays a valid stroked path.
+            let width = x1 - x0;
+            let amplitude = f64::from(MARKUP_STROKE_WIDTH) * 1.2;
+            let steps = ((width / 3.0).round() as usize).clamp(4, 96);
+            let mut first = true;
+            for step in 0..=steps {
+                let t = step as f64 / steps as f64;
+                let x = x0 + width * t;
+                let wave = if step % 2 == 0 { amplitude } else { -amplitude };
+                let py = y + wave;
+                if first {
+                    data.push_str(&format!("{x:.3} {py:.3} m\n"));
+                    first = false;
+                } else {
+                    data.push_str(&format!("{x:.3} {py:.3} l\n"));
+                }
+            }
+            data.push_str("S\n");
+        } else {
+            data.push_str(&format!("{x0:.3} {y:.3} m {x1:.3} {y:.3} l S\n"));
+        }
     }
     data.push_str("Q\n");
 

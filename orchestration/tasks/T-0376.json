@@ -1,0 +1,18 @@
+{
+  "id": "T-0376",
+  "lane": "integrator",
+  "title": "STD-007: PDF/A conformance reachable from the CLI",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0375"],
+  "owns": [
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/authoring.md",
+    "docs/evidence/review/T-0376.md",
+    "orchestration/tasks/T-0376.json"
+  ],
+  "acceptance": "pdfxi preflight and pdfxi export conformance run on real fixtures with PDF/A-2b and PDF/X-4 profiles, apply the byte-expressible fixups, and never claim certification; STD-007 becomes verified on the cli host with evidence.",
+  "notes": "ADR 0009 row 3. The CLI validate/convert path exists; only promotion and evidence are missing.",
+  "evidence": "docs/evidence/review/T-0376.md"
+}

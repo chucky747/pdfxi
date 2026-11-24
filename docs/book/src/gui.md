@@ -49,8 +49,12 @@ is stale. Use <kbd>Ctrl</kbd>+<kbd>N</kbd>, the **Open a PDF** button, or the
 
 - The thumbnail panel shows real page thumbnails; selecting one navigates to
   that page. See [Pages panel](pages-panel.md).
-- The canvas is continuous: scroll to move through the document.
-- The floating page/zoom pill shows the current page and the page count.
+- The canvas layout follows the **Page layout** picker in the bottom bar:
+  Single Page, Continuous, Two Page, or Two Page Continuous. The choice is per
+  tab view state and does not modify the document.
+- The **Split view** picker next to it opens a second pane of the same document:
+  Side by side or Stacked, each pane with its own scroll position. Single pane
+  closes the split.
 - Page rasters are produced by PDFium at the current zoom and display scale, so
   text stays crisp at non-default Windows scaling.
 - The command bar and the page pill cover zoom in, zoom out, fit page, fit

@@ -1,0 +1,19 @@
+{
+  "id": "T-0378",
+  "lane": "integrator",
+  "title": "VIEW-002: page layout control in the GUI",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0377"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/viewing.md",
+    "docs/evidence/review/T-0378.md",
+    "orchestration/tasks/T-0378.json"
+  ],
+  "acceptance": "the bottom bar exposes a Page layout picker for Single Page, Continuous, Two Page and Two Page Continuous; choosing one dispatches SetViewMode and changes the active tab's layout; a widget test drives the real egui control; VIEW-002 becomes verified on the gui host.",
+  "notes": "ADR 0009 row 5. The canvas layouts were real; the GUI had no control to select them.",
+  "evidence": "docs/evidence/review/T-0378.md"
+}

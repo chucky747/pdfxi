@@ -1,0 +1,20 @@
+{
+  "id": "T-0374",
+  "lane": "integrator",
+  "title": "EXPORT-006: TIFF export reachable from the GUI and CLI",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0373"],
+  "owns": [
+    "crates/pdfxi-convert/**",
+    "crates/pdfxi-app/**",
+    "crates/pdfxi-cli/**",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/evidence/review/T-0374.md",
+    "orchestration/tasks/T-0374.json"
+  ],
+  "acceptance": "PNG/JPEG/TIFF export is reachable through the GUI export card and the renderer-backed converter; multi-page TIFF is written; tests cover the TIFF signature and real fixture; EXPORT-006 becomes verified on the gui host; evidence recorded.",
+  "notes": "ADR 0009 row 1. The renderer already writes TIFF; this wires the converter, GUI picker, and tests.",
+  "evidence": "docs/evidence/review/T-0374.md"
+}

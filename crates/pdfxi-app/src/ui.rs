@@ -74,9 +74,10 @@ use egui::Key;
 
 use crate::{
     AppState, CanvasHit, CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, CloseDecision,
-    DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, OpenOutcome, OwnedSpan,
-    OwnedTextPage, PageSize, Rotation, SelectionModel, ShortcutKey, ShortcutModifiers, TabId,
-    ThumbnailPaneState, Toolset, ViewCommand, ViewMode, Zoom, app_name, map_shortcut,
+    DEFAULT_SPLIT_RATIO, DEFAULT_ZOOM, DocumentTab, FindMatch, FindOptions, FindState, OpenOutcome,
+    OwnedSpan, OwnedTextPage, PageSize, Rotation, SelectionModel, ShortcutKey, ShortcutModifiers,
+    SplitDirection, SplitLayout, TabId, ThumbnailPaneState, Toolset, ViewCommand, ViewMode, Zoom,
+    app_name, map_shortcut,
 };
 
 #[cfg(feature = "pdfium")]
@@ -94,7 +95,7 @@ mod shell;
 pub mod library;
 
 pub use shell::capabilities::{Capabilities, Capability, RailItem, ToolRow};
-pub use shell::commands::AppCommand;
+pub use shell::commands::{AppCommand, SplitChoice};
 pub use shell::comments::AnnotationEntry;
 use shell::preferences::{self as shell_preferences, ShellPreferences};
 pub use shell::session::{CloseChoice, ClosePlan, plan_close, save_conflict_offers_save_as};
@@ -524,6 +525,35 @@ pub fn run() -> Result<(), String> {
 /// command bar, and the document canvas. Every control and keyboard
 /// shortcut maps to a method on this type that mutates only the underlying
 /// state, keeping behavior testable without a window.
+/// A two-pane split of the canvas.
+///
+/// Each pane keeps its own scroll offset; both show the active tab. The layout
+/// math and the ratio live in [`SplitLayout`], so the GUI only stores state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SplitView {
+    /// Which way the viewport is divided.
+    pub(crate) layout: SplitLayout,
+    /// Scroll offset of each pane, first (top/left) then second (bottom/right).
+    pub(crate) scroll: [CanvasPoint; 2],
+}
+
+impl SplitView {
+    /// A split of `direction` at the default ratio, both panes starting at
+    /// the current scroll offset.
+    pub(crate) fn new(direction: SplitDirection, scroll: CanvasPoint) -> Option<Self> {
+        let layout = match direction {
+            SplitDirection::Horizontal => SplitLayout::horizontal(DEFAULT_SPLIT_RATIO),
+            SplitDirection::Vertical => SplitLayout::vertical(DEFAULT_SPLIT_RATIO),
+        }
+        .ok()?;
+        Some(Self {
+            layout,
+            scroll: [scroll, scroll],
+        })
+    }
+}
+
+/// The desktop viewer's application state and `egui` shell.
 #[derive(Default)]
 pub struct PdfxiApp {
     state: AppState,
@@ -554,6 +584,8 @@ pub struct PdfxiApp {
     presentation_needs_fullscreen: bool,
     /// Slide state while presenting; `None` outside presentation mode.
     presentation_model: Option<PresentationModel>,
+    /// Two-pane split of the canvas; `None` when the canvas is one pane.
+    split: Option<SplitView>,
     /// Settings as persisted on disk (launch flags never modify this).
     settings: settings::Settings,
     /// Where settings are saved; `None` for viewers that never touch disk.
@@ -1699,6 +1731,43 @@ impl PdfxiApp {
         match self.state.set_view_mode(mode) {
             Ok(()) => self.status = format!("View mode: {}", mode.label()),
             Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    /// Split the canvas into two panes, or return to one pane.
+    pub fn set_split(&mut self, choice: SplitChoice) {
+        let scroll = CanvasPoint::new(self.scroll_x, self.scroll_y);
+        let direction = match choice {
+            SplitChoice::Off => {
+                self.split = None;
+                self.status = "Single pane".to_owned();
+                return;
+            }
+            SplitChoice::SideBySide => SplitDirection::Vertical,
+            SplitChoice::Stacked => SplitDirection::Horizontal,
+        };
+        match SplitView::new(direction, scroll) {
+            Some(view) => {
+                self.split = Some(view);
+                self.status = format!("Split view: {}", choice.label());
+            }
+            None => self.status = "The window is too small for two panes".to_owned(),
+        }
+    }
+
+    /// Whether the canvas is currently split into two panes.
+    #[must_use]
+    pub fn is_split(&self) -> bool {
+        self.split.is_some()
+    }
+
+    /// The selected split choice, for the bottom-bar picker.
+    #[must_use]
+    pub(crate) fn split_choice(&self) -> SplitChoice {
+        match self.split.map(|view| view.layout.direction) {
+            None => SplitChoice::Off,
+            Some(SplitDirection::Vertical) => SplitChoice::SideBySide,
+            Some(SplitDirection::Horizontal) => SplitChoice::Stacked,
         }
     }
 

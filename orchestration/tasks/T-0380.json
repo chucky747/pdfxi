@@ -1,0 +1,20 @@
+{
+  "id": "T-0380",
+  "lane": "integrator",
+  "title": "REVIEW-001: note, highlight, underline, strikeout and squiggly tools in the GUI",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0379"],
+  "owns": [
+    "crates/pdfxi-edit/**",
+    "crates/pdfxi-app/**",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/comments.md",
+    "docs/evidence/review/T-0380.md",
+    "orchestration/tasks/T-0380.json"
+  ],
+  "acceptance": "all five markup kinds are reachable from the GUI Comments panel and apply to the real text selection; squiggly has a real writer and appearance; tests cover all five; REVIEW-001 becomes verified on the gui host.",
+  "notes": "ADR 0009 row 7. Note and highlight were wired; underline/strikeout existed in the library; squiggly was missing.",
+  "evidence": "docs/evidence/review/T-0380.md"
+}

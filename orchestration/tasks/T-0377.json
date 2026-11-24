@@ -1,0 +1,19 @@
+{
+  "id": "T-0377",
+  "lane": "integrator",
+  "title": "REVIEW-007: review tracker reachable from the CLI",
+  "priority": "P3",
+  "status": "verified",
+  "depends_on": ["T-0376"],
+  "owns": [
+    "crates/pdfxi-cli/**",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/authoring.md",
+    "docs/evidence/review/T-0377.md",
+    "orchestration/tasks/T-0377.json"
+  ],
+  "acceptance": "pdfxi review status reads a real annotated PDF, rebuilds threads from /IRT and /State, prints the five-status board, participant roster and digest; pdfxi annotate reply creates a real reply and can set the parent state; tests cover both; REVIEW-007 becomes verified on the cli host.",
+  "notes": "ADR 0009 row 4. The tracker model existed; this adds the CLI caller and reply/state write path.",
+  "evidence": "docs/evidence/review/T-0377.md"
+}

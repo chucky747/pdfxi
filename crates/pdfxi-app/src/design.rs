@@ -390,6 +390,8 @@ pub enum Icon {
     FitPage,
     /// Full screen corners.
     Fullscreen,
+    /// Presentation play triangle on a screen.
+    Present,
     /// Check mark.
     Check,
     /// Arrow left (undo/back).
@@ -766,6 +768,19 @@ pub fn icon(painter: &egui::Painter, rect: Rect, glyph: Icon, color: Color32) {
                     stroke,
                 ));
             }
+        }
+        Icon::Present => {
+            let r = Rect::from_center_size(c, Vec2::splat(half * 1.40));
+            painter.rect_stroke(r, 2.0, thin, egui::StrokeKind::Inside);
+            painter.add(egui::Shape::line(
+                vec![
+                    p(-0.10, -0.18),
+                    p(0.16, 0.0),
+                    p(-0.10, 0.18),
+                    p(-0.10, -0.18),
+                ],
+                stroke,
+            ));
         }
         Icon::Check => {
             painter.add(egui::Shape::line(

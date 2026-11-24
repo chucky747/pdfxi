@@ -1,7 +1,8 @@
 //! Bottom document bar: page navigation, page box, zoom and full screen.
 
+use crate::ViewMode;
 use crate::design::{Icon, Palette};
-use crate::ui::{AppCommand, PdfxiApp};
+use crate::ui::{AppCommand, PdfxiApp, SplitChoice};
 
 use super::widgets::{shell_divider, shell_icon_button};
 
@@ -27,6 +28,7 @@ impl PdfxiApp {
         };
         let current = tab.current_page();
         let count = tab.page_count();
+        let current_mode = tab.view_mode();
         let zoom_label = tab.zoom().scale().map_or_else(
             || "Fit".to_owned(),
             |scale| format!("{:.0}%", scale * 100.0),
@@ -122,6 +124,51 @@ impl PdfxiApp {
             {
                 self.dispatch(AppCommand::ToggleFullscreen, Some(ui.ctx()));
             }
+            if shell_icon_button(ui, palette, Icon::Present, 22.0, "Present")
+                .on_hover_text("Present full screen (Esc to exit)")
+                .clicked()
+            {
+                self.dispatch(AppCommand::StartPresentation, Some(ui.ctx()));
+            }
+
+            shell_divider(ui, palette);
+
+            let layout = egui::ComboBox::from_id_salt("shell-page-layout")
+                .selected_text(egui::RichText::new(current_mode.label()).size(10.5))
+                .width(112.0)
+                .show_ui(ui, |ui| {
+                    for &mode in ViewMode::ALL {
+                        if ui
+                            .selectable_label(mode == current_mode, mode.label())
+                            .clicked()
+                        {
+                            self.dispatch(AppCommand::SetViewMode(mode), Some(ui.ctx()));
+                        }
+                    }
+                });
+            layout.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Page layout")
+            });
+
+            shell_divider(ui, palette);
+
+            let split_choice = self.split_choice();
+            let split = egui::ComboBox::from_id_salt("shell-split")
+                .selected_text(egui::RichText::new(split_choice.label()).size(10.5))
+                .width(104.0)
+                .show_ui(ui, |ui| {
+                    for &choice in SplitChoice::ALL {
+                        if ui
+                            .selectable_label(choice == split_choice, choice.label())
+                            .clicked()
+                        {
+                            self.dispatch(AppCommand::SetSplit(choice), Some(ui.ctx()));
+                        }
+                    }
+                });
+            split.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Split view")
+            });
         });
     }
 }

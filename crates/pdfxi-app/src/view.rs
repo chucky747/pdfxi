@@ -50,6 +50,14 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
+    /// Every mode in declaration order, for pickers and tests.
+    pub const ALL: &'static [Self] = &[
+        Self::SinglePage,
+        Self::Continuous,
+        Self::TwoPage,
+        Self::TwoPageContinuous,
+    ];
+
     /// A stable, human-readable label for this mode.
     pub fn label(self) -> &'static str {
         match self {

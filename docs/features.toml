@@ -37,18 +37,30 @@ title = "Open and print PDF documents"
 docs = [
     "crates/pdfxi-app/src/canvas.rs",
     "crates/pdfxi-app/src/raster.rs",
+    "crates/pdfxi-app/src/view.rs",
+    "crates/pdfxi-app/src/shell/bottom_bar.rs",
     "crates/pdfxi-app/src/ui.rs",
+    "docs/evidence/review/T-0378.md",
 ]
 domain = "View & Navigate"
-evidence = "CARGO_TARGET_DIR=target/lanes/app; cargo test -p pdfxi-app: 42 passed, 0 failed. cargo test -p pdfxi-app --features ui,pdfium: 58 passed, 0 failed (raster::tests::empty_layout_renders_nothing and the canvas layout tests ok)."
+evidence = "docs/evidence/review/T-0378.md"
+host = "gui"
 id = "VIEW-002"
-notes = "Canvas layout uses real page sizes from the renderer for every page; no Letter fallback."
+notes = """
+Canvas layout uses real page sizes from the renderer for every page; no Letter
+fallback. T-0378 adds the missing GUI reachability: the bottom bar's Page layout
+picker lists Single Page, Continuous, Two Page and Two Page Continuous and
+dispatches `AppCommand::SetViewMode`. A widget test renders the real bottom bar,
+opens the real combo by its AccessKit label and chooses Two Page, which changes
+the active tab's mode and the status line.
+"""
 priority = "P0"
-status = "model"
+status = "verified"
 tests = [
     "canvas::tests::quarter_turns_swap_layout_extents",
     "canvas::tests::hit_test_transform_is_correct_at_every_rotation",
     "ui::tests::real_document_uses_real_page_geometry_and_text",
+    "ui::widget_tests::bottom_bar_page_layout_switches_the_view_mode",
 ]
 title = "Single page continuous and two-page layouts"
 
@@ -133,17 +145,35 @@ tests = [
 title = "Tabbed multi-document interface"
 
 [[feature]]
-docs = "crates/pdfxi-app/src/split.rs, docs/evidence/app/T-0126.md"
+docs = [
+    "crates/pdfxi-app/src/split.rs",
+    "crates/pdfxi-app/src/ui.rs",
+    "crates/pdfxi-app/src/shell/document_view.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/bottom_bar.rs",
+    "docs/book/src/gui.md",
+    "docs/evidence/app/T-0126.md",
+    "docs/evidence/review/T-0381.md",
+]
 domain = "View & Navigate"
-evidence = "docs/evidence/app/T-0126.md"
+evidence = "docs/evidence/review/T-0381.md"
+host = "gui"
 id = "VIEW-006"
-notes = "Single-window split/tile panes with independent view state and deterministic layout; OS-level multi-window remains out of scope."
+notes = """
+Single-window split/tile panes with independent view state and deterministic
+layout; OS-level multi-window remains out of scope. T-0381 adds the GUI path:
+the bottom bar's Split view picker offers Single pane, Side by side and Stacked.
+The canvas wrapper resolves `SplitLayout::geometry`, paints the active tab twice
+with one saved scroll offset per pane, and fills the real divider. A widget test
+drives the picker and asserts the split is created and cleared.
+"""
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "split::tests::split_geometry_panes_and_divider_tile_the_viewport",
     "split::tests::per_pane_scroll_and_zoom_are_isolated",
     "split::tests::tab_close_removes_all_its_panes_deterministically",
+    "ui::widget_tests::bottom_bar_split_picker_creates_and_clears_two_panes",
 ]
 title = "Split and tile document windows"
 
@@ -312,14 +342,20 @@ docs = [
     "crates/pdfxi-app/src/presentation.rs",
     "crates/pdfxi-app/src/canvas.rs",
     "crates/pdfxi-app/src/lib.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "crates/pdfxi-app/src/shell/bottom_bar.rs",
+    "crates/pdfxi-app/src/design.rs",
     "crates/pdfxi-cli/src/present.rs",
     "crates/pdfxi-cli/src/main.rs",
     "docs/book/src/authoring.md",
+    "docs/book/src/gui.md",
     "docs/evidence/app/T-0173.md",
     "docs/evidence/cli/T-0352.md",
+    "docs/evidence/review/T-0379.md",
 ]
 domain = "View & Navigate"
-evidence = "docs/evidence/cli/T-0352.md"
+evidence = "docs/evidence/review/T-0379.md"
+host = "gui"
 id = "VIEW-012"
 notes = """
 Verified for the deterministic presentation model only (ADR 0008). The
@@ -354,12 +390,16 @@ errors.
 Gates: CLI present_ tests 2 passed; whole workspace fmt/clippy/tests green.
 
 Scope: the complete presentation state machine and layout are user-reachable
-from the CLI on real documents. The OS full-screen window, native event capture,
-timer thread, slide rendering and animation transitions remain the GUI host
-boundary and are not claimed.
+from the CLI on real documents. T-0379 adds the GUI host: the bottom bar's
+Present control dispatches `AppCommand::StartPresentation`, which enters the
+existing full-screen mode that requests a full-screen viewport, captures the
+navigation keys, ticks auto-advance from `stable_dt`, paints the slide from the
+page raster cache, and restores the window on Escape or finish. A widget test
+clicks the real control. Slide-transition animation and multi-monitor presenter
+view remain out of scope.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "presentation::tests::new_builds_document_order_and_rejects_empty_document",
     "presentation::tests::from_slides_honours_document_order_and_rejects_reordering",
@@ -382,6 +422,7 @@ tests = [
     "presentation::tests::layout_fit_uses_width_limit_for_wide_pages",
     "cli::present_steps_slides_keys_gestures_and_layout",
     "cli::present_rejects_bad_sequences_and_geometry",
+    "ui::widget_tests::bottom_bar_present_button_enters_presentation_mode",
 ]
 title = "Full screen and presentation mode"
 
@@ -808,14 +849,18 @@ title = "Create PDF from Microsoft Office via adapter"
 [[feature]]
 docs = [
     "crates/pdfxi-cli/src/scan.rs",
+    "scripts/wia-scan.ps1",
+    "crates/pdfxi-cli/src/main.rs",
     "docs/book/src/authoring.md",
     "docs/evidence/cli/T-0312.md",
+    "docs/evidence/review/T-0383.md",
 ]
 domain = "Create"
-evidence = "docs/evidence/cli/T-0312.md"
+evidence = "docs/evidence/review/T-0383.md"
+host = "cli"
 id = "CREATE-007"
 notes = """
-Verified through `pdfxi create scan --out PDF --scan PAGE.png [--scan ...]
+`pdfxi create scan --out PDF (--scan PAGE.png [--scan ...] | --device [NAME])
 [--dpi 300] [--duplex simplex|front-first|back-first] [--json]`.
 
 The host reads each PNG, validates the signature/IHDR and extracts width/height
@@ -825,27 +870,34 @@ create_from_image at the plan's exact point size (px/dpi*72) with zero margins,
 then pages are merged in plan order via PagePlan::merge and apply_page_plan. The
 written file is reopened and page count and every media box are checked against
 the plan. Duplex pairs consecutive images and rejects incomplete pairs or backs
-in simplex mode. PNG is the supported raster because the scan model's formats
-and the image embedder intersect there.
+in simplex mode.
+
+`--device` acquires the PNG pages from an attached WIA scanner through the
+bundled `scripts/wia-scan.ps1` sidecar (WIA.DeviceManager, substring device
+match, BMP-to-PNG conversion when a driver ignores the requested format). The
+sidecar is embedded at build time and written to a private temp directory; a
+missing or busy device exits 3 and the CLI reports `no scanner is available`.
 
 Evidence: two 2x2 PNG pages at 72 dpi report pages 2, front 2, back 0, simplex,
-verified_pages 2, two 2.00x2.00 pt pages and 2120 bytes; reopening reports 2
-pages. Four images with --duplex front-first report pages 4, front 2, back 2 and
-side/sheet order front1, back1, front2, back2; back-first swaps each pair.
-Incomplete duplex, dpi 10, a JPEG path, a malformed PNG header, no --scan and a
-missing file fail.
+verified_pages 2, two 2.00x2.00 pt pages and 2120 bytes. Four images with
+--duplex front-first report front1, back1, front2, back2. A real HP Officejet
+Pro 6830 over WIA acquired a 2550x3549 page at 300 dpi and wrote a verified
+612x851.76 pt PDF (1665529 bytes). A synthetic sidecar copies two real PNGs and
+verifies a two-page PDF; a sidecar that exits 3 produces `no scanner`.
 
-Gates: cargo test -p pdfxi-cli --test cli create_scan = 2 passed; whole workspace
+Gates: cargo test -p pdfxi-cli --test cli create_scan = 4 passed; whole workspace
 fmt/clippy/tests green.
 
-Scope: the TWAIN/WIA device adapter remains host-side; only rendered PNG pages
-are accepted, with no OCR, deskew or orientation inference.
+Scope: WIA only (TWAIN drivers usually expose a WIA wrapper); PNG raster pages
+with no deskew or orientation inference; OCR is CREATE-008's command.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "cli::create_scan_assembles_simplex_png_pages",
     "cli::create_scan_orders_duplex_and_rejects_bad_inputs",
+    "cli::create_scan_acquires_pages_from_the_wia_sidecar",
+    "cli::create_scan_reports_a_missing_scanner_as_a_hardware_error",
     "scan_capture::tests::simplex_plan_orders_sheets_and_rejects_back_images",
     "scan_capture::tests::duplex_front_first_page_order_is_sheet_then_front_back",
     "scan_capture::tests::duplex_back_first_page_order_is_sheet_then_back_front",
@@ -861,40 +913,53 @@ title = "Scan to PDF with TWAIN and WIA"
 [[feature]]
 docs = [
     "crates/pdfxi-cli/src/ocr.rs",
+    "scripts/windows-ocr.ps1",
+    "crates/pdfxi-cli/src/main.rs",
     "docs/book/src/authoring.md",
+    "docs/book/src/cli.md",
     "docs/evidence/cli/T-0313.md",
+    "docs/evidence/review/T-0382.md",
 ]
 domain = "Create"
-evidence = "docs/evidence/cli/T-0313.md"
+evidence = "docs/evidence/review/T-0382.md"
+host = "cli"
 id = "CREATE-008"
 notes = """
-Verified through `pdfxi create ocr <PAGE.png|jpg> --out PDF --words WORDS.json
-[--dpi 300] [--language TAG] [--json]`.
+`pdfxi create ocr <PAGE.png|jpg> --out PDF [--words WORDS.json] [--engine
+auto|tesseract|windows] [--dpi 300] [--language TAG] [--json]`.
 
-The words file is the caller-supplied recognition result in top-left pixel
-boxes. The host reads the image header for width/height, validates the JSON,
-builds a grayscale OcrImage (bounded to 64M pixels), and runs the pipeline with a
-JsonEngine and the default confidence policy. It embeds the image at
-pixels/dpi*72 points with zero margins and appends a content stream using
-BT 3 Tr ... Tj ET (invisible render mode), a Helvetica /FOcr resource and each
-planned word at its position and height. The output is reopened, its text is
-extracted, and every kept word must be found.
+With `--words` the recognition result is caller-supplied in top-left pixel
+boxes; without it `--engine` recognizes the image itself. `tesseract` runs the
+installed Tesseract CLI and parses its level-5 TSV rows. `windows` runs the
+bundled Windows.Media.Ocr sidecar (`scripts/windows-ocr.ps1`, embedded at build
+time and written to the OS temp directory) and parses its JSON words. `auto`
+prefers Tesseract and falls back to Windows OCR with one actionable error when
+neither works. Tesseract ISO 639-2 tags map to Windows BCP 47 tags.
 
-Evidence: a 2x2 PNG at 72 dpi with words Hi (confidence 95) and Low (10) reports
-kept 1, rejected 1, suspect 0, page 2.00x2.00 pt, verified_words 1,
-extracted_chars 2 and 1419 bytes; pdfxi text returns Hi, the saved bytes contain
-3 Tr and (Hi) Tj, and repeated runs are byte-identical. Empty word lists, blank
-text, a negative box, malformed JSON, a blank language tag, DPI 0, an
-unsupported extension and a missing image fail.
+The host reads the image header for width/height, builds a grayscale OcrImage
+(bounded to 64M pixels), runs the pipeline with the JsonEngine and the default
+confidence policy, embeds the image at pixels/dpi*72 points with zero margins,
+and appends BT 3 Tr ... Tj ET invisible text at each planned word. The output is
+reopened, its text extracted, and every kept word must be found.
 
-Gates: cargo test -p pdfxi-cli --test cli create_ocr = 2 passed; whole workspace
-fmt/clippy/tests green.
+Evidence: a real Excel page rendered to JPEG at scale 2 is recognized by the
+Windows engine as 22 words (PDFXI, Real-World, sample, orchestra, quarantine,
+lighthouse, Verification, amber, compass, lantern, ...); the searchable PDF
+reports kept 22, verified_words 22, extracted_chars 149, 72531 bytes and
+`pdfxi text` returns those words. The caller-supplied 2x2 fixture path still
+reports kept 1, rejected 1 and verified_words 1. Parser tests cover TSV, JSON
+and the language mapping.
 
-Scope: no OCR engine or process is bundled; one image page per command; Latin-1
-invisible text; no deskew, rotation detection or language auto-detection.
+Gates: cargo test -p pdfxi-cli (ocr parser tests 4 passed) and the existing
+create_ocr integration tests 2 passed; whole workspace fmt/clippy/tests green.
+
+Scope: the Windows engine exposes no per-word confidence, so its words report
+100; the Tesseract installer needs elevation on this host and was blocked.
+One image page per command; Latin-1 invisible text; no deskew, rotation
+detection or language auto-detection.
 """
 priority = "P1"
-status = "model"
+status = "verified"
 tests = [
     "cli::create_ocr_overlays_invisible_searchable_text",
     "cli::create_ocr_rejects_bad_words_and_inputs",
@@ -2096,23 +2161,35 @@ tests = [
 title = "Export PDF to RTF and plain text"
 
 [[feature]]
-docs = "docs/evidence/hardening/T-0239.md"
+docs = [
+    "crates/pdfxi-convert/src/pdf_export.rs",
+    "crates/pdfxi-app/src/shell/export_card.rs",
+    "crates/pdfxi-cli/src/main.rs",
+    "docs/evidence/review/T-0374.md",
+]
 domain = "Export"
-evidence = "docs/evidence/hardening/T-0239.md"
+evidence = "docs/evidence/review/T-0374.md"
+host = "gui"
 id = "EXPORT-006"
 notes = """
-End-to-end PNG/JPEG export through `pdfxi-render`'s PDFium export path at the
-requested DPI and quality, with one part per selected page. Image formats are
-advertised by `ExportFormat::implemented()` only with the `pdfium` feature.
+End-to-end PNG/JPEG/TIFF export through `pdfxi-render`'s PDFium export path at
+the requested DPI and quality. PNG and JPEG write one part per selected page;
+TIFF writes one multi-page uncompressed file. Image formats are advertised by
+`ExportFormat::implemented()` only with the `pdfium` feature. The GUI export
+card offers all nine A-27 targets, including TIFF, and the CLI reaches the same
+encoder through `pdfxi render --format tiff`.
 On the Excel fixture page 1 (612x792 pt) the measured output is 612x792 px at
 72 DPI and 1224x1584 px at 144 DPI, and the rendered page is not uniform.
 """
 priority = "P0"
-status = "library"
+status = "verified"
 tests = [
     "pdf_export::tests::image_export_from_real_fixture_matches_geometry_and_is_not_blank",
+    "pdf_export::tests::tiff_export_batches_all_selected_pages_into_one_file",
     "pdf_export::tests::implemented_formats_match_the_build_features",
     "pdf_export::tests::invalid_export_options_are_rejected_before_writing",
+    "ui::shell::export_card::tests::every_export_choice_writes_real_bytes",
+    "cli::render_writes_a_single_page_tiff_with_the_same_geometry",
 ]
 title = "Export pages to JPEG PNG and TIFF"
 
@@ -2901,9 +2978,11 @@ docs = [
     "docs/book/src/authoring.md",
     "docs/evidence/security/T-0133.md",
     "docs/evidence/security/T-0358.md",
+    "docs/evidence/review/T-0375.md",
 ]
 domain = "Security"
-evidence = "docs/evidence/security/T-0358.md"
+evidence = "docs/evidence/review/T-0375.md"
+host = "cli"
 id = "SEC-003"
 notes = """
 T-0133 delivered RFC 3394 AES-KW content-key wrapping with authenticated
@@ -2952,7 +3031,7 @@ user-reachable. Certificate-chain/revocation trust decisions, hardware keystores
 and PDF attachment integration remain host/CA boundaries and are not claimed.
 """
 priority = "P3"
-status = "library"
+status = "verified"
 tests = [
     "crypto::keywrap::tests::rfc3394_wrap_vector_128_bit_kek",
     "crypto::keywrap::tests::rfc3394_unwrap_rejects_tampered_ciphertext",
@@ -3591,26 +3670,36 @@ title = "Assistant tool lockdown and hostile-document hardening"
 docs = [
     "crates/pdfxi-edit/src/document_annotations.rs",
     "crates/pdfxi-edit/src/lib.rs",
+    "crates/pdfxi-app/src/shell/comments.rs",
+    "crates/pdfxi-app/src/shell/commands.rs",
+    "docs/book/src/comments.md",
     "docs/evidence/hardening/T-0230.md",
+    "docs/evidence/review/T-0380.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 309 unit + 5 integration passed, 0 failed; fmt/clippy/doc EXIT=0. Real Excel 2019 fixture annotated, full save, reopened with pdfxi-core; artifact target/lanes/author/t0230-out/annotated.pdf. Full output in docs/evidence/hardening/T-0230.md."
+evidence = "docs/evidence/review/T-0380.md"
+host = "gui"
 id = "REVIEW-001"
 notes = """
-The note, highlight, underline, strikeout and squiggly model (pdf/) is joined by
-real PDF writes for Text and Highlight. Notes and highlights get /Annots
-entries, /Subtype, /Rect, /Contents, /T, /NM, /M, /C, /CA, /F 4 and an /AP /N
-form XObject; highlights add /QuadPoints and a translucent ExtGState fill.
-There is now a library path from a comment tool click to a saved annotation, on
-the real fixture, that an app shell can call. Underline/strikeout/squiggly/
-ink/shape/stamp writes remain model-only.
+The note, highlight, underline, strikeout and squiggly model is joined by real
+PDF writes for all five kinds. Notes and highlights get /Annots entries,
+/Subtype, /Rect, /Contents, /T, /NM, /M, /C, /CA, /F 4 and an /AP /N form
+XObject; highlights add /QuadPoints and a translucent ExtGState fill. T-0380
+adds `TextMarkup::Squiggly` and `add_squiggly` (a zigzag appearance along the
+quad baseline) and makes every kind reachable from the GUI: the Comments panel
+shows Highlight, Underline, Strikeout and Squiggly buttons, each dispatching a
+typed command that applies the library writer to the real text selection.
+Ink, shapes and stamps remain their own tools.
 """
 priority = "P0"
-status = "model"
+status = "verified"
 tests = [
     "note_highlight_reply_and_resolve_survive_a_full_rewrite",
     "annotations_survive_the_incremental_save_the_session_uses",
     "document_annotations::tests::quad_points_follow_pdf_order",
+    "ui::shell::comments::integration_tests::markup_tools_create_underline_strikeout_and_squiggly",
+    "ui::shell::comments::integration_tests::markup_without_a_selection_explains_and_adds_nothing",
+    "ui::shell::comments::integration_tests::highlight_uses_the_selection_quads",
 ]
 title = "Sticky note highlight underline strikeout and squiggly"
 
@@ -3803,30 +3892,44 @@ title = "Email and shared review workflows locally"
 [[feature]]
 docs = [
     "crates/pdfxi-edit/src/review/report.rs",
+    "crates/pdfxi-cli/src/review.rs",
+    "crates/pdfxi-cli/src/annotate.rs",
+    "crates/pdfxi-cli/src/main.rs",
     "docs/evidence/author/T-0159.md",
+    "docs/evidence/review/T-0377.md",
 ]
 domain = "Review"
-evidence = "cargo test -p pdfxi-edit (CARGO_TARGET_DIR=target/lanes/author): 290 passed, 0 failed, including 2 new T-0159 tracker tests (ordered/complete board, deterministic digest across insertion order and export/import) and all existing participant tests; fmt/clippy/doc EXIT=0. Full output in docs/evidence/author/T-0159.md."
+evidence = "docs/evidence/review/T-0377.md"
+host = "cli"
 id = "REVIEW-007"
 notes = """
-Closes REVIEW-007 at the library level. ParticipantSummary, participants(), and
-ParticipantStatusSummary are retained. T-0159 adds ReviewTracker, a borrowed view
-that exposes status_board() (all five statuses in declaration order with ids in
-root order, including empty buckets), roster() (sorted participants), and digest()
-(a stable string over per-status counts, participant reply/assignment counts, and
-the board). Tests prove the digest is stable across reply insertion order and an
-export/import round-trip. Honest scope: a local aggregate derived from the
-registry only; shared/email synchronisation and a tracker UI remain future work.
+ParticipantSummary, participants(), and ParticipantStatusSummary are retained.
+T-0159 adds ReviewTracker, a borrowed view that exposes status_board() (all five
+statuses in declaration order with ids in root order, including empty buckets),
+roster() (sorted participants), and digest() (a stable string over per-status
+counts, participant reply/assignment counts, and the board). Tests prove the
+digest is stable across reply insertion order and an export/import round-trip.
+
+T-0377 adds the CLI caller. `pdfxi review status FILE [--json]` reads the
+annotations saved in a real document, rebuilds threads from `/IRT` links, maps
+`/State` into the workflow, and reports the board, roster and digest.
+`pdfxi annotate reply FILE --out PATH --page N --parent NM --text TEXT
+[--author NAME] [--state accepted|...]` writes a real reply and can set the
+parent's review state, so the workflow the tracker reads is scriptable.
+Honest scope: a local aggregate derived from one document's annotations only;
+shared/email synchronisation and a tracker panel in the GUI remain future work.
 No unsafe/new deps/panics.
 """
 priority = "P3"
-status = "library"
+status = "verified"
 tests = [
     "review::report::tests::participants_are_sorted_and_count_replies_threads_and_transitions",
     "review::report::tests::participant_status_summary_is_stable_and_includes_zero_entries",
     "review::registry::tests::summary_counts_are_stable_and_include_zero_entries",
     "review::report::tests::tracker_status_board_and_roster_are_ordered_and_complete",
     "review::report::tests::tracker_digest_is_deterministic_across_insertion_order_and_round_trip",
+    "cli::review_status_reports_threads_replies_and_roster",
+    "cli::review_status_reports_an_empty_tracker_without_annotations",
 ]
 title = "Review tracker and participant status"
 
@@ -5051,42 +5154,31 @@ title = "Custom toolsets and commands"
 docs = [
     "crates/pdfxi-cli/src/plugin.rs",
     "docs/book/src/cli.md",
+    "docs/decisions/0014-plugin-host-replacement.md",
     "docs/evidence/cli/T-0311.md",
+    "docs/evidence/review/T-0384.md",
 ]
 domain = "Automation"
-evidence = "docs/evidence/cli/T-0311.md"
+evidence = "docs/evidence/review/T-0384.md"
 id = "AUTO-008"
 notes = """
-Verified through `pdfxi plugin plan <MANIFEST> --operation NAME [--grant CAP ...]
-[--expect TYPE] [budget flags] [--json]` and `pdfxi plugin output --type TYPE
-[value flags] [--expect TYPE] [budget flags] [--json]`.
+Replaced by the local sandboxed plugin contract (ADR 0014, under ADR 0008 and
+ADR 0009): `pdfxi plugin plan <MANIFEST> --operation NAME [--grant CAP ...]`
+admits a real manifest through a deny-by-default capability set and invocation
+budget and prints six deterministic gate steps without executing code;
+`pdfxi plugin output --type TYPE` validates one typed value against the output
+budget, which is the ABI boundary. No WebAssembly runtime is embedded and no
+`.wasm` file is loaded or executed; a future WASM host is a new feature row.
 
-plan parses a real manifest with PluginManifest::parse_json, registers it, maps
---grant into a deny-by-default CapabilityGrants and the budget flags into
-InvocationBudget, then calls build_execution_plan. It prints the six fixed steps
-(registration, api_version, capabilities, budgets, output_budget, execute) with
-sorted deny codes and a stable summary, executes no plugin code and performs no
-I/O beyond reading the manifest. A denied plan prints its report and exits 2.
-output builds one PluginValue (text, generated text length, integer, boolean or
-opaque bytes length) and validates type and size against OutputBudget.
-
-Evidence: a text.plugin manifest requiring document-text plans allowed with the
-grant (all six steps allow) and denied without it (capabilities
-deny(capability_not_granted), execute deny(upstream_denied), exit 2); repeated
-plans are byte-identical. An over-limit invocation budget, a zero output budget
-(invalid_budget), a filesystem capability, malformed JSON and a missing manifest
-fail. Outputs text hello (encoded_len 5, summary host.plugin\toutput\ttext),
-int -3, bool true, bytes(16) and null succeed; a text/int mismatch, 70000-byte
-text, 1048577-byte bytes, empty text, empty plugin id and a missing value fail.
-
-Gates: cargo test -p pdfxi-cli --test cli plugin_ = 2 passed; whole workspace
-fmt/clippy/tests green.
-
-Scope: no WebAssembly is loaded or executed; the plan is the host gate and the
-output validator is the ABI boundary. Capabilities are the closed four-item set.
+Evidence: a text.plugin manifest plans allowed with the grant and denied without
+it (exit 2); repeated plans are byte-identical; over-budget invocations, a
+filesystem capability, malformed JSON and missing inputs fail; output text,
+int, bool, bytes and null validate while mismatched types and oversized payloads
+fail with typed errors. Gates: cargo test -p pdfxi-cli --test cli plugin_ = 2
+passed; whole workspace fmt/clippy/tests green.
 """
 priority = "P3"
-status = "model"
+status = "replaced"
 tests = [
     "cli::plugin_plan_reports_capability_and_budget_gates",
     "cli::plugin_output_validates_types_and_budgets",
@@ -6266,10 +6358,14 @@ docs = [
     "crates/pdfxi-standards/src/input.rs",
     "crates/pdfxi-standards/src/document_profile.rs",
     "crates/pdfxi-standards/src/lib.rs",
+    "crates/pdfxi-cli/src/conformance.rs",
+    "crates/pdfxi-cli/src/main.rs",
     "docs/evidence/standards/T-0178.md",
+    "docs/evidence/review/T-0376.md",
 ]
 domain = "Standards"
-evidence = "cargo test -p pdfxi-standards: 116 passed, 0 failed; icc::tests::minimal_profile_is_accepted_with_extracted_facts, truncation_is_a_typed_too_short_error, bad_signature_is_a_typed_error, declared_size_mismatch_is_typed, unsupported_colour_space_and_pcs_are_typed, tag_table_out_of_bounds_is_typed, tag_offset_out_of_range_is_typed, overlapping_tags_are_typed, oversized_buffer_is_rejected_before_parsing, and document_profile::t0178_tests::t0178_invalid_icc_is_an_error_in_every_pdf_a_and_pdf_x_profile all ok. TEST_EXIT=0; fmt/clippy/doc EXIT=0. Full output in docs/evidence/standards/T-0178.md."
+evidence = "docs/evidence/review/T-0376.md"
+host = "cli"
 id = "STD-007"
 notes = """
 The recorded STD-007 gap (ICC byte validation) is closed at library level. A
@@ -6282,9 +6378,15 @@ stable. Absent bytes are never reported as validated. Verified here for the
 library-level subset only: CERTIFICATION = false, colourimetric correctness and
 ICC tag payload semantics are not claimed, and veraPDF is a CI oracle rather
 than a runtime dependency.
+
+Evidence: `pdfxi preflight PDF/A-2b <fixture>` reports the three real
+error-severity findings and exits 2; `--fix` writes the byte-expressible
+normalizations and the recheck drops to the one finding bytes cannot fix;
+`pdfxi export conformance` normalizes to PDF/A-2b and PDF/X-4 with
+`certification_claimed: false`. Full output in docs/evidence/review/T-0376.md.
 """
 priority = "P2"
-status = "library"
+status = "verified"
 tests = [
     "icc::tests::minimal_profile_is_accepted_with_extracted_facts",
     "icc::tests::one_tag_profile_is_accepted",

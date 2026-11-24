@@ -18,7 +18,7 @@ use pdfxi_convert::{DEFAULT_EXPORT_DPI, DEFAULT_JPEG_QUALITY, TextPageSelection}
 use crate::design::Palette;
 use crate::ui::PdfxiApp;
 
-/// The eight A-27 export targets.
+/// The nine A-27 export targets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ExportChoice {
     /// Plain UTF-8 text.
@@ -34,6 +34,8 @@ pub(crate) enum ExportChoice {
     Png,
     /// Page images as JPEG.
     Jpeg,
+    /// A single multi-page TIFF of the selected pages.
+    Tiff,
     /// A single HTML document.
     Html,
     /// Rich Text Format.
@@ -42,13 +44,14 @@ pub(crate) enum ExportChoice {
 
 impl ExportChoice {
     /// Every target, in the order the format picker lists them.
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::Text,
         Self::Docx,
         Self::Xlsx,
         Self::Pptx,
         Self::Png,
         Self::Jpeg,
+        Self::Tiff,
         Self::Html,
         Self::Rtf,
     ];
@@ -63,6 +66,7 @@ impl ExportChoice {
             Self::Pptx => "PowerPoint (.pptx)",
             Self::Png => "PNG images (.png)",
             Self::Jpeg => "JPEG images (.jpg)",
+            Self::Tiff => "TIFF images (.tiff)",
             Self::Html => "Web page (.html)",
             Self::Rtf => "Rich Text (.rtf)",
         }
@@ -78,6 +82,7 @@ impl ExportChoice {
             Self::Pptx => "pptx",
             Self::Png => "png",
             Self::Jpeg => "jpg",
+            Self::Tiff => "tiff",
             Self::Html => "html",
             Self::Rtf => "rtf",
         }
@@ -93,6 +98,7 @@ impl ExportChoice {
             Self::Pptx => ExportFormat::Pptx,
             Self::Png => ExportFormat::Png,
             Self::Jpeg => ExportFormat::Jpeg,
+            Self::Tiff => ExportFormat::Tiff,
             Self::Html => ExportFormat::Html,
             Self::Rtf => ExportFormat::Rtf,
         }
@@ -108,7 +114,7 @@ pub(crate) struct ExportUiState {
     pub(crate) format: ExportChoice,
     /// Baseline JPEG quality, `1..=100`; ignored by other formats.
     pub(crate) jpeg_quality: u8,
-    /// Raster resolution for PNG and JPEG.
+    /// Raster resolution for PNG, JPEG and TIFF.
     pub(crate) dpi: u32,
     /// Path of the last successful export.
     pub(crate) last_path: Option<PathBuf>,
@@ -393,7 +399,7 @@ mod tests {
             app.handle_export_command();
             assert!(app.export_card_open());
             app.export_ui.format = choice;
-            // Small raster pages keep the image tests fast; PNG/JPEG honour DPI.
+            // Small raster pages keep the image tests fast; raster formats honour DPI.
             app.export_ui.dpi = 72;
 
             let dir = export_dir(choice.extension());
@@ -440,6 +446,9 @@ mod tests {
                     );
                 }
                 ExportChoice::Jpeg => assert!(starts_with(&bytes, &[0xFF, 0xD8]), "JPEG SOI"),
+                ExportChoice::Tiff => {
+                    assert!(starts_with(&bytes, b"II*\0"), "little-endian TIFF header")
+                }
                 ExportChoice::Html => {
                     let html = String::from_utf8_lossy(&bytes).to_lowercase();
                     assert!(html.contains("<html"), "HTML root element");

@@ -19,7 +19,7 @@ pdfxi <COMMAND> --help
 | `search <FILE> <QUERY> [--case-sensitive] [--whole-word] [--json]` | Cross-page text search | implemented |
 | `replace <FILE> --out PATH --find T --replace T [--case-sensitive] [--whole-word] [--diacritic-insensitive] [--limit N] [--json]` | Literal find-and-replace across a document | verified (`EDIT-003`) |
 | `measure <FILE> --points "x,y;x,y[;...]" [--page N] [--unit pt\|in\|mm\|cm\|ft] [--dpi D] [--decimals N] [--json]` | Distance, area and perimeter on a page | verified (`REVIEW-009`) |
-| `render <FILE> --page N --scale S --out PATH [--format png\|ppm]` | Rasterize one page | implemented, `pdfium` build |
+| `render <FILE> --page N --scale S --out PATH [--format png\|ppm\|tiff\|jpeg]` | Rasterize one page | verified (`EXPORT-006`) |
 | `action list <FILE>` | List named actions in an action file | implemented |
 | `action show <FILE> <NAME>` | Show an action's steps and parameters | implemented |
 | `action run <FILE> <NAME> --input <PATH>... [--output-dir DIR] [--json]` | Run an action over inputs | implemented, staging-only |
@@ -44,6 +44,8 @@ pdfxi <COMMAND> --help
 | `ops resolve <NAME> [NAME=VALUE ...] [--json]` | Resolve a validated typed call plan | verified (`AUTO-005`) |
 | `annotate add <FILE> --out PATH --kind free-text\|callout\|cloud\|pencil\|stamp\|file-attachment [--rect x0,y0,x1,y1] [--text T] [--ink STROKES] [--stamp-name N] [--attachment PATH] [--json]` | Add a drawing annotation | verified (`REVIEW-002`, `REVIEW-003`) |
 | `annotate list <FILE> [--page N] [--json]` | List one page's annotations | verified (`REVIEW-002`) |
+| `annotate reply <FILE> --out PATH --page N --parent NM --text T [--author NAME] [--state accepted\|rejected\|cancelled\|completed\|marked\|unmarked] [--json]` | Reply to an annotation and set its review state | verified (`REVIEW-007`) |
+| `review status <FILE> [--json]` | Report the tracker board, participant roster and digest | verified (`REVIEW-007`) |
 | `outline list <FILE> [--json]` | List the bookmark tree | verified (`EDIT-011`) |
 | `outline add <FILE> --out PATH --title T --page N [--parent PATH] [--index N]` | Append a bookmark | verified (`EDIT-011`) |
 | `outline rename <FILE> --out PATH --path PATH --title T` | Rename a bookmark | verified (`EDIT-011`) |

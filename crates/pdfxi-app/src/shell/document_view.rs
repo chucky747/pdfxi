@@ -7,7 +7,7 @@ use crate::raster::RasterKey;
 use crate::ui::LiveTexture;
 use crate::ui::*;
 use crate::{
-    CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, FindMatch, Rotation, Toolset,
+    CanvasLayout, CanvasPoint, CanvasRect, CanvasSize, FindMatch, PaneRect, Rotation, Toolset,
     uv_quad_for_rotation,
 };
 
@@ -156,7 +156,64 @@ impl PdfxiApp {
     }
 
     /// Render the document canvas, or the empty Home state with no document.
+    ///
+    /// With a split active this paints the active tab twice, each pane at its
+    /// own scroll offset, with the configured divider between them.
     pub(crate) fn canvas_ui(&mut self, ui: &mut egui::Ui) {
+        if self.state.active_tab().is_none() {
+            self.canvas_content_ui(ui);
+            return;
+        }
+        let Some(split) = self.split else {
+            self.canvas_content_ui(ui);
+            return;
+        };
+        let width = ui.available_width().max(1.0);
+        let height = ui.available_height().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let viewport = PaneRect::new(0, 0, width as u32, height as u32);
+        let Ok(geometry) = split.layout.geometry(viewport) else {
+            self.canvas_content_ui(ui);
+            return;
+        };
+        let base = ui.min_rect().left_top();
+        let mut scroll = split.scroll;
+        for (index, pane) in [geometry.first, geometry.second].into_iter().enumerate() {
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
+            let rect = egui::Rect::from_min_size(
+                base + egui::vec2(pane.x as f32, pane.y as f32),
+                egui::vec2(pane.width as f32, pane.height as f32),
+            );
+            let saved = (self.scroll_x, self.scroll_y);
+            self.scroll_x = scroll[index].x;
+            self.scroll_y = scroll[index].y;
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                self.canvas_content_ui(ui);
+            });
+            scroll[index] = CanvasPoint::new(self.scroll_x, self.scroll_y);
+            self.scroll_x = saved.0;
+            self.scroll_y = saved.1;
+        }
+        if let Some(view) = self.split.as_mut() {
+            view.scroll = scroll;
+        }
+        let palette = Palette::for_mode(self.theme);
+        #[allow(clippy::cast_precision_loss)]
+        let divider = egui::Rect::from_min_size(
+            base + egui::vec2(
+                geometry.divider.rect.x as f32,
+                geometry.divider.rect.y as f32,
+            ),
+            egui::vec2(
+                geometry.divider.rect.width as f32,
+                geometry.divider.rect.height as f32,
+            ),
+        );
+        ui.painter().rect_filled(divider, 0.0, palette.border);
+    }
+
+    /// Render one canvas pane, or the empty Home state with no document.
+    pub(crate) fn canvas_content_ui(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::for_mode(self.theme);
         egui::Frame::new()
             .fill(palette.canvas)

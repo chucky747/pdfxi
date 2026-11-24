@@ -150,6 +150,8 @@ struct Snapshot {
     active_form_field: Option<String>,
     form_draft: Option<String>,
     forms_editable: bool,
+    /// Full-screen presentation mode is active.
+    presentation: bool,
 }
 
 fn snapshot(app: &PdfxiApp) -> Snapshot {
@@ -217,6 +219,7 @@ fn snapshot(app: &PdfxiApp) -> Snapshot {
         active_form_field: app.active_form_field().map(str::to_owned),
         form_draft: app.form_draft().map(str::to_owned),
         forms_editable: app.forms_editable(),
+        presentation: app.is_presenting(),
     }
 }
 
@@ -348,6 +351,11 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
         ("ToggleTools", AppCommand::ToggleTools),
         ("ToggleGrid", AppCommand::ToggleGrid),
         ("ToggleFullscreen", AppCommand::ToggleFullscreen),
+        (
+            "SetSplit",
+            AppCommand::SetSplit(pdfxi_app::ui::SplitChoice::SideBySide),
+        ),
+        ("StartPresentation", AppCommand::StartPresentation),
         ("SetZoomPercent", AppCommand::SetZoomPercent(150)),
         (
             "SubmitPageNumber",
@@ -384,6 +392,9 @@ fn all_commands() -> Vec<(&'static str, AppCommand)> {
         ("CancelNoteDraft", AppCommand::CancelNoteDraft),
         ("SaveNoteDraft", AppCommand::SaveNoteDraft),
         ("AddHighlight", AppCommand::AddHighlight),
+        ("AddUnderline", AppCommand::AddUnderline),
+        ("AddStrikeout", AppCommand::AddStrikeout),
+        ("AddSquiggly", AppCommand::AddSquiggly),
         (
             "OpenAnnotation",
             AppCommand::OpenAnnotation {
@@ -527,6 +538,8 @@ const PROVEN_LABELS: &[&str] = &[
     "redact",
     "ai-assistant",
     "toggle-fullscreen",
+    "set-split",
+    "start-presentation",
     "set-zoom-percent",
     "submit-page-number",
     "add-page",
@@ -538,6 +551,9 @@ const PROVEN_LABELS: &[&str] = &[
     "cancel-note-draft",
     "save-note-draft",
     "add-highlight",
+    "add-underline",
+    "add-strikeout",
+    "add-squiggly",
     "open-annotation",
     "close-annotation-popup",
     "reply-to-annotation",
@@ -758,6 +774,8 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("toggle-tools", "toggle-tools"),
         ("toggle-grid", "toggle-grid"),
         ("toggle-fullscreen", "toggle-fullscreen"),
+        ("set-split", "set-split"),
+        ("start-presentation", "start-presentation"),
         ("set-zoom-percent", "set-zoom-percent"),
         ("submit-page-number", "submit-page-number"),
         ("show-rail", "show-rail"),
@@ -775,6 +793,9 @@ fn command_labels_are_stable_unique_and_non_empty() {
         ("cancel-note-draft", "cancel-note-draft"),
         ("save-note-draft", "save-note-draft"),
         ("add-highlight", "add-highlight"),
+        ("add-underline", "add-underline"),
+        ("add-strikeout", "add-strikeout"),
+        ("add-squiggly", "add-squiggly"),
         ("open-annotation", "open-annotation"),
         ("close-annotation-popup", "close-annotation-popup"),
         ("reply-to-annotation", "reply-to-annotation"),
@@ -1250,6 +1271,46 @@ fn with_excel_document() -> PdfxiApp {
         "the annotation fixture must start without annotations"
     );
     app
+}
+
+#[test]
+fn dispatched_split_presentation_and_markup_commands_act() {
+    let mut app = with_excel_document();
+
+    assert_dispatch_acts(
+        "start-presentation",
+        &mut app,
+        AppCommand::StartPresentation,
+    );
+    assert!(app.is_presenting(), "Present enters the presentation mode");
+
+    assert_dispatch_acts(
+        "set-split",
+        &mut app,
+        AppCommand::SetSplit(pdfxi_app::ui::SplitChoice::SideBySide),
+    );
+    assert!(app.is_split(), "the split picker creates a split");
+    assert_dispatch_acts(
+        "set-split",
+        &mut app,
+        AppCommand::SetSplit(pdfxi_app::ui::SplitChoice::Off),
+    );
+    assert!(!app.is_split(), "Single pane clears the split");
+
+    // The harness has no public selection setter, so the honest headless proof
+    // is the documented no-selection guard; the real annotation writes are
+    // proven by the app's markup tests.
+    for (label, command) in [
+        ("add-underline", AppCommand::AddUnderline),
+        ("add-strikeout", AppCommand::AddStrikeout),
+        ("add-squiggly", AppCommand::AddSquiggly),
+    ] {
+        assert_dispatch_acts(label, &mut app, command);
+        assert!(
+            app.comments_hint().is_some(),
+            "{label} explains the missing selection"
+        );
+    }
 }
 
 #[test]

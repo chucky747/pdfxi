@@ -3052,11 +3052,11 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-accessibility"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "pdfxi-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "eframe",
  "egui",
@@ -3080,7 +3080,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-assistant"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64",
  "http",
@@ -3096,11 +3096,11 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-automation"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "pdfxi-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -3129,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-convert"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pdfxi-accessibility",
  "pdfxi-core",
@@ -3140,7 +3140,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pdfxi-testkit",
  "thiserror 2.0.21",
@@ -3148,7 +3148,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-document"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pdfxi-core",
  "pdfxi-security",
@@ -3157,7 +3157,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-edit"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "image",
  "pdfxi-core",
@@ -3169,7 +3169,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-forms"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pdfxi-core",
  "thiserror 2.0.21",
@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-render"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pdfium-render",
  "pdfxi-core",
@@ -3188,7 +3188,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-security"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cipher",
  "cms",
@@ -3210,11 +3210,11 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-standards"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "pdfxi-testkit"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pdfxi-core",
  "pdfxi-forms",
@@ -3224,7 +3224,7 @@ dependencies = [
 
 [[package]]
 name = "pdfxi-text"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -5614,7 +5614,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",

@@ -4,12 +4,14 @@
 //! orders simplex/duplex sheets, and reuses the print-capture assembly plan, but
 //! carries no pixel buffers. This host reads real PNG files, describes each
 //! page, verifies the plan, embeds each raster with `create_from_image`, and
-//! merges the pages in plan order. The device adapter (TWAIN/WIA) remains the
-//! caller's responsibility; any rasterizer that writes PNG can drive this
-//! command.
+//! merges the pages in plan order. `--device` acquires those PNG pages from an
+//! attached WIA scanner through the bundled `scripts/wia-scan.ps1` sidecar;
+//! `--scan` remains the path for pages scanned another way. A host with no
+//! scanner reports that as a typed error, not an empty document.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, bail};
 use pdfxi_convert::{
@@ -17,10 +19,23 @@ use pdfxi_convert::{
     ScanSource, build_scan_plan, create_from_image,
 };
 use pdfxi_core::{Document, PagePlan};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Maximum image file size read into memory for one scan page.
 const MAX_SCAN_BYTES: u64 = 1_073_741_824;
+
+/// The WIA acquisition sidecar embedded at build time.
+const WIA_SCAN_SCRIPT: &str = include_str!("../../../scripts/wia-scan.ps1");
+
+/// The sidecar's JSON report.
+#[derive(Debug, Deserialize)]
+struct WiaReport {
+    /// Device name reported by WIA.
+    #[allow(dead_code)]
+    device: String,
+    /// Acquired PNG paths in scan order.
+    pages: Vec<PathBuf>,
+}
 
 /// One scanned page row.
 #[derive(Serialize)]
@@ -122,16 +137,80 @@ struct LoadedScan {
     format: CreateImageFormat,
 }
 
+/// Acquire pages from an attached WIA scanner.
+///
+/// `device` is empty for the first attached scanner or a WIA device name. The
+/// sidecar writes PNG pages into a private temporary directory and reports
+/// their paths. A machine with no scanner (sidecar exit 3) is reported as a
+/// typed hardware error.
+fn acquire_wia(device: &str) -> anyhow::Result<Vec<PathBuf>> {
+    let out_dir = std::env::temp_dir().join(format!("pdfxi-scan-{}", std::process::id()));
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir)
+            .with_context(|| format!("clear the scan directory {}", out_dir.display()))?;
+    }
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("create the scan directory {}", out_dir.display()))?;
+
+    // The test seam lets the acquisition path run with a synthetic device.
+    let script = match std::env::var_os("PDFXI_WIA_SCAN_SCRIPT") {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let path = out_dir.join("wia-scan.ps1");
+            std::fs::write(&path, WIA_SCAN_SCRIPT)
+                .with_context(|| format!("write the WIA sidecar to {}", path.display()))?;
+            path
+        }
+    };
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-OutDir")
+        .arg(&out_dir);
+    if !device.is_empty() {
+        command.arg("-DeviceName").arg(device);
+    }
+    let output = command
+        .output()
+        .with_context(|| "start the WIA acquisition sidecar (PowerShell is required)")?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        let code = output.status.code().unwrap_or(-1);
+        if code == 3 {
+            bail!(
+                "no scanner is available: {}",
+                error.trim().trim_start_matches("no WIA scanner: ")
+            );
+        }
+        bail!("the WIA sidecar failed ({code}): {}", error.trim());
+    }
+    let report: WiaReport =
+        serde_json::from_slice(&output.stdout).context("parse the WIA sidecar output")?;
+    if report.pages.is_empty() {
+        bail!("the scanner returned no pages");
+    }
+    Ok(report.pages)
+}
+
 /// `pdfxi create scan`.
 pub(crate) fn create_scan(
-    inputs: &[PathBuf],
+    scans: &[PathBuf],
     out: &Path,
+    device: Option<&str>,
     dpi: f64,
     duplex_text: &str,
     json: bool,
 ) -> anyhow::Result<()> {
+    let acquired;
+    let inputs: &[PathBuf] = if let Some(name) = device {
+        acquired = acquire_wia(name)?;
+        acquired.as_slice()
+    } else {
+        scans
+    };
     if inputs.is_empty() {
-        bail!("pass at least one --scan IMAGE");
+        bail!("pass at least one --scan IMAGE or use --device to acquire pages");
     }
     let duplex = parse_duplex(duplex_text)?;
     let options = ScanOptions::new().with_duplex(duplex);

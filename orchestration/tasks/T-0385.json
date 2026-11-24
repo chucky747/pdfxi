@@ -1,0 +1,22 @@
+{
+  "id": "T-0385",
+  "lane": "integrator",
+  "title": "Ship signed 0.1.5 with a local CI green gate",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0383"],
+  "owns": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "docs/releases/0.1.5.md",
+    "docs/book/src/releases/0.1.5.md",
+    "docs/book/src/SUMMARY.md",
+    "docs/book/src/install.md",
+    "README.md",
+    "docs/evidence/release/T-0385.md",
+    "orchestration/tasks/T-0385.json"
+  ],
+  "acceptance": "version 0.1.5 builds; the setup and binaries are signed with the local self-signed certificate and verify; the setup installs per-user and leaves a desktop shortcut to the new binary; goal-verify --all prints GOAL VERIFIED at HEAD; cargo xtask ci is green; evidence records hashes, signature status, shortcut path and target.",
+  "notes": "Release task. Local signing is not publicly trusted; T-0202 records that boundary.",
+  "evidence": "docs/evidence/release/T-0385.md"
+}

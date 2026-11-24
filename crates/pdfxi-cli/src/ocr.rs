@@ -14,8 +14,16 @@
 //!   "words": [ { "text": "Hello", "x": 10, "y": 20, "width": 40, "height": 14,
 //!                "confidence": 95 } ] }
 //! ```
+//!
+//! With `--engine` (or no `--words`) the host recognizes the image itself:
+//! `tesseract` runs the installed Tesseract CLI and parses its TSV output;
+//! `windows` runs the bundled `scripts/windows-ocr.ps1` sidecar over the
+//! built-in Windows.Media.Ocr engine. `auto` prefers Tesseract and falls back
+//! to Windows OCR. A recognition failure is a typed error, never an empty
+//! searchable layer.
 
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, bail};
 use pdfxi_convert::{
@@ -28,6 +36,33 @@ use serde::{Deserialize, Serialize};
 
 /// Maximum pixels passed to the OCR model in one image.
 const MAX_OCR_PIXELS: usize = 64 * 1024 * 1024;
+
+/// The Windows OCR sidecar embedded at build time so an installed CLI does not
+/// depend on the repository layout.
+const WINDOWS_OCR_SCRIPT: &str = include_str!("../../../scripts/windows-ocr.ps1");
+
+/// Recognition backend selected by `create ocr --engine`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum OcrBackend {
+    /// Tesseract when installed, otherwise the Windows OCR engine.
+    #[default]
+    Auto,
+    /// The Tesseract command-line engine.
+    Tesseract,
+    /// The built-in Windows.Media.Ocr engine.
+    Windows,
+}
+
+impl OcrBackend {
+    /// Stable label used in reports.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Tesseract => "tesseract",
+            Self::Windows => "windows",
+        }
+    }
+}
 
 /// One word from the JSON file.
 #[derive(Debug, Deserialize)]
@@ -77,6 +112,170 @@ impl OcrEngine for JsonEngine {
             self.words.clone(),
             self.language.clone(),
         ))
+    }
+}
+
+/// Parse Tesseract's TSV output into the words model.
+///
+/// Tesseract writes one header row plus one row per level; level 5 rows carry
+/// word boxes in input-image pixels with a 0..=100 confidence and `-1` for
+/// non-text rows. Empty rows and low-level rows are skipped.
+fn parse_tesseract_tsv(text: &str) -> anyhow::Result<WordsFile> {
+    let mut lines = text.lines();
+    let header = lines.next().unwrap_or_default();
+    if !header.starts_with("level\tpage_num\tblock_num") {
+        bail!("tesseract output is not TSV: missing the column header");
+    }
+    let mut words = Vec::new();
+    for line in lines {
+        let columns: Vec<&str> = line.split('\t').collect();
+        if columns.len() < 12 {
+            continue;
+        }
+        let Ok(level) = columns[0].parse::<u8>() else {
+            continue;
+        };
+        if level != 5 {
+            continue;
+        }
+        let word = columns[11].trim();
+        if word.is_empty() {
+            continue;
+        }
+        let Ok(left) = columns[6].parse::<f64>() else {
+            continue;
+        };
+        let Ok(top) = columns[7].parse::<f64>() else {
+            continue;
+        };
+        let Ok(width) = columns[8].parse::<f64>() else {
+            continue;
+        };
+        let Ok(height) = columns[9].parse::<f64>() else {
+            continue;
+        };
+        let Ok(confidence) = columns[10].parse::<f32>() else {
+            continue;
+        };
+        if confidence < 0.0 {
+            continue;
+        }
+        words.push(WordInput {
+            text: word.to_owned(),
+            x: left,
+            y: top,
+            width,
+            height,
+            confidence,
+        });
+    }
+    if words.is_empty() {
+        bail!("tesseract reported no words");
+    }
+    Ok(WordsFile {
+        language: None,
+        words,
+    })
+}
+
+/// Parse the Windows OCR sidecar's JSON into the words model.
+fn parse_windows_json(text: &str) -> anyhow::Result<WordsFile> {
+    let parsed: WordsFile =
+        serde_json::from_str(text).context("parse the Windows OCR JSON output")?;
+    if parsed.words.is_empty() {
+        bail!("the Windows OCR engine reported no words");
+    }
+    Ok(parsed)
+}
+
+/// Run Tesseract over `image` and return its words.
+fn tesseract_words(image: &Path, language: &str) -> anyhow::Result<WordsFile> {
+    let output = Command::new("tesseract")
+        .arg(image)
+        .arg("stdout")
+        .arg("-l")
+        .arg(language)
+        .arg("tsv")
+        .output()
+        .with_context(|| "start tesseract (install Tesseract or use --engine windows)")?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        bail!("tesseract exited {}: {}", output.status, error.trim());
+    }
+    parse_tesseract_tsv(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Map a Tesseract-style language tag to the Windows OCR tag.
+///
+/// Tesseract uses ISO 639-2 (`eng`, `deu`, `chi_sim`); Windows accepts BCP 47
+/// base tags (`en`, `de`, `zh-Hans`). Unknown tags are passed through.
+fn windows_language_tag(tag: &str) -> String {
+    let lower = tag.to_ascii_lowercase();
+    let mapped = match lower.as_str() {
+        "eng" => "en",
+        "deu" | "ger" => "de",
+        "fra" | "fre" => "fr",
+        "spa" => "es",
+        "ita" => "it",
+        "por" => "pt",
+        "nld" | "dut" => "nl",
+        "jpn" => "ja",
+        "kor" => "ko",
+        "rus" => "ru",
+        "chi_sim" => "zh-Hans",
+        "chi_tra" => "zh-Hant",
+        other => other,
+    };
+    mapped.to_owned()
+}
+
+/// Run the embedded Windows OCR sidecar over `image` and return its words.
+fn windows_words(image: &Path, language: Option<&str>) -> anyhow::Result<WordsFile> {
+    let script = std::env::temp_dir().join(format!("pdfxi-windows-ocr-{}.ps1", std::process::id()));
+    std::fs::write(&script, WINDOWS_OCR_SCRIPT)
+        .with_context(|| format!("write the OCR sidecar to {}", script.display()))?;
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Image")
+        .arg(image);
+    if let Some(tag) = language {
+        command.arg("-Language").arg(windows_language_tag(tag));
+    }
+    let output = command
+        .output()
+        .with_context(|| "start the Windows OCR sidecar (PowerShell is required)")?;
+    let _ = std::fs::remove_file(&script);
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "the Windows OCR engine failed ({}): {}",
+            output.status,
+            error.trim()
+        );
+    }
+    parse_windows_json(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Recognize `image` with the selected backend.
+fn recognize_with_engine(
+    image: &Path,
+    backend: OcrBackend,
+    language: Option<&str>,
+) -> anyhow::Result<WordsFile> {
+    match backend {
+        OcrBackend::Tesseract => tesseract_words(image, language.unwrap_or("eng")),
+        OcrBackend::Windows => windows_words(image, language),
+        OcrBackend::Auto => match tesseract_words(image, language.unwrap_or("eng")) {
+            Ok(words) => Ok(words),
+            Err(tesseract_error) => windows_words(image, language).map_err(|windows_error| {
+                anyhow::anyhow!(
+                    "no OCR engine could recognize {}: tesseract: {tesseract_error}; windows: {windows_error}",
+                    image.display()
+                )
+            }),
+        },
     }
 }
 
@@ -337,7 +536,8 @@ struct OcrReport {
 pub(crate) fn create_ocr(
     image: &Path,
     out: &Path,
-    words_path: &Path,
+    words_path: Option<&Path>,
+    backend: OcrBackend,
     dpi: f64,
     language: Option<&str>,
     json: bool,
@@ -356,12 +556,28 @@ pub(crate) fn create_ocr(
         );
     }
 
-    let words_text = std::fs::read_to_string(words_path)
-        .with_context(|| format!("read words {}", words_path.display()))?;
-    let parsed: WordsFile = serde_json::from_str(&words_text)
-        .with_context(|| format!("parse words {}", words_path.display()))?;
+    let parsed = match words_path {
+        Some(path) => {
+            let words_text = std::fs::read_to_string(path)
+                .with_context(|| format!("read words {}", path.display()))?;
+            serde_json::from_str::<WordsFile>(&words_text)
+                .with_context(|| format!("parse words {}", path.display()))?
+        }
+        None => {
+            let recognized = recognize_with_engine(image, backend, language)?;
+            if backend == OcrBackend::Auto {
+                eprintln!("note: recognized with an automatic OCR backend");
+            } else {
+                eprintln!("note: recognized with {}", backend.label());
+            }
+            recognized
+        }
+    };
     if parsed.words.is_empty() {
-        bail!("{} contains no words", words_path.display());
+        match words_path {
+            Some(path) => bail!("{} contains no words", path.display()),
+            None => bail!("no OCR words were found for {}", image.display()),
+        }
     }
     let mut engine_words = Vec::with_capacity(parsed.words.len());
     for (index, word) in parsed.words.iter().enumerate() {
@@ -479,4 +695,55 @@ pub(crate) fn create_ocr(
     println!("extracted_chars: {}", report.extracted_chars);
     println!("bytes: {}", report.bytes);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OcrBackend, parse_tesseract_tsv, parse_windows_json, windows_language_tag};
+
+    const TSV: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+1\t1\t0\t0\t0\t0\t0\t0\t100\t50\t-1\t\n\
+5\t1\t1\t1\t1\t1\t10\t20\t40\t14\t95.5\tHello\n\
+5\t1\t1\t1\t1\t2\t60\t20\t30\t14\t88\tworld\n";
+
+    #[test]
+    fn tesseract_tsv_keeps_level_five_words_with_boxes_and_confidence() {
+        let words = parse_tesseract_tsv(TSV).expect("parse TSV");
+        assert_eq!(words.words.len(), 2);
+        assert_eq!(words.words[0].text, "Hello");
+        assert_eq!(words.words[0].x, 10.0);
+        assert_eq!(words.words[0].y, 20.0);
+        assert_eq!(words.words[0].width, 40.0);
+        assert_eq!(words.words[0].height, 14.0);
+        assert!((words.words[0].confidence - 95.5).abs() < f32::EPSILON);
+        assert_eq!(words.words[1].text, "world");
+    }
+
+    #[test]
+    fn tesseract_tsv_rejects_non_tsv_and_empty_output() {
+        assert!(parse_tesseract_tsv("not a table").is_err());
+        let header_only = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
+        assert!(parse_tesseract_tsv(header_only).is_err());
+    }
+
+    #[test]
+    fn windows_ocr_json_parses_words_and_rejects_empty_output() {
+        let json = r#"{"language":"en-GB","words":[{"text":"PDFXI","x":107.0,"y":116.0,"width":49.0,"height":14.0,"confidence":100.0}]}"#;
+        let words = parse_windows_json(json).expect("parse JSON");
+        assert_eq!(words.language.as_deref(), Some("en-GB"));
+        assert_eq!(words.words.len(), 1);
+        assert_eq!(words.words[0].text, "PDFXI");
+        assert_eq!(words.words[0].x, 107.0);
+        assert!(parse_windows_json(r#"{"words":[]}"#).is_err());
+        assert!(parse_windows_json("not json").is_err());
+    }
+
+    #[test]
+    fn tesseract_tags_map_to_windows_ocr_tags() {
+        assert_eq!(windows_language_tag("eng"), "en");
+        assert_eq!(windows_language_tag("DEU"), "de");
+        assert_eq!(windows_language_tag("chi_sim"), "zh-Hans");
+        assert_eq!(windows_language_tag("en-GB"), "en-gb");
+        assert_eq!(OcrBackend::default(), OcrBackend::Auto);
+    }
 }

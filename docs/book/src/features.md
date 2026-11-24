@@ -1,8 +1,9 @@
 # Feature matrix
 
-The canonical parity matrix is `docs/features.toml` (145 rows). Its human
+The canonical parity matrix is `docs/features.toml` (146 rows). Its human
 summary is [FEATURES.md](../../FEATURES.md). At this release every row is
-terminal: 143 are `verified` and 2 are `replaced` under ADR 0008/0009.
+terminal: 142 are `verified`, 3 are `replaced` under ADR 0008/0009/0014, and
+PLAT-002 is `deferred` because the project is Windows-only.
 
 Detailed M1 pages:
 

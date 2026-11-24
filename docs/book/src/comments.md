@@ -1,8 +1,8 @@
 # Comments
 
 Comments are PDF annotations written into the document. They are stored in the
-file when you save, so they travel with the PDF. This page covers the two
-annotation types the shell creates today and the review actions around them.
+file when you save, so they travel with the PDF. This page covers the annotation
+types the shell creates today and the review actions around them.
 
 ## What you can add
 
@@ -10,6 +10,13 @@ annotation types the shell creates today and the review actions around them.
 |---|---|
 | Text note (`/Text`) | A note annotation with your comment text |
 | Highlight (`/Highlight`) | A highlight annotation over the selected text |
+| Underline (`/Underline`) | A line under the selected text |
+| Strikeout (`/StrikeOut`) | A line through the selected text |
+| Squiggly (`/Squiggly`) | A wavy line under the selected text |
+
+The Comments panel shows one button per markup kind. Select text on the page
+first; choosing a tool applies it to every selected page and then clears the
+selection.
 
 Adding a comment writes:
 
@@ -50,8 +57,8 @@ file as cryptographically locked ([Security](security.md)).
 
 ## Limits
 
-- Only text notes and highlights are created by the shell. Drawing, ink, stamps,
-  and measurement annotations are **not** available here.
+- Only text notes and text-markup annotations are created by the shell. Drawing,
+  ink, stamps, and measurement annotations are **not** available here.
 - Author names are labels, not authenticated identities.
 - A comment is a PDF annotation, not a shared-review message. Nothing is
   transmitted; **Shared** is a placeholder and does not carry comments between

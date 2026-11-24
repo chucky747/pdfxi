@@ -1,0 +1,21 @@
+{
+  "id": "T-0382",
+  "lane": "integrator",
+  "title": "CREATE-008: real OCR engines reachable from the CLI",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0381"],
+  "owns": [
+    "crates/pdfxi-cli/**",
+    "scripts/windows-ocr.ps1",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/authoring.md",
+    "docs/book/src/cli.md",
+    "docs/evidence/review/T-0382.md",
+    "orchestration/tasks/T-0382.json"
+  ],
+  "acceptance": "pdfxi create ocr recognizes a real rendered page with the Windows OCR engine (and Tesseract when installed) and writes a searchable PDF whose extracted text contains the recognized words; parser tests cover the TSV and JSON contracts; CREATE-008 becomes verified on the cli host.",
+  "notes": "ADR 0009 row 9. The Tesseract installer needs elevation on this host; the built-in Windows.Media.Ocr engine supplies a real OCR run on real bytes.",
+  "evidence": "docs/evidence/review/T-0382.md"
+}

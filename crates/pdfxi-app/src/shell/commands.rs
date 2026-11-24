@@ -31,6 +31,33 @@ use crate::ui::{CaptionAction, CloseChoice, UiClosePolicy};
 use crate::{TabId, Toolset, ViewMode};
 
 use super::capabilities::RailItem;
+use super::comments::MarkupKind;
+
+/// Canvas split selected by the bottom-bar Split picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitChoice {
+    /// One pane.
+    Off,
+    /// Left and right panes.
+    SideBySide,
+    /// Top and bottom panes.
+    Stacked,
+}
+
+impl SplitChoice {
+    /// Every choice in picker order.
+    pub const ALL: &'static [Self] = &[Self::Off, Self::SideBySide, Self::Stacked];
+
+    /// Stable, human-readable label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Single pane",
+            Self::SideBySide => "Side by side",
+            Self::Stacked => "Stacked",
+        }
+    }
+}
 
 /// One user action performed by the viewer shell.
 ///
@@ -185,6 +212,10 @@ pub enum AppCommand {
     ToggleGrid,
     /// Toggle a native full-screen viewport.
     ToggleFullscreen,
+    /// Split the canvas into two panes, or clear the split.
+    SetSplit(SplitChoice),
+    /// Enter full-screen presentation mode over the open document.
+    StartPresentation,
     /// Set a custom zoom percentage.
     SetZoomPercent(u32),
     /// Validate and submit the page-number box.
@@ -258,6 +289,12 @@ pub enum AppCommand {
     CancelNoteDraft,
     /// Add a highlight over the current text selection.
     AddHighlight,
+    /// Add an underline over the current text selection.
+    AddUnderline,
+    /// Add a strikeout over the current text selection.
+    AddStrikeout,
+    /// Add a squiggly underline over the current text selection.
+    AddSquiggly,
     /// Open an annotation's thread popup and scroll to its page.
     OpenAnnotation {
         /// Zero-based page.
@@ -429,6 +466,8 @@ impl AppCommand {
             Self::ToggleTools => "toggle-tools",
             Self::ToggleGrid => "toggle-grid",
             Self::ToggleFullscreen => "toggle-fullscreen",
+            Self::SetSplit(_) => "set-split",
+            Self::StartPresentation => "start-presentation",
             Self::SetZoomPercent(_) => "set-zoom-percent",
             Self::SubmitPageNumber(_) => "submit-page-number",
             Self::ShowRail(_) => "show-rail",
@@ -461,6 +500,9 @@ impl AppCommand {
             Self::SaveNoteDraft => "save-note-draft",
             Self::CancelNoteDraft => "cancel-note-draft",
             Self::AddHighlight => "add-highlight",
+            Self::AddUnderline => "add-underline",
+            Self::AddStrikeout => "add-strikeout",
+            Self::AddSquiggly => "add-squiggly",
             Self::OpenAnnotation { .. } => "open-annotation",
             Self::CloseAnnotationPopup => "close-annotation-popup",
             Self::ReplyToAnnotation { .. } => "reply-to-annotation",
@@ -639,6 +681,8 @@ impl crate::ui::PdfxiApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
                 }
             }
+            AppCommand::SetSplit(choice) => self.set_split(choice),
+            AppCommand::StartPresentation => self.apply_launch_presentation(true),
             AppCommand::SetZoomPercent(percent) => self.set_zoom_percent(percent),
             AppCommand::SubmitPageNumber(text) => {
                 self.submit_page_number(&text);
@@ -723,6 +767,9 @@ impl crate::ui::PdfxiApp {
             AppCommand::SaveNoteDraft => self.save_note_draft(),
             AppCommand::CancelNoteDraft => self.cancel_note_draft(),
             AppCommand::AddHighlight => self.highlight_selection(),
+            AppCommand::AddUnderline => self.markup_selection(MarkupKind::Underline),
+            AppCommand::AddStrikeout => self.markup_selection(MarkupKind::Strikeout),
+            AppCommand::AddSquiggly => self.markup_selection(MarkupKind::Squiggly),
             AppCommand::OpenAnnotation { page, id } => self.open_annotation_popup(page, &id),
             AppCommand::CloseAnnotationPopup => self.close_annotation_popup(),
             AppCommand::ReplyToAnnotation { page, id, contents } => {

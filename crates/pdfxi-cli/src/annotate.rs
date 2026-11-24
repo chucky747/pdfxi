@@ -10,7 +10,8 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use pdfxi_core::Document;
 use pdfxi_edit::{
-    Point, Rect, add_callout, add_cloud, add_file_attachment, add_free_text, list_annotations,
+    AnnotationState, Point, Rect, add_callout, add_cloud, add_file_attachment, add_free_text,
+    list_annotations, reply_to, set_state,
 };
 use serde::Serialize;
 
@@ -125,6 +126,84 @@ fn parse_point(text: &str) -> anyhow::Result<Point> {
         bail!("--anchor must be a finite point");
     }
     Ok(Point::new(values[0], values[1]))
+}
+
+/// A PDF review `/State` value accepted by `annotate reply --state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ReviewStateArg {
+    /// The comment is accepted (resolved).
+    Accepted,
+    /// The comment is rejected.
+    Rejected,
+    /// The comment is cancelled.
+    Cancelled,
+    /// The comment is completed.
+    Completed,
+    /// The comment is marked.
+    Marked,
+    /// The comment is unmarked.
+    Unmarked,
+}
+
+impl ReviewStateArg {
+    /// Map to the library's annotation state.
+    const fn state(self) -> AnnotationState {
+        match self {
+            Self::Accepted => AnnotationState::Accepted,
+            Self::Rejected => AnnotationState::Rejected,
+            Self::Cancelled => AnnotationState::Cancelled,
+            Self::Completed => AnnotationState::Completed,
+            Self::Marked => AnnotationState::Marked,
+            Self::Unmarked => AnnotationState::Unmarked,
+        }
+    }
+}
+
+/// Reply to an annotation and optionally set the parent's review state.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_reply(
+    file: &Path,
+    out: &Path,
+    page: usize,
+    parent: &str,
+    text: &str,
+    author: &str,
+    state: Option<ReviewStateArg>,
+    json: bool,
+) -> anyhow::Result<()> {
+    if page == 0 {
+        bail!("--page is one-based and must be at least 1");
+    }
+    let mut document = load(file)?;
+    let index = page - 1;
+    let identifier = reply_to(&mut document, index, parent, text, author)
+        .with_context(|| format!("reply to {parent} on page {page}"))?;
+    if let Some(state) = state {
+        set_state(&mut document, index, parent, state.state())
+            .with_context(|| format!("set /State on {parent}"))?;
+    }
+
+    let bytes = document.save().context("save the replied document")?;
+    std::fs::write(out, &bytes).with_context(|| format!("write {}", out.display()))?;
+
+    let reopened = Document::from_bytes(bytes).context("reopen the replied document")?;
+    let annotations = rows(&reopened, index)?;
+    let report = AnnotateReport {
+        file: file.display().to_string(),
+        out: Some(out.display().to_string()),
+        page,
+        annotations,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("file: {}", report.file);
+        println!("out:  {}", out.display());
+        println!("page: {page}");
+        println!("reply: {}", identifier.id);
+        println!("annotations: {}", report.annotations.len());
+    }
+    Ok(())
 }
 
 /// Add one annotation and save the document.

@@ -25,9 +25,9 @@
 //!   the extracted lines flowed into a body text box. The slide size follows the
 //!   first source page (its aspect ratio), not a forced 16:9 deck.
 //! - Image export renders through the optional `pdfium` feature. Without that
-//!   feature [`ExportFormat::Png`] and [`ExportFormat::Jpeg`] are not listed by
-//!   [`ExportFormat::implemented`] and fail with
-//!   [`PdfExportError::UnsupportedFormat`].
+//!   feature [`ExportFormat::Png`], [`ExportFormat::Jpeg`] and
+//!   [`ExportFormat::Tiff`] are not listed by [`ExportFormat::implemented`] and
+//!   fail with [`PdfExportError::UnsupportedFormat`].
 
 use crate::export_options::ExportOptionError;
 use crate::office_export::xml;
@@ -226,6 +226,8 @@ pub enum ExportFormat {
     Png,
     /// Baseline JPEG through the renderer.
     Jpeg,
+    /// Uncompressed, optionally multi-page TIFF through the renderer.
+    Tiff,
     /// Self-contained semantic HTML (`.html`).
     Html,
     /// Rich Text Format (`.rtf`).
@@ -241,6 +243,7 @@ impl ExportFormat {
         Self::Pptx,
         Self::Png,
         Self::Jpeg,
+        Self::Tiff,
         Self::Html,
         Self::Rtf,
     ];
@@ -261,6 +264,7 @@ impl ExportFormat {
                 Self::Pptx,
                 Self::Png,
                 Self::Jpeg,
+                Self::Tiff,
                 Self::Html,
                 Self::Rtf,
             ]
@@ -282,7 +286,7 @@ impl ExportFormat {
     #[must_use]
     pub const fn is_implemented(self) -> bool {
         match self {
-            Self::Png | Self::Jpeg => cfg!(feature = "pdfium"),
+            Self::Png | Self::Jpeg | Self::Tiff => cfg!(feature = "pdfium"),
             Self::Text | Self::Docx | Self::Xlsx | Self::Pptx | Self::Html | Self::Rtf => true,
         }
     }
@@ -297,6 +301,7 @@ impl ExportFormat {
             Self::Pptx => "pptx",
             Self::Png => "png",
             Self::Jpeg => "jpg",
+            Self::Tiff => "tiff",
             Self::Html => "html",
             Self::Rtf => "rtf",
         }
@@ -314,6 +319,7 @@ impl ExportFormat {
             }
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
+            Self::Tiff => "image/tiff",
             Self::Html => "text/html; charset=utf-8",
             Self::Rtf => "application/rtf",
         }
@@ -329,15 +335,16 @@ impl ExportFormat {
             Self::Pptx => "PowerPoint",
             Self::Png => "PNG image",
             Self::Jpeg => "JPEG image",
+            Self::Tiff => "TIFF image",
             Self::Html => "HTML",
             Self::Rtf => "RTF",
         }
     }
 
-    /// Return true for the two raster formats.
+    /// Return true for the raster formats.
     #[must_use]
     pub const fn is_image(self) -> bool {
-        matches!(self, Self::Png | Self::Jpeg)
+        matches!(self, Self::Png | Self::Jpeg | Self::Tiff)
     }
 }
 
@@ -361,7 +368,7 @@ pub struct ExportOptions {
     pub title: String,
     /// Pages to export, zero-based.
     pub selection: TextPageSelection,
-    /// Raster resolution for PNG and JPEG output.
+    /// Raster resolution for PNG, JPEG and TIFF output.
     pub dpi: u32,
     /// Baseline JPEG quality in `1..=100`; ignored by the other formats.
     pub jpeg_quality: u8,
@@ -417,9 +424,10 @@ impl ExportOptions {
 
 /// One file inside an [`ExportedFile`].
 ///
-/// Single-file formats produce exactly one part named `document`; image
-/// formats produce one part per source page named `page-N` (one-based). Callers
-/// append [`ExportFormat::extension`] when writing a part to disk.
+/// Single-file formats produce exactly one part named `document`; PNG and JPEG
+/// produce one part per source page named `page-N` (one-based). TIFF also
+/// produces one `document` part containing every selected page in one IFD
+/// chain. Callers append [`ExportFormat::extension`] when writing a part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportedPart {
     /// Filename stem without the extension.
@@ -693,6 +701,7 @@ pub fn export_docx(
 /// | `Html` | 1 | one `<section>` per page with escaped `<p>` lines and inline CSS |
 /// | `Rtf` | 1 | RTF 1.9 with `\page` between pages and `\uN?` escapes |
 /// | `Png`/`Jpeg` | one per page | renderer raster at [`ExportOptions::dpi`] |
+/// | `Tiff` | 1 | one multi-page uncompressed TIFF at [`ExportOptions::dpi`] |
 ///
 /// # Errors
 ///
@@ -777,7 +786,7 @@ fn export_pdf_inner(
         ExportFormat::Pptx => export_dispatch_pptx(document, options, &pages),
         ExportFormat::Html => export_dispatch_html(document, options, &pages),
         ExportFormat::Rtf => export_dispatch_rtf(document, &pages),
-        ExportFormat::Png | ExportFormat::Jpeg => {
+        ExportFormat::Png | ExportFormat::Jpeg | ExportFormat::Tiff => {
             export_dispatch_image(document, format, options, &pages, cancellation)
         }
     }
@@ -1045,13 +1054,19 @@ fn export_dispatch_image(
             pdfxi_render::ColorMode::Rgba,
             pdfxi_render::AlphaPolicy::Preserve,
         )
-    } else {
+    } else if format == ExportFormat::Jpeg {
         (
             pdfxi_render::ImageFormat::Jpeg,
             pdfxi_render::ColorMode::Rgb,
             pdfxi_render::AlphaPolicy::Flatten {
                 background: [255, 255, 255],
             },
+        )
+    } else {
+        (
+            pdfxi_render::ImageFormat::Tiff,
+            pdfxi_render::ColorMode::Rgba,
+            pdfxi_render::AlphaPolicy::Preserve,
         )
     };
     let mut one_based = Vec::with_capacity(pages.len());
@@ -1076,8 +1091,14 @@ fn export_dispatch_image(
     let mut parts = Vec::with_capacity(images.len());
     for image in images {
         let number = image.page.get().saturating_add(1);
+        // The renderer batches every selected page into one TIFF IFD chain.
+        let name = if image_format == pdfxi_render::ImageFormat::Tiff {
+            "document".to_owned()
+        } else {
+            format!("page-{number}")
+        };
         parts.push(ExportedPart {
-            name: format!("page-{number}"),
+            name,
             bytes: image.bytes,
             pixel_size: Some((image.width, image.height)),
         });
@@ -1473,20 +1494,23 @@ mod tests {
             assert!(formats.contains(&format), "{format} must be available");
             assert!(format.is_implemented());
         }
-        let images = [ExportFormat::Png, ExportFormat::Jpeg];
-        assert_eq!(formats.len(), if cfg!(feature = "pdfium") { 8 } else { 6 });
+        let images = [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Tiff];
+        assert_eq!(formats.len(), if cfg!(feature = "pdfium") { 9 } else { 6 });
         for format in images {
             assert_eq!(format.is_implemented(), cfg!(feature = "pdfium"));
             assert_eq!(formats.contains(&format), cfg!(feature = "pdfium"));
         }
-        assert_eq!(ExportFormat::ALL.len(), 8);
+        assert_eq!(ExportFormat::ALL.len(), 9);
         assert_eq!(ExportFormat::Png.extension(), "png");
         assert_eq!(ExportFormat::Jpeg.extension(), "jpg");
+        assert_eq!(ExportFormat::Tiff.extension(), "tiff");
+        assert_eq!(ExportFormat::Tiff.media_type(), "image/tiff");
         assert_eq!(
             ExportFormat::Docx.media_type(),
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         );
         assert!(ExportFormat::Png.is_image());
+        assert!(ExportFormat::Tiff.is_image());
         assert!(!ExportFormat::Html.is_image());
         assert_eq!(ExportFormat::Rtf.to_string(), "RTF");
     }
@@ -1775,6 +1799,26 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn tiff_export_batches_all_selected_pages_into_one_file() {
+        let document = fixture("powerpoint-slides.pdf");
+        let file = export_pdf(
+            &document,
+            ExportFormat::Tiff,
+            &ExportOptions::new().with_dpi(36),
+        )
+        .expect("tiff dispatch");
+        assert_eq!(file.format, ExportFormat::Tiff);
+        assert_eq!(file.page_count, 3);
+        assert_eq!(file.parts.len(), 1, "TIFF is one multi-page file");
+        let part = &file.parts[0];
+        assert_eq!(part.name, "document");
+        assert_eq!(&part.bytes[..4], b"II*\0", "little-endian TIFF header");
+        assert!(part.bytes.len() > 10_000, "three pages encode more");
+        assert!(file.is_single_file());
     }
 
     #[cfg(feature = "pdfium")]

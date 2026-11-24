@@ -1,0 +1,18 @@
+{
+  "id": "T-0384",
+  "lane": "integrator",
+  "title": "AUTO-008: WASM plugin host replaced by the sandboxed plugin contract",
+  "priority": "P3",
+  "status": "replaced",
+  "depends_on": ["T-0383"],
+  "owns": [
+    "docs/decisions/0014-plugin-host-replacement.md",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/evidence/review/T-0384.md",
+    "orchestration/tasks/T-0384.json"
+  ],
+  "acceptance": "ADR 0014 records the replacement; AUTO-008 is terminal `replaced` with the existing plugin tests as evidence; no WASM runtime is claimed.",
+  "notes": "ADR 0009 row 11. The plan allows the documented ADR-replacement path for AUTO-008.",
+  "evidence": "docs/evidence/review/T-0384.md"
+}

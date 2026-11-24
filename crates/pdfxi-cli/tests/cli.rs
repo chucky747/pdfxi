@@ -408,6 +408,71 @@ fn render_minimal_pdf_to_ppm_and_png() {
 
 #[cfg(feature = "pdfium")]
 #[test]
+fn render_writes_a_single_page_tiff_with_the_same_geometry() {
+    let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
+    let png = TempOut::new("png");
+    let output = run(&[
+        "render",
+        pdf.arg(),
+        "--page",
+        "0",
+        "--scale",
+        "1.0",
+        "--out",
+        png.arg(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let png_bytes = fs::read(&png.path).expect("read PNG output");
+    let (width, height) = png_dimensions(&png_bytes);
+    let width = u32::try_from(width).expect("PNG width fits u32");
+    let height = u32::try_from(height).expect("PNG height fits u32");
+
+    let tiff = TempOut::new("tiff");
+    let output = run(&[
+        "render",
+        pdf.arg(),
+        "--page",
+        "0",
+        "--scale",
+        "1.0",
+        "--out",
+        tiff.arg(),
+        "--format",
+        "tiff",
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let bytes = fs::read(&tiff.path).expect("read TIFF output");
+    assert_eq!(&bytes[..4], b"II*\0", "little-endian TIFF header");
+    // IFD0 starts at the offset stored right after the header.
+    let ifd = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    assert!(ifd >= 8 && ifd < bytes.len(), "IFD offset must be in range");
+    let entries = u16::from_le_bytes([bytes[ifd], bytes[ifd + 1]]);
+    assert!(entries >= 10, "a page IFD carries the core tags");
+    // ImageWidth (256) and ImageLength (257) must match the PNG raster.
+    let mut found_width = None;
+    let mut found_height = None;
+    for index in 0..usize::from(entries) {
+        let base = ifd + 2 + index * 12;
+        let tag = u16::from_le_bytes([bytes[base], bytes[base + 1]]);
+        let value = u32::from_le_bytes([
+            bytes[base + 8],
+            bytes[base + 9],
+            bytes[base + 10],
+            bytes[base + 11],
+        ]);
+        match tag {
+            256 => found_width = Some(value),
+            257 => found_height = Some(value),
+            _ => {}
+        }
+    }
+    assert_eq!(found_width, Some(width), "TIFF width matches PNG");
+    assert_eq!(found_height, Some(height), "TIFF height matches PNG");
+    assert!(bytes.len() > 10_000, "pixel data must be present");
+}
+
+#[cfg(feature = "pdfium")]
+#[test]
 fn render_rejects_invalid_page() {
     let pdf = TempPdf::new(&pdfxi_testkit::minimal_pdf());
     let out = TempOut::new("png");
@@ -5182,6 +5247,102 @@ fn annotate_adds_callout_and_cloud_and_keeps_earlier_ones() {
 }
 
 #[test]
+fn review_status_reports_threads_replies_and_roster() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let annotated = TempOut::new("pdf");
+    let added = run(&[
+        "annotate",
+        "add",
+        source.to_str().expect("utf-8 source"),
+        "--out",
+        annotated.arg(),
+        "--kind",
+        "free-text",
+        "--rect",
+        "72,600,320,660",
+        "--text",
+        "Review this table",
+        "--author",
+        "Alice",
+    ]);
+    assert!(added.status.success(), "stderr: {}", stderr(&added));
+    let listed = run(&["annotate", "list", annotated.arg(), "--json"]);
+    let value: Value = serde_json::from_str(&stdout(&listed)).expect("valid JSON");
+    let parent = value["annotations"][0]["id"]
+        .as_str()
+        .expect("annotation id")
+        .to_owned();
+
+    let replied = TempOut::new("pdf");
+    let reply = run(&[
+        "annotate",
+        "reply",
+        annotated.arg(),
+        "--out",
+        replied.arg(),
+        "--page",
+        "1",
+        "--parent",
+        &parent,
+        "--text",
+        "Looks good after the fix",
+        "--author",
+        "Bob",
+        "--state",
+        "accepted",
+    ]);
+    assert!(reply.status.success(), "stderr: {}", stderr(&reply));
+
+    let status = run(&["review", "status", replied.arg(), "--json"]);
+    assert!(status.status.success(), "stderr: {}", stderr(&status));
+    let report: Value = serde_json::from_str(&stdout(&status)).expect("valid JSON");
+    assert_eq!(report["pages"], 1);
+    assert_eq!(report["threads"], 1);
+    assert_eq!(report["replies"], 1);
+    let board = report["board"].as_array().expect("board array");
+    assert_eq!(board.len(), 5, "every status has a bucket");
+    let resolved = board
+        .iter()
+        .find(|bucket| bucket["status"] == "resolved")
+        .expect("resolved bucket");
+    assert_eq!(resolved["threads"].as_array().expect("ids").len(), 1);
+    let open = board
+        .iter()
+        .find(|bucket| bucket["status"] == "open")
+        .expect("open bucket");
+    assert_eq!(open["threads"].as_array().expect("ids").len(), 0);
+    let roster = report["roster"].as_array().expect("roster array");
+    assert_eq!(roster.len(), 1);
+    assert_eq!(roster[0]["author"], "Bob");
+    assert_eq!(roster[0]["replies"], 1);
+    assert_eq!(roster[0]["threads"], 1);
+    let digest = report["digest"].as_str().expect("digest");
+    assert!(digest.contains("resolved:1"), "{digest}");
+    assert!(digest.contains("Bob:1:0"), "{digest}");
+}
+
+#[test]
+fn review_status_reports_an_empty_tracker_without_annotations() {
+    let source = authoring_fixture("authoring-page-boxes.pdf");
+    let status = run(&[
+        "review",
+        "status",
+        source.to_str().expect("utf-8"),
+        "--json",
+    ]);
+    assert!(status.status.success(), "stderr: {}", stderr(&status));
+    let report: Value = serde_json::from_str(&stdout(&status)).expect("valid JSON");
+    assert_eq!(report["threads"], 0);
+    assert_eq!(report["replies"], 0);
+    assert_eq!(
+        report["board"].as_array().expect("board").len(),
+        5,
+        "all statuses are present even when empty"
+    );
+    assert_eq!(report["roster"].as_array().expect("roster").len(), 0);
+}
+
+#[test]
 fn annotate_rejects_bad_requests() {
     let source = authoring_fixture("authoring-page-boxes.pdf");
     let out = TempOut::new("pdf");
@@ -7520,6 +7681,80 @@ fn create_scan_orders_duplex_and_rejects_bad_inputs() {
         TempPath::new("png").arg(),
     ]);
     assert!(!missing.status.success());
+}
+
+#[test]
+fn create_scan_acquires_pages_from_the_wia_sidecar() {
+    let first = TempPath::new("png");
+    first.write(&sample_png());
+    let second = TempPath::new("png");
+    second.write(&sample_png());
+    let script = TempPath::new("ps1");
+    let body = format!(
+        "param([string]$OutDir,[string]$DeviceName)\n\
+         Copy-Item -LiteralPath '{first}' (Join-Path $OutDir 'scan-1.png')\n\
+         Copy-Item -LiteralPath '{second}' (Join-Path $OutDir 'scan-2.png')\n\
+         @{{ device = 'PDFXI Synthetic Scanner'; pages = @((Join-Path $OutDir 'scan-1.png'), (Join-Path $OutDir 'scan-2.png')) }} | ConvertTo-Json -Compress\n",
+        first = first.path.display(),
+        second = second.path.display()
+    );
+    script.write(body.as_bytes());
+    let out = TempOut::new("pdf");
+    let output = Command::new(env!("CARGO_BIN_EXE_pdfxi"))
+        .args([
+            "create",
+            "scan",
+            "--out",
+            out.arg(),
+            "--device",
+            "--dpi",
+            "72",
+            "--json",
+        ])
+        .env("PDFXI_WIA_SCAN_SCRIPT", &script.path)
+        .output()
+        .expect("spawn pdfxi");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert_eq!(value["pages"], 2);
+    assert_eq!(value["verified_pages"], 2);
+    assert_eq!(value["front"], 2);
+    let rows = value["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows[0]["file"]
+            .as_str()
+            .unwrap_or("")
+            .ends_with("scan-1.png"),
+        "{:?}",
+        rows[0]["file"]
+    );
+}
+
+#[test]
+fn create_scan_reports_a_missing_scanner_as_a_hardware_error() {
+    let script = TempPath::new("ps1");
+    script.write(
+        b"[Console]::Error.WriteLine('no WIA scanner is attached to this machine')\nexit 3\n",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_pdfxi"))
+        .args([
+            "create",
+            "scan",
+            "--out",
+            TempOut::new("pdf").arg(),
+            "--device",
+        ])
+        .env("PDFXI_WIA_SCAN_SCRIPT", &script.path)
+        .output()
+        .expect("spawn pdfxi");
+    assert!(!output.status.success(), "a missing scanner must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no scanner"), "{stderr}");
 }
 
 #[test]

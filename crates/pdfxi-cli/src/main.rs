@@ -201,6 +201,8 @@ mod layers;
 /// `pdfxi recipient`: certificate-addressed encryption of real files.
 mod recipient;
 mod repair;
+/// `pdfxi review`: report the review tracker over an annotated PDF.
+mod review;
 /// `pdfxi action sequence`: run Action Wizard steps over real documents.
 mod sequence;
 /// `pdfxi timestamp`: mint and validate RFC 3161 timestamp tokens.
@@ -373,7 +375,7 @@ enum Command {
         /// Destination path for the image.
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
-        /// Output encoding: `png` (the default) or `ppm`.
+        /// Output encoding: `png` (the default), `ppm`, `tiff`, or `jpeg`.
         #[arg(long, value_enum, default_value = "png")]
         format: OutputFormat,
     },
@@ -839,6 +841,16 @@ enum Command {
         /// The annotation operation to perform.
         #[command(subcommand)]
         command: AnnotateCommand,
+    },
+    /// Report the review tracker and participant roster of an annotated PDF.
+    ///
+    /// Reads the comments already saved in the document, maps each `/State`
+    /// into the review workflow, and prints the status board, participant
+    /// roster and a deterministic digest. This is a reader: nothing is written.
+    Review {
+        /// The review operation to perform.
+        #[command(subcommand)]
+        command: ReviewCommand,
     },
     /// Edit bookmarks in the document outline.
     Outline {
@@ -1790,6 +1802,45 @@ enum AnnotateCommand {
         /// One-based page to inspect.
         #[arg(long, value_name = "N", default_value_t = 1)]
         page: usize,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reply to an existing annotation and optionally set its review state.
+    Reply {
+        /// Path to the PDF file.
+        file: PathBuf,
+        /// Where to write the edited document.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// One-based page holding the parent annotation.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        page: usize,
+        /// `/NM` identifier of the parent annotation.
+        #[arg(long, value_name = "NM")]
+        parent: String,
+        /// Reply text written to the new annotation's `/Contents`.
+        #[arg(long, value_name = "TEXT")]
+        text: String,
+        /// Author name written to `/T`.
+        #[arg(long, default_value = "")]
+        author: String,
+        /// Review state to set on the parent (`accepted`, `rejected`, ...).
+        #[arg(long, value_enum)]
+        state: Option<annotate::ReviewStateArg>,
+        /// Emit machine-readable JSON with stable field names.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Operations on the `pdfxi review` command group.
+#[derive(Debug, Subcommand)]
+enum ReviewCommand {
+    /// Report the tracker board, participant roster and digest.
+    Status {
+        /// Path to the annotated PDF file.
+        file: PathBuf,
         /// Emit machine-readable JSON with stable field names.
         #[arg(long)]
         json: bool,
@@ -3319,18 +3370,22 @@ enum CreateCommand {
     },
     /// Overlay an invisible searchable-text layer from OCR words.
     ///
-    /// `--words` is the caller-supplied recognition result (one page, top-left
-    /// pixel boxes); the command embeds the image and writes invisible text at
-    /// the planned positions. No OCR engine or process is bundled.
+    /// With `--words` the recognition result is caller-supplied (one page,
+    /// top-left pixel boxes). Without it, `--engine` runs a real engine:
+    /// Tesseract when installed, the built-in Windows.Media.Ocr engine, or
+    /// `auto` to prefer Tesseract and fall back to Windows OCR.
     Ocr {
         /// Scanned PNG or JPEG page.
         image: PathBuf,
         /// Destination PDF.
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
-        /// JSON words file.
+        /// JSON words file; omit to recognize with `--engine`.
         #[arg(long, value_name = "PATH")]
-        words: PathBuf,
+        words: Option<PathBuf>,
+        /// Recognition backend used when `--words` is omitted.
+        #[arg(long, value_enum, default_value = "auto")]
+        engine: ocr::OcrBackend,
         /// Declared image resolution in dots per inch.
         #[arg(long, default_value_t = 300.0)]
         dpi: f64,
@@ -3382,8 +3437,11 @@ enum CreateCommand {
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
         /// Scanned PNG page; repeat in scan order.
-        #[arg(long = "scan", value_name = "PNG", required = true)]
+        #[arg(long = "scan", value_name = "PNG")]
         scans: Vec<PathBuf>,
+        /// Acquire pages from an attached WIA scanner; optional device name.
+        #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
+        device: Option<String>,
         /// Declared scanner resolution in dots per inch.
         #[arg(long, default_value_t = 300.0)]
         dpi: f64,
@@ -3725,6 +3783,10 @@ enum OutputFormat {
     Png,
     /// Binary P6 Portable Pixmap (alpha discarded).
     Ppm,
+    /// Uncompressed little-endian TIFF with an RGBA alpha channel.
+    Tiff,
+    /// Baseline JPEG with a white background (alpha flattened).
+    Jpeg,
 }
 
 #[cfg(feature = "pdfium")]
@@ -3734,6 +3796,8 @@ impl OutputFormat {
         match self {
             Self::Png => "PNG",
             Self::Ppm => "PPM",
+            Self::Tiff => "TIFF",
+            Self::Jpeg => "JPEG",
         }
     }
 }
@@ -4440,6 +4504,19 @@ fn run_cli() -> anyhow::Result<()> {
                 json,
             ),
             AnnotateCommand::List { file, page, json } => annotate::run_list(&file, page, json),
+            AnnotateCommand::Reply {
+                file,
+                out,
+                page,
+                parent,
+                text,
+                author,
+                state,
+                json,
+            } => annotate::run_reply(&file, &out, page, &parent, &text, &author, state, json),
+        },
+        Command::Review { command } => match command {
+            ReviewCommand::Status { file, json } => review::run_status(&file, json),
         },
         Command::Outline { command } => match command {
             OutlineCommand::List { file, json } => navigation::run_outline_list(&file, json),
@@ -5001,10 +5078,19 @@ fn run_cli() -> anyhow::Result<()> {
                 image,
                 out,
                 words,
+                engine,
                 dpi,
                 language,
                 json,
-            } => ocr::create_ocr(&image, &out, &words, dpi, language.as_deref(), json),
+            } => ocr::create_ocr(
+                &image,
+                &out,
+                words.as_deref(),
+                engine,
+                dpi,
+                language.as_deref(),
+                json,
+            ),
             CreateCommand::Portfolio {
                 manifest,
                 out,
@@ -5019,10 +5105,11 @@ fn run_cli() -> anyhow::Result<()> {
             CreateCommand::Scan {
                 out,
                 scans,
+                device,
                 dpi,
                 duplex,
                 json,
-            } => scan::create_scan(&scans, &out, dpi, &duplex, json),
+            } => scan::create_scan(&scans, &out, device.as_deref(), dpi, &duplex, json),
         },
         Command::Script { command } => match command {
             ScriptCommand::Run {
@@ -5667,6 +5754,59 @@ fn render(
         }
         OutputFormat::Ppm => {
             image::encode_ppm(rendered.width(), rendered.height(), rendered.pixels())
+        }
+        OutputFormat::Tiff => {
+            // Reuse the renderer's dependency-free TIFF encoder so the CLI and
+            // the export pipeline produce the same file layout. The TIFF
+            // resolution tag records the effective DPI of the requested scale.
+            let effective = (72.0_f32 * scale).round();
+            let dpi = if effective.is_finite() && effective >= 1.0 {
+                u32::try_from(effective.min(pdfxi_render::MAX_EXPORT_DPI as f32).round() as i64)
+                    .unwrap_or(pdfxi_render::DEFAULT_EXPORT_DPI)
+            } else {
+                72
+            };
+            let options = pdfxi_render::ExportOptions {
+                format: pdfxi_render::ImageFormat::Tiff,
+                color: pdfxi_render::ColorMode::Rgba,
+                alpha: pdfxi_render::AlphaPolicy::Preserve,
+                dpi,
+                ..pdfxi_render::ExportOptions::default()
+            };
+            pdfxi_render::encode_image(
+                rendered.width(),
+                rendered.height(),
+                rendered.pixels(),
+                &options,
+            )
+            .map_err(anyhow::Error::from)
+        }
+        OutputFormat::Jpeg => {
+            // Baseline JPEG has no alpha channel; flatten onto white. This is
+            // the format the OCR sidecar and most scanners can consume.
+            let effective = (72.0_f32 * scale).round();
+            let dpi = if effective.is_finite() && effective >= 1.0 {
+                u32::try_from(effective.min(pdfxi_render::MAX_EXPORT_DPI as f32).round() as i64)
+                    .unwrap_or(pdfxi_render::DEFAULT_EXPORT_DPI)
+            } else {
+                72
+            };
+            let options = pdfxi_render::ExportOptions {
+                format: pdfxi_render::ImageFormat::Jpeg,
+                color: pdfxi_render::ColorMode::Rgb,
+                alpha: pdfxi_render::AlphaPolicy::Flatten {
+                    background: [255, 255, 255],
+                },
+                dpi,
+                ..pdfxi_render::ExportOptions::default()
+            };
+            pdfxi_render::encode_image(
+                rendered.width(),
+                rendered.height(),
+                rendered.pixels(),
+                &options,
+            )
+            .map_err(anyhow::Error::from)
         }
     }
     .with_context(|| format!("failed to encode page {page} as {}", format.label()))?;

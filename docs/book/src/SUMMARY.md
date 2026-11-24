@@ -56,4 +56,5 @@
 
 # Releases
 
+- [0.1.5 release notes](releases/0.1.5.md)
 - [0.1.4 release notes](releases/0.1.4.md)

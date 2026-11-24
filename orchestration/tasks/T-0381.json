@@ -1,0 +1,19 @@
+{
+  "id": "T-0381",
+  "lane": "integrator",
+  "title": "VIEW-006: split and tile panes in the GUI",
+  "priority": "P2",
+  "status": "verified",
+  "depends_on": ["T-0380"],
+  "owns": [
+    "crates/pdfxi-app/**",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/gui.md",
+    "docs/evidence/review/T-0381.md",
+    "orchestration/tasks/T-0381.json"
+  ],
+  "acceptance": "the bottom bar exposes a Split view picker for single pane, side by side and stacked; the canvas paints the active tab twice with independent scroll offsets and a real divider; a widget test drives the picker; VIEW-006 becomes verified on the gui host.",
+  "notes": "ADR 0009 row 8. The split geometry model existed; the GUI had no control and the canvas painted one pane.",
+  "evidence": "docs/evidence/review/T-0381.md"
+}

@@ -6,8 +6,9 @@
 //! document, and it keeps the shell free of annotation semantics.
 
 use pdfxi_edit::{
-    AnnotationState, AnnotationSubtype, AnnotationView, Point, Rect, add_highlight, add_text_note,
-    delete_annotation, list_annotations, reply_to, set_state, update_contents,
+    AnnotationState, AnnotationSubtype, AnnotationView, Point, Rect, add_highlight, add_squiggly,
+    add_strikeout, add_text_note, add_underline, delete_annotation, list_annotations, reply_to,
+    set_state, update_contents,
 };
 use pdfxi_security::Permission;
 
@@ -24,6 +25,58 @@ pub struct AnnotationEntry {
     pub page: usize,
     /// The annotation as the library reads it.
     pub view: AnnotationView,
+}
+
+/// The text-markup tools the shell can apply to a selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MarkupKind {
+    /// Translucent yellow highlight.
+    Highlight,
+    /// A line under the text.
+    Underline,
+    /// A line through the text.
+    Strikeout,
+    /// A wavy line under the text.
+    Squiggly,
+}
+
+impl MarkupKind {
+    /// Button and hint label.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Highlight => "Highlight",
+            Self::Underline => "Underline",
+            Self::Strikeout => "Strikeout",
+            Self::Squiggly => "Squiggly",
+        }
+    }
+
+    /// Past-tense status fragment used after a successful edit.
+    const fn done_label(self) -> &'static str {
+        match self {
+            Self::Highlight => "Highlighted",
+            Self::Underline => "Underlined",
+            Self::Strikeout => "Struck out",
+            Self::Squiggly => "Squiggled",
+        }
+    }
+
+    /// Apply this markup to `quads` on `page`, using the library writers.
+    fn apply(
+        self,
+        document: &mut pdfxi_core::Document,
+        page: usize,
+        quads: &[Rect],
+        contents: &str,
+        author: &str,
+    ) -> Result<pdfxi_edit::AnnotationRef, pdfxi_edit::AnnotationEditError> {
+        match self {
+            Self::Highlight => add_highlight(document, page, quads, contents, author),
+            Self::Underline => add_underline(document, page, quads, contents, author),
+            Self::Strikeout => add_strikeout(document, page, quads, contents, author),
+            Self::Squiggly => add_squiggly(document, page, quads, contents, author),
+        }
+    }
 }
 
 /// A pending note placement typed by the user.
@@ -381,11 +434,18 @@ impl PdfxiApp {
     /// Without a selection nothing is created and a short hint explains how to
     /// make one.
     pub(crate) fn highlight_selection(&mut self) {
+        self.markup_selection(MarkupKind::Highlight);
+    }
+
+    /// Add text markup of `kind` over the current selection.
+    pub(crate) fn markup_selection(&mut self, kind: MarkupKind) {
         let groups = self.selection_quads();
         if groups.is_empty() {
-            self.comments.hint =
-                Some("Select text on the page first, then choose Highlight.".to_owned());
-            self.status = "Select text before highlighting".to_owned();
+            self.comments.hint = Some(format!(
+                "Select text on the page first, then choose {}.",
+                kind.label()
+            ));
+            self.status = format!("Select text before choosing {}", kind.label());
             return;
         }
         let author = self.settings.display_name.clone();
@@ -393,7 +453,7 @@ impl PdfxiApp {
             let (id, mut candidate) = self.annotation_target()?;
             let mut added = 0usize;
             for (page, quads) in &groups {
-                add_highlight(&mut candidate, *page, quads, "", &author)
+                kind.apply(&mut candidate, *page, quads, "", &author)
                     .map_err(|error| error.to_string())?;
                 added += 1;
             }
@@ -404,7 +464,7 @@ impl PdfxiApp {
                 self.comments.error = None;
                 self.comments.hint = None;
                 self.selection.clear();
-                self.status = format!("Highlighted {added} page(s)");
+                self.status = format!("{} {added} page(s)", kind.done_label());
             }
             Err(error) => self.comments.error = Some(error),
         }
@@ -681,6 +741,25 @@ impl PdfxiApp {
             ui.label(egui::RichText::new("Open a document to review comments.").weak());
             return;
         }
+        ui.horizontal_wrapped(|ui| {
+            for kind in [
+                MarkupKind::Highlight,
+                MarkupKind::Underline,
+                MarkupKind::Strikeout,
+                MarkupKind::Squiggly,
+            ] {
+                if ui.small_button(kind.label()).clicked() {
+                    let command = match kind {
+                        MarkupKind::Highlight => AppCommand::AddHighlight,
+                        MarkupKind::Underline => AppCommand::AddUnderline,
+                        MarkupKind::Strikeout => AppCommand::AddStrikeout,
+                        MarkupKind::Squiggly => AppCommand::AddSquiggly,
+                    };
+                    self.dispatch(command, Some(ui.ctx()));
+                }
+            }
+        });
+        ui.add_space(4.0);
         let entries = self.comments.entries.clone();
         if entries.is_empty() {
             ui.add_space(8.0);
@@ -1146,6 +1225,49 @@ mod integration_tests {
 
         app.dispatch(AppCommand::DeleteAnnotation { page: 0, id: root }, None);
         assert_eq!(app.annotation_count(), 0, "delete removes the thread");
+    }
+
+    #[test]
+    fn markup_tools_create_underline_strikeout_and_squiggly() {
+        for (command, subtype) in [
+            (AppCommand::AddUnderline, "Underline"),
+            (AppCommand::AddStrikeout, "StrikeOut"),
+            (AppCommand::AddSquiggly, "Squiggly"),
+        ] {
+            let mut app = open_excel();
+            assert!(!app.text_pages.is_empty(), "fixture text must be extracted");
+            app.selection
+                .drag(TextAnchor::new(0, 0), TextAnchor::new(0, 12));
+            assert!(!app.selection_quads().is_empty());
+
+            app.dispatch(command, None);
+            assert_eq!(app.annotation_count(), 1, "{subtype}");
+            let entry = app.annotations().first().expect("one annotation");
+            assert_eq!(entry.view.subtype.as_pdf_name(), subtype);
+            assert!(app.comments_error().is_none(), "{:?}", app.comments_error());
+            assert_eq!(
+                app.status(),
+                format!(
+                    "{} 1 page(s)",
+                    match subtype {
+                        "Underline" => "Underlined",
+                        "StrikeOut" => "Struck out",
+                        _ => "Squiggled",
+                    }
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn markup_without_a_selection_explains_and_adds_nothing() {
+        let mut app = open_excel();
+        app.selection.clear();
+        app.dispatch(AppCommand::AddSquiggly, None);
+        assert_eq!(app.annotation_count(), 0);
+        let hint = app.comments_hint().expect("hint");
+        assert!(hint.contains("Squiggly"), "{hint}");
+        assert!(app.status().contains("Select text"));
     }
 
     #[test]
