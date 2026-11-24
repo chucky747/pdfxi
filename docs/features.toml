@@ -5728,15 +5728,14 @@ dependencies. cargo check -p pdfxi-app --all-features still passes.
 Windows gates after the change: fmt 0, clippy -D warnings 0, workspace tests
 exit 0 with 79 green suites (print test skipped).
 
-macOS remains CI-only (macos-14); no macOS host exists in this workspace and none
-is claimed. Linux-specific shell/registry/installer behaviour stays the
+No macOS host exists in this workspace and none is claimed, and no macOS
+build is offered. Linux-specific shell/registry/installer behaviour stays the
 PLAT-001/005/006 host boundary.
 
 Status: deferred. Windows (x86_64-pc-windows-msvc) is the only verified support
-target for 0.1.4. The Linux and macOS checks above are developer host probes,
+target for 0.1.5. The Linux and macOS checks above are developer host probes,
 not supported builds, and no cross-platform CI runs; the local Windows gate is
-the verified one. No macOS or
-Linux user support is claimed.
+the verified one. No macOS or Linux user support is claimed.
 """
 priority = "P3"
 status = "deferred"
