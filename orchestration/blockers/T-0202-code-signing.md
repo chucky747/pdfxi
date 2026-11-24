@@ -1,8 +1,44 @@
 # Blocker: code signing (T-0202)
 
-Status: open. No certificate exists in this workspace, so nothing built by this
-campaign is signed. The 0.1.4 setup and payload remain unsigned. No task,
-document, or report may claim otherwise.
+Status: **local self-signed signing is implemented (2026-11-24)**. Public-CA
+trust is still open: no OV/EV certificate exists, so other machines will not
+trust the publisher and SmartScreen may still warn there. The 0.1.4 setup and
+payload remain unsigned; 0.1.5 is the first release built with the local
+certificate.
+
+## Local self-signed signing
+
+`scripts/new-signing-cert.ps1` creates a Code Signing certificate in
+`Cert:\CurrentUser\My` with an exportable key. `scripts/trust-signing-cert.ps1`
+adds its public part to the current user's Root and TrustedPublisher stores
+through the .NET store API, without a UI prompt. Set
+`PDFXI_SIGN_THUMBPRINT` and run `scripts/package.ps1`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/new-signing-cert.ps1
+$env:PDFXI_SIGN_THUMBPRINT = '<thumbprint>'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/trust-signing-cert.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
+```
+
+The package signs `pdfxi.exe` and `pdfxi-ui.exe` before staging, so the manifest
+and zip contain the signed bytes, then signs the Inno Setup executable before
+writing its `.sha256` sidecar. Each signature is checked with
+`Get-AuthenticodeSignature`; a non-`Valid` status fails the package.
+`PDFXI_SIGN_TIMESTAMP_URL` overrides the default RFC 3161 URL (DigiCert);
+set it to an empty string for an offline build without a timestamp. With no
+thumbprint the build stays unsigned and prints
+`SIGNING skipped: PDFXI_SIGN_THUMBPRINT not set`.
+
+Scope of the self-signed certificate:
+
+- It proves the bytes were signed by this key and detects tampering.
+- It is `Valid` on this machine after the trust step.
+- It is **not** a publicly trusted publisher. Machines without the certificate
+  see an untrusted publisher, and SmartScreen reputation is not granted.
+- A public OV/EV certificate (or an organisation certificate plus a published
+  trust anchor) is still required for distribution to other users.
+
 
 ## What is unsigned
 

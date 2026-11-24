@@ -6,6 +6,7 @@
 mod bench;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitStatus};
@@ -111,6 +112,8 @@ enum Command {
     },
     /// Build, install, exercise and uninstall the smoke-identity installer.
     InstallerTest,
+    /// Run the complete local CI gate and write `target/ci/ci-report.md`.
+    Ci,
 }
 
 #[derive(Debug, Subcommand)]
@@ -210,6 +213,7 @@ fn main() -> Result<()> {
             CorpusCommand::Smoke => corpus_smoke(),
         },
         Command::InstallerTest => installer_test(),
+        Command::Ci => ci(),
     }
 }
 
@@ -255,11 +259,135 @@ fn verify(no_docs: bool) -> Result<()> {
     run("cargo", &["test", "--workspace"])?;
     run_feature_tests()?;
     if !no_docs {
-        run("cargo", &["doc", "--workspace", "--no-deps"])?;
+        // Single-threaded rustdoc: parallel workspace docs deadlock on this
+        // host (T-0369 evidence), and the local gate must be reproducible.
+        run("cargo", &["doc", "--workspace", "--no-deps", "-j", "1"])?;
     }
     features_verify()?;
     println!("VERIFY OK");
     Ok(())
+}
+
+/// Run the complete local gate that replaces GitHub CI.
+///
+/// The report is written even when a step fails, so the last local run is
+/// inspectable without scraping the terminal.
+fn ci() -> Result<()> {
+    let report_dir = root().join("target").join("ci");
+    fs::create_dir_all(&report_dir)
+        .with_context(|| format!("create local CI report directory {}", report_dir.display()))?;
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    println!("LOCAL CI start unix={started}");
+
+    let result = (|| -> Result<()> {
+        verify(false)?;
+        docs()?;
+        bench_command(false, false)?;
+        installer_test()?;
+        screen_reader_smoke()?;
+        signature_check()?;
+        Ok(())
+    })();
+
+    let status = if result.is_ok() { "PASS" } else { "FAIL" };
+    let report = format!(
+        "# PDFXI local CI\n\n\
+         - started_unix: {started}\n\
+         - status: {status}\n\
+         - host: Windows (the only verified target)\n\n\
+         Steps: `cargo xtask verify` (fmt, clippy, tests, doc -j 1, feature \
+         matrix), `cargo xtask docs` (mdBook when MDBOOK is available), \
+         `cargo xtask bench`, `cargo xtask installer-test`.\n\n\
+         GitHub CI is not used. This local run is the verified gate.\n"
+    );
+    let path = report_dir.join("ci-report.md");
+    fs::write(&path, report).with_context(|| format!("write {}", path.display()))?;
+    if result.is_ok() {
+        println!("LOCAL CI OK: {}", path.display());
+    } else {
+        println!("LOCAL CI FAILED: {}", path.display());
+    }
+    result
+}
+
+/// Run a PowerShell script from the repository root with explicit arguments.
+fn run_powershell_script(script: &str, args: &[String]) -> Result<()> {
+    let path = root().join(script);
+    if !path.is_file() {
+        bail!("missing local CI script: {}", path.display());
+    }
+    let mut command = vec![
+        "-NoProfile".to_owned(),
+        "-ExecutionPolicy".to_owned(),
+        "Bypass".to_owned(),
+        "-File".to_owned(),
+        path.to_string_lossy().into_owned(),
+    ];
+    command.extend_from_slice(args);
+    println!("$ powershell {}", command.join(" "));
+    let status = ProcessCommand::new("powershell")
+        .args(&command)
+        .current_dir(root())
+        .status()
+        .with_context(|| format!("failed to start PowerShell for {script}"))?;
+    ensure_status("powershell", status)
+}
+
+/// Locate the per-user installed viewer. The local gate runs against the
+/// installed build, not a developer target directory.
+fn installed_viewer() -> Result<PathBuf> {
+    let local = env::var_os("LOCALAPPDATA")
+        .context("LOCALAPPDATA is not set; the installed viewer path is unknown")?;
+    let path = PathBuf::from(local)
+        .join("Programs")
+        .join("PDFXI")
+        .join("pdfxi-ui.exe");
+    if !path.is_file() {
+        bail!(
+            "installed viewer not found: {} (build and install the package first)",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
+/// Run the real NVDA screen-reader smoke against the installed viewer.
+fn screen_reader_smoke() -> Result<()> {
+    let viewer = installed_viewer()?;
+    let out = root().join("target").join("tmp").join("screen-reader-ci");
+    run_powershell_script(
+        "scripts/screen-reader-smoke.ps1",
+        &[
+            "-Exe".to_owned(),
+            viewer.to_string_lossy().into_owned(),
+            "-OutDir".to_owned(),
+            out.to_string_lossy().into_owned(),
+        ],
+    )
+}
+
+/// Verify Authenticode signatures when a signing certificate is configured.
+/// An unsigned build is reported, never inferred as signed.
+fn signature_check() -> Result<()> {
+    if env::var_os("PDFXI_SIGN_THUMBPRINT").is_none() {
+        println!("SIGNATURE CHECK skipped: PDFXI_SIGN_THUMBPRINT not set (unsigned build)");
+        return Ok(());
+    }
+    let viewer = installed_viewer()?;
+    let cli = viewer.with_file_name("pdfxi.exe");
+    run_powershell_script(
+        "scripts/verify-signatures.ps1",
+        &[
+            "-Viewer".to_owned(),
+            viewer.to_string_lossy().into_owned(),
+            "-Cli".to_owned(),
+            cli.to_string_lossy().into_owned(),
+            "-Require".to_owned(),
+        ],
+    )
 }
 
 fn milestone_required_rows(milestone: &str) -> Option<&'static [&'static str]> {

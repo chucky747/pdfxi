@@ -1,0 +1,21 @@
+{
+  "id": "T-0372",
+  "lane": "integrator",
+  "title": "Self-signed code signing for local builds",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0370"],
+  "owns": [
+    "scripts/new-signing-cert.ps1",
+    "scripts/trust-signing-cert.ps1",
+    "scripts/verify-signatures.ps1",
+    "scripts/package.ps1",
+    "orchestration/blockers/T-0202-code-signing.md",
+    "docs/releases/**",
+    "docs/evidence/review/T-0372.md",
+    "orchestration/tasks/T-0372.json"
+  ],
+  "acceptance": "A code-signing certificate can be generated locally, trusted for the current user, and used by scripts/package.ps1 to sign pdfxi.exe, pdfxi-ui.exe and the setup; every signature verifies; missing thumbprint leaves the build unsigned and records that state; T-0202 documents the self-signed scope and limits; evidence recorded.",
+  "notes": "Stream B of the post-0.1.4 close-out. Free local certificate only; not a publicly trusted publisher.",
+  "evidence": "docs/evidence/review/T-0372.md"
+}

@@ -1,0 +1,22 @@
+{
+  "id": "T-0371",
+  "lane": "integrator",
+  "title": "Replace GitHub CI with a local CI gate",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0370"],
+  "owns": [
+    "docs/PLAN.md",
+    "docs/TESTING.md",
+    "docs/features.toml",
+    "xtask/**",
+    "scripts/register-local-ci.ps1",
+    "docs/evidence/review/T-0371.md",
+    "orchestration/tasks/T-0371.json",
+    "orchestration/BOARD.md"
+  ],
+  "acceptance": "GitHub CI is absent from the plan and testing docs; cargo xtask ci runs the complete local gate (fmt, clippy, tests, doc -j1, deny, features verify, mdBook, bench, installer-test) and writes a report; scripts/register-local-ci.ps1 is the opt-in nightly scheduler; cargo xtask ci exits 0; evidence recorded.",
+  "notes": "Stream A of the 2026-11-24 post-0.1.4 close-out plan. Windows only; no GitHub CI.",
+  "evidence": "docs/evidence/review/T-0371.md"
+}
+

@@ -4551,9 +4551,11 @@ docs = [
     "docs/book/src/authoring.md",
     "docs/evidence/cli/T-0332.md",
     "crates/pdfxi-app/src/a11y.rs",
+    "scripts/screen-reader-smoke.ps1",
 ]
 domain = "Accessibility"
-evidence = "docs/evidence/cli/T-0332.md"
+evidence = "docs/evidence/review/T-0373.md"
+host = "gui"
 id = "ACCESS-006"
 notes = """
 Verified through `pdfxi accessibility tree <INPUT.pdf> [--page N]
@@ -4568,15 +4570,21 @@ the Document/Page 1 nodes; --focus toolbar moves focus to node 3 with
 "Toolbar, Toolbar"; --high-contrast changes the status label to "High contrast
 on". An out-of-range page and an unknown region fail with typed errors.
 
-Scope: no window, AccessKit call or platform screen reader. The CLI publishes
-the deterministic tree a platform bridge consumes.
+Scope: the deterministic CLI tree is joined by a real NVDA 2026.3 session.
+`scripts/screen-reader-smoke.ps1` starts NVDA with its Speech Viewer, drives
+the shell with keyboard focus, and reads the speech log through UI Automation.
+It passed 14 checks on the installed build: window title, Open/Print/Fit,
+Pages/Comments, page number and next page, Fill & Sign, and the text/checkbox/
+choice form widgets with their names, roles and values. It fails closed when
+NVDA is absent. `cargo xtask ci` runs it against the installed viewer.
 """
 priority = "P2"
-status = "model"
+status = "verified"
 tests = [
     "cli::accessibility_tree_reflects_real_pages_and_focus",
     "cli::accessibility_tree_rejects_bad_pages_and_regions",
     "a11y::tests::tree_from_snapshot_is_deterministic_and_well_formed",
+    "ui::widget_tests::forms_panel_lists_the_fields_of_the_form_fixture",
 ]
 title = "Screen reader and accesskit integration"
 
@@ -5595,7 +5603,6 @@ title = "Windows desktop application"
 [[feature]]
 docs = [
     "docs/PLATFORMS.md",
-    ".github/workflows/ci.yml",
     "docs/evidence/platform-check.md",
     "docs/evidence/platform/T-0354.md",
     "crates/pdfxi-render/src/win_print.rs",
@@ -5635,7 +5642,8 @@ PLAT-001/005/006 host boundary.
 
 Status: deferred. Windows (x86_64-pc-windows-msvc) is the only verified support
 target for 0.1.4. The Linux and macOS checks above are developer host probes,
-not supported builds, and GitHub CI is not used by this campaign. No macOS or
+not supported builds, and no cross-platform CI runs; the local Windows gate is
+the verified one. No macOS or
 Linux user support is claimed.
 """
 priority = "P3"

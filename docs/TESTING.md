@@ -8,8 +8,35 @@
 | Integration | `tests/` per crate | < 60 s total | Generated fixtures |
 | Doc tests | rustdoc | < 30 s | Public examples compile |
 | Full | `--profile full` | < 15 min | Corpus subsets, OCR, render |
-| Nightly | CI | < 2 h | veraPDF, fuzz, mutation, full corpus |
-| Release | CI | 24 h fuzz | No panics on malformed corpus |
+| Nightly | Local scheduled run | < 2 h | veraPDF, fuzz, mutation, full corpus |
+| Release | Local release run | 24 h fuzz | No panics on malformed corpus |
+
+## Local CI
+
+There is no GitHub CI. The verified gate is the local Windows run:
+
+```powershell
+cargo xtask ci
+```
+
+It runs `cargo fmt --all --check`, clippy with warnings denied, the workspace
+tests, the feature tests, `cargo doc --workspace --no-deps -j 1`, the feature
+matrix, mdBook (when `MDBOOK` is available), the benchmark gate,
+`cargo xtask installer-test`, the real NVDA screen-reader smoke against the
+installed viewer, and the Authenticode check when
+`PDFXI_SIGN_THUMBPRINT` is set. It writes `target/ci/ci-report.md` and exits
+non-zero on the first failed step.
+
+The nightly tier is opt-in. Register a Windows Task Scheduler job with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-local-ci.ps1
+```
+
+Use `-Remove` to unregister it, `-TaskName` to choose another name, and `-At`
+to change the start time. The job runs `cargo xtask ci`; the 24-hour fuzz and
+mutation campaigns remain explicit blocked items until the host toolchain can
+run them.
 
 ## Rules
 
@@ -28,8 +55,8 @@
 | Generated minimal PDFs | unit/integration | committed |
 | PDF Association examples | feature coverage | fetched |
 | pdf.js test suite | rendering/parsing | fetched |
-| veraPDF corpus | PDF/A, PDF/X | fetched, CI only |
-| SafeDocs malformed set | robustness/fuzz seeds | fetched, CI only |
+| veraPDF corpus | PDF/A, PDF/X | fetched, nightly only |
+| SafeDocs malformed set | robustness/fuzz seeds | fetched, nightly only |
 | Adobe-free real-world set | compatibility | local, gitignored |
 
 `cargo xtask corpus fetch` downloads with SHA-256 verification;

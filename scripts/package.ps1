@@ -178,6 +178,7 @@ function New-Installer {
     $setup = Join-Path $PackageRoot "pdfxi-setup-$Version-windows-x86_64.exe"
     if ($exit -ne 0) { throw "ISCC exited $exit; no installer produced" }
     if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "ISCC reported success but $setup is missing" }
+    Sign-Artifact -Path $setup
     Write-Utf8NoBom "$setup.sha256" ("$((Get-Sha256 $setup))  $(Split-Path -Leaf $setup)`n")
     return $setup
 }
@@ -259,6 +260,49 @@ function Resolve-TargetDir {
 function Get-Sha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+# --- code signing ----------------------------------------------------------
+# Local self-signed signing only. PDFXI_SIGN_THUMBPRINT selects the certificate
+# in Cert:\CurrentUser\My. When it is absent the build stays unsigned and says so;
+# a missing certificate must never look like a green signing step (T-0202).
+function Get-SigningCertificate {
+    $thumb = $env:PDFXI_SIGN_THUMBPRINT
+    if (-not $thumb) { return $null }
+    $normalized = ($thumb -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+    if (-not $normalized) { throw "PDFXI_SIGN_THUMBPRINT is not a thumbprint: '$thumb'" }
+    $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue |
+        Where-Object { $_.Thumbprint -eq $normalized } |
+        Select-Object -First 1
+    if (-not $cert) {
+        throw "code-signing certificate not found in Cert:\CurrentUser\My: $normalized"
+    }
+    return $cert
+}
+
+function Sign-Artifact {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $cert = Get-SigningCertificate
+    if (-not $cert) { return }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "cannot sign missing artifact: $Path"
+    }
+    $timestamp = if ($env:PDFXI_SIGN_TIMESTAMP_URL) { $env:PDFXI_SIGN_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
+    $parameters = @{
+        LiteralPath    = $Path
+        Certificate    = $cert
+        HashAlgorithm  = 'SHA256'
+    }
+    if ($timestamp) { $parameters.TimestampServer = $timestamp }
+    $result = Set-AuthenticodeSignature @parameters
+    if ($result.Status -ne 'Valid') {
+        throw "signing ${Path} failed: status=$($result.Status) message=$($result.StatusMessage)"
+    }
+    $verify = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($verify.Status -ne 'Valid') {
+        throw "signature verification failed for ${Path}: status=$($verify.Status) message=$($verify.StatusMessage)"
+    }
+    Write-Host "SIGNED $Path thumbprint=$($cert.Thumbprint) status=$($verify.Status)"
 }
 
 function Write-Utf8NoBom {
@@ -646,6 +690,14 @@ function Invoke-Package {
         if (-not (Test-Path -LiteralPath (Join-Path $releaseDir $binary) -PathType Leaf)) {
             throw "release binary missing: $(Join-Path $releaseDir $binary) (omit -SkipBuild to build it)"
         }
+    }
+    if ($env:PDFXI_SIGN_THUMBPRINT) {
+        Write-Output "SIGNING binaries thumbprint=$($env:PDFXI_SIGN_THUMBPRINT)"
+        foreach ($binary in @('pdfxi.exe', 'pdfxi-ui.exe')) {
+            Sign-Artifact -Path (Join-Path $releaseDir $binary)
+        }
+    } else {
+        Write-Output 'SIGNING skipped: PDFXI_SIGN_THUMBPRINT not set (unsigned build)'
     }
     Write-Output "PDFIUM $(Resolve-PdfiumDir $PdfiumDir) sha256=$(Get-PdfiumSha256 $PdfiumSha256)"
     $artifacts = New-PackageArtifacts -ReleaseDir $releaseDir -PackageRoot $script:PackageRoot `

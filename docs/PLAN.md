@@ -24,8 +24,9 @@ boundaries; `orchestration/BOARD.md` is live state.
 ### M0 — Bootstrap
 
 Deliver repository rules, global memory, OpenCode configuration, agent roster,
-task board, claims, goal controller, workspace skeleton, CI, `xtask`, and
-`goal-verify`. Exit: `cargo xtask goal-verify --milestone M0`.
+task board, claims, goal controller, workspace skeleton, the local CI gate
+(`cargo xtask ci`), `xtask`, and `goal-verify`. Exit:
+`cargo xtask goal-verify --milestone M0`.
 
 ### M1 — Vertical slice
 

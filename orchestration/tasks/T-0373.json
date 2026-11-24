@@ -1,0 +1,21 @@
+{
+  "id": "T-0373",
+  "lane": "integrator",
+  "title": "Real NVDA screen-reader gate and ACCESS-006 verification",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0370"],
+  "owns": [
+    "scripts/screen-reader-smoke.ps1",
+    "docs/features.toml",
+    "docs/FEATURES.md",
+    "docs/book/src/accessibility.md",
+    "docs/user-guide.html",
+    "docs/evidence/review/T-0373.md",
+    "orchestration/blockers/ACCESS-006-screen-reader.md",
+    "orchestration/tasks/T-0373.json"
+  ],
+  "acceptance": "scripts/screen-reader-smoke.ps1 runs a real NVDA session with the Speech Viewer, drives the shell and AcroForm widgets, and asserts the spoken names/roles/values; it fails closed when NVDA is absent; ACCESS-006 is verified on the gui host with the screen-reader evidence and the app tree tests; the accessibility docs and user guide reflect the result.",
+  "notes": "Stream C of the post-0.1.4 close-out. NVDA 2026.3 portable is under target/tools (untracked); the script resolves PDFXI_NVDA, the portable copy, installed paths, or PATH.",
+  "evidence": "docs/evidence/review/T-0373.md"
+}
