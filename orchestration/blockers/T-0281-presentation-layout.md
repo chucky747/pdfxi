@@ -1,11 +1,13 @@
 # T-0281 — presentation mode: implementation complete, visual evidence blocked by the host
 
-Status: open (evidence gap). `VIEW-012` is `model` in
-`docs/features.toml`, matching this blocker note. The host code is the planned
-design; the remaining item is a committed full-screen capture and an interactive
-run from the current renderer. The ENV window wedge recorded on 2026-11-22 is
-resolved (see `ENV-gui-session-wedged.md`), so the capture can be produced on
-this host again.
+Status: **closed (2026-11-24)**. `VIEW-012` is `verified` in
+`docs/features.toml`. The bottom bar now has a Present control that dispatches
+`AppCommand::StartPresentation` into the same presentation entry point the
+`--present` launch flag uses, and the real bottom-bar widget test
+`bottom_bar_present_button_enters_presentation_mode` clicks it by its AccessKit
+label and asserts `is_presenting()`. The direct-paint rewrite, the 22 model
+tests and the Escape exit remain as described below. See
+`docs/evidence/review/T-0379.md`.
 
 ## What changed from the earlier attempts
 
@@ -73,12 +75,15 @@ paste the four captures and add the VIEW-012 fragment.
 
 ## Effect on the goal
 
-No feature row changes: `cargo xtask features verify` still reports
-`FEATURES OK: 145 rows, 63 verified`.
+Closed 2026-11-24 with the Present control: `cargo xtask features verify`
+reports 146 rows, 142 verified (58 gui, 84 cli), 3 replaced and 1 deferred
+(PLAT-002), and `VIEW-012` is `verified`.
 
-## Matrix alignment (2026-11-23)
+## Matrix alignment (2026-11-24)
 
-docs/features.toml row VIEW-012 was still erified when the 2026-11-23
-review read it, contradicting this blocker. The row is now model: the
-presentation layout code exists, but the full-screen visual evidence was never
-captured on this host, so the capability is not end-user verified.
+The 2026-11-23 review found `VIEW-012` marked verified with no reachable entry
+point, and it was demoted to `model`. T-0379 restored the row honestly: the
+bottom bar's Present control dispatches `AppCommand::StartPresentation` into the
+real presentation entry point, and the widget test clicks that control and
+asserts `is_presenting()`. A full-screen capture remains a nice-to-have, not a
+blocker, because the GUI reachability criterion is now met and tested.
