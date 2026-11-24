@@ -6,9 +6,9 @@ x64 with the GNU toolchain pinned in `rust-toolchain.toml`.
 | Platform | Build | Test | Notes |
 |---|---|---|---|
 | Windows x86_64 GNU | yes | yes | canonical development host |
-| Windows x86_64 MSVC | CI job | CI job | `.github/workflows/ci.yml` |
-| Linux x86_64 | native check in WSL Ubuntu 24.04 | CI job (`ubuntu-latest`) | `target/linux-wsl`; windowing crates need GTK/X11/Wayland headers |
-| macOS aarch64 | CI job | CI job (`macos-14`) | no local host available in the canonical workspace |
+| Windows x86_64 MSVC | developer probe | not run | not a release target; no GitHub CI |
+| Linux x86_64 | native check in WSL Ubuntu 24.04 | local WSL check | `target/linux-wsl`; windowing crates need GTK/X11/Wayland headers |
+| macOS aarch64 | no local host | not run | no macOS host in the canonical workspace; no macOS support claimed |
 
 ## Local Linux check
 

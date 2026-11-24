@@ -1,0 +1,16 @@
+{
+  "id": "T-0387",
+  "lane": "integrator",
+  "title": "Remove stale GitHub CI rows from the platform table",
+  "priority": "P1",
+  "status": "verified",
+  "depends_on": ["T-0371"],
+  "owns": [
+    "docs/PLATFORMS.md",
+    "docs/evidence/review/T-0387.md",
+    "orchestration/tasks/T-0387.json"
+  ],
+  "acceptance": "docs/PLATFORMS.md no longer cites .github/workflows/ci.yml or CI jobs; the Windows x86_64 GNU host stays canonical, Linux is a local WSL probe, macOS and MSVC are documented as unverified.",
+  "notes": "Plan A.3 cleanup: the repository has no GitHub CI and no .github workflow file.",
+  "evidence": "docs/evidence/review/T-0387.md"
+}
