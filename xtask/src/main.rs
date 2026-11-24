@@ -284,6 +284,7 @@ fn ci() -> Result<()> {
 
     let result = (|| -> Result<()> {
         verify(false)?;
+        deny_check()?;
         docs()?;
         bench_command(false, false)?;
         installer_test()?;
@@ -299,8 +300,9 @@ fn ci() -> Result<()> {
          - status: {status}\n\
          - host: Windows (the only verified target)\n\n\
          Steps: `cargo xtask verify` (fmt, clippy, tests, doc -j 1, feature \
-         matrix), `cargo xtask docs` (mdBook when MDBOOK is available), \
-         `cargo xtask bench`, `cargo xtask installer-test`.\n\n\
+         matrix), `cargo deny check`, `cargo xtask docs` (mdBook when MDBOOK is \
+         available), `cargo xtask bench`, `cargo xtask installer-test`, the NVDA \
+         screen-reader smoke, and the Authenticode signature check.\n\n\
          GitHub CI is not used. This local run is the verified gate.\n"
     );
     let path = report_dir.join("ci-report.md");
@@ -892,6 +894,10 @@ fn run_feature_tests() -> Result<()> {
         &["test", "-p", "pdfxi-render", "--features", "pdfium"],
     )?;
     Ok(())
+}
+
+fn deny_check() -> Result<()> {
+    run("cargo", &["deny", "check"])
 }
 
 fn features_verify() -> Result<()> {

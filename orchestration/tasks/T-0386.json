@@ -1,0 +1,16 @@
+{
+  "id": "T-0386",
+  "lane": "integrator",
+  "title": "Add cargo deny to the local CI gate",
+  "priority": "P0",
+  "status": "verified",
+  "depends_on": ["T-0371"],
+  "owns": [
+    "xtask/src/main.rs",
+    "docs/evidence/review/T-0386.md",
+    "orchestration/tasks/T-0386.json"
+  ],
+  "acceptance": "cargo xtask ci runs cargo deny check between verify and docs, fails on a policy violation, and records deny in target/ci/ci-report.md; the deny step passes on this workspace.",
+  "notes": "Goal end condition 2 names deny explicitly. cargo-deny 0.22.0 is installed and deny.toml passes.",
+  "evidence": "docs/evidence/review/T-0386.md"
+}
